@@ -1,0 +1,21 @@
+[package]
+name = "flicknote-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "flicknote"
+path = "src/main.rs"
+
+[dependencies]
+flicknote-core = { path = "../flicknote-core" }
+flicknote-auth = { path = "../flicknote-auth" }
+clap = { version = "4", features = ["derive"] }
+uuid = { workspace = true }
+chrono = "0.4"
+url = "2"
+serde_json = { workspace = true }
+tokio = { workspace = true }
+libc = "0.2"
+dirs = "6"
+rusqlite = { workspace = true }

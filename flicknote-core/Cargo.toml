@@ -1,0 +1,16 @@
+[package]
+name = "flicknote-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+powersync = { workspace = true }
+rusqlite = { workspace = true }
+http-client = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+flicknote-auth = { path = "../flicknote-auth" }
+dirs = "6"

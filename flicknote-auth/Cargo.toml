@@ -1,0 +1,16 @@
+[package]
+name = "flicknote-auth"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+sha2 = "0.10"
+rand = "0.9"
+base64 = "0.22"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["net", "macros", "rt", "io-util"] }
+thiserror = { workspace = true }
+url = "2"
+urlencoding = "2"

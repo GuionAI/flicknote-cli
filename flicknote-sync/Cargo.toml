@@ -1,0 +1,23 @@
+[package]
+name = "flicknote-sync"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "flicknote-sync"
+path = "src/main.rs"
+
+[dependencies]
+flicknote-core = { path = "../flicknote-core" }
+flicknote-auth = { path = "../flicknote-auth" }
+powersync = { workspace = true }
+rusqlite = { workspace = true }
+http-client = { workspace = true, features = ["curl_client"] }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures-lite = { workspace = true }
+log = "0.4"
+env_logger = "0.11"
