@@ -1,0 +1,51 @@
+# FlickNote CLI
+
+Local-first note management CLI with cloud sync via PowerSync and Supabase.
+
+## Architecture
+
+Rust workspace with 4 crates:
+
+- **flicknote-cli** — CLI binary (clap-based commands: list, get, clip, login, sync)
+- **flicknote-core** — Shared library (db, config, schema, types, session, errors)
+- **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
+- **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)
+
+## Build & Test
+
+```bash
+cargo build                # build all crates
+cargo test                 # run all tests
+cargo clippy               # lint
+cargo fmt --check          # format check
+```
+
+Or use the Makefile: `make build`, `make test`, `make check`, `make install`
+
+## Key Dependencies
+
+- **powersync** — local path dependency (SQLite sync engine)
+- **rusqlite** — SQLite with bundled + load_extension
+- **clap** — CLI framework (derive macros)
+- **tokio** — async runtime
+- **reqwest** — HTTP client (auth)
+- **serde/serde_json** — serialization
+
+## Project Conventions
+
+- Rust 2024 edition, resolver 3
+- Guard clauses over deep nesting
+- `thiserror` for error types
+- Config via XDG dirs (`~/.config/flicknote/`) or env vars
+- Data stored at `~/.local/share/flicknote/`
+
+## Commit Style
+
+```
+feat(scope): description
+fix(scope): description
+refactor(scope): description
+chore(scope): description
+```
+
+Scopes: `cli`, `core`, `auth`, `sync`, `ci`

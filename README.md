@@ -1,2 +1,88 @@
 # flicknote-cli
 
+Local-first note management CLI with cloud sync. Captures, queries, and manages notes stored in a local SQLite database synced to the cloud via PowerSync and Supabase.
+
+## Features
+
+- **List & search notes** — filter by type, search text, limit results
+- **Get note details** — retrieve by full or partial UUID
+- **Clip URLs** — capture links as note entries
+- **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
+- **Background sync** — daemon process with launchd integration (macOS)
+
+## Build
+
+Requires Rust 2024 edition (nightly or recent stable with edition support).
+
+```bash
+# Build all crates
+make build
+
+# Run tests
+make test
+
+# Lint + format check
+make check
+
+# Install to ~/.cargo/bin
+make install
+```
+
+Or directly with cargo:
+
+```bash
+cargo build --release
+cargo install --path flicknote-cli
+```
+
+## Usage
+
+```bash
+# Authenticate
+flicknote-cli login --email user@example.com
+
+# List recent notes
+flicknote-cli list
+flicknote-cli list --type link --limit 10
+flicknote-cli list --search "rust"
+
+# Get a specific note
+flicknote-cli get <note-id>
+
+# Clip a URL
+flicknote-cli clip https://example.com
+
+# Manage sync daemon
+flicknote-cli sync start
+flicknote-cli sync status
+flicknote-cli sync stop
+
+# Install as launchd service (macOS)
+flicknote-cli sync install
+```
+
+## Configuration
+
+Config file: `~/.config/flicknote/config.json`
+
+Environment variables:
+- `FLICKNOTE_SUPABASE_URL`
+- `FLICKNOTE_SUPABASE_KEY`
+- `FLICKNOTE_POWERSYNC_URL`
+
+Data directory: `~/.local/share/flicknote/`
+
+## Architecture
+
+Rust workspace with 4 crates:
+
+| Crate | Type | Purpose |
+|-------|------|---------|
+| `flicknote-cli` | binary | CLI commands |
+| `flicknote-core` | library | Database, config, types, schema |
+| `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
+| `flicknote-sync` | binary | Background sync daemon |
+
+## License
+
+MIT

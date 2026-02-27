@@ -2034,6 +2034,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 [[package]]
 name = "powersync"
 version = "0.0.4"
+source = "git+https://github.com/powersync-ja/powersync-native?rev=81c3c79#81c3c7937528e016353050e744bef2e8d6639b05"
 dependencies = [
  "async-channel 2.5.0",
  "async-lock",
