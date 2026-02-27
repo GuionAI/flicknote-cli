@@ -4,6 +4,7 @@ use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 
 mod commands;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "flicknote", about = "FlickNote CLI — local-first note management")]
@@ -23,6 +24,10 @@ enum Commands {
     Clip(commands::clip::ClipArgs),
     /// Authenticate with FlickNote
     Login(commands::login::LoginArgs),
+    /// Log out — remove saved session
+    Logout,
+    /// Interactive TUI for browsing notes
+    Tui,
     /// Manage sync daemon
     Sync(commands::sync::SyncArgs),
 }
@@ -43,6 +48,8 @@ fn run() -> Result<(), CliError> {
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &args),
         Commands::Clip(args) => commands::clip::run(&Database::open_local(&config)?, &config, &args),
         Commands::Login(args) => commands::login::run(&config, &args),
+        Commands::Logout => commands::logout::run(&config),
+        Commands::Tui => commands::tui::run(&config),
         Commands::Sync(args) => commands::sync::run(&config, &args),
     }
 }

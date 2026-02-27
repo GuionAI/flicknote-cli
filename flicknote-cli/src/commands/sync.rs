@@ -74,6 +74,7 @@ fn start(config: &Config) -> Result<(), CliError> {
     let log2 = log.try_clone()?;
 
     let child = Command::new(daemon_binary()?)
+        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "flicknote_sync=info,powersync=warn".into()))
         .stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log2)
@@ -135,6 +136,11 @@ fn install(config: &Config) -> Result<(), CliError> {
     <array>
         <string>{}</string>
     </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RUST_LOG</key>
+        <string>flicknote_sync=info,powersync=warn</string>
+    </dict>
     <key>KeepAlive</key>
     <true/>
     <key>RunAtLoad</key>
