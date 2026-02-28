@@ -4,7 +4,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 
 #[derive(Args)]
-pub struct ListArgs {
+pub(crate) struct ListArgs {
     /// Search notes by title
     #[arg(long)]
     search: Option<String>,
@@ -19,7 +19,7 @@ pub struct ListArgs {
     json: bool,
 }
 
-pub fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
     let notes = db.read(|conn| {
         let mut sql = String::from("SELECT * FROM notes WHERE deleted_at IS NULL");
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
@@ -38,7 +38,7 @@ pub fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
 
         let mut stmt = conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(|p| p.as_ref()).collect();
+            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
         let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
     })?;
@@ -50,8 +50,8 @@ pub fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
         );
     } else {
         println!(
-            "{:<10} {:<8} {:<14} {:<12} {}",
-            "ID", "Type", "Status", "Date", "Title"
+            "{:<10} {:<8} {:<14} {:<12} Title",
+            "ID", "Type", "Status", "Date"
         );
         println!("{}", "-".repeat(70));
         for note in &notes {

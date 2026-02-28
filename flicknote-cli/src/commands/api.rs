@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use crate::api_client::ApiClient;
 
 #[derive(Args)]
-pub struct ApiArgs {
+pub(crate) struct ApiArgs {
     #[command(subcommand)]
     pub command: ApiCommands,
 }
 
 #[derive(Subcommand)]
-pub enum ApiCommands {
+pub(crate) enum ApiCommands {
     /// Upload a file attachment to a note
     Upload(UploadArgs),
     /// Download a note's attachment
@@ -22,7 +22,7 @@ pub enum ApiCommands {
 }
 
 #[derive(Args)]
-pub struct UploadArgs {
+pub(crate) struct UploadArgs {
     /// Note ID to attach the file to
     pub note_id: String,
     /// Path to the file to upload
@@ -30,7 +30,7 @@ pub struct UploadArgs {
 }
 
 #[derive(Args)]
-pub struct DownloadArgs {
+pub(crate) struct DownloadArgs {
     /// Note ID to download attachment from
     pub note_id: String,
     /// Output file path
@@ -39,12 +39,12 @@ pub struct DownloadArgs {
 }
 
 #[derive(Args)]
-pub struct DeleteArgs {
+pub(crate) struct DeleteArgs {
     /// Note ID to delete attachment from
     pub note_id: String,
 }
 
-pub fn run(config: &Config, args: &ApiArgs) -> Result<(), CliError> {
+pub(crate) fn run(config: &Config, args: &ApiArgs) -> Result<(), CliError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

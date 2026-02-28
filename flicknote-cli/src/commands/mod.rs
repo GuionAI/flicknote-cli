@@ -1,8 +1,8 @@
-pub mod api;
-pub mod clip;
-pub mod get;
-pub mod list;
-pub mod login;
-pub mod logout;
-pub mod sync;
-pub mod tui;
+pub(crate) mod api;
+pub(crate) mod clip;
+pub(crate) mod get;
+pub(crate) mod list;
+pub(crate) mod login;
+pub(crate) mod logout;
+pub(crate) mod sync;
+pub(crate) mod tui;

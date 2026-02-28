@@ -4,7 +4,7 @@ use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use std::panic;
 
-pub fn run(config: &Config) -> Result<(), CliError> {
+pub(crate) fn run(config: &Config) -> Result<(), CliError> {
     let db = Database::open_local(config)?;
     let app = App::new(db)?;
 

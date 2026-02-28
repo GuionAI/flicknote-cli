@@ -6,7 +6,7 @@ use flicknote_core::session;
 use rusqlite::params;
 
 #[derive(Args)]
-pub struct ClipArgs {
+pub(crate) struct ClipArgs {
     /// URL to clip
     url: String,
     /// Note title
@@ -17,7 +17,7 @@ pub struct ClipArgs {
     url_scheme: Option<String>,
 }
 
-pub fn run(db: &Database, config: &Config, args: &ClipArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &Database, config: &Config, args: &ClipArgs) -> Result<(), CliError> {
     let user_id = session::get_user_id(config)?;
 
     let (url, title) = if let Some(ref scheme) = args.url_scheme {

@@ -4,7 +4,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 
 #[derive(Args)]
-pub struct GetArgs {
+pub(crate) struct GetArgs {
     /// Note ID (full UUID or short prefix)
     id: String,
     /// Output as JSON
@@ -12,7 +12,7 @@ pub struct GetArgs {
     json: bool,
 }
 
-pub fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
     // Reject LIKE wildcards
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {

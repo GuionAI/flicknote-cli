@@ -18,3 +18,22 @@ async-trait = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 futures-lite = "2"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+# Error swallowing prevention
+let_underscore_must_use = "warn"
+let_underscore_untyped = "warn"
+
+# Prevent debug artifacts in production
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# Useful pedantic subset (low noise, high value)
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+use_self = "warn"

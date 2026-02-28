@@ -4,7 +4,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
 #[derive(Args)]
-pub struct LoginArgs {
+pub(crate) struct LoginArgs {
     /// Email for OTP login
     #[arg(long, conflicts_with = "provider")]
     email: Option<String>,
@@ -13,7 +13,7 @@ pub struct LoginArgs {
     provider: Option<String>,
 }
 
-pub fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
+pub(crate) fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

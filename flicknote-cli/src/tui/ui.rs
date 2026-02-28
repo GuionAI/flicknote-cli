@@ -14,7 +14,7 @@ fn format_date(date: Option<&str>) -> &str {
     date.and_then(|d| d.get(..10)).unwrap_or("-")
 }
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub(crate) fn draw(frame: &mut Frame, app: &App) {
     match app.view {
         View::List => draw_list(frame, app),
         View::Detail => draw_detail(frame, app),

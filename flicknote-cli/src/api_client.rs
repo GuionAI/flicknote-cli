@@ -4,7 +4,7 @@ use flicknote_core::error::CliError;
 use reqwest::Client;
 use serde::Deserialize;
 
-pub struct ApiClient {
+pub(crate) struct ApiClient {
     http: Client,
     base_url: String,
     access_token: String,
@@ -12,25 +12,26 @@ pub struct ApiClient {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UploadUrlResponse {
+pub(crate) struct UploadUrlResponse {
     pub upload_url: String,
     pub content_type: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DownloadUrlResponse {
+pub(crate) struct DownloadUrlResponse {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DeleteResponse {
+pub(crate) struct DeleteResponse {
+    #[allow(dead_code)]
     pub deleted: bool,
 }
 
 impl ApiClient {
     /// Create API client with a fresh (auto-refreshed) token.
     /// Uses GoTrueClient::get_session() which refreshes if near expiry.
-    pub async fn new(config: &Config) -> Result<Self, CliError> {
+    pub(crate) async fn new(config: &Config) -> Result<Self, CliError> {
         config.validate_api()?;
         let auth = GoTrueClient::new(
             &config.supabase_url,
@@ -51,7 +52,7 @@ impl ApiClient {
 
     /// Step 1: Get presigned upload URL from API
     /// Step 2: PUT file directly to R2 via presigned URL
-    pub async fn upload_file(
+    pub(crate) async fn upload_file(
         &self,
         note_id: &str,
         file_path: &std::path::Path,
@@ -74,7 +75,9 @@ impl ApiClient {
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(CliError::Other(format!("Upload URL request failed: {body}")));
+            return Err(CliError::Other(format!(
+                "Upload URL request failed: {body}"
+            )));
         }
 
         let upload_resp: UploadUrlResponse = resp
@@ -102,17 +105,14 @@ impl ApiClient {
     }
 
     /// Get presigned download URL, then download file content
-    pub async fn download_attachment(
+    pub(crate) async fn download_attachment(
         &self,
         note_id: &str,
         output_path: &std::path::Path,
     ) -> Result<u64, CliError> {
         let resp = self
             .http
-            .post(format!(
-                "{}/api/v1/attachments/download-url",
-                self.base_url
-            ))
+            .post(format!("{}/api/v1/attachments/download-url", self.base_url))
             .bearer_auth(&self.access_token)
             .json(&serde_json::json!({ "noteId": note_id }))
             .send()
@@ -126,9 +126,10 @@ impl ApiClient {
             )));
         }
 
-        let download_resp: DownloadUrlResponse = resp.json().await.map_err(|e| {
-            CliError::Other(format!("Failed to parse download URL response: {e}"))
-        })?;
+        let download_resp: DownloadUrlResponse = resp
+            .json()
+            .await
+            .map_err(|e| CliError::Other(format!("Failed to parse download URL response: {e}")))?;
 
         // Download from R2 presigned URL
         let file_resp = self
@@ -155,13 +156,13 @@ impl ApiClient {
     }
 
     /// DELETE /api/v1/attachments/:noteId
-    pub async fn delete_attachment(&self, note_id: &str) -> Result<DeleteResponse, CliError> {
+    pub(crate) async fn delete_attachment(
+        &self,
+        note_id: &str,
+    ) -> Result<DeleteResponse, CliError> {
         let resp = self
             .http
-            .delete(format!(
-                "{}/api/v1/attachments/{}",
-                self.base_url, note_id
-            ))
+            .delete(format!("{}/api/v1/attachments/{}", self.base_url, note_id))
             .bearer_auth(&self.access_token)
             .send()
             .await

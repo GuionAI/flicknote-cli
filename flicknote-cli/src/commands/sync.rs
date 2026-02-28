@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 #[derive(Args)]
-pub struct SyncArgs {
+pub(crate) struct SyncArgs {
     #[command(subcommand)]
     command: SyncCommand,
 }
@@ -25,7 +25,7 @@ enum SyncCommand {
     Uninstall,
 }
 
-pub fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
+pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
     match &args.command {
         SyncCommand::Start => start(config),
         SyncCommand::Stop => stop(config),
@@ -44,10 +44,12 @@ fn read_pid(config: &Config) -> Option<u32> {
     let content = fs::read_to_string(&path).ok()?;
     let pid: u32 = content.trim().parse().ok()?;
     // Check if process is alive
+    #[allow(unsafe_code)]
     if unsafe { libc::kill(pid as i32, 0) } == 0 {
         return Some(pid);
     }
-    // Stale PID file
+    // Stale PID file — best-effort cleanup
+    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
     let _ = fs::remove_file(&path);
     None
 }
@@ -96,9 +98,14 @@ fn stop(config: &Config) -> Result<(), CliError> {
         return Ok(());
     };
 
-    unsafe {
-        libc::kill(pid as i32, libc::SIGTERM);
+    #[allow(unsafe_code)]
+    let ret = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if ret == -1 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("Warning: failed to send SIGTERM to pid {pid}: {err}");
     }
+    // Best-effort cleanup after SIGTERM
+    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
     let _ = fs::remove_file(pid_file(config));
     println!("Sync daemon stopped");
     Ok(())
@@ -160,21 +167,46 @@ fn install(config: &Config) -> Result<(), CliError> {
             config.paths.log_file.display(),
         );
 
-        fs::create_dir_all(plist_path.parent().unwrap())?;
+        fs::create_dir_all(
+            plist_path
+                .parent()
+                .ok_or_else(|| CliError::Other("Could not determine LaunchAgents directory".into()))?,
+        )?;
         fs::write(&plist_path, &plist)?;
 
+        #[allow(unsafe_code)]
         let uid = unsafe { libc::getuid() };
-        let _ = Command::new("launchctl")
+
+        // Bootout existing service — ok to fail if not loaded
+        let output = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/{label}")])
-            .output();
-        Command::new("launchctl")
+            .output()
+            .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // "Could not find specified service" is expected on first install
+            if !stderr.contains("Could not find specified service") {
+                return Err(CliError::Other(format!(
+                    "launchctl bootout failed: {stderr}"
+                )));
+            }
+        }
+
+        // Bootstrap must succeed
+        let output = Command::new("launchctl")
             .args([
                 "bootstrap",
                 &format!("gui/{uid}"),
-                &plist_path.to_string_lossy(),
+                plist_path.to_string_lossy().as_ref(),
             ])
             .output()
-            .map_err(|e| CliError::Other(format!("Failed to bootstrap: {e}")))?;
+            .map_err(|e| CliError::Other(format!("launchctl bootstrap failed to execute: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CliError::Other(format!(
+                "launchctl bootstrap failed: {stderr}"
+            )));
+        }
 
         println!("Installed and started: {label}");
         Ok(())
@@ -197,11 +229,25 @@ fn uninstall(_config: &Config) -> Result<(), CliError> {
             .join("Library/LaunchAgents")
             .join(format!("{label}.plist"));
 
+        #[allow(unsafe_code)]
         let uid = unsafe { libc::getuid() };
-        let _ = Command::new("launchctl")
+        let output = Command::new("launchctl")
             .args(["bootout", &format!("gui/{uid}/{label}")])
-            .output();
-        let _ = fs::remove_file(&plist_path);
+            .output()
+            .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // Uninstall is lenient with bootout failures (unlike install) because
+            // the goal is to clean up — if the service is already gone or in a bad
+            // state, we still want to remove the plist file and report success.
+            if !stderr.contains("Could not find specified service") {
+                eprintln!("Warning: launchctl bootout failed: {stderr}");
+            }
+        }
+
+        if plist_path.exists() {
+            fs::remove_file(&plist_path)?;
+        }
 
         println!("Uninstalled: {label}");
         Ok(())

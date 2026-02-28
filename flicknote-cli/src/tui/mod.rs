@@ -1,2 +1,2 @@
-pub mod app;
-pub mod ui;
+pub(crate) mod app;
+pub(crate) mod ui;

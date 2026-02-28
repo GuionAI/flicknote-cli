@@ -132,7 +132,10 @@ impl GoTrueClient {
             .arg(&oauth_url)
             .spawn()?;
 
-        println!("Opened browser for {provider} login...");
+        #[allow(clippy::print_stdout)]
+        {
+            println!("Opened browser for {provider} login...");
+        }
 
         let code = tokio::time::timeout(std::time::Duration::from_secs(60), rx)
             .await
@@ -178,8 +181,8 @@ impl GoTrueClient {
         if let Some(expires_at) = stored.expires_at {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
             if now + 60 >= expires_at {
                 return self.refresh_token(&stored.refresh_token).await;
             }
@@ -229,5 +232,7 @@ fn load_pkce_verifier(session_file: &std::path::Path) -> Result<String, AuthErro
 
 fn cleanup_pkce_verifier(session_file: &std::path::Path) {
     let verifier_file = session_file.with_extension("pkce");
+    // Best-effort temp file cleanup
+    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
     let _ = std::fs::remove_file(verifier_file);
 }

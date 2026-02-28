@@ -51,22 +51,21 @@ impl Config {
         let mut powersync_url = String::new();
         let mut api_url = String::new();
 
-        if config_file.exists() {
-            if let Ok(raw) = fs::read_to_string(&config_file) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw) {
-                    if let Some(v) = json.get("supabaseUrl").and_then(|v| v.as_str()) {
-                        supabase_url = v.to_string();
-                    }
-                    if let Some(v) = json.get("supabaseAnonKey").and_then(|v| v.as_str()) {
-                        supabase_anon_key = v.to_string();
-                    }
-                    if let Some(v) = json.get("powersyncUrl").and_then(|v| v.as_str()) {
-                        powersync_url = v.to_string();
-                    }
-                    if let Some(v) = json.get("apiUrl").and_then(|v| v.as_str()) {
-                        api_url = v.to_string();
-                    }
-                }
+        if config_file.exists()
+            && let Ok(raw) = fs::read_to_string(&config_file)
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw)
+        {
+            if let Some(v) = json.get("supabaseUrl").and_then(|v| v.as_str()) {
+                supabase_url = v.to_string();
+            }
+            if let Some(v) = json.get("supabaseAnonKey").and_then(|v| v.as_str()) {
+                supabase_anon_key = v.to_string();
+            }
+            if let Some(v) = json.get("powersyncUrl").and_then(|v| v.as_str()) {
+                powersync_url = v.to_string();
+            }
+            if let Some(v) = json.get("apiUrl").and_then(|v| v.as_str()) {
+                api_url = v.to_string();
             }
         }
 
@@ -92,7 +91,7 @@ impl Config {
             log_file,
         };
 
-        Ok(Config {
+        Ok(Self {
             supabase_url,
             supabase_anon_key,
             powersync_url,

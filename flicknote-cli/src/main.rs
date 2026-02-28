@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 use clap::{Parser, Subcommand};
 use flicknote_core::config::Config;
 use flicknote_core::db::Database;

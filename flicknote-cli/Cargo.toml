@@ -25,3 +25,6 @@ serde = { workspace = true }
 rusqlite = { workspace = true }
 ratatui = "0.29"
 crossterm = "0.28"
+
+[lints]
+workspace = true

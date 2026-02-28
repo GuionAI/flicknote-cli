@@ -14,3 +14,6 @@ tokio = { workspace = true, features = ["net", "macros", "rt", "io-util"] }
 thiserror = { workspace = true }
 url = "2"
 urlencoding = "2"
+
+[lints]
+workspace = true

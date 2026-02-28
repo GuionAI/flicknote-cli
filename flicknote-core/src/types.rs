@@ -43,6 +43,9 @@ impl Note {
     pub fn link_url(&self) -> Option<String> {
         let meta = self.metadata.as_ref()?;
         let v: serde_json::Value = serde_json::from_str(meta).ok()?;
-        v.get("link")?.get("url")?.as_str().map(|s| s.to_string())
+        v.get("link")?
+            .get("url")?
+            .as_str()
+            .map(std::string::ToString::to_string)
     }
 }

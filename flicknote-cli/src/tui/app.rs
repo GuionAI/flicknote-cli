@@ -4,13 +4,13 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum View {
+pub(crate) enum View {
     List,
     Detail,
     Search,
 }
 
-pub struct App {
+pub(crate) struct App {
     pub view: View,
     pub notes: Vec<Note>,
     pub selected: usize,
@@ -21,7 +21,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(db: Database) -> Result<Self, CliError> {
+    pub(crate) fn new(db: Database) -> Result<Self, CliError> {
         let notes = Self::fetch_notes(&db, None)?;
         Ok(Self {
             view: View::List,
@@ -51,17 +51,17 @@ impl App {
             };
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
+                params.iter().map(std::convert::AsRef::as_ref).collect();
             let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
             rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
         })
     }
 
-    pub fn selected_note(&self) -> Option<&Note> {
+    pub(crate) fn selected_note(&self) -> Option<&Note> {
         self.notes.get(self.selected)
     }
 
-    pub fn handle_events(&mut self) -> Result<(), CliError> {
+    pub(crate) fn handle_events(&mut self) -> Result<(), CliError> {
         let Event::Key(key) = event::read().map_err(|e| CliError::Other(e.to_string()))? else {
             return Ok(());
         };
@@ -142,7 +142,7 @@ impl App {
         Ok(())
     }
 
-    pub fn run(mut self, mut terminal: ratatui::DefaultTerminal) -> Result<(), CliError> {
+    pub(crate) fn run(mut self, mut terminal: ratatui::DefaultTerminal) -> Result<(), CliError> {
         while !self.should_quit {
             terminal
                 .draw(|frame| super::ui::draw(frame, &self))
