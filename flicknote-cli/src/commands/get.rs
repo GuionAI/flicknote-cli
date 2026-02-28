@@ -14,11 +14,7 @@ pub struct GetArgs {
 
 pub fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
     // Reject LIKE wildcards
-    if !args
-        .id
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() || c == '-')
-    {
+    if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {
             id: args.id.clone(),
         });
@@ -60,14 +56,8 @@ pub fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
         println!("ID:         {}", note.id);
         println!("Type:       {}", note.r#type);
         println!("Status:     {}", note.status);
-        println!(
-            "Created:    {}",
-            note.created_at.as_deref().unwrap_or("-")
-        );
-        println!(
-            "Updated:    {}",
-            note.updated_at.as_deref().unwrap_or("-")
-        );
+        println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
+        println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
         if let Some(ref pid) = note.project_id {
             println!("Project:    {pid}");
         }

@@ -74,7 +74,11 @@ fn start(config: &Config) -> Result<(), CliError> {
     let log2 = log.try_clone()?;
 
     let child = Command::new(daemon_binary()?)
-        .env("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_else(|_| "flicknote_sync=info,powersync=warn".into()))
+        .env(
+            "RUST_LOG",
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "flicknote_sync=info,powersync=warn".into()),
+        )
         .stdin(std::process::Stdio::null())
         .stdout(log)
         .stderr(log2)

@@ -40,8 +40,7 @@ pub fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params_vec.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(CliError::from)
+        rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
     })?;
 
     if args.json {

@@ -183,8 +183,7 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(detail, chunks[1]);
 
     // Status bar
-    let status =
-        Paragraph::new(" q/esc back to list").style(Style::new().fg(Color::DarkGray));
+    let status = Paragraph::new(" q/esc back to list").style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[2]);
 }
 
@@ -233,7 +232,7 @@ fn draw_search(frame: &mut Frame, app: &App) {
     frame.render_widget(list, chunks[2]);
 
     // Status bar
-    let status = Paragraph::new(" enter search  │  esc cancel")
-        .style(Style::new().fg(Color::DarkGray));
+    let status =
+        Paragraph::new(" enter search  │  esc cancel").style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[3]);
 }

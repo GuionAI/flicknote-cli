@@ -3,11 +3,15 @@ use flicknote_core::config::Config;
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 
+mod api_client;
 mod commands;
 mod tui;
 
 #[derive(Parser)]
-#[command(name = "flicknote", about = "FlickNote CLI — local-first note management")]
+#[command(
+    name = "flicknote",
+    about = "FlickNote CLI — local-first note management"
+)]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
@@ -30,6 +34,8 @@ enum Commands {
     Tui,
     /// Manage sync daemon
     Sync(commands::sync::SyncArgs),
+    /// Interact with FlickNote API directly
+    Api(commands::api::ApiArgs),
 }
 
 fn main() {
@@ -46,10 +52,13 @@ fn run() -> Result<(), CliError> {
     match cli.command {
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &args),
-        Commands::Clip(args) => commands::clip::run(&Database::open_local(&config)?, &config, &args),
+        Commands::Clip(args) => {
+            commands::clip::run(&Database::open_local(&config)?, &config, &args)
+        }
         Commands::Login(args) => commands::login::run(&config, &args),
         Commands::Logout => commands::logout::run(&config),
         Commands::Tui => commands::tui::run(&config),
         Commands::Sync(args) => commands::sync::run(&config, &args),
+        Commands::Api(args) => commands::api::run(&config, &args),
     }
 }

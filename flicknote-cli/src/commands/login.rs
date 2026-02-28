@@ -26,12 +26,13 @@ pub fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
 
     rt.block_on(async {
         if let Some(ref provider) = args.provider {
-            client.sign_in_with_oauth(provider).await.map_err(|e| {
-                CliError::Auth {
+            client
+                .sign_in_with_oauth(provider)
+                .await
+                .map_err(|e| CliError::Auth {
                     operation: "signIn".into(),
                     description: e.to_string(),
-                }
-            })?;
+                })?;
         } else {
             let email = match &args.email {
                 Some(e) => e.clone(),
@@ -43,12 +44,13 @@ pub fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
                 }
             };
 
-            client.sign_in_with_otp(&email).await.map_err(|e| {
-                CliError::Auth {
+            client
+                .sign_in_with_otp(&email)
+                .await
+                .map_err(|e| CliError::Auth {
                     operation: "signIn".into(),
                     description: e.to_string(),
-                }
-            })?;
+                })?;
             println!("OTP sent to {email}");
 
             eprint!("Enter code: ");

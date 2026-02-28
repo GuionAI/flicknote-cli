@@ -75,10 +75,7 @@ impl BackendConnector for FlickNoteConnector {
                     UpdateType::Patch => {
                         let data = crud.data.unwrap_or_default();
                         let resp = client
-                            .patch(format!(
-                                "{}/rest/v1/{table}?id=eq.{id}",
-                                self.supabase_url
-                            ))
+                            .patch(format!("{}/rest/v1/{table}?id=eq.{id}", self.supabase_url))
                             .header("apikey", &self.supabase_anon_key)
                             .header("Authorization", format!("Bearer {token}"))
                             .json(&data)
@@ -92,10 +89,7 @@ impl BackendConnector for FlickNoteConnector {
                     }
                     UpdateType::Delete => {
                         let resp = client
-                            .delete(format!(
-                                "{}/rest/v1/{table}?id=eq.{id}",
-                                self.supabase_url
-                            ))
+                            .delete(format!("{}/rest/v1/{table}?id=eq.{id}", self.supabase_url))
                             .header("apikey", &self.supabase_anon_key)
                             .header("Authorization", format!("Bearer {token}"))
                             .send()
@@ -141,11 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = ConnectionPool::open(&config.paths.db_file)?;
     let client = Arc::new(IsahcClient::new());
-    let env = PowerSyncEnvironment::custom(
-        client,
-        pool,
-        Box::new(PowerSyncEnvironment::tokio_timer()),
-    );
+    let env =
+        PowerSyncEnvironment::custom(client, pool, Box::new(PowerSyncEnvironment::tokio_timer()));
 
     let db = PowerSyncDatabase::new(env, app_schema());
     db.async_tasks().spawn_with_tokio();

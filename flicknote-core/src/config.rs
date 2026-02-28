@@ -5,6 +5,7 @@ pub struct Config {
     pub supabase_url: String,
     pub supabase_anon_key: String,
     pub powersync_url: String,
+    pub api_url: String,
     pub paths: ConfigPaths,
 }
 
@@ -19,8 +20,9 @@ pub struct ConfigPaths {
 
 impl Config {
     pub fn load() -> Result<Self, crate::error::CliError> {
-        let home = dirs::home_dir()
-            .ok_or_else(|| crate::error::CliError::Other("Could not determine home directory".into()))?;
+        let home = dirs::home_dir().ok_or_else(|| {
+            crate::error::CliError::Other("Could not determine home directory".into())
+        })?;
 
         let config_dir = std::env::var("XDG_CONFIG_HOME")
             .map(|d| PathBuf::from(d).join("flicknote"))
@@ -47,6 +49,7 @@ impl Config {
         let mut supabase_url = String::new();
         let mut supabase_anon_key = String::new();
         let mut powersync_url = String::new();
+        let mut api_url = String::new();
 
         if config_file.exists() {
             if let Ok(raw) = fs::read_to_string(&config_file) {
@@ -60,6 +63,9 @@ impl Config {
                     if let Some(v) = json.get("powersyncUrl").and_then(|v| v.as_str()) {
                         powersync_url = v.to_string();
                     }
+                    if let Some(v) = json.get("apiUrl").and_then(|v| v.as_str()) {
+                        api_url = v.to_string();
+                    }
                 }
             }
         }
@@ -72,6 +78,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FLICKNOTE_POWERSYNC_URL") {
             powersync_url = v;
+        }
+        if let Ok(v) = std::env::var("FLICKNOTE_API_URL") {
+            api_url = v;
         }
 
         let paths = ConfigPaths {
@@ -87,15 +96,27 @@ impl Config {
             supabase_url,
             supabase_anon_key,
             powersync_url,
+            api_url,
             paths,
         })
+    }
+
+    /// Validate that api_url is set. Call before API operations.
+    pub fn validate_api(&self) -> Result<(), crate::error::CliError> {
+        if self.api_url.is_empty() {
+            return Err(crate::error::CliError::Other(
+                "apiUrl is not configured — set it in config.json or FLICKNOTE_API_URL".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Validate that required fields are set. Call before operations that need them.
     pub fn validate(&self) -> Result<(), crate::error::CliError> {
         if self.supabase_url.is_empty() {
             return Err(crate::error::CliError::Other(
-                "supabaseUrl is not configured — set it in config.json or FLICKNOTE_SUPABASE_URL".into(),
+                "supabaseUrl is not configured — set it in config.json or FLICKNOTE_SUPABASE_URL"
+                    .into(),
             ));
         }
         if self.supabase_anon_key.is_empty() {
@@ -105,7 +126,8 @@ impl Config {
         }
         if self.powersync_url.is_empty() {
             return Err(crate::error::CliError::Other(
-                "powersyncUrl is not configured — set it in config.json or FLICKNOTE_POWERSYNC_URL".into(),
+                "powersyncUrl is not configured — set it in config.json or FLICKNOTE_POWERSYNC_URL"
+                    .into(),
             ));
         }
         Ok(())

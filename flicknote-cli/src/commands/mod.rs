@@ -1,3 +1,4 @@
+pub mod api;
 pub mod clip;
 pub mod get;
 pub mod list;

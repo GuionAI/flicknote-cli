@@ -126,9 +126,7 @@ impl GoTrueClient {
         );
 
         #[cfg(target_os = "macos")]
-        std::process::Command::new("open")
-            .arg(&oauth_url)
-            .spawn()?;
+        std::process::Command::new("open").arg(&oauth_url).spawn()?;
         #[cfg(target_os = "linux")]
         std::process::Command::new("xdg-open")
             .arg(&oauth_url)
@@ -225,9 +223,8 @@ fn save_pkce_verifier(session_file: &std::path::Path, verifier: &str) -> Result<
 
 fn load_pkce_verifier(session_file: &std::path::Path) -> Result<String, AuthError> {
     let verifier_file = session_file.with_extension("pkce");
-    std::fs::read_to_string(&verifier_file).map_err(|_| {
-        AuthError::Api("PKCE verifier not found — run login again".into())
-    })
+    std::fs::read_to_string(&verifier_file)
+        .map_err(|_| AuthError::Api("PKCE verifier not found — run login again".into()))
 }
 
 fn cleanup_pkce_verifier(session_file: &std::path::Path) {

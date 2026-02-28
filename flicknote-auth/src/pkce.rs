@@ -17,5 +17,8 @@ pub fn generate() -> PkceChallenge {
     let hash = Sha256::digest(verifier.as_bytes());
     let challenge = URL_SAFE_NO_PAD.encode(hash);
 
-    PkceChallenge { verifier, challenge }
+    PkceChallenge {
+        verifier,
+        challenge,
+    }
 }

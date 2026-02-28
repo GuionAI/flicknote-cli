@@ -18,6 +18,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 libc = "0.2"
 dirs = "6"
+reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+mime_guess = "2"
+futures-util = "0.3"
+serde = { workspace = true }
 rusqlite = { workspace = true }
 ratatui = "0.29"
 crossterm = "0.28"
