@@ -1,4 +1,4 @@
-.PHONY: build test check fmt clippy install clean release
+.PHONY: build test check fmt clippy install reinstall clean release
 
 build:
 	cargo build
@@ -19,6 +19,13 @@ clippy:
 
 install:
 	cargo install --path flicknote-cli
+	cargo install --path flicknote-sync
+
+reinstall:
+	cargo install --path flicknote-cli --force
+	cargo install --path flicknote-sync --force
+	flicknote sync uninstall
+	flicknote sync install
 
 clean:
 	cargo clean
