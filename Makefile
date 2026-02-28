@@ -24,8 +24,11 @@ install:
 reinstall:
 	cargo install --path flicknote-cli --force
 	cargo install --path flicknote-sync --force
-	flicknote sync uninstall
-	flicknote sync install
+	@for label in $$(launchctl list 2>/dev/null | awk '/io\.guion\.flicknote/ {print $$3}'); do \
+		echo "Restarting $$label..."; \
+		launchctl kickstart -k "gui/$$(id -u)/$$label"; \
+		echo "✓ $$label restarted"; \
+	done
 
 clean:
 	cargo clean
