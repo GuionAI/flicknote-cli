@@ -1,10 +1,8 @@
-use flicknote_auth::session::load_session;
+use flicknote_auth::client::GoTrueClient;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
 
 pub struct ApiClient {
     http: Client,
@@ -13,16 +11,36 @@ pub struct ApiClient {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ApiResponse {
-    pub id: Option<String>,
-    pub message: Option<String>,
+#[serde(rename_all = "camelCase")]
+pub struct UploadUrlResponse {
+    pub upload_url: String,
+    pub content_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DownloadUrlResponse {
+    pub url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteResponse {
+    pub deleted: bool,
 }
 
 impl ApiClient {
-    pub fn new(config: &Config) -> Result<Self, CliError> {
+    /// Create API client with a fresh (auto-refreshed) token.
+    /// Uses GoTrueClient::get_session() which refreshes if near expiry.
+    pub async fn new(config: &Config) -> Result<Self, CliError> {
         config.validate_api()?;
-        let session =
-            load_session(&config.paths.session_file).map_err(|_| CliError::NotAuthenticated)?;
+        let auth = GoTrueClient::new(
+            &config.supabase_url,
+            &config.supabase_anon_key,
+            &config.paths.session_file,
+        );
+        let session = auth
+            .get_session()
+            .await
+            .map_err(|e| CliError::Other(format!("Auth error: {e}")))?;
 
         Ok(Self {
             http: Client::new(),
@@ -31,186 +49,131 @@ impl ApiClient {
         })
     }
 
-    pub async fn upload_file(&self, file_path: &std::path::Path) -> Result<ApiResponse, CliError> {
-        let file_name = file_path
+    /// Step 1: Get presigned upload URL from API
+    /// Step 2: PUT file directly to R2 via presigned URL
+    pub async fn upload_file(
+        &self,
+        note_id: &str,
+        file_path: &std::path::Path,
+    ) -> Result<(), CliError> {
+        let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file")
             .to_string();
 
-        let file_bytes = std::fs::read(file_path)?;
-        let mime = mime_from_extension(file_path);
-
-        let part = reqwest::multipart::Part::bytes(file_bytes)
-            .file_name(file_name)
-            .mime_str(&mime)
-            .map_err(|e| CliError::Other(format!("Invalid MIME type: {e}")))?;
-
-        let form = reqwest::multipart::Form::new().part("file", part);
-
+        // Get presigned upload URL
         let resp = self
             .http
-            .post(format!("{}/api/upload", self.base_url))
+            .post(format!("{}/api/v1/attachments/upload-url", self.base_url))
             .bearer_auth(&self.access_token)
-            .multipart(form)
+            .json(&serde_json::json!({ "noteId": note_id, "filename": filename }))
             .send()
             .await
-            .map_err(|e| CliError::Other(format!("Upload request failed: {e}")))?;
+            .map_err(|e| CliError::Other(format!("Upload URL request failed: {e}")))?;
 
-        parse_response(resp).await
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CliError::Other(format!("Upload URL request failed: {body}")));
+        }
+
+        let upload_resp: UploadUrlResponse = resp
+            .json()
+            .await
+            .map_err(|e| CliError::Other(format!("Failed to parse upload URL response: {e}")))?;
+
+        // Upload file directly to R2
+        let file_bytes = std::fs::read(file_path)?;
+        let put_resp = self
+            .http
+            .put(&upload_resp.upload_url)
+            .header("Content-Type", &upload_resp.content_type)
+            .body(file_bytes)
+            .send()
+            .await
+            .map_err(|e| CliError::Other(format!("File upload failed: {e}")))?;
+
+        if !put_resp.status().is_success() {
+            let body = put_resp.text().await.unwrap_or_default();
+            return Err(CliError::Other(format!("File upload to R2 failed: {body}")));
+        }
+
+        Ok(())
     }
 
-    /// Downloads an attachment, streaming it to the given output path.
-    /// Returns the number of bytes written.
+    /// Get presigned download URL, then download file content
     pub async fn download_attachment(
         &self,
-        attachment_id: &str,
+        note_id: &str,
         output_path: &std::path::Path,
     ) -> Result<u64, CliError> {
         let resp = self
             .http
-            .get(format!(
-                "{}/api/attachments/{}/download",
-                self.base_url, attachment_id
+            .post(format!(
+                "{}/api/v1/attachments/download-url",
+                self.base_url
             ))
             .bearer_auth(&self.access_token)
+            .json(&serde_json::json!({ "noteId": note_id }))
             .send()
             .await
-            .map_err(|e| CliError::Other(format!("Download request failed: {e}")))?;
+            .map_err(|e| CliError::Other(format!("Download URL request failed: {e}")))?;
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(CliError::Other(format!("Download failed: {body}")));
+            return Err(CliError::Other(format!(
+                "Download URL request failed: {body}"
+            )));
         }
 
-        let mut file = tokio::fs::File::create(output_path)
-            .await
-            .map_err(|e| CliError::Other(format!("Failed to create output file: {e}")))?;
+        let download_resp: DownloadUrlResponse = resp.json().await.map_err(|e| {
+            CliError::Other(format!("Failed to parse download URL response: {e}"))
+        })?;
 
-        let mut stream = resp.bytes_stream();
-        let mut total: u64 = 0;
-        while let Some(chunk) = stream.next().await {
-            let chunk =
-                chunk.map_err(|e| CliError::Other(format!("Error reading response: {e}")))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| CliError::Other(format!("Error writing file: {e}")))?;
-            total += chunk.len() as u64;
-        }
-
-        file.flush()
-            .await
-            .map_err(|e| CliError::Other(format!("Error flushing file: {e}")))?;
-
-        Ok(total)
-    }
-
-    /// Fetches the original filename from the download endpoint's Content-Disposition header.
-    pub async fn get_attachment_filename(
-        &self,
-        attachment_id: &str,
-    ) -> Result<Option<String>, CliError> {
-        let resp = self
+        // Download from R2 presigned URL
+        let file_resp = self
             .http
-            .head(format!(
-                "{}/api/attachments/{}/download",
-                self.base_url, attachment_id
-            ))
-            .bearer_auth(&self.access_token)
+            .get(&download_resp.url)
             .send()
             .await
-            .map_err(|e| CliError::Other(format!("HEAD request failed: {e}")))?;
+            .map_err(|e| CliError::Other(format!("File download failed: {e}")))?;
 
-        Ok(parse_content_disposition_filename(&resp))
+        if !file_resp.status().is_success() {
+            return Err(CliError::Other(format!(
+                "File download failed: HTTP {}",
+                file_resp.status()
+            )));
+        }
+
+        let bytes = file_resp
+            .bytes()
+            .await
+            .map_err(|e| CliError::Other(format!("Error reading response: {e}")))?;
+
+        std::fs::write(output_path, &bytes)?;
+        Ok(bytes.len() as u64)
     }
 
-    pub async fn delete_attachment(&self, attachment_id: &str) -> Result<ApiResponse, CliError> {
+    /// DELETE /api/v1/attachments/:noteId
+    pub async fn delete_attachment(&self, note_id: &str) -> Result<DeleteResponse, CliError> {
         let resp = self
             .http
             .delete(format!(
-                "{}/api/attachments/{}",
-                self.base_url, attachment_id
+                "{}/api/v1/attachments/{}",
+                self.base_url, note_id
             ))
             .bearer_auth(&self.access_token)
             .send()
             .await
             .map_err(|e| CliError::Other(format!("Delete request failed: {e}")))?;
 
-        parse_response(resp).await
-    }
-
-    pub async fn create_link(
-        &self,
-        url: &str,
-        title: Option<&str>,
-    ) -> Result<ApiResponse, CliError> {
-        let mut body = serde_json::json!({ "url": url });
-        if let Some(t) = title {
-            body["title"] = serde_json::Value::String(t.to_string());
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(CliError::Other(format!("Delete failed: {body}")));
         }
 
-        let resp = self
-            .http
-            .post(format!("{}/api/links", self.base_url))
-            .bearer_auth(&self.access_token)
-            .json(&body)
-            .send()
+        resp.json::<DeleteResponse>()
             .await
-            .map_err(|e| CliError::Other(format!("Link request failed: {e}")))?;
-
-        parse_response(resp).await
+            .map_err(|e| CliError::Other(format!("Failed to parse delete response: {e}")))
     }
-
-    pub async fn create_note(
-        &self,
-        content: &str,
-        title: Option<&str>,
-    ) -> Result<ApiResponse, CliError> {
-        let mut body = serde_json::json!({ "content": content });
-        if let Some(t) = title {
-            body["title"] = serde_json::Value::String(t.to_string());
-        }
-
-        let resp = self
-            .http
-            .post(format!("{}/api/notes", self.base_url))
-            .bearer_auth(&self.access_token)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| CliError::Other(format!("Note request failed: {e}")))?;
-
-        parse_response(resp).await
-    }
-}
-
-async fn parse_response(resp: reqwest::Response) -> Result<ApiResponse, CliError> {
-    if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Err(CliError::Other(format!("API error: {body}")));
-    }
-    resp.json::<ApiResponse>()
-        .await
-        .map_err(|e| CliError::Other(format!("Failed to parse API response: {e}")))
-}
-
-fn mime_from_extension(path: &std::path::Path) -> String {
-    mime_guess::from_path(path)
-        .first_or_octet_stream()
-        .to_string()
-}
-
-fn parse_content_disposition_filename(resp: &reqwest::Response) -> Option<String> {
-    let header = resp.headers().get("content-disposition")?.to_str().ok()?;
-    // Parse: attachment; filename="name.ext" or filename=name.ext
-    for part in header.split(';') {
-        let part = part.trim();
-        if let Some(rest) = part.strip_prefix("filename=") {
-            let name = rest.trim_matches('"').trim();
-            if !name.is_empty() {
-                return Some(name.to_string());
-            }
-        }
-    }
-    None
 }
