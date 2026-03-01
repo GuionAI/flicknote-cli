@@ -81,7 +81,7 @@ fn draw_list(frame: &mut Frame, app: &App) {
     // Status bar
     let count = app.notes.len();
     let status = Paragraph::new(format!(
-        " {count} notes  │  j/k navigate  │  enter open  │  / search  │  q quit"
+        " {count} notes  │  j/k navigate  │  enter open  │  / search  │  d archive  │  q quit"
     ))
     .style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[2]);
@@ -187,6 +187,16 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(status, chunks[2]);
 }
 
+fn dimmed_note_list(app: &App) -> Vec<ListItem<'_>> {
+    app.notes
+        .iter()
+        .map(|note| {
+            let title = note.title.as_deref().unwrap_or("(untitled)");
+            ListItem::new(format!("  {title}")).style(Style::new().fg(Color::DarkGray))
+        })
+        .collect()
+}
+
 fn draw_search(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -219,20 +229,36 @@ fn draw_search(frame: &mut Frame, app: &App) {
     let cursor_y = chunks[1].y + 1;
     frame.set_cursor_position((cursor_x.min(chunks[1].right() - 2), cursor_y));
 
-    // Show existing list dimmed behind
-    let items: Vec<ListItem> = app
-        .notes
-        .iter()
-        .map(|note| {
-            let title = note.title.as_deref().unwrap_or("(untitled)");
-            ListItem::new(format!("  {title}")).style(Style::new().fg(Color::DarkGray))
-        })
-        .collect();
-    let list = List::new(items);
-    frame.render_widget(list, chunks[2]);
+    // Autocomplete suggestions or dimmed note list
+    let dimmed_notes = dimmed_note_list(app);
+    if !app.autocomplete_matches.is_empty() {
+        let ac_height = app.autocomplete_matches.len().min(8) as u16;
+        let sub =
+            Layout::vertical([Constraint::Length(ac_height), Constraint::Min(0)]).split(chunks[2]);
+
+        let suggestions: Vec<ListItem> = app
+            .autocomplete_matches
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let style = if i == app.autocomplete_index {
+                    Style::new().fg(Color::Yellow).bold()
+                } else {
+                    Style::new().fg(Color::DarkGray)
+                };
+                ListItem::new(format!("  {name}")).style(style)
+            })
+            .collect();
+        frame.render_widget(List::new(suggestions), sub[0]);
+        frame.render_widget(List::new(dimmed_notes), sub[1]);
+    } else {
+        frame.render_widget(List::new(dimmed_notes), chunks[2]);
+    }
 
     // Status bar
-    let status =
-        Paragraph::new(" enter search  │  esc cancel").style(Style::new().fg(Color::DarkGray));
+    let status = Paragraph::new(
+        " type to search  │  project:name to filter  │  tab autocomplete  │  enter search  │  esc cancel",
+    )
+    .style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[3]);
 }
