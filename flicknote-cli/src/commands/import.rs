@@ -49,13 +49,14 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
         }
 
         let id = uuid::Uuid::new_v4().to_string();
+        let created_at = file_created_time(file);
         let now = chrono::Utc::now().to_rfc3339();
 
         db.write(|conn| {
             conn.execute(
                 "INSERT INTO notes (id, user_id, type, status, title, content, project_id, created_at, updated_at)
                  VALUES (?, ?, 'normal', 'ai_queued', NULL, ?, ?, ?, ?)",
-                params![id, user_id, content, project_id, now, now],
+                params![id, user_id, content, project_id, created_at, now],
             )?;
 
             // Link to task if --task provided
@@ -69,7 +70,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
                 conn.execute(
                     "INSERT INTO note_tasks (id, note_id, user_id, title, external_id, created_at)
                      VALUES (?, ?, ?, ?, ?, ?)",
-                    params![link_id, id, user_id, title, external_id, now],
+                    params![link_id, id, user_id, title, external_id, created_at],
                 )?;
             }
 
@@ -110,6 +111,28 @@ fn collect_md_files(path: &Path) -> Result<Vec<PathBuf>, CliError> {
         "{} does not exist",
         path.display()
     )))
+}
+
+fn file_created_time(path: &Path) -> String {
+    let metadata = std::fs::metadata(path).ok();
+    let system_time = metadata
+        .as_ref()
+        .and_then(|m| m.created().ok())
+        .or_else(|| metadata.as_ref().and_then(|m| m.modified().ok()));
+
+    match system_time {
+        Some(t) => {
+            let datetime: chrono::DateTime<chrono::Utc> = t.into();
+            datetime.to_rfc3339()
+        }
+        None => {
+            eprintln!(
+                "Warning: could not read creation time for {}, using current time",
+                path.display()
+            );
+            chrono::Utc::now().to_rfc3339()
+        }
+    }
 }
 
 fn collect_md_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), CliError> {
