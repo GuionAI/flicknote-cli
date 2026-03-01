@@ -6,20 +6,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-latest
+    runs-on: rust-ci
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install libclang (for bindgen)
-        run: sudo apt-get install -y libclang-dev || (sudo apt-get update && sudo apt-get install -y libclang-dev)
-
-      - uses: https://github.com/dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
 
       - uses: https://github.com/Swatinem/rust-cache@v2
 
@@ -28,9 +22,6 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
-
-      - name: Install cargo-deny
-        run: cargo install cargo-deny
 
       - name: License & vulnerability check
         run: cargo deny check
