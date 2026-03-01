@@ -1,8 +1,12 @@
+pub(crate) mod add;
 pub(crate) mod api;
-pub(crate) mod clip;
+pub(crate) mod archive;
 pub(crate) mod get;
+pub(crate) mod link;
 pub(crate) mod list;
 pub(crate) mod login;
 pub(crate) mod logout;
+pub(crate) mod project;
 pub(crate) mod sync;
 pub(crate) mod tui;
+pub(crate) mod util;

@@ -2,6 +2,7 @@ use clap::Args;
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
+use rusqlite::params;
 
 #[derive(Args)]
 pub(crate) struct ListArgs {
@@ -11,6 +12,15 @@ pub(crate) struct ListArgs {
     /// Filter by type
     #[arg(long, value_parser = ["normal", "voice", "link"])]
     r#type: Option<String>,
+    /// Filter by project name
+    #[arg(long)]
+    project: Option<String>,
+    /// Filter by taskwarrior task UUID
+    #[arg(long)]
+    task: Option<String>,
+    /// Show only archived notes
+    #[arg(long)]
+    archived: bool,
     /// Maximum number of results
     #[arg(long, default_value = "20")]
     limit: u32,
@@ -21,7 +31,12 @@ pub(crate) struct ListArgs {
 
 pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
     let notes = db.read(|conn| {
-        let mut sql = String::from("SELECT * FROM notes WHERE deleted_at IS NULL");
+        let base_condition = if args.archived {
+            "WHERE deleted_at IS NOT NULL"
+        } else {
+            "WHERE deleted_at IS NULL"
+        };
+        let mut sql = format!("SELECT * FROM notes {base_condition}");
         let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
 
         if let Some(ref t) = args.r#type {
@@ -31,6 +46,26 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
         if let Some(ref search) = args.search {
             sql.push_str(" AND title LIKE ?");
             params_vec.push(Box::new(format!("%{search}%")));
+        }
+        if let Some(ref project_name) = args.project {
+            let project_id: Option<String> = conn
+                .prepare(
+                    "SELECT id FROM projects WHERE name = ? AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
+                )?
+                .query_row(params![project_name], |row| row.get(0))
+                .ok();
+
+            if let Some(pid) = project_id {
+                sql.push_str(" AND project_id = ?");
+                params_vec.push(Box::new(pid));
+            } else {
+                eprintln!("Warning: no project found with name \"{project_name}\".");
+                return Ok(vec![]);
+            }
+        }
+        if let Some(ref tw_uuid) = args.task {
+            sql.push_str(" AND id IN (SELECT note_id FROM note_tasks WHERE json_extract(external_id, '$.tw') = ?)");
+            params_vec.push(Box::new(tw_uuid.clone()));
         }
 
         sql.push_str(" ORDER BY created_at DESC LIMIT ?");

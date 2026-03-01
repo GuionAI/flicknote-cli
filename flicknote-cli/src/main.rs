@@ -22,12 +22,18 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Add a note (text or URL — auto-detected)
+    Add(commands::add::AddArgs),
+    /// Archive a note (soft-delete)
+    Archive(commands::archive::ArchiveArgs),
     /// List notes
     List(commands::list::ListArgs),
     /// Get a note by ID
     Get(commands::get::GetArgs),
-    /// Clip a URL as a new link note
-    Clip(commands::clip::ClipArgs),
+    /// Link an existing note to a taskwarrior task
+    Link(commands::link::LinkArgs),
+    /// Manage projects
+    Project(commands::project::ProjectArgs),
     /// Authenticate with FlickNote
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
@@ -52,10 +58,17 @@ fn run() -> Result<(), CliError> {
     let config = Config::load()?;
 
     match cli.command {
+        Commands::Add(args) => {
+            commands::add::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Archive(args) => commands::archive::run(&Database::open_local(&config)?, &args),
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &args),
-        Commands::Clip(args) => {
-            commands::clip::run(&Database::open_local(&config)?, &config, &args)
+        Commands::Link(args) => {
+            commands::link::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Project(args) => {
+            commands::project::run(&Database::open_local(&config)?, &args)
         }
         Commands::Login(args) => commands::login::run(&config, &args),
         Commands::Logout => commands::logout::run(&config),

@@ -49,3 +49,26 @@ impl Note {
             .map(std::string::ToString::to_string)
     }
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Project {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub color: Option<String>,
+    pub is_archived: Option<i64>,
+    pub created_at: Option<String>,
+}
+
+impl Project {
+    pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get("id")?,
+            user_id: row.get("user_id")?,
+            name: row.get("name")?,
+            color: row.get("color")?,
+            is_archived: row.get("is_archived")?,
+            created_at: row.get("created_at")?,
+        })
+    }
+}
