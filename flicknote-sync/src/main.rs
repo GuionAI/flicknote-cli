@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -124,12 +125,59 @@ impl FlickNoteConnector {
     }
 }
 
+fn pid_path(config: &Config) -> PathBuf {
+    PathBuf::from(&config.paths.data_dir).join("sync.pid")
+}
+
+struct PidGuard(PathBuf);
+
+impl Drop for PidGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.0) {
+            log::warn!("Failed to remove PID file: {}", e);
+        }
+    }
+}
+
+/// Check for an existing sync daemon and write our PID file.
+///
+/// Note: there is a small TOCTOU window between the `kill(pid, 0)` liveness
+/// check and writing the new PID file. Two daemons launched simultaneously
+/// could both pass. For a CLI daemon this is acceptable; use `flock` or
+/// `O_CREAT|O_EXCL` if stronger guarantees are ever needed.
+#[allow(unsafe_code)]
+fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::error::Error>> {
+    if let Ok(contents) = std::fs::read_to_string(path)
+        && let Ok(pid) = contents.trim().parse::<i32>()
+    {
+        let result = unsafe { libc::kill(pid, 0) };
+        if result == 0
+            || (result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+        {
+            return Err(format!(
+                "Sync daemon already running (pid={}). Kill it first or delete {}",
+                pid,
+                path.display()
+            )
+            .into());
+        }
+        log::info!("Removing stale PID file (pid={} no longer running)", pid);
+    }
+
+    std::fs::write(path, std::process::id().to_string())
+        .map_err(|e| format!("Failed to write PID file {}: {}", path.display(), e))?;
+    Ok(PidGuard(path.to_path_buf()))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     let config = Config::load()?;
     config.validate()?;
+
+    let pid_file = pid_path(&config);
+    let _pid_guard = check_and_write_pid(&pid_file)?;
 
     PowerSyncEnvironment::powersync_auto_extension()?;
 

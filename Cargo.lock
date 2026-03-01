@@ -1030,6 +1030,7 @@ dependencies = [
  "flicknote-core",
  "futures-lite 2.6.1",
  "http-client",
+ "libc",
  "log",
  "powersync",
  "reqwest",
