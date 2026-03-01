@@ -43,10 +43,32 @@ pub(crate) fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
             })
     })?;
 
+    let project_name: Option<String> = if let Some(ref pid) = note.project_id {
+        db.read(|conn| {
+            match conn
+                .prepare("SELECT name FROM projects WHERE id = ? LIMIT 1")?
+                .query_row(rusqlite::params![pid], |row| row.get(0))
+            {
+                Ok(name) => Ok(Some(name)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e.into()),
+            }
+        })?
+    } else {
+        None
+    };
+
     if args.json {
+        let json_output = serde_json::json!({
+            "id": note.id,
+            "title": note.title,
+            "project": project_name,
+            "summary": note.summary,
+            "content": note.content,
+        });
         println!(
             "{}",
-            serde_json::to_string_pretty(&note).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&json_output).map_err(CliError::Json)?
         );
     } else {
         println!(
@@ -58,8 +80,8 @@ pub(crate) fn run(db: &Database, args: &GetArgs) -> Result<(), CliError> {
         println!("Status:     {}", note.status);
         println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
         println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
-        if let Some(ref pid) = note.project_id {
-            println!("Project:    {pid}");
+        if let Some(ref name) = project_name {
+            println!("Project:    {name}");
         }
         if let Some(ref source) = note.source {
             println!("Source:     {source}");
