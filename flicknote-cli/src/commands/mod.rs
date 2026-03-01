@@ -10,4 +10,5 @@ pub(crate) mod logout;
 pub(crate) mod project;
 pub(crate) mod sync;
 pub(crate) mod tui;
+pub(crate) mod upload;
 pub(crate) mod util;

@@ -44,6 +44,8 @@ enum Commands {
     Sync(commands::sync::SyncArgs),
     /// Import markdown files as notes
     Import(commands::import::ImportArgs),
+    /// Upload a file and create a file-type note
+    Upload(commands::upload::UploadArgs),
     /// Interact with FlickNote API directly
     Api(commands::api::ApiArgs),
 }
@@ -74,6 +76,9 @@ fn run() -> Result<(), CliError> {
         Commands::Sync(args) => commands::sync::run(&config, &args),
         Commands::Import(args) => {
             commands::import::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Upload(args) => {
+            commands::upload::run(&Database::open_local(&config)?, &config, &args)
         }
         Commands::Api(args) => commands::api::run(&config, &args),
     }
