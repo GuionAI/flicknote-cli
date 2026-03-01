@@ -14,6 +14,13 @@ fn format_date(date: Option<&str>) -> &str {
     date.and_then(|d| d.get(..10)).unwrap_or("-")
 }
 
+fn project_name<'a>(app: &'a App, project_id: &str) -> Option<&'a str> {
+    app.projects
+        .iter()
+        .find(|p| p.id == project_id)
+        .map(|p| p.name.as_str())
+}
+
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     match app.view {
         View::List => draw_list(frame, app),
@@ -55,7 +62,7 @@ fn draw_list(frame: &mut Frame, app: &App) {
             } else {
                 title.to_string()
             };
-            let line = Line::from(vec![
+            let mut spans = vec![
                 Span::raw(format!(" {icon} ")),
                 Span::styled(
                     format!("{truncated_title:<40}"),
@@ -65,7 +72,16 @@ fn draw_list(frame: &mut Frame, app: &App) {
                 Span::styled(date, Style::new().fg(Color::DarkGray)),
                 Span::raw("  "),
                 Span::styled(&note.status, Style::new().fg(Color::Yellow)),
-            ]);
+            ];
+            if let Some(ref pid) = note.project_id
+                && let Some(name) = project_name(app, pid)
+            {
+                spans.push(Span::styled(
+                    format!("  [{name}]"),
+                    Style::new().fg(Color::Magenta),
+                ));
+            }
+            let line = Line::from(spans);
             ListItem::new(line)
         })
         .collect();
@@ -132,9 +148,10 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     ];
 
     if let Some(ref pid) = note.project_id {
+        let name = project_name(app, pid).unwrap_or(pid.as_str());
         lines.push(Line::from(vec![
             Span::styled("Project:  ", Style::new().fg(Color::DarkGray)),
-            Span::raw(pid),
+            Span::raw(name),
         ]));
     }
 
