@@ -1,4 +1,4 @@
-.PHONY: build test check fmt clippy install reinstall clean release
+.PHONY: build test check fmt clippy install reinstall clean release setup
 
 build:
 	cargo build
@@ -32,3 +32,6 @@ reinstall:
 
 clean:
 	cargo clean
+
+setup:
+	git config core.hooksPath .githooks

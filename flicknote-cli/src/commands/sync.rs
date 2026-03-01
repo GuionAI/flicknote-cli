@@ -31,7 +31,7 @@ pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
         SyncCommand::Stop => stop(config),
         SyncCommand::Status => status(config),
         SyncCommand::Install => install(config),
-        SyncCommand::Uninstall => uninstall(config),
+        SyncCommand::Uninstall => uninstall(),
     }
 }
 
@@ -120,24 +120,16 @@ fn status(config: &Config) -> Result<(), CliError> {
 }
 
 fn install(config: &Config) -> Result<(), CliError> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        println!("launchd install is only supported on macOS");
-        return Ok(());
-    }
+    let label = "io.guion.flicknote.sync";
+    let home = dirs::home_dir()
+        .ok_or_else(|| CliError::Other("Could not determine home directory".into()))?;
+    let plist_path = home
+        .join("Library/LaunchAgents")
+        .join(format!("{label}.plist"));
+    let daemon = daemon_binary()?;
 
-    #[cfg(target_os = "macos")]
-    {
-        let label = "io.guion.flicknote.sync";
-        let home = dirs::home_dir()
-            .ok_or_else(|| CliError::Other("Could not determine home directory".into()))?;
-        let plist_path = home
-            .join("Library/LaunchAgents")
-            .join(format!("{label}.plist"));
-        let daemon = daemon_binary()?;
-
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -162,94 +154,84 @@ fn install(config: &Config) -> Result<(), CliError> {
     <string>{}</string>
 </dict>
 </plist>"#,
-            daemon.display(),
-            config.paths.log_file.display(),
-            config.paths.log_file.display(),
-        );
+        daemon.display(),
+        config.paths.log_file.display(),
+        config.paths.log_file.display(),
+    );
 
-        fs::create_dir_all(
-            plist_path
-                .parent()
-                .ok_or_else(|| CliError::Other("Could not determine LaunchAgents directory".into()))?,
-        )?;
-        fs::write(&plist_path, &plist)?;
+    fs::create_dir_all(
+        plist_path
+            .parent()
+            .ok_or_else(|| CliError::Other("Could not determine LaunchAgents directory".into()))?,
+    )?;
+    fs::write(&plist_path, &plist)?;
 
-        #[allow(unsafe_code)]
-        let uid = unsafe { libc::getuid() };
+    #[allow(unsafe_code)]
+    let uid = unsafe { libc::getuid() };
 
-        // Bootout existing service — ok to fail if not loaded
-        let output = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{label}")])
-            .output()
-            .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // "Could not find specified service" is expected on first install
-            if !stderr.contains("Could not find specified service") {
-                return Err(CliError::Other(format!(
-                    "launchctl bootout failed: {stderr}"
-                )));
-            }
-        }
-
-        // Bootstrap must succeed
-        let output = Command::new("launchctl")
-            .args([
-                "bootstrap",
-                &format!("gui/{uid}"),
-                plist_path.to_string_lossy().as_ref(),
-            ])
-            .output()
-            .map_err(|e| CliError::Other(format!("launchctl bootstrap failed to execute: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+    // Bootout existing service — ok to fail if not loaded
+    let output = Command::new("launchctl")
+        .args(["bootout", &format!("gui/{uid}/{label}")])
+        .output()
+        .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // "Could not find specified service" is expected on first install
+        if !stderr.contains("Could not find specified service") {
             return Err(CliError::Other(format!(
-                "launchctl bootstrap failed: {stderr}"
+                "launchctl bootout failed: {stderr}"
             )));
         }
-
-        println!("Installed and started: {label}");
-        Ok(())
     }
+
+    // Bootstrap must succeed
+    let output = Command::new("launchctl")
+        .args([
+            "bootstrap",
+            &format!("gui/{uid}"),
+            plist_path.to_string_lossy().as_ref(),
+        ])
+        .output()
+        .map_err(|e| CliError::Other(format!("launchctl bootstrap failed to execute: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(CliError::Other(format!(
+            "launchctl bootstrap failed: {stderr}"
+        )));
+    }
+
+    println!("Installed and started: {label}");
+    Ok(())
 }
 
-fn uninstall(_config: &Config) -> Result<(), CliError> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        println!("launchd uninstall is only supported on macOS");
-        return Ok(());
+fn uninstall() -> Result<(), CliError> {
+    let label = "io.guion.flicknote.sync";
+    let home = dirs::home_dir()
+        .ok_or_else(|| CliError::Other("Could not determine home directory".into()))?;
+    let plist_path = home
+        .join("Library/LaunchAgents")
+        .join(format!("{label}.plist"));
+
+    #[allow(unsafe_code)]
+    let uid = unsafe { libc::getuid() };
+    let output = Command::new("launchctl")
+        .args(["bootout", &format!("gui/{uid}/{label}")])
+        .output()
+        .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Uninstall is lenient with bootout failures (unlike install) because
+        // the goal is to clean up — if the service is already gone or in a bad
+        // state, we still want to remove the plist file and report success.
+        if !stderr.contains("Could not find specified service") {
+            eprintln!("Warning: launchctl bootout failed: {stderr}");
+        }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let label = "io.guion.flicknote.sync";
-        let home = dirs::home_dir()
-            .ok_or_else(|| CliError::Other("Could not determine home directory".into()))?;
-        let plist_path = home
-            .join("Library/LaunchAgents")
-            .join(format!("{label}.plist"));
-
-        #[allow(unsafe_code)]
-        let uid = unsafe { libc::getuid() };
-        let output = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{label}")])
-            .output()
-            .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // Uninstall is lenient with bootout failures (unlike install) because
-            // the goal is to clean up — if the service is already gone or in a bad
-            // state, we still want to remove the plist file and report success.
-            if !stderr.contains("Could not find specified service") {
-                eprintln!("Warning: launchctl bootout failed: {stderr}");
-            }
-        }
-
-        if plist_path.exists() {
-            fs::remove_file(&plist_path)?;
-        }
-
-        println!("Uninstalled: {label}");
-        Ok(())
+    if plist_path.exists() {
+        fs::remove_file(&plist_path)?;
     }
+
+    println!("Uninstalled: {label}");
+    Ok(())
 }

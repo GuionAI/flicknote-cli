@@ -11,9 +11,7 @@ pub(crate) fn resolve_note_id(db: &Database, prefix: &str) -> Result<String, Cli
         let second = rows.next()?.is_some();
 
         match (first, second) {
-            (Some(_), true) => Err(CliError::Other(format!(
-                "Ambiguous ID prefix: {prefix}"
-            ))),
+            (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
             (Some(id), false) => Ok(id),
             (None, _) => Err(CliError::NoteNotFound {
                 id: prefix.to_string(),

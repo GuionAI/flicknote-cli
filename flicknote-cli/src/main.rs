@@ -42,6 +42,8 @@ enum Commands {
     Tui,
     /// Manage sync daemon
     Sync(commands::sync::SyncArgs),
+    /// Import markdown files as notes
+    Import(commands::import::ImportArgs),
     /// Interact with FlickNote API directly
     Api(commands::api::ApiArgs),
 }
@@ -58,22 +60,21 @@ fn run() -> Result<(), CliError> {
     let config = Config::load()?;
 
     match cli.command {
-        Commands::Add(args) => {
-            commands::add::run(&Database::open_local(&config)?, &config, &args)
-        }
+        Commands::Add(args) => commands::add::run(&Database::open_local(&config)?, &config, &args),
         Commands::Archive(args) => commands::archive::run(&Database::open_local(&config)?, &args),
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &args),
         Commands::Link(args) => {
             commands::link::run(&Database::open_local(&config)?, &config, &args)
         }
-        Commands::Project(args) => {
-            commands::project::run(&Database::open_local(&config)?, &args)
-        }
+        Commands::Project(args) => commands::project::run(&Database::open_local(&config)?, &args),
         Commands::Login(args) => commands::login::run(&config, &args),
         Commands::Logout => commands::logout::run(&config),
         Commands::Tui => commands::tui::run(&config),
         Commands::Sync(args) => commands::sync::run(&config, &args),
+        Commands::Import(args) => {
+            commands::import::run(&Database::open_local(&config)?, &config, &args)
+        }
         Commands::Api(args) => commands::api::run(&config, &args),
     }
 }

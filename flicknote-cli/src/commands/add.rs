@@ -64,7 +64,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
     Ok(())
 }
 
-fn resolve_or_create_project(
+pub(crate) fn resolve_or_create_project(
     db: &Database,
     user_id: &str,
     name: &str,
