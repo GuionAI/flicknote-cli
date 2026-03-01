@@ -55,7 +55,11 @@ fn draw_list(frame: &mut Frame, app: &App) {
         .iter()
         .map(|note| {
             let icon = type_icon(&note.r#type);
-            let title = note.title.as_deref().unwrap_or("(untitled)");
+            let title = note
+                .title
+                .as_deref()
+                .or(note.content.as_deref())
+                .unwrap_or("(untitled)");
             let date = format_date(note.created_at.as_deref());
             let truncated_title: String = if title.chars().count() > 40 {
                 title.chars().take(40).collect()
@@ -118,7 +122,11 @@ fn draw_detail(frame: &mut Frame, app: &App) {
 
     // Title bar
     let icon = type_icon(&note.r#type);
-    let title = note.title.as_deref().unwrap_or("(untitled)");
+    let title = note
+        .title
+        .as_deref()
+        .or(note.content.as_deref())
+        .unwrap_or("(untitled)");
     let title_bar = Paragraph::new(format!(" {icon} {title}"))
         .style(Style::new().bold().fg(Color::White).bg(Color::Blue));
     frame.render_widget(title_bar, chunks[0]);
@@ -208,8 +216,17 @@ fn dimmed_note_list(app: &App) -> Vec<ListItem<'_>> {
     app.notes
         .iter()
         .map(|note| {
-            let title = note.title.as_deref().unwrap_or("(untitled)");
-            ListItem::new(format!("  {title}")).style(Style::new().fg(Color::DarkGray))
+            let title = note
+                .title
+                .as_deref()
+                .or(note.content.as_deref())
+                .unwrap_or("(untitled)");
+            let truncated: String = if title.chars().count() > 40 {
+                title.chars().take(40).collect()
+            } else {
+                title.to_string()
+            };
+            ListItem::new(format!("  {truncated}")).style(Style::new().fg(Color::DarkGray))
         })
         .collect()
 }

@@ -6,7 +6,7 @@ use rusqlite::params;
 
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// Search notes by title
+    /// Search notes by title or content
     #[arg(long)]
     search: Option<String>,
     /// Filter by type
@@ -44,8 +44,10 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
             params_vec.push(Box::new(t.clone()));
         }
         if let Some(ref search) = args.search {
-            sql.push_str(" AND title LIKE ?");
-            params_vec.push(Box::new(format!("%{search}%")));
+            sql.push_str(" AND (title LIKE ? OR content LIKE ?)");
+            let pattern = format!("%{search}%");
+            params_vec.push(Box::new(pattern.clone()));
+            params_vec.push(Box::new(pattern));
         }
         if let Some(ref project_name) = args.project {
             let project_id: Option<String> = conn
@@ -96,7 +98,16 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
                 .as_deref()
                 .and_then(|d| d.get(..10))
                 .unwrap_or("-");
-            let title = note.title.as_deref().unwrap_or("(untitled)");
+            let title = note
+                .title
+                .as_deref()
+                .or(note.content.as_deref())
+                .unwrap_or("(untitled)");
+            let title: String = if title.chars().count() > 60 {
+                title.chars().take(60).collect()
+            } else {
+                title.to_string()
+            };
             println!(
                 "{:<10} {:<8} {:<14} {:<12} {}",
                 id, note.r#type, note.status, date, title

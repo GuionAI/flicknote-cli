@@ -7,7 +7,7 @@ use rusqlite::params;
 
 #[derive(Args)]
 pub(crate) struct AddArgs {
-    /// Note title or URL (URLs are auto-detected as link notes)
+    /// Note content or URL (URLs are auto-detected as link notes)
     value: String,
     /// Assign to project by name (creates project if it doesn't exist)
     #[arg(long)]
@@ -40,7 +40,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
             )?;
         } else {
             conn.execute(
-                "INSERT INTO notes (id, user_id, type, status, title, project_id, created_at, updated_at)
+                "INSERT INTO notes (id, user_id, type, status, content, project_id, created_at, updated_at)
                  VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?)",
                 params![id, user_id, args.value, project_id, now, now],
             )?;

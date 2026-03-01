@@ -46,10 +46,13 @@ impl App {
             let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match search {
                 Some(q) if !q.is_empty() => {
                     let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-                    (
-                        "SELECT * FROM notes WHERE deleted_at IS NULL AND title LIKE ? ESCAPE '\\' ORDER BY created_at DESC LIMIT 200".into(),
-                        vec![Box::new(format!("%{escaped}%"))],
-                    )
+                    {
+                        let pattern = format!("%{escaped}%");
+                        (
+                            "SELECT * FROM notes WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT 200".into(),
+                            vec![Box::new(pattern.clone()), Box::new(pattern)],
+                        )
+                    }
                 },
                 _ => (
                     "SELECT * FROM notes WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 200".into(),
