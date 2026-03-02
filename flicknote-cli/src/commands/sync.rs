@@ -79,7 +79,7 @@ fn start(config: &Config) -> Result<(), CliError> {
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "flicknote_sync=info,powersync=warn".into()),
+                .unwrap_or_else(|_| "flicknote_sync=info,powersync=debug".into()),
         )
         .stdin(std::process::Stdio::null())
         .stdout(log)
@@ -142,7 +142,7 @@ fn install(config: &Config) -> Result<(), CliError> {
     <key>EnvironmentVariables</key>
     <dict>
         <key>RUST_LOG</key>
-        <string>flicknote_sync=info,powersync=warn</string>
+        <string>flicknote_sync=info,powersync=debug</string>
     </dict>
     <key>KeepAlive</key>
     <true/>
