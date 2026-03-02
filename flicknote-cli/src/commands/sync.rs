@@ -169,20 +169,11 @@ fn install(config: &Config) -> Result<(), CliError> {
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
 
-    // Bootout existing service — ok to fail if not loaded
-    let output = Command::new("launchctl")
+    // Bootout existing service — ignore errors (may not be loaded)
+    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+    let _ = Command::new("launchctl")
         .args(["bootout", &format!("gui/{uid}/{label}")])
-        .output()
-        .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // "Could not find specified service" is expected on first install
-        if !stderr.contains("Could not find specified service") {
-            return Err(CliError::Other(format!(
-                "launchctl bootout failed: {stderr}"
-            )));
-        }
-    }
+        .output();
 
     // Bootstrap must succeed
     let output = Command::new("launchctl")
@@ -214,19 +205,11 @@ fn uninstall() -> Result<(), CliError> {
 
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
-    let output = Command::new("launchctl")
+    // Bootout existing service — ignore errors (may not be loaded)
+    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+    let _ = Command::new("launchctl")
         .args(["bootout", &format!("gui/{uid}/{label}")])
-        .output()
-        .map_err(|e| CliError::Other(format!("launchctl bootout failed to execute: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Uninstall is lenient with bootout failures (unlike install) because
-        // the goal is to clean up — if the service is already gone or in a bad
-        // state, we still want to remove the plist file and report success.
-        if !stderr.contains("Could not find specified service") {
-            eprintln!("Warning: launchctl bootout failed: {stderr}");
-        }
-    }
+        .output();
 
     if plist_path.exists() {
         fs::remove_file(&plist_path)?;
