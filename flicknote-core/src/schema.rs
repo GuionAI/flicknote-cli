@@ -82,20 +82,5 @@ pub fn app_schema() -> Schema {
         |_| {},
     ));
 
-    schema.tables.push(Table::create(
-        "note_tasks",
-        vec![
-            Column::text("title"),
-            Column::text("due_at"),
-            Column::integer("is_full_day"),
-            Column::text("note_id"),
-            Column::text("external_id"),
-            Column::text("user_id"),
-            Column::text("created_at"),
-            Column::integer("is_urgent"),
-        ],
-        |_| {},
-    ));
-
     schema
 }

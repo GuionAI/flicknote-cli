@@ -4,7 +4,6 @@ pub(crate) mod archive;
 pub(crate) mod edit;
 pub(crate) mod get;
 pub(crate) mod import;
-pub(crate) mod link;
 pub(crate) mod list;
 pub(crate) mod login;
 pub(crate) mod logout;

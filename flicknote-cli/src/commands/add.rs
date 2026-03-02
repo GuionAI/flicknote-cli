@@ -13,9 +13,6 @@ pub(crate) struct AddArgs {
     /// Assign to project by name (creates project if it doesn't exist)
     #[arg(long)]
     project: Option<String>,
-    /// Link to a taskwarrior task by UUID
-    #[arg(long)]
-    task: Option<String>,
 }
 
 pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), CliError> {
@@ -63,17 +60,6 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
                 "INSERT INTO notes (id, user_id, type, status, title, content, project_id, created_at, updated_at)
                  VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?, ?)",
                 params![id, user_id, title, content, project_id, now, now],
-            )?;
-        }
-
-        if let Some(ref tw_uuid) = args.task {
-            let link_id = uuid::Uuid::new_v4().to_string();
-            let external_id = serde_json::json!({ "tw": tw_uuid }).to_string();
-            let title = if is_url { "Link note" } else { &content };
-            conn.execute(
-                "INSERT INTO note_tasks (id, note_id, user_id, title, external_id, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                params![link_id, id, user_id, title, external_id, now],
             )?;
         }
 

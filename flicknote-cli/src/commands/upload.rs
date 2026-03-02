@@ -16,9 +16,6 @@ pub(crate) struct UploadArgs {
     /// Assign to project by name
     #[arg(long)]
     project: Option<String>,
-    /// Link to a taskwarrior task by UUID
-    #[arg(long)]
-    task: Option<String>,
 }
 
 pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(), CliError> {
@@ -74,16 +71,6 @@ pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(
              VALUES (?, ?, 'file', 'source_queued', ?, ?, ?, ?)",
             params![id, user_id, metadata, project_id, now, now],
         )?;
-
-        if let Some(ref tw_uuid) = args.task {
-            let link_id = uuid::Uuid::new_v4().to_string();
-            let external_id = serde_json::json!({ "tw": tw_uuid }).to_string();
-            conn.execute(
-                "INSERT INTO note_tasks (id, note_id, user_id, title, external_id, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?)",
-                params![link_id, id, user_id, filename, external_id, now],
-            )?;
-        }
 
         Ok(())
     })?;

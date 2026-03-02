@@ -15,9 +15,6 @@ pub(crate) struct ListArgs {
     /// Filter by project name
     #[arg(long)]
     project: Option<String>,
-    /// Filter by taskwarrior task UUID
-    #[arg(long)]
-    task: Option<String>,
     /// Show only archived notes
     #[arg(long)]
     archived: bool,
@@ -65,11 +62,6 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
                 return Ok(vec![]);
             }
         }
-        if let Some(ref tw_uuid) = args.task {
-            sql.push_str(" AND id IN (SELECT note_id FROM note_tasks WHERE json_extract(external_id, '$.tw') = ?)");
-            params_vec.push(Box::new(tw_uuid.clone()));
-        }
-
         sql.push_str(" ORDER BY created_at DESC LIMIT ?");
         params_vec.push(Box::new(args.limit));
 

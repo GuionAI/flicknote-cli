@@ -14,9 +14,6 @@ pub(crate) struct ImportArgs {
     /// Assign to project by name (creates if it doesn't exist)
     #[arg(long)]
     project: Option<String>,
-    /// Link to a taskwarrior task by UUID
-    #[arg(long)]
-    task: Option<String>,
 }
 
 pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(), CliError> {
@@ -59,21 +56,6 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
                  VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?, ?)",
                 params![id, user_id, title, content, project_id, created_at, now],
             )?;
-
-            // Link to task if --task provided
-            if let Some(ref tw_uuid) = args.task {
-                let link_id = uuid::Uuid::new_v4().to_string();
-                let external_id = serde_json::json!({ "tw": tw_uuid }).to_string();
-                let title = file.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("Imported note")
-                    .to_string();
-                conn.execute(
-                    "INSERT INTO note_tasks (id, note_id, user_id, title, external_id, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?)",
-                    params![link_id, id, user_id, title, external_id, created_at],
-                )?;
-            }
 
             Ok(())
         })?;
