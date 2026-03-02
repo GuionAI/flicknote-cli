@@ -1,5 +1,6 @@
 pub(crate) mod add;
 pub(crate) mod api;
+pub(crate) mod append;
 pub(crate) mod archive;
 pub(crate) mod edit;
 pub(crate) mod get;

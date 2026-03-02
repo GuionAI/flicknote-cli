@@ -28,6 +28,28 @@ pub(crate) fn resolve_note_id(db: &Database, prefix: &str) -> Result<String, Cli
     })
 }
 
+/// Fetch note content from DB, returning `None` for NULL/missing content.
+/// Shared by `get_note_content` and the append command.
+pub(crate) fn get_note_content_optional(
+    db: &Database,
+    full_id: &str,
+    user_id: &str,
+    display_id: &str,
+) -> Result<Option<String>, CliError> {
+    db.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT content FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        )?;
+        let mut rows = stmt.query(params![full_id, user_id])?;
+        match rows.next()? {
+            Some(row) => Ok(row.get::<_, Option<String>>(0)?),
+            None => Err(CliError::NoteNotFound {
+                id: display_id.to_string(),
+            }),
+        }
+    })
+}
+
 /// Fetch note content from DB. Shared by get --tree, get -s, and edit.
 pub(crate) fn get_note_content(
     db: &Database,
@@ -35,21 +57,8 @@ pub(crate) fn get_note_content(
     user_id: &str,
     display_id: &str,
 ) -> Result<String, CliError> {
-    db.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT content FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        )?;
-        let mut rows = stmt.query(params![full_id, user_id])?;
-        match rows.next()? {
-            Some(row) => {
-                let content: Option<String> = row.get(0)?;
-                content.ok_or_else(|| CliError::Other("Note has no content".into()))
-            }
-            None => Err(CliError::NoteNotFound {
-                id: display_id.to_string(),
-            }),
-        }
-    })
+    get_note_content_optional(db, full_id, user_id, display_id)?
+        .ok_or_else(|| CliError::Other("Note has no content".into()))
 }
 
 /// Read content from an optional arg, falling back to stdin. Returns an error

@@ -26,6 +26,8 @@ struct Cli {
 enum Commands {
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
+    /// Append content to an existing note
+    Append(commands::append::AppendArgs),
     /// Archive a note (soft-delete)
     Archive(commands::archive::ArchiveArgs),
     /// List notes
@@ -67,6 +69,9 @@ fn run() -> Result<(), CliError> {
 
     match cli.command {
         Commands::Add(args) => commands::add::run(&Database::open_local(&config)?, &config, &args),
+        Commands::Append(args) => {
+            commands::append::run(&Database::open_local(&config)?, &config, &args)
+        }
         Commands::Archive(args) => commands::archive::run(&Database::open_local(&config)?, &args),
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &config, &args),
