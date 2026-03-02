@@ -7,6 +7,7 @@ use flicknote_core::error::CliError;
 
 mod api_client;
 mod commands;
+mod markdown;
 mod tui;
 mod utils;
 
@@ -49,6 +50,10 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Interact with FlickNote API directly
     Api(commands::api::ApiArgs),
+    /// Replace a section in a note by heading name
+    Edit(commands::edit::EditArgs),
+    /// Replace entire note content
+    Replace(commands::replace::ReplaceArgs),
 }
 
 fn main() {
@@ -66,7 +71,7 @@ fn run() -> Result<(), CliError> {
         Commands::Add(args) => commands::add::run(&Database::open_local(&config)?, &config, &args),
         Commands::Archive(args) => commands::archive::run(&Database::open_local(&config)?, &args),
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
-        Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &args),
+        Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &config, &args),
         Commands::Link(args) => {
             commands::link::run(&Database::open_local(&config)?, &config, &args)
         }
@@ -82,5 +87,11 @@ fn run() -> Result<(), CliError> {
             commands::upload::run(&Database::open_local(&config)?, &config, &args)
         }
         Commands::Api(args) => commands::api::run(&config, &args),
+        Commands::Edit(args) => {
+            commands::edit::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Replace(args) => {
+            commands::replace::run(&Database::open_local(&config)?, &config, &args)
+        }
     }
 }
