@@ -25,6 +25,7 @@ serde = { workspace = true }
 rusqlite = { workspace = true }
 ratatui = "0.29"
 crossterm = "0.28"
+pulldown-cmark = { version = "0.13.1", default-features = false }
 
 [lints]
 workspace = true

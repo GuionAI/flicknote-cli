@@ -49,7 +49,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let title = extract_title(&content);
+        let title = crate::utils::extract_title(&content);
         let created_at = file_created_time(file);
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -137,21 +137,6 @@ fn file_created_time(path: &Path) -> String {
     }
 }
 
-/// Extract title from first markdown H1 heading (# Title).
-/// Returns None if no heading found.
-fn extract_title(content: &str) -> Option<String> {
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if let Some(title) = trimmed.strip_prefix("# ") {
-            let title = title.trim();
-            if !title.is_empty() {
-                return Some(title.to_string());
-            }
-        }
-    }
-    None
-}
-
 fn collect_md_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), CliError> {
     let entries = std::fs::read_dir(dir)
         .map_err(|e| CliError::Other(format!("Failed to read dir {}: {}", dir.display(), e)))?;
@@ -166,48 +151,4 @@ fn collect_md_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Result<(), CliE
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_title_normal_heading() {
-        assert_eq!(
-            extract_title("# My Title\nsome body"),
-            Some("My Title".into())
-        );
-    }
-
-    #[test]
-    fn extract_title_no_heading() {
-        assert_eq!(extract_title("just some text\nno heading here"), None);
-    }
-
-    #[test]
-    fn extract_title_empty_h1() {
-        assert_eq!(extract_title("# \nsome body"), None);
-    }
-
-    #[test]
-    fn extract_title_h2_skipped() {
-        assert_eq!(extract_title("## Not a title\n### Also not"), None);
-    }
-
-    #[test]
-    fn extract_title_trims_whitespace() {
-        assert_eq!(
-            extract_title("#   Spaced Title   \nbody"),
-            Some("Spaced Title".into())
-        );
-    }
-
-    #[test]
-    fn extract_title_first_h1_anywhere() {
-        assert_eq!(
-            extract_title("some preamble\n\n# First\n\n# Second"),
-            Some("First".into()),
-        );
-    }
 }

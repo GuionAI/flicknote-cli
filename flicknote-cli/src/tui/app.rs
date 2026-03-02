@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
@@ -18,6 +20,8 @@ pub(crate) struct App {
     pub search_input: String,
     pub should_quit: bool,
     pub projects: Vec<Project>,
+    pub scroll_offset: u16,
+    pub detail_content_height: Cell<u16>,
     pub autocomplete_matches: Vec<String>,
     pub autocomplete_index: usize,
     db: Database,
@@ -33,6 +37,8 @@ impl App {
             selected: 0,
             search_query: String::new(),
             search_input: String::new(),
+            scroll_offset: 0,
+            detail_content_height: Cell::new(0),
             should_quit: false,
             projects,
             autocomplete_matches: Vec::new(),
@@ -96,6 +102,14 @@ impl App {
         self.notes.get(self.selected)
     }
 
+    fn search_filter(&self) -> Option<&str> {
+        if self.search_query.is_empty() {
+            None
+        } else {
+            Some(self.search_query.as_str())
+        }
+    }
+
     pub(crate) fn handle_events(&mut self) -> Result<(), CliError> {
         let Event::Key(key) = event::read().map_err(|e| CliError::Other(e.to_string()))? else {
             return Ok(());
@@ -130,6 +144,7 @@ impl App {
             }
             KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
                 if !self.notes.is_empty() {
+                    self.scroll_offset = 0;
                     self.view = View::Detail;
                 }
             }
@@ -156,6 +171,32 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('r') => {
+                if let Ok(notes) = Self::fetch_notes(&self.db, self.search_filter()) {
+                    self.notes = notes;
+                    if self.selected >= self.notes.len() {
+                        self.selected = self.notes.len().saturating_sub(1);
+                    }
+                }
+                self.projects = Self::fetch_projects(&self.db).unwrap_or_default();
+            }
+            KeyCode::Char('u') => {
+                let now = chrono::Utc::now().to_rfc3339();
+                let result = self.db.write(|conn| {
+                    conn.execute(
+                        "UPDATE notes SET deleted_at = NULL, updated_at = ? \
+                         WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL \
+                         ORDER BY deleted_at DESC LIMIT 1)",
+                        rusqlite::params![&now],
+                    )?;
+                    Ok(())
+                });
+                if result.is_ok()
+                    && let Ok(notes) = Self::fetch_notes(&self.db, self.search_filter())
+                {
+                    self.notes = notes;
+                }
+            }
             _ => {}
         }
     }
@@ -164,6 +205,18 @@ impl App {
         match key {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left => {
                 self.view = View::List;
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                let max = self.detail_content_height.get();
+                if self.scroll_offset < max {
+                    self.scroll_offset = self.scroll_offset.saturating_add(1);
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
+                self.scroll_offset = 0;
             }
             _ => {}
         }
@@ -192,12 +245,7 @@ impl App {
                         rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
                     })?;
                 } else {
-                    let search = if self.search_query.is_empty() {
-                        None
-                    } else {
-                        Some(self.search_query.as_str())
-                    };
-                    self.notes = Self::fetch_notes(&self.db, search)?;
+                    self.notes = Self::fetch_notes(&self.db, self.search_filter())?;
                 }
                 self.selected = 0;
                 self.view = View::List;

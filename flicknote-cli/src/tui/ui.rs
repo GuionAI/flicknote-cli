@@ -101,7 +101,7 @@ fn draw_list(frame: &mut Frame, app: &App) {
     // Status bar
     let count = app.notes.len();
     let status = Paragraph::new(format!(
-        " {count} notes  │  j/k navigate  │  enter open  │  / search  │  d archive  │  q quit"
+        " {count} notes  │  j/k navigate  │  enter open  │  / search  │  d archive  │  u undo  │  r refresh  │  q quit"
     ))
     .style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[2]);
@@ -197,18 +197,25 @@ fn draw_detail(frame: &mut Frame, app: &App) {
             "── Content ──",
             Style::new().fg(Color::DarkGray),
         ));
-        for line in content.lines() {
-            lines.push(Line::raw(line));
+        for line in super::markdown::to_lines(content) {
+            lines.push(line);
         }
     }
 
+    let visible_height = chunks[1].height;
+    let total_lines = lines.len() as u16;
+    let max_scroll = total_lines.saturating_sub(visible_height);
+    app.detail_content_height.set(max_scroll);
+
     let detail = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
+        .scroll((app.scroll_offset, 0))
         .block(Block::default().padding(Padding::horizontal(1)));
     frame.render_widget(detail, chunks[1]);
 
     // Status bar
-    let status = Paragraph::new(" q/esc back to list").style(Style::new().fg(Color::DarkGray));
+    let status = Paragraph::new(" j/k scroll  │  g top  │  q/esc back to list")
+        .style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[2]);
 }
 

@@ -58,10 +58,11 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
                 params![id, user_id, metadata, project_id, now, now],
             )?;
         } else {
+            let title = crate::utils::extract_title(&content);
             conn.execute(
-                "INSERT INTO notes (id, user_id, type, status, content, project_id, created_at, updated_at)
-                 VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?)",
-                params![id, user_id, content, project_id, now, now],
+                "INSERT INTO notes (id, user_id, type, status, title, content, project_id, created_at, updated_at)
+                 VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?, ?)",
+                params![id, user_id, title, content, project_id, now, now],
             )?;
         }
 
