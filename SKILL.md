@@ -19,9 +19,6 @@ flicknote add "https://example.com/article"
 # Add to a project (creates project if it doesn't exist)
 flicknote add "Design doc draft" --project myproject
 
-# Link to a taskwarrior task
-flicknote add "Research findings" --task <uuid>
-
 # Pipe content from stdin
 echo "long content here" | flicknote add --project myproject
 cat notes.md | flicknote add --project research
@@ -32,7 +29,6 @@ cat notes.md | flicknote add --project research
 ```bash
 flicknote list                          # recent notes (default: 20)
 flicknote list --project myproject      # notes in a project
-flicknote list --task <uuid>            # notes linked to a task
 flicknote list --search "API"           # search by title or content
 flicknote list --type link              # filter by type (normal, voice, link)
 flicknote list --limit 50               # more results
@@ -66,6 +62,10 @@ echo "updated content" | flicknote edit abc12345 --section "Summary"
 # Replace entire note content
 flicknote replace abc12345 "Completely new content"
 cat updated.md | flicknote replace abc12345
+
+# Append to an existing note (adds with \n\n separator)
+flicknote append abc12345 "Additional notes from today"
+echo "more content" | flicknote append abc12345
 ```
 
 ## Uploading Files
@@ -73,7 +73,7 @@ cat updated.md | flicknote replace abc12345
 ```bash
 # Upload a file and create a file-type note
 flicknote upload screenshot.png --project myproject
-flicknote upload report.pdf --task <uuid>
+flicknote upload report.pdf
 ```
 
 ## Note Types
