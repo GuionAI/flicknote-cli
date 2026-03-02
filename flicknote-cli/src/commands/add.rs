@@ -4,11 +4,12 @@ use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use flicknote_core::session;
 use rusqlite::params;
+use std::io::{IsTerminal, Read};
 
 #[derive(Args)]
 pub(crate) struct AddArgs {
-    /// Note content or URL (URLs are auto-detected as link notes)
-    value: String,
+    /// Note content or URL. Reads from stdin if omitted.
+    value: Option<String>,
     /// Assign to project by name (creates project if it doesn't exist)
     #[arg(long)]
     project: Option<String>,
@@ -22,7 +23,25 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let is_url = args.value.starts_with("http://") || args.value.starts_with("https://");
+    let content = match &args.value {
+        Some(v) => v.to_owned(),
+        None => {
+            if std::io::stdin().is_terminal() {
+                return Err(CliError::Other(
+                    "No content provided. Pass a value or pipe from stdin.".into(),
+                ));
+            }
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            let trimmed = buf.trim_end().to_string();
+            if trimmed.is_empty() {
+                return Err(CliError::Other("No content provided".into()));
+            }
+            trimmed
+        }
+    };
+
+    let is_url = content.starts_with("http://") || content.starts_with("https://");
 
     let project_id = if let Some(ref name) = args.project {
         Some(resolve_or_create_project(db, &user_id, name)?)
@@ -32,7 +51,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
 
     db.write(|conn| {
         if is_url {
-            let metadata = serde_json::json!({ "link": { "url": &args.value } }).to_string();
+            let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
             conn.execute(
                 "INSERT INTO notes (id, user_id, type, status, title, metadata, project_id, created_at, updated_at)
                  VALUES (?, ?, 'link', 'source_queued', NULL, ?, ?, ?, ?)",
@@ -42,14 +61,14 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
             conn.execute(
                 "INSERT INTO notes (id, user_id, type, status, content, project_id, created_at, updated_at)
                  VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?)",
-                params![id, user_id, args.value, project_id, now, now],
+                params![id, user_id, content, project_id, now, now],
             )?;
         }
 
         if let Some(ref tw_uuid) = args.task {
             let link_id = uuid::Uuid::new_v4().to_string();
             let external_id = serde_json::json!({ "tw": tw_uuid }).to_string();
-            let title = if is_url { "Link note" } else { &args.value };
+            let title = if is_url { "Link note" } else { &content };
             conn.execute(
                 "INSERT INTO note_tasks (id, note_id, user_id, title, external_id, created_at)
                  VALUES (?, ?, ?, ?, ?, ?)",
