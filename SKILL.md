@@ -66,6 +66,16 @@ cat updated.md | flicknote replace abc12345
 # Append to an existing note (adds with \n\n separator)
 flicknote append abc12345 "Additional notes from today"
 echo "more content" | flicknote append abc12345
+
+# Remove a section by heading
+flicknote remove abc12345 --section "Outdated Notes"
+
+# Rename a section heading (preserves heading level and body)
+flicknote rename abc12345 --section "Draft" "Final"
+
+# Insert content before or after a section
+flicknote insert abc12345 --before "Summary" "## Preface\nContext for this doc"
+flicknote insert abc12345 --after "Findings" "## Analysis\nDeeper dive here"
 ```
 
 ## Uploading Files
