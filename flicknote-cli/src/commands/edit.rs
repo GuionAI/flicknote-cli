@@ -4,7 +4,9 @@ use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use rusqlite::params;
 
-use super::util::{get_note_content, read_content_or_stdin, resolve_note_id};
+use flicknote_core::hooks;
+
+use super::util::{get_note, get_note_content, read_content_or_stdin, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct EditArgs {
@@ -81,6 +83,24 @@ pub(crate) fn run(db: &Database, config: &Config, args: &EditArgs) -> Result<(),
     } else {
         format!("{}{}\n\n{}", before, new_section.trim_end(), after)
     };
+
+    // Notify on-modify hook (may reject)
+    let old_note = get_note(db, &full_id, &user_id)?;
+    let mut new_note = old_note.clone();
+    new_note.content = Some(new_content.trim().to_string());
+    new_note.status = "ai_queued".to_string();
+    new_note.updated_at = Some(now.clone());
+
+    let old_json = serde_json::to_string(&old_note)?;
+    let new_json = serde_json::to_string(&new_note)?;
+    let config_dir = config.paths.config_dir.to_string_lossy();
+    hooks::run_on_modify(
+        &config.paths.hooks_dir,
+        &old_json,
+        &new_json,
+        "edit",
+        &config_dir,
+    )?;
 
     // Write back + re-queue for AI
     db.write(|conn| {

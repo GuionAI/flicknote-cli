@@ -1,5 +1,6 @@
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
+use flicknote_core::types::Note;
 use rusqlite::params;
 use std::io::{IsTerminal, Read};
 
@@ -59,6 +60,24 @@ pub(crate) fn get_note_content(
 ) -> Result<String, CliError> {
     get_note_content_optional(db, full_id, user_id, display_id)?
         .ok_or_else(|| CliError::Other("Note has no content".into()))
+}
+
+/// Fetch a full Note by ID. Returns error if not found or deleted.
+pub(crate) fn get_note(db: &Database, full_id: &str, user_id: &str) -> Result<Note, CliError> {
+    db.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+             project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+             FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+        )?;
+        let mut rows = stmt.query(params![full_id, user_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Note::from_row(row)?),
+            None => Err(CliError::NoteNotFound {
+                id: full_id.to_string(),
+            }),
+        }
+    })
 }
 
 /// Read content from an optional arg, falling back to stdin. Returns an error

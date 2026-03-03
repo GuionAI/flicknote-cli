@@ -4,7 +4,9 @@ use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use rusqlite::params;
 
-use super::util::{read_content_or_stdin, resolve_note_id};
+use flicknote_core::hooks;
+
+use super::util::{get_note, read_content_or_stdin, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
@@ -19,23 +21,26 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    // Verify note exists
-    db.read(|conn| {
-        let exists: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-            params![full_id, user_id],
-            |row| row.get(0),
-        )?;
-        if !exists {
-            return Err(CliError::NoteNotFound {
-                id: args.id.clone(),
-            });
-        }
-        Ok(())
-    })?;
-
     // Get content from arg or stdin
     let content = read_content_or_stdin(&args.content, false)?;
+
+    // Notify on-modify hook (may reject)
+    let old_note = get_note(db, &full_id, &user_id)?;
+    let mut new_note = old_note.clone();
+    new_note.content = Some(content.clone());
+    new_note.status = "ai_queued".to_string();
+    new_note.updated_at = Some(now.clone());
+
+    let old_json = serde_json::to_string(&old_note)?;
+    let new_json = serde_json::to_string(&new_note)?;
+    let config_dir = config.paths.config_dir.to_string_lossy();
+    hooks::run_on_modify(
+        &config.paths.hooks_dir,
+        &old_json,
+        &new_json,
+        "replace",
+        &config_dir,
+    )?;
 
     // Full content replacement + re-queue for AI
     db.write(|conn| {

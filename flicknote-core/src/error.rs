@@ -26,6 +26,9 @@ pub enum CliError {
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("Hook rejected: {message}")]
+    HookRejected { message: String },
+
     #[error("{0}")]
     Other(String),
 }
