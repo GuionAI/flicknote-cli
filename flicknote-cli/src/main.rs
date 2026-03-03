@@ -19,7 +19,7 @@ mod utils;
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -73,7 +73,11 @@ fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let config = Config::load()?;
 
-    match cli.command {
+    let Some(command) = cli.command else {
+        return commands::tui::run(&config);
+    };
+
+    match command {
         Commands::Add(args) => commands::add::run(&Database::open_local(&config)?, &config, &args),
         Commands::Append(args) => {
             commands::append::run(&Database::open_local(&config)?, &config, &args)
