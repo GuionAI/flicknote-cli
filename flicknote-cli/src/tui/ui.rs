@@ -94,6 +94,7 @@ fn draw_list(frame: &mut Frame, app: &App) {
         .highlight_style(Style::new().bg(Color::DarkGray).bold())
         .highlight_symbol("▶ ");
 
+    frame.render_widget(Clear, chunks[1]);
     let mut state = ListState::default();
     state.select(Some(app.selected));
     frame.render_stateful_widget(list, chunks[1], &mut state);
@@ -203,11 +204,24 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     }
 
     let visible_height = chunks[1].height;
-    let total_lines = lines.len() as u16;
-    let max_scroll = total_lines.saturating_sub(visible_height);
+    // Account for horizontal padding (1 each side) to get actual text width
+    let inner_width = chunks[1].width.saturating_sub(2) as usize;
+    let total_visual_lines: u16 = lines
+        .iter()
+        .map(|line| {
+            let w = line.width();
+            if w == 0 || inner_width == 0 {
+                1u16
+            } else {
+                w.div_ceil(inner_width) as u16
+            }
+        })
+        .sum();
+    let max_scroll = total_visual_lines.saturating_sub(visible_height);
     app.detail_content_height.set(max_scroll);
     app.detail_visible_height.set(visible_height);
 
+    frame.render_widget(Clear, chunks[1]);
     let detail = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
         .scroll((app.scroll_offset, 0))
