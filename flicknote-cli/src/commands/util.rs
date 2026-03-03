@@ -4,6 +4,66 @@ use flicknote_core::types::Note;
 use rusqlite::params;
 use std::io::{IsTerminal, Read};
 
+use crate::markdown::{Document, Heading};
+
+/// Byte-range boundaries of a matched section in a markdown document.
+pub(crate) struct SectionBounds<'a> {
+    /// The matched heading.
+    pub heading: &'a Heading,
+    /// Byte offset where the heading line starts.
+    pub start: usize,
+    /// Byte offset where the section ends (next same/higher-level heading, or EOF).
+    pub end: usize,
+}
+
+/// Find a section by heading name in a parsed document.
+///
+/// Uses case-insensitive contains matching. Errors if zero or multiple matches.
+pub(crate) fn find_section<'a>(
+    doc: &'a Document,
+    section: &str,
+    display_id: &str,
+) -> Result<SectionBounds<'a>, CliError> {
+    let matches = doc.filter_headings(section);
+    let heading = match matches.len() {
+        0 => {
+            return Err(CliError::Other(format!(
+                "Section '{section}' not found. Use `flicknote get {display_id} --tree` to see structure."
+            )));
+        }
+        1 => matches[0],
+        _ => {
+            let names: Vec<_> = matches.iter().map(|h| format!("  - {}", h.text)).collect();
+            return Err(CliError::Other(format!(
+                "'{section}' matches {} headings — be more specific:\n{}",
+                matches.len(),
+                names.join("\n")
+            )));
+        }
+    };
+
+    let heading_idx = doc
+        .headings
+        .iter()
+        .position(|h| h.text == heading.text && h.offset == heading.offset)
+        .unwrap();
+
+    let start = heading.offset;
+    let end = doc
+        .headings
+        .iter()
+        .skip(heading_idx + 1)
+        .find(|h| h.level <= heading.level)
+        .map(|h| h.offset)
+        .unwrap_or(doc.content.len());
+
+    Ok(SectionBounds {
+        heading,
+        start,
+        end,
+    })
+}
+
 pub(crate) fn resolve_note_id(db: &Database, prefix: &str) -> Result<String, CliError> {
     // Reject LIKE wildcards — only hex digits and dashes are valid UUID characters
     if !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {

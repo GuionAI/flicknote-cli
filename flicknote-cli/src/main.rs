@@ -54,6 +54,12 @@ enum Commands {
     Edit(commands::edit::EditArgs),
     /// Replace entire note content
     Replace(commands::replace::ReplaceArgs),
+    /// Remove a section from a note by heading name
+    Remove(commands::remove::RemoveArgs),
+    /// Rename a section heading in a note
+    Rename(commands::rename::RenameArgs),
+    /// Insert content before or after a section
+    Insert(commands::insert::InsertArgs),
 }
 
 fn main() {
@@ -92,6 +98,15 @@ fn run() -> Result<(), CliError> {
         }
         Commands::Replace(args) => {
             commands::replace::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Remove(args) => {
+            commands::remove::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Rename(args) => {
+            commands::rename::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Insert(args) => {
+            commands::insert::run(&Database::open_local(&config)?, &config, &args)
         }
     }
 }

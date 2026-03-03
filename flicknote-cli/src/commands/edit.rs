@@ -6,7 +6,9 @@ use rusqlite::params;
 
 use flicknote_core::hooks;
 
-use super::util::{get_note, get_note_content, read_content_or_stdin, resolve_note_id};
+use super::util::{
+    find_section, get_note, get_note_content, read_content_or_stdin, resolve_note_id,
+};
 
 #[derive(Args)]
 pub(crate) struct EditArgs {
@@ -27,45 +29,13 @@ pub(crate) fn run(db: &Database, config: &Config, args: &EditArgs) -> Result<(),
     let content = get_note_content(db, &full_id, &user_id, &args.id)?;
     let doc = crate::markdown::parse_markdown(&content);
 
-    // Find section by contains match, enforce uniqueness
-    let matches = doc.filter_headings(&args.section);
-    let heading = match matches.len() {
-        0 => {
-            return Err(CliError::Other(format!(
-                "Section '{}' not found. Use `flicknote get {} --tree` to see structure.",
-                args.section, args.id
-            )));
-        }
-        1 => matches[0],
-        _ => {
-            let names: Vec<_> = matches.iter().map(|h| format!("  - {}", h.text)).collect();
-            return Err(CliError::Other(format!(
-                "'{}' matches {} headings — be more specific:\n{}",
-                args.section,
-                matches.len(),
-                names.join("\n")
-            )));
-        }
-    };
+    let bounds = find_section(&doc, &args.section, &args.id)?;
+    let heading = bounds.heading;
+    let start = bounds.start;
+    let end = bounds.end;
 
     // Get replacement content from arg or stdin (empty = section removal)
     let new_section = read_content_or_stdin(&args.content, true)?;
-
-    // Calculate section byte range (heading line through end of section)
-    let heading_idx = doc
-        .headings
-        .iter()
-        .position(|h| h.text == heading.text && h.offset == heading.offset)
-        .unwrap();
-
-    let start = heading.offset;
-    let end = doc
-        .headings
-        .iter()
-        .skip(heading_idx + 1)
-        .find(|h| h.level <= heading.level)
-        .map(|h| h.offset)
-        .unwrap_or(content.len());
 
     // Build new content: before + replacement + after
     let before = &content[..start];
