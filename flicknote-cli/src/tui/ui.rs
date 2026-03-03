@@ -206,6 +206,7 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     let total_lines = lines.len() as u16;
     let max_scroll = total_lines.saturating_sub(visible_height);
     app.detail_content_height.set(max_scroll);
+    app.detail_visible_height.set(visible_height);
 
     let detail = Paragraph::new(lines)
         .wrap(Wrap { trim: false })
@@ -214,8 +215,9 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(detail, chunks[1]);
 
     // Status bar
-    let status = Paragraph::new(" j/k scroll  │  g top  │  q/esc back to list")
-        .style(Style::new().fg(Color::DarkGray));
+    let status =
+        Paragraph::new(" j/k scroll  │  C-d/C-u half-page  │  g top  │  G bottom  │  q/esc back")
+            .style(Style::new().fg(Color::DarkGray));
     frame.render_widget(status, chunks[2]);
 }
 

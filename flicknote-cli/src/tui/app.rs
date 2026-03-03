@@ -1,6 +1,6 @@
 use std::cell::Cell;
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use flicknote_core::types::{Note, Project};
@@ -22,6 +22,7 @@ pub(crate) struct App {
     pub projects: Vec<Project>,
     pub scroll_offset: u16,
     pub detail_content_height: Cell<u16>,
+    pub detail_visible_height: Cell<u16>,
     pub autocomplete_matches: Vec<String>,
     pub autocomplete_index: usize,
     db: Database,
@@ -39,6 +40,7 @@ impl App {
             search_input: String::new(),
             scroll_offset: 0,
             detail_content_height: Cell::new(0),
+            detail_visible_height: Cell::new(0),
             should_quit: false,
             projects,
             autocomplete_matches: Vec::new(),
@@ -119,7 +121,7 @@ impl App {
         }
         match self.view {
             View::List => self.handle_list_key(key.code),
-            View::Detail => self.handle_detail_key(key.code),
+            View::Detail => self.handle_detail_key(key),
             View::Search => self.handle_search_key(key.code)?,
         }
         Ok(())
@@ -201,22 +203,36 @@ impl App {
         }
     }
 
-    fn handle_detail_key(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::Left => {
+    fn handle_detail_key(&mut self, key: KeyEvent) {
+        let max = self.detail_content_height.get();
+        let half_page = self.detail_visible_height.get() / 2;
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _)
+            | (KeyCode::Char('q'), KeyModifiers::NONE)
+            | (KeyCode::Char('h'), KeyModifiers::NONE)
+            | (KeyCode::Left, _) => {
                 self.view = View::List;
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                let max = self.detail_content_height.get();
+            (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
                 if self.scroll_offset < max {
                     self.scroll_offset = self.scroll_offset.saturating_add(1);
                 }
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
             }
-            KeyCode::Char('g') | KeyCode::Home => {
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                self.scroll_offset = (self.scroll_offset + half_page).min(max);
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.scroll_offset = self.scroll_offset.saturating_sub(half_page);
+            }
+            (KeyCode::Char('g'), KeyModifiers::NONE) | (KeyCode::Home, _) => {
                 self.scroll_offset = 0;
+            }
+            (KeyCode::Char('G'), KeyModifiers::SHIFT | KeyModifiers::NONE) | (KeyCode::End, _) => {
+                self.scroll_offset = max;
             }
             _ => {}
         }
