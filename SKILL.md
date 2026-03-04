@@ -78,6 +78,11 @@ flicknote insert abc12345 --before "Summary" "## Preface\nContext for this doc"
 flicknote insert abc12345 --after "Findings" "## Analysis\nDeeper dive here"
 ```
 
+**Warning: Don't pipe flicknote content through sed/awk.** Content with code blocks, backticks, `$`, or `\` gets silently corrupted by shell substitution. Instead:
+- Use `flicknote edit` or `flicknote replace` with a heredoc for the new content
+- Use `flicknote insert --before/--after` to add sections
+- Use `flicknote remove` to delete sections
+
 ## Uploading Files
 
 ```bash
