@@ -8,6 +8,15 @@ cat file.md | flicknote add --project <name>
 flicknote add "https://example.com"           # auto-detected as link
 ```
 
+For multiline content with special characters, use heredoc:
+
+```bash
+cat <<'EOF' | flicknote add --project <name>
+# My Note
+Some content with **markdown** and $variables
+EOF
+```
+
 ## List
 
 ```bash
