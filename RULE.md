@@ -4,7 +4,6 @@
 
 ```bash
 flicknote add "content" --project <name>
-cat file.md | flicknote add --project <name>
 flicknote add "https://example.com"           # auto-detected as link
 ```
 
