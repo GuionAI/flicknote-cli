@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use crate::api_client::ApiClient;
 use crate::commands::add::resolve_or_create_project;
+use crate::commands::util::resolve_project_arg;
 
 #[derive(Args)]
 pub(crate) struct UploadArgs {
@@ -59,7 +60,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(
     })
     .to_string();
 
-    let project_id = if let Some(ref name) = args.project {
+    let project_id = if let Some(ref name) = resolve_project_arg(&args.project) {
         Some(resolve_or_create_project(db, &user_id, name)?)
     } else {
         None

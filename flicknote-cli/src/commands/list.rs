@@ -4,6 +4,8 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 use rusqlite::params;
 
+use super::util::resolve_project_arg;
+
 #[derive(Args)]
 pub(crate) struct ListArgs {
     /// Search notes by title or content
@@ -46,7 +48,11 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
             params_vec.push(Box::new(pattern.clone()));
             params_vec.push(Box::new(pattern));
         }
-        if let Some(ref project_name) = args.project {
+        let effective_project = resolve_project_arg(&args.project);
+        if args.project.is_none() && let Some(ref name) = effective_project {
+            eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
+        }
+        if let Some(ref project_name) = effective_project {
             let project_id: Option<String> = conn
                 .prepare(
                     "SELECT id FROM projects WHERE name = ? AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",

@@ -6,6 +6,8 @@ use flicknote_core::session;
 use rusqlite::params;
 use std::io::{IsTerminal, Read};
 
+use super::util::resolve_project_arg;
+
 #[derive(Args)]
 pub(crate) struct AddArgs {
     /// Note content or URL. Reads from stdin if omitted.
@@ -40,7 +42,8 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
 
     let is_url = content.starts_with("http://") || content.starts_with("https://");
 
-    let project_id = if let Some(ref name) = args.project {
+    let effective_project = resolve_project_arg(&args.project);
+    let project_id = if let Some(ref name) = effective_project {
         Some(resolve_or_create_project(db, &user_id, name)?)
     } else {
         None
@@ -66,7 +69,10 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
         Ok(())
     })?;
 
-    println!("Created note {}.", &id[..8]);
+    match effective_project.as_deref() {
+        Some(name) => println!("Created note {} in project \"{name}\".", &id[..8]),
+        None => println!("Created note {}.", &id[..8]),
+    }
     Ok(())
 }
 

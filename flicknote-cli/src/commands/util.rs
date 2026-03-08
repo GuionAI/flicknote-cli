@@ -140,6 +140,16 @@ pub(crate) fn get_note(db: &Database, full_id: &str, user_id: &str) -> Result<No
     })
 }
 
+/// Return the effective project name: arg wins, then $FLICKNOTE_PROJECT, then None.
+pub(crate) fn resolve_project_arg(arg: &Option<String>) -> Option<String> {
+    if arg.is_some() {
+        return arg.clone();
+    }
+    std::env::var("FLICKNOTE_PROJECT")
+        .ok()
+        .filter(|s| !s.is_empty())
+}
+
 /// Read content from stdin. Errors if stdin is a terminal or if the input is empty.
 pub(crate) fn read_stdin_required() -> Result<String, CliError> {
     if std::io::stdin().is_terminal() {

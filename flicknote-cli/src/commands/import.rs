@@ -7,6 +7,8 @@ use flicknote_core::error::CliError;
 use flicknote_core::session;
 use rusqlite::params;
 
+use super::util::resolve_project_arg;
+
 #[derive(Args)]
 pub(crate) struct ImportArgs {
     /// Path to a .md file or directory of .md files
@@ -27,7 +29,8 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
     }
 
     // Resolve project if specified
-    let project_id = if let Some(ref name) = args.project {
+    let effective_project = resolve_project_arg(&args.project);
+    let project_id = if let Some(ref name) = effective_project {
         Some(crate::commands::add::resolve_or_create_project(
             db, &user_id, name,
         )?)
@@ -68,7 +71,15 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
         let display_title = title.as_deref().unwrap_or("(untitled)");
         println!("Imported {} → {} — {}", filename, &id[..8], display_title);
     }
-    println!("Imported {} note(s).", imported.len());
+    match effective_project.as_deref() {
+        Some(name) => {
+            println!(
+                "Imported {} note(s) into project \"{name}\".",
+                imported.len()
+            )
+        }
+        None => println!("Imported {} note(s).", imported.len()),
+    }
 
     Ok(())
 }
