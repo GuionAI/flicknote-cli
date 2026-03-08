@@ -60,6 +60,8 @@ enum Commands {
     Rename(commands::rename::RenameArgs),
     /// Insert content before or after a section
     Insert(commands::insert::InsertArgs),
+    /// Modify note metadata (e.g. move to another project)
+    Modify(commands::modify::ModifyArgs),
 }
 
 fn main() {
@@ -111,6 +113,9 @@ fn run() -> Result<(), CliError> {
         }
         Commands::Insert(args) => {
             commands::insert::run(&Database::open_local(&config)?, &config, &args)
+        }
+        Commands::Modify(args) => {
+            commands::modify::run(&Database::open_local(&config)?, &config, &args)
         }
     }
 }
