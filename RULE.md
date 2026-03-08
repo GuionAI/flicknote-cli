@@ -33,13 +33,21 @@ flicknote get <id> --section "Section Name"
 flicknote get <id> --json
 ```
 
-## Edit
+## Replace / Append
 
 ```bash
-flicknote edit <id> --section "Name" "new content"
-echo "content" | flicknote edit <id> --section "Name"
-flicknote replace <id> "full new content"
-flicknote append <id> "additional content"
+echo "new content" | flicknote replace <id>
+echo "new content" | flicknote replace <id> --section "Name"
+echo "more content" | flicknote append <id>
+```
+
+For multiline content with special characters, use heredoc:
+
+```bash
+cat <<'EOF' | flicknote replace <id>
+# Updated Note
+Content with **markdown** and $variables
+EOF
 ```
 
 ## Section Operations
@@ -47,8 +55,8 @@ flicknote append <id> "additional content"
 ```bash
 flicknote remove <id> --section "Name"
 flicknote rename <id> --section "Old" "New"
-flicknote insert <id> --before "Section" "content"
-flicknote insert <id> --after "Section" "content"
+echo "content" | flicknote insert <id> --before "Section"
+echo "content" | flicknote insert <id> --after "Section"
 ```
 
 ## Archive
@@ -57,4 +65,4 @@ flicknote insert <id> --after "Section" "content"
 flicknote archive <id>
 ```
 
-Never pipe flicknote content through sed/awk — use edit/replace/insert instead.
+Never pipe flicknote content through sed/awk — use replace/insert instead.
