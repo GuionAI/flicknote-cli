@@ -6,14 +6,12 @@ use rusqlite::params;
 
 use flicknote_core::hooks;
 
-use super::util::{get_note, get_note_content_optional, read_content_or_stdin, resolve_note_id};
+use super::util::{get_note, get_note_content_optional, read_stdin_required, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct AppendArgs {
     /// Note ID (full UUID or prefix)
     id: String,
-    /// Content to append. Reads from stdin if omitted.
-    content: Option<String>,
 }
 
 pub(crate) fn run(db: &Database, config: &Config, args: &AppendArgs) -> Result<(), CliError> {
@@ -24,8 +22,8 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AppendArgs) -> Result<(
     // Get existing content
     let existing = get_note_content_optional(db, &full_id, &user_id, &args.id)?;
 
-    // Get new content from arg or stdin
-    let new_content = read_content_or_stdin(&args.content, false)?;
+    // Get new content from stdin
+    let new_content = read_stdin_required()?;
 
     // Concatenate: existing + separator + new
     let combined = match existing.as_deref() {

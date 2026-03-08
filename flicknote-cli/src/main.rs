@@ -50,8 +50,6 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Interact with FlickNote API directly
     Api(commands::api::ApiArgs),
-    /// Replace a section in a note by heading name
-    Edit(commands::edit::EditArgs),
     /// Replace entire note content
     Replace(commands::replace::ReplaceArgs),
     /// Remove a section from a note by heading name
@@ -99,9 +97,6 @@ fn run() -> Result<(), CliError> {
             commands::upload::run(&Database::open_local(&config)?, &config, &args)
         }
         Commands::Api(args) => commands::api::run(&config, &args),
-        Commands::Edit(args) => {
-            commands::edit::run(&Database::open_local(&config)?, &config, &args)
-        }
         Commands::Replace(args) => {
             commands::replace::run(&Database::open_local(&config)?, &config, &args)
         }

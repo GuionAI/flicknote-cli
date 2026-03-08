@@ -111,7 +111,7 @@ pub(crate) fn get_note_content_optional(
     })
 }
 
-/// Fetch note content from DB. Shared by get --tree, get -s, and edit.
+/// Fetch note content from DB. Shared by get --tree, get -s, and replace.
 pub(crate) fn get_note_content(
     db: &Database,
     full_id: &str,
@@ -140,27 +140,17 @@ pub(crate) fn get_note(db: &Database, full_id: &str, user_id: &str) -> Result<No
     })
 }
 
-/// Read content from an optional arg, falling back to stdin. Returns an error
-/// if stdin is a terminal and no value was provided.
-/// When `allow_empty` is false, also rejects empty stdin input.
-pub(crate) fn read_content_or_stdin(
-    content: &Option<String>,
-    allow_empty: bool,
-) -> Result<String, CliError> {
-    if let Some(v) = content {
-        return Ok(v.clone());
-    }
-
+/// Read content from stdin. Errors if stdin is a terminal or if the input is empty.
+pub(crate) fn read_stdin_required() -> Result<String, CliError> {
     if std::io::stdin().is_terminal() {
         return Err(CliError::Other(
-            "No content provided. Pass a value or pipe from stdin.".into(),
+            "No content provided. Pipe content from stdin.".into(),
         ));
     }
-
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
     let trimmed = buf.trim_end().to_string();
-    if !allow_empty && trimmed.is_empty() {
+    if trimmed.is_empty() {
         return Err(CliError::Other("No content provided".into()));
     }
     Ok(trimmed)

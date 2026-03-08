@@ -1,6 +1,6 @@
 ---
 name: flicknote-cli
-description: "FlickNote CLI for managing notes — add, list, get, edit, and organize by project"
+description: "FlickNote CLI for managing notes — add, list, get, replace, and organize by project"
 ---
 
 # FlickNote CLI
@@ -54,17 +54,17 @@ flicknote get abc12345 --json
 
 ## Editing Notes
 
-```bash
-# Replace a section by heading name (reads new content from stdin if omitted)
-flicknote edit abc12345 --section "Summary" "New summary content"
-echo "updated content" | flicknote edit abc12345 --section "Summary"
+All content-writing commands read from **stdin only** — pipe content in or use heredoc.
 
-# Replace entire note content
-flicknote replace abc12345 "Completely new content"
+```bash
+# Replace entire note content (stdin required)
+echo "Completely new content" | flicknote replace abc12345
 cat updated.md | flicknote replace abc12345
 
-# Append to an existing note (adds with \n\n separator)
-flicknote append abc12345 "Additional notes from today"
+# Replace a section by heading name (stdin required)
+echo "updated content" | flicknote replace abc12345 --section "Summary"
+
+# Append to an existing note (stdin required, adds with \n\n separator)
 echo "more content" | flicknote append abc12345
 
 # Remove a section by heading
@@ -73,13 +73,13 @@ flicknote remove abc12345 --section "Outdated Notes"
 # Rename a section heading (preserves heading level and body)
 flicknote rename abc12345 --section "Draft" "Final"
 
-# Insert content before or after a section
-flicknote insert abc12345 --before "Summary" "## Preface\nContext for this doc"
-flicknote insert abc12345 --after "Findings" "## Analysis\nDeeper dive here"
+# Insert content before or after a section (stdin required)
+echo "## Preface\nContext for this doc" | flicknote insert abc12345 --before "Summary"
+echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after "Findings"
 ```
 
 **Warning: Don't pipe flicknote content through sed/awk.** Content with code blocks, backticks, `$`, or `\` gets silently corrupted by shell substitution. Instead:
-- Use `flicknote edit` or `flicknote replace` with a heredoc for the new content
+- Use `flicknote replace` with a heredoc for the new content
 - Use `flicknote insert --before/--after` to add sections
 - Use `flicknote remove` to delete sections
 

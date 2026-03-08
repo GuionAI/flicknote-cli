@@ -6,30 +6,31 @@ use rusqlite::params;
 
 use flicknote_core::hooks;
 
-use super::util::{get_note, read_content_or_stdin, resolve_note_id};
+use super::util::{find_section, get_note, get_note_content, read_stdin_required, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
     /// Note ID (full UUID or prefix)
     id: String,
-    /// New content. Reads from stdin if omitted.
-    content: Option<String>,
+    /// Replace only the named section (case-insensitive contains match)
+    #[arg(short = 's', long = "section")]
+    section: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
-    let full_id = resolve_note_id(db, &args.id)?;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    // Get content from arg or stdin
-    let content = read_content_or_stdin(&args.content, false)?;
-
-    // Notify on-modify hook (may reject)
-    let old_note = get_note(db, &full_id, &user_id)?;
+/// Run the on-modify hook and write updated content to the database.
+fn write_note(
+    db: &Database,
+    config: &Config,
+    full_id: &str,
+    user_id: &str,
+    new_content: &str,
+    now: &str,
+) -> Result<(), CliError> {
+    let old_note = get_note(db, full_id, user_id)?;
     let mut new_note = old_note.clone();
-    new_note.content = Some(content.clone());
+    new_note.content = Some(new_content.to_string());
     new_note.status = "ai_queued".to_string();
-    new_note.updated_at = Some(now.clone());
+    new_note.updated_at = Some(now.to_string());
 
     let old_json = serde_json::to_string(&old_note)?;
     let new_json = serde_json::to_string(&new_note)?;
@@ -42,15 +43,46 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
         &config_dir,
     )?;
 
-    // Full content replacement + re-queue for AI
     db.write(|conn| {
         conn.execute(
             "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE id = ? AND user_id = ?",
-            params![content, now, full_id, user_id],
+            params![new_content, now, full_id, user_id],
         )?;
         Ok(())
-    })?;
+    })
+}
 
-    println!("Replaced content for note {}.", &full_id[..8]);
+pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
+    let user_id = flicknote_core::session::get_user_id(config)?;
+    let full_id = resolve_note_id(db, &args.id)?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    if let Some(section_name) = &args.section {
+        // Section-level replace (formerly `edit`). Use `flicknote remove` to delete a section.
+        let content = get_note_content(db, &full_id, &user_id, &args.id)?;
+        let doc = crate::markdown::parse_markdown(&content);
+        let bounds = find_section(&doc, section_name, &args.id)?;
+        let heading = bounds.heading;
+        let start = bounds.start;
+        let end = bounds.end;
+
+        let new_section = read_stdin_required()?;
+
+        let before = &content[..start];
+        let after = &content[end..];
+        let new_content = format!("{}{}\n\n{}", before, new_section.trim_end(), after);
+
+        write_note(db, config, &full_id, &user_id, new_content.trim(), &now)?;
+        println!(
+            "Replaced section '{}' in note {}.",
+            heading.text,
+            &full_id[..8]
+        );
+    } else {
+        let content = read_stdin_required()?;
+        write_note(db, config, &full_id, &user_id, &content, &now)?;
+        println!("Replaced content for note {}.", &full_id[..8]);
+    }
+
     Ok(())
 }

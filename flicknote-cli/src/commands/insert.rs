@@ -6,9 +6,7 @@ use rusqlite::params;
 
 use flicknote_core::hooks;
 
-use super::util::{
-    find_section, get_note, get_note_content, read_content_or_stdin, resolve_note_id,
-};
+use super::util::{find_section, get_note, get_note_content, read_stdin_required, resolve_note_id};
 
 #[derive(Args)]
 #[command(group(clap::ArgGroup::new("position").required(true)))]
@@ -21,8 +19,6 @@ pub(crate) struct InsertArgs {
     /// Insert after this section
     #[arg(long, group = "position")]
     after: Option<String>,
-    /// Content to insert. Reads from stdin if omitted.
-    content: Option<String>,
 }
 
 pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(), CliError> {
@@ -44,7 +40,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, section_name, &args.id)?;
 
-    let insert_content = read_content_or_stdin(&args.content, false)?;
+    let insert_content = read_stdin_required()?;
 
     let split_point = if insert_before {
         bounds.start
