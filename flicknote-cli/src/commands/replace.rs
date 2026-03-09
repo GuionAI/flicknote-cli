@@ -62,26 +62,19 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
         let content = get_note_content(db, &full_id, &user_id, &args.id)?;
         let doc = crate::markdown::parse_markdown(&content);
         let bounds = find_section(&doc, section_id, &args.id)?;
-        let heading_text = bounds.heading.text.clone();
         let heading_level = bounds.heading.level;
         let start = bounds.start;
         let end = bounds.end;
 
         let new_body = read_stdin_required()?;
 
-        // Cap headings in replacement body to section_level + 1
-        let max_content_level = heading_level + 1;
-        let capped_body = crate::markdown::cap_heading_level(new_body.trim(), max_content_level);
-
-        let new_content = crate::markdown::replace_section_body(&content, start, end, &capped_body)
-            .map_err(CliError::Other)?;
+        // Shift entire piped content so its root heading matches section_level.
+        // cap_heading_level finds the shallowest heading and shifts all headings relatively.
+        let shifted = crate::markdown::cap_heading_level(new_body.trim(), heading_level);
+        let new_content = crate::markdown::replace_entire_section(&content, start, end, &shifted);
 
         write_note(db, config, &full_id, &user_id, new_content.trim(), &now)?;
-        println!(
-            "Replaced section '{}' in note {}.\n",
-            heading_text,
-            &full_id[..8]
-        );
+        println!("Replaced section in note {}.\n", &full_id[..8]);
         print!("{}", crate::markdown::render_tree(new_content.trim()));
     } else {
         let content = read_stdin_required()?;

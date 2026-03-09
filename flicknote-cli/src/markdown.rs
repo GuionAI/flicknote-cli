@@ -251,6 +251,10 @@ fn heading_level(line: &str) -> Option<usize> {
 ///   `#### Deep / ##### Deeper`  →  `### Deep / #### Deeper`  (offset -1)
 ///   `### Right / #### Sub`  →  unchanged  (offset 0)
 pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
+    debug_assert!(
+        target_level >= 1,
+        "target_level must be >= 1 (heading levels start at 1)"
+    );
     let min_level = content.lines().filter_map(heading_level).min();
     let Some(min_level) = min_level else {
         return content.to_string();
@@ -275,36 +279,30 @@ pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
         .join("\n")
 }
 
-/// Replace the body of a section (identified by its byte bounds) with new content.
-///
-/// Preserves the heading line. Heading-level cap is applied by the caller before this.
-/// Returns `Err` if the heading line has no trailing newline (malformed document).
-pub(crate) fn replace_section_body(
+/// Replace an entire section (heading + body) with `new_content`.
+/// `start` = byte offset of section heading line. `end` = byte offset of next sibling (or EOF).
+/// Caller must normalize heading levels in `new_content` before calling.
+pub(crate) fn replace_entire_section(
     content: &str,
-    heading_start: usize,
-    section_end: usize,
-    new_body: &str,
-) -> Result<String, String> {
-    let heading_line_end = content[heading_start..]
-        .find('\n')
-        .map(|i| heading_start + i + 1)
-        .ok_or_else(|| {
-            "Section heading has no trailing newline — malformed document".to_string()
-        })?;
-
-    let before = &content[..heading_line_end]; // includes the heading line with \n
-    let after = &content[section_end..];
-    let result = if after.is_empty() {
-        format!("{}\n{}", before.trim_end_matches('\n'), new_body)
-    } else {
-        format!(
-            "{}\n\n{}\n\n{}",
-            before.trim_end_matches('\n'),
-            new_body,
-            after.trim_start_matches('\n')
-        )
-    };
-    Ok(result)
+    start: usize,
+    end: usize,
+    new_content: &str,
+) -> String {
+    // Offsets come from line_offsets() which splits on '\n' (single ASCII byte),
+    // so all line-start positions are valid UTF-8 char boundaries.
+    debug_assert!(
+        content.is_char_boundary(start) && content.is_char_boundary(end),
+        "start/end must be valid char boundaries"
+    );
+    let before = content[..start].trim_end_matches('\n');
+    let after = content[end..].trim_start_matches('\n');
+    let replacement = new_content.trim();
+    match (before.is_empty(), after.is_empty()) {
+        (true, true) => replacement.to_string(),
+        (true, false) => format!("{replacement}\n\n{after}"),
+        (false, true) => format!("{before}\n\n{replacement}"),
+        (false, false) => format!("{before}\n\n{replacement}\n\n{after}"),
+    }
 }
 
 /// Render the full tree for a markdown content string (for post-mutation output).
@@ -617,104 +615,179 @@ mod cap_heading_tests {
 }
 
 #[cfg(test)]
-mod replace_section_body_tests {
+mod replace_entire_section_tests {
     use super::*;
 
     fn alpha_bounds(content: &str) -> (usize, usize) {
         let doc = parse_markdown(content);
-        let alpha_id = doc
-            .headings
-            .iter()
-            .find(|h| h.text == "Alpha")
-            .expect("Alpha heading not found")
-            .id
-            .clone();
-        let idx = doc.headings.iter().position(|h| h.id == alpha_id).unwrap();
-        let start = doc.headings[idx].offset;
+        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
+        let idx = doc.headings.iter().position(|x| x.id == h.id).unwrap();
+        let start = h.offset;
         let end = doc
             .headings
             .iter()
             .skip(idx + 1)
-            .find(|h| h.level <= doc.headings[idx].level)
-            .map(|h| h.offset)
+            .find(|h2| h2.level <= h.level)
+            .map(|h2| h2.offset)
             .unwrap_or(content.len());
         (start, end)
     }
 
     #[test]
-    fn test_replace_section_preserves_heading() {
+    fn test_replace_entire_section_replaces_heading_and_body() {
         let original = "# Root\n\n## Alpha\n\nOld content.\n\n## Beta\n\nBeta content.\n";
         let (start, end) = alpha_bounds(original);
-        let result = replace_section_body(original, start, end, "New content.").unwrap();
+        let result = replace_entire_section(original, start, end, "## New Title\n\nNew body.");
 
-        assert!(result.contains("## Alpha"), "heading should be preserved");
+        assert!(result.contains("## New Title"), "new heading should appear");
         assert!(
-            result.contains("New content."),
-            "new content should be present"
+            !result.contains("## Alpha"),
+            "old heading should be replaced"
         );
-        assert!(
-            !result.contains("Old content."),
-            "old content should be gone"
-        );
-        assert!(
-            result.contains("## Beta"),
-            "other sections must be untouched"
-        );
-        assert!(
-            result.contains("Beta content."),
-            "other section content must be untouched"
-        );
+        assert!(result.contains("New body."), "new body should be present");
+        assert!(!result.contains("Old content."), "old body should be gone");
+        assert!(result.contains("## Beta"), "Beta section must be untouched");
+        assert!(result.contains("Beta content."));
     }
 
     #[test]
-    fn test_replace_section_last_section() {
+    fn test_replace_entire_section_last_section() {
         let original = "# Root\n\n## Alpha\n\nOld.\n";
         let (start, end) = alpha_bounds(original);
-        let result = replace_section_body(original, start, end, "New.").unwrap();
+        let result = replace_entire_section(original, start, end, "## Alpha New\n\nNew.");
 
-        assert!(result.contains("## Alpha"), "heading preserved");
-        assert!(result.contains("New."), "new content present");
-        assert!(!result.contains("Old."), "old content gone");
+        assert!(result.contains("## Alpha New"));
+        assert!(
+            !result.lines().any(|l| l == "## Alpha"),
+            "old heading must be gone (exact line match)"
+        );
+        assert!(result.contains("New."));
+        assert!(!result.contains("Old."));
     }
 
     #[test]
-    fn test_replace_section_heading_no_newline_errors() {
-        // Malformed: heading at very end with no \n
-        let content = "## Alpha";
-        let result = replace_section_body(content, 0, content.len(), "body");
-        assert!(
-            result.is_err(),
-            "should error on heading with no trailing newline"
-        );
-        let msg = result.unwrap_err();
-        assert!(
-            msg.contains("malformed"),
-            "error should mention malformed document"
-        );
-    }
-
-    #[test]
-    fn test_replace_h2_section_shifts_content_headings() {
-        // Alpha is H2, target = H3. Replacement starts with H1 (shallowest) → offset +2.
-        // H1 → H3, H2 → H4: relative hierarchy preserved.
-        let original = "# Root\n\n## Alpha\n\nOld.\n\n## Beta\n\nBeta.";
+    fn test_replace_entire_section_no_trailing_junk() {
+        let original = "# Root\n\n## Alpha\n\nBody.\n\n## Beta\n\nBeta.\n";
         let (start, end) = alpha_bounds(original);
-        let new_body_raw = "Intro.\n\n# Subsection\n\nOK.\n\n## Sub-sub\n\nNot OK.";
+        let result = replace_entire_section(original, start, end, "## Alpha\n\nReplaced.");
+        assert!(!result.contains("\n\n\n"), "no triple newlines");
+    }
+
+    #[test]
+    fn test_replace_entire_section_first_section() {
+        // start == 0: no content before the section. Must not produce a leading newline.
+        let original = "## Alpha\n\nOld.\n\n## Beta\n\nBeta.";
+        let (start, end) = alpha_bounds(original);
+        assert_eq!(start, 0, "Alpha should be at offset 0");
+        let result = replace_entire_section(original, start, end, "## Alpha New\n\nNew.");
+
+        assert!(!result.starts_with('\n'), "must not have leading newline");
+        assert!(result.starts_with("## Alpha New"), "new heading at start");
+        assert!(result.contains("## Beta"), "Beta untouched");
+    }
+
+    #[test]
+    fn test_replace_entire_section_sole_section() {
+        // Document is a single section — both before and after are empty (true, true branch).
+        let original = "## Alpha\n\nOld body.";
         let doc = parse_markdown(original);
-        let section_level = doc
+        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
+        let start = h.offset;
+        let end = original.len();
+
+        let result = replace_entire_section(original, start, end, "## New\n\nNew body.");
+
+        assert_eq!(
+            result, "## New\n\nNew body.",
+            "sole section replaced cleanly"
+        );
+        assert!(!result.starts_with('\n'), "no leading newline");
+        assert!(!result.ends_with('\n'), "no trailing newline");
+    }
+
+    #[test]
+    fn test_replace_entire_section_with_child_headings() {
+        // Alpha has a child heading — it should be consumed by the replacement span.
+        let original = "# Root\n\n## Alpha\n\nAlpha body.\n\n### Alpha Child\n\nChild body.\n\n## Beta\n\nBeta.";
+        let doc = parse_markdown(original);
+        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
+        let idx = doc.headings.iter().position(|x| x.id == h.id).unwrap();
+        let start = h.offset;
+        let end = doc
             .headings
             .iter()
-            .find(|h| h.text == "Alpha")
-            .unwrap()
-            .level;
-        let shifted = cap_heading_level(new_body_raw, section_level + 1);
-        let result = replace_section_body(original, start, end, &shifted).unwrap();
+            .skip(idx + 1)
+            .find(|h2| h2.level <= h.level)
+            .map(|h2| h2.offset)
+            .unwrap_or(original.len());
 
-        assert!(result.contains("### Subsection"), "H1 should shift to H3");
-        assert!(result.contains("#### Sub-sub"), "H2 should shift to H4");
+        let result = replace_entire_section(original, start, end, "## New Alpha\n\nNew body.");
+
+        assert!(result.contains("## New Alpha"), "new heading present");
+        assert!(!result.contains("## Alpha\n"), "old heading gone");
         assert!(
-            !result.lines().any(|l| l == "# Subsection"),
-            "original H1 must not remain"
+            !result.contains("### Alpha Child"),
+            "child heading consumed"
         );
+        assert!(!result.contains("Child body."), "child body consumed");
+        assert!(result.contains("## Beta"), "Beta untouched");
+    }
+
+    #[test]
+    fn test_replace_entire_section_no_heading_in_replacement() {
+        // Behavioral documentation: piping pure body text (no headings) removes the old
+        // heading entirely. The caller is responsible for providing the full subtree.
+        let original = "# Root\n\n## Alpha\n\nOld body.\n\n## Beta\n\nBeta.";
+        let doc = parse_markdown(original);
+        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
+        let idx = doc.headings.iter().position(|x| x.id == h.id).unwrap();
+        let start = h.offset;
+        let end = doc
+            .headings
+            .iter()
+            .skip(idx + 1)
+            .find(|h2| h2.level <= h.level)
+            .map(|h2| h2.offset)
+            .unwrap_or(original.len());
+
+        let result = replace_entire_section(original, start, end, "Just plain text.");
+
+        assert!(result.contains("Just plain text."), "replacement present");
+        assert!(!result.contains("## Alpha"), "old heading replaced");
+        assert!(!result.contains("Old body."), "old body gone");
+        assert!(result.contains("## Beta"), "Beta untouched");
+    }
+}
+
+#[cfg(test)]
+mod replace_section_model_a_tests {
+    use super::*;
+
+    #[test]
+    fn test_replace_section_model_a_with_level_normalization() {
+        let original = "# Root\n\n## Alpha\n\nOld body.\n\n## Beta\n\nBeta.";
+        let doc = parse_markdown(original);
+        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
+        let section_level = h.level; // 2
+        let idx = doc.headings.iter().position(|x| x.id == h.id).unwrap();
+        let start = h.offset;
+        let end = doc
+            .headings
+            .iter()
+            .skip(idx + 1)
+            .find(|h2| h2.level <= h.level)
+            .map(|h2| h2.offset)
+            .unwrap_or(original.len());
+
+        // User pipes H3 root + H4 sub — should shift to H2 + H3
+        let piped = "### New Title\n\nNew body.\n\n#### Subsection\n\nSub body.";
+        let shifted = cap_heading_level(piped, section_level);
+        let result = replace_entire_section(original, start, end, &shifted);
+
+        assert!(result.contains("## New Title"), "root shifted to H2");
+        assert!(result.contains("### Subsection"), "sub shifted to H3");
+        assert!(!result.contains("## Alpha"), "old heading gone");
+        assert!(!result.contains("Old body."), "old body gone");
+        assert!(result.contains("## Beta"), "Beta untouched");
     }
 }
