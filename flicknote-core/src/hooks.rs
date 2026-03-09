@@ -28,22 +28,44 @@ pub fn run_on_modify(
         return Ok(());
     }
 
-    let mut child = Command::new(&hook_path)
-        .args([
-            "api:1",
-            &format!("command:{command}"),
-            &format!("config:{config_dir}"),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
+    // Retry on ETXTBSY (os error 26): transient race between file write and exec
+    // on some kernels/filesystems. Resolves within milliseconds.
+    let mut child = {
+        let mut last_err = None;
+        let mut spawned = None;
+        for attempt in 0u32..3 {
+            match Command::new(&hook_path)
+                .args([
+                    "api:1",
+                    &format!("command:{command}"),
+                    &format!("config:{config_dir}"),
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            {
+                Ok(child) => {
+                    spawned = Some(child);
+                    break;
+                }
+                Err(e) if e.raw_os_error() == Some(26) && attempt < 2 => {
+                    std::thread::sleep(std::time::Duration::from_millis(10 * (attempt as u64 + 1)));
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    break;
+                }
+            }
+        }
+        spawned.ok_or_else(|| {
+            let e = last_err.unwrap();
             CliError::Other(format!(
                 "Failed to execute hook {}: {e}",
                 hook_path.display()
             ))
-        })?;
+        })?
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
         writeln!(stdin, "{old_json}")?;

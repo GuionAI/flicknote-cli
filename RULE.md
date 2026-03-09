@@ -28,16 +28,27 @@ flicknote list --json
 
 ```bash
 flicknote get <id>
-flicknote get <id> --tree                     # heading structure
-flicknote get <id> --section "Section Name"
+flicknote get <id> --tree                     # heading structure with section IDs
+flicknote get <id> --section <section-id>     # use ID from --tree output (e.g. 3K)
 flicknote get <id> --json
+```
+
+To target a section, first run `--tree` to see IDs, then use the ID:
+
+```bash
+flicknote get abc12345 --tree
+# └─ # My Note
+#    ├─ [3K] ## Summary
+#    └─ [aZ] ## Details
+# Note: H1 headings are not shown with IDs and cannot be targeted with --section
+flicknote get abc12345 --section 3K
 ```
 
 ## Replace / Append
 
 ```bash
 echo "new content" | flicknote replace <id>
-echo "new content" | flicknote replace <id> --section "Name"
+echo "new content" | flicknote replace <id> --section <section-id>
 echo "more content" | flicknote append <id>
 ```
 
@@ -50,13 +61,16 @@ Content with **markdown** and $variables
 EOF
 ```
 
+Mutating commands (`replace`, `remove`, `rename`, `insert`) print the updated `--tree` after making changes.
+
 ## Section Operations
 
 ```bash
-flicknote remove <id> --section "Name"
-flicknote rename <id> --section "Old" "New"
-echo "content" | flicknote insert <id> --before "Section"
-echo "content" | flicknote insert <id> --after "Section"
+flicknote remove <id> --section <section-id>
+flicknote rename <id> --section <section-id> "New Name"
+echo "content" | flicknote insert <id> --before <section-id>
+echo "content" | flicknote insert <id> --after <section-id>
+# IDs are 2-character base62 (0–9, A–Z, a–z) — run --tree to find them; H1 headings have no ID
 ```
 
 ## Archive

@@ -42,14 +42,25 @@ flicknote list --json                   # JSON output
 # Get full note details
 flicknote get abc12345
 
-# See heading structure of a long note
+# See heading structure with section IDs
 flicknote get abc12345 --tree
 
-# Extract a specific section by heading name
-flicknote get abc12345 --section "Summary"
+# Extract a specific section — use ID from --tree output (e.g. 3K)
+flicknote get abc12345 --section 3K
 
 # JSON output
 flicknote get abc12345 --json
+```
+
+To target a section, first run `--tree` to see IDs, then use the ID with `--section`:
+
+```bash
+flicknote get abc12345 --tree
+# └─ # My Note
+#    ├─ [3K] ## Summary
+#    └─ [aZ] ## Details
+# Note: H1 headings are not shown with IDs and cannot be targeted with --section
+flicknote get abc12345 --section 3K
 ```
 
 ## Editing Notes
@@ -61,22 +72,24 @@ All content-writing commands read from **stdin only** — pipe content in or use
 echo "Completely new content" | flicknote replace abc12345
 cat updated.md | flicknote replace abc12345
 
-# Replace a section by heading name (stdin required)
-echo "updated content" | flicknote replace abc12345 --section "Summary"
+# Replace a section by ID (run --tree first to get the ID)
+echo "updated content" | flicknote replace abc12345 --section 3K
 
 # Append to an existing note (stdin required, adds with \n\n separator)
 echo "more content" | flicknote append abc12345
 
-# Remove a section by heading
-flicknote remove abc12345 --section "Outdated Notes"
+# Remove a section by ID
+flicknote remove abc12345 --section 3K
 
 # Rename a section heading (preserves heading level and body)
-flicknote rename abc12345 --section "Draft" "Final"
+flicknote rename abc12345 --section 3K "Final"
 
-# Insert content before or after a section (stdin required)
-echo "## Preface\nContext for this doc" | flicknote insert abc12345 --before "Summary"
-echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after "Findings"
+# Insert content before or after a section by ID (stdin required)
+echo "## Preface\nContext for this doc" | flicknote insert abc12345 --before 3K
+echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after aZ
 ```
+
+Mutating commands (`replace`, `remove`, `rename`, `insert`) print the updated `--tree` after making changes, so you can see new IDs without a separate `--tree` call.
 
 **Warning: Don't pipe flicknote content through sed/awk.** Content with code blocks, backticks, `$`, or `\` gets silently corrupted by shell substitution. Instead:
 - Use `flicknote replace` with a heredoc for the new content
