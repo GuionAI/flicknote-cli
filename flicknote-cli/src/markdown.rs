@@ -230,21 +230,46 @@ impl HeadingNode {
     }
 }
 
-/// Cap all headings in content at `max_level` (e.g. 3 = H3).
-/// Any heading deeper than max_level (more # signs) is promoted to max_level.
-pub(crate) fn cap_heading_level(content: &str, max_level: usize) -> String {
-    let prefix = "#".repeat(max_level);
+/// Counts leading `#` characters on a line if followed by a space (valid heading).
+fn heading_level(line: &str) -> Option<usize> {
+    if !line.starts_with('#') {
+        return None;
+    }
+    let hashes = line.bytes().take_while(|&b| b == b'#').count();
+    if line.as_bytes().get(hashes) == Some(&b' ') {
+        Some(hashes)
+    } else {
+        None
+    }
+}
+
+/// Shift all headings in `content` so the shallowest heading lands at `target_level`,
+/// preserving relative hierarchy. Non-heading lines are unchanged.
+///
+/// Examples (target_level = 3):
+///   `## Intro / ### Sub`  →  `### Intro / #### Sub`  (offset +1)
+///   `#### Deep / ##### Deeper`  →  `### Deep / #### Deeper`  (offset -1)
+///   `### Right / #### Sub`  →  unchanged  (offset 0)
+pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
+    let min_level = content.lines().filter_map(heading_level).min();
+    let Some(min_level) = min_level else {
+        return content.to_string();
+    };
+
+    let offset = target_level as isize - min_level as isize;
+    if offset == 0 {
+        return content.to_string();
+    }
+
     content
         .lines()
-        .map(|line| {
-            if let Some(rest) = line.strip_prefix('#') {
-                let hashes = 1 + rest.bytes().take_while(|&b| b == b'#').count();
-                if hashes > max_level && line.as_bytes().get(hashes) == Some(&b' ') {
-                    let text = &line[hashes..]; // includes the space
-                    return format!("{prefix}{text}");
-                }
+        .map(|line| match heading_level(line) {
+            Some(hashes) => {
+                let new_level = ((hashes as isize + offset) as usize).min(6);
+                let text = &line[hashes..]; // includes the leading space
+                format!("{}{}", "#".repeat(new_level), text)
             }
-            line.to_string()
+            None => line.to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -442,6 +467,7 @@ mod cap_heading_tests {
 
     #[test]
     fn test_cap_headings_h4_promoted_to_h3() {
+        // H4 is the shallowest, so it becomes H3; H5 shifts to H4 (hierarchy preserved)
         let input = "Some text.\n\n#### Too Deep\n\nContent.\n\n##### Also Deep\n\nMore.";
         let result = cap_heading_level(input, 3);
         assert!(
@@ -449,8 +475,8 @@ mod cap_heading_tests {
             "H4 should be promoted to H3"
         );
         assert!(
-            result.contains("### Also Deep"),
-            "H5 should be promoted to H3"
+            result.contains("#### Also Deep"),
+            "H5 should shift to H4 (one below H4→H3)"
         );
     }
 
@@ -468,6 +494,124 @@ mod cap_heading_tests {
         assert_eq!(
             result, input,
             "content without headings should be unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_h1_demoted_to_h3() {
+        let input = "# Top Level\n\nContent.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.contains("### Top Level"),
+            "H1 inside H2 section should demote to H3"
+        );
+        assert!(
+            !result.lines().any(|l| l == "# Top Level"),
+            "original H1 marker must not remain"
+        );
+        assert!(
+            result.contains("Content."),
+            "body text must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_h2_demoted_to_h3() {
+        let input = "## Second Level\n\nContent.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.contains("### Second Level"),
+            "H2 inside H2 section should demote to H3"
+        );
+        assert!(
+            result.contains("Content."),
+            "body text must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_h3_unchanged_clamp() {
+        let input = "### Third Level\n\nContent.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.contains("### Third Level"),
+            "H3 should remain unchanged"
+        );
+        assert!(
+            result.contains("Content."),
+            "body text must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_h4_promoted_to_h3_clamp() {
+        let input = "#### Fourth Level\n\nContent.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.contains("### Fourth Level"),
+            "H4 should be promoted to H3"
+        );
+        assert!(
+            result.contains("Content."),
+            "body text must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_mixed_offset_shift_preserves_hierarchy() {
+        // H1 is shallowest → becomes H3; H3 and H5 shift by same offset (+2)
+        // Hierarchy is preserved: H1→H3, H3→H5, H5→H7
+        let input = "# Intro\n\nPara.\n\n### Middle\n\nText.\n\n##### Deep\n\nMore.";
+        let result = cap_heading_level(input, 3);
+        assert!(result.contains("### Intro"), "H1 should shift to H3");
+        assert!(result.contains("##### Middle"), "H3 should shift to H5");
+        assert!(
+            result.contains("###### Deep"),
+            "H5 should shift to H7, clamped to H6"
+        );
+        assert!(
+            !result.lines().any(|l| l == "# Intro"),
+            "H1 marker must not remain"
+        );
+        assert!(result.contains("Para."), "body text must survive unchanged");
+    }
+
+    #[test]
+    fn test_cap_target_level_1_shift_preserves_hierarchy() {
+        // H2 is shallowest → becomes H1; H3 shifts to H2 (offset = -1)
+        let input = "## Deep\n\nContent.\n\n### Deeper\n\nMore.";
+        let result = cap_heading_level(input, 1);
+        assert!(result.contains("# Deep"), "H2 should shift to H1");
+        assert!(result.contains("## Deeper"), "H3 should shift to H2");
+    }
+
+    #[test]
+    fn test_offset_shift_standalone_doc_into_h2_section() {
+        // Real-world case: user writes standalone content starting at H1,
+        // inserts into an H2 section (target=3). Full hierarchy shifts by +2.
+        let input = "## Overview\n\nIntro.\n\n### Details\n\nText.\n\n#### Notes\n\nMore.";
+        let result = cap_heading_level(input, 3);
+        assert!(result.contains("### Overview"), "H2 → H3");
+        assert!(result.contains("#### Details"), "H3 → H4");
+        assert!(result.contains("##### Notes"), "H4 → H5");
+        assert!(
+            result.contains("Intro."),
+            "body text must survive unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_hash_without_space_passes_through() {
+        // "#NoSpace" is not a valid heading — must not be altered
+        let input = "#NoSpace\n\n## Real Heading\n\nContent.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.contains("#NoSpace"),
+            "#NoSpace should pass through unchanged"
+        );
+        assert!(
+            result.contains("### Real Heading"),
+            "valid H2 should demote to H3"
         );
     }
 }
@@ -550,10 +694,12 @@ mod replace_section_body_tests {
     }
 
     #[test]
-    fn test_replace_h2_section_caps_content_headings() {
+    fn test_replace_h2_section_shifts_content_headings() {
+        // Alpha is H2, target = H3. Replacement starts with H1 (shallowest) → offset +2.
+        // H1 → H3, H2 → H4: relative hierarchy preserved.
         let original = "# Root\n\n## Alpha\n\nOld.\n\n## Beta\n\nBeta.";
         let (start, end) = alpha_bounds(original);
-        let new_body_raw = "Intro.\n\n### Subsection\n\nOK.\n\n#### Too Deep\n\nNot OK.";
+        let new_body_raw = "Intro.\n\n# Subsection\n\nOK.\n\n## Sub-sub\n\nNot OK.";
         let doc = parse_markdown(original);
         let section_level = doc
             .headings
@@ -561,14 +707,14 @@ mod replace_section_body_tests {
             .find(|h| h.text == "Alpha")
             .unwrap()
             .level;
-        let capped = cap_heading_level(new_body_raw, section_level + 1);
-        let result = replace_section_body(original, start, end, &capped).unwrap();
+        let shifted = cap_heading_level(new_body_raw, section_level + 1);
+        let result = replace_section_body(original, start, end, &shifted).unwrap();
 
-        assert!(result.contains("### Subsection"), "H3 should be kept");
+        assert!(result.contains("### Subsection"), "H1 should shift to H3");
+        assert!(result.contains("#### Sub-sub"), "H2 should shift to H4");
         assert!(
-            result.contains("### Too Deep"),
-            "H4 should be promoted to H3"
+            !result.lines().any(|l| l == "# Subsection"),
+            "original H1 must not remain"
         );
-        assert!(!result.contains("#### Too Deep"), "H4 should not remain");
     }
 }
