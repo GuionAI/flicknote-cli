@@ -64,9 +64,10 @@ pub(crate) fn run(db: &Database, config: &Config, args: &RemoveArgs) -> Result<(
     })?;
 
     println!(
-        "Removed section '{}' from note {}.",
+        "Removed section '{}' from note {}.\n",
         bounds.heading.text,
         &full_id[..8]
     );
+    print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())
 }

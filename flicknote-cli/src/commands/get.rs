@@ -49,32 +49,17 @@ pub(crate) fn run(db: &Database, config: &Config, args: &GetArgs) -> Result<(), 
             return Ok(());
         }
 
-        let section_name = args.section.as_ref().unwrap();
-        let matches = doc.filter_headings(section_name);
-
-        match matches.len() {
-            0 => {
-                return Err(CliError::Other(format!(
-                    "Section '{}' not found. Use `flicknote get {} --tree` to see structure.",
-                    section_name, &args.id
-                )));
-            }
-            1 => {
-                let section_content = doc
-                    .extract_section(&matches[0].text)
-                    .ok_or_else(|| CliError::Other("Failed to extract section".into()))?;
-                println!("{}", section_content);
-            }
-            _ => {
-                let names: Vec<_> = matches.iter().map(|h| format!("  - {}", h.text)).collect();
-                return Err(CliError::Other(format!(
-                    "'{}' matches {} headings — be more specific:\n{}",
-                    section_name,
-                    matches.len(),
-                    names.join("\n")
-                )));
-            }
-        }
+        let section_id = args.section.as_ref().unwrap();
+        let bounds = super::util::find_section(&doc, section_id, &args.id)?;
+        // Skip the heading line, extract only the body using the pre-computed byte offsets.
+        // Avoids a second name-based scan which would return the wrong section for duplicate headings.
+        // `.unwrap_or(bounds.end)` is intentional: a heading with no body returns empty string.
+        let body_start = content[bounds.start..]
+            .find('\n')
+            .map(|i| bounds.start + i + 1)
+            .unwrap_or(bounds.end);
+        let section_content = content[body_start..bounds.end].trim();
+        println!("{}", section_content);
         return Ok(());
     }
 

@@ -85,9 +85,10 @@ pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(
 
     let position = if insert_before { "before" } else { "after" };
     println!(
-        "Inserted content {position} '{}' in note {}.",
+        "Inserted content {position} '{}' in note {}.\n",
         bounds.heading.text,
         &full_id[..8]
     );
+    print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())
 }

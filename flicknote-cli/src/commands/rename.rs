@@ -69,10 +69,11 @@ pub(crate) fn run(db: &Database, config: &Config, args: &RenameArgs) -> Result<(
     })?;
 
     println!(
-        "Renamed '{}' → '{}' in note {}.",
+        "Renamed '{}' → '{}' in note {}.\n",
         bounds.heading.text,
         args.name,
         &full_id[..8]
     );
+    print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())
 }

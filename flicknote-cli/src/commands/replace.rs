@@ -57,31 +57,37 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    if let Some(section_name) = &args.section {
+    if let Some(section_id) = &args.section {
         // Section-level replace (formerly `edit`). Use `flicknote remove` to delete a section.
         let content = get_note_content(db, &full_id, &user_id, &args.id)?;
         let doc = crate::markdown::parse_markdown(&content);
-        let bounds = find_section(&doc, section_name, &args.id)?;
-        let heading = bounds.heading;
+        let bounds = find_section(&doc, section_id, &args.id)?;
+        let heading_text = bounds.heading.text.clone();
+        let heading_level = bounds.heading.level;
         let start = bounds.start;
         let end = bounds.end;
 
-        let new_section = read_stdin_required()?;
+        let new_body = read_stdin_required()?;
 
-        let before = &content[..start];
-        let after = &content[end..];
-        let new_content = format!("{}{}\n\n{}", before, new_section.trim_end(), after);
+        // Cap headings in replacement body to section_level + 1
+        let max_content_level = heading_level + 1;
+        let capped_body = crate::markdown::cap_heading_level(new_body.trim(), max_content_level);
+
+        let new_content = crate::markdown::replace_section_body(&content, start, end, &capped_body)
+            .map_err(CliError::Other)?;
 
         write_note(db, config, &full_id, &user_id, new_content.trim(), &now)?;
         println!(
-            "Replaced section '{}' in note {}.",
-            heading.text,
+            "Replaced section '{}' in note {}.\n",
+            heading_text,
             &full_id[..8]
         );
+        print!("{}", crate::markdown::render_tree(new_content.trim()));
     } else {
         let content = read_stdin_required()?;
         write_note(db, config, &full_id, &user_id, &content, &now)?;
-        println!("Replaced content for note {}.", &full_id[..8]);
+        println!("Replaced content for note {}.\n", &full_id[..8]);
+        print!("{}", crate::markdown::render_tree(&content));
     }
 
     Ok(())
