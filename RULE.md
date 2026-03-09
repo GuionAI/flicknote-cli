@@ -20,7 +20,8 @@ EOF
 
 ```bash
 flicknote list --project <name>
-flicknote list --search "keyword"
+flicknote find "keyword"
+flicknote find "keyword1" "keyword2"    # OR match
 flicknote list --json
 ```
 

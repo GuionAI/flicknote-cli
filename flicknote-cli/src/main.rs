@@ -34,6 +34,8 @@ enum Commands {
     Unarchive(commands::unarchive::UnarchiveArgs),
     /// List notes
     List(commands::list::ListArgs),
+    /// Find notes by keyword (OR match across title, content, summary)
+    Find(commands::find::FindArgs),
     /// Get a note by ID
     Get(commands::get::GetArgs),
     /// Manage projects
@@ -89,6 +91,7 @@ fn run() -> Result<(), CliError> {
             commands::unarchive::run(&Database::open_local(&config)?, &args)
         }
         Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
+        Commands::Find(args) => commands::find::run(&Database::open_local(&config)?, &args),
         Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &config, &args),
         Commands::Project(args) => commands::project::run(&Database::open_local(&config)?, &args),
         Commands::Login(args) => commands::login::run(&config, &args),

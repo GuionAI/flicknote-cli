@@ -29,7 +29,8 @@ cat notes.md | flicknote add --project research
 ```bash
 flicknote list                          # recent notes (default: 20)
 flicknote list --project myproject      # notes in a project
-flicknote list --search "API"           # search by title or content
+flicknote find "API"                    # search by keyword (OR match)
+flicknote find "API" "REST"             # multiple keywords
 flicknote list --type link              # filter by type (normal, voice, link)
 flicknote list --limit 50               # more results
 flicknote list --archived               # show archived notes

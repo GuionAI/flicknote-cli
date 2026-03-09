@@ -44,7 +44,8 @@ flicknote-cli login --email user@example.com
 # List recent notes
 flicknote-cli list
 flicknote-cli list --type link --limit 10
-flicknote-cli list --search "rust"
+flicknote find rust
+flicknote find rust effect         # OR match across multiple keywords
 
 # Get a specific note
 flicknote-cli get <note-id>

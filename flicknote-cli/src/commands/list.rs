@@ -4,13 +4,10 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 use rusqlite::params;
 
-use super::util::resolve_project_arg;
+use super::util::{print_notes_table, resolve_project_arg};
 
 #[derive(Args)]
 pub(crate) struct ListArgs {
-    /// Search notes by title or content
-    #[arg(long)]
-    search: Option<String>,
     /// Filter by type
     #[arg(long, value_parser = ["normal", "voice", "link"])]
     r#type: Option<String>,
@@ -41,12 +38,6 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
         if let Some(ref t) = args.r#type {
             sql.push_str(" AND type = ?");
             params_vec.push(Box::new(t.clone()));
-        }
-        if let Some(ref search) = args.search {
-            sql.push_str(" AND (title LIKE ? OR content LIKE ?)");
-            let pattern = format!("%{search}%");
-            params_vec.push(Box::new(pattern.clone()));
-            params_vec.push(Box::new(pattern));
         }
         let effective_project = resolve_project_arg(&args.project);
         if args.project.is_none() && let Some(ref name) = effective_project {
@@ -84,33 +75,7 @@ pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
             serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
         );
     } else {
-        println!(
-            "{:<10} {:<8} {:<14} {:<12} Title",
-            "ID", "Type", "Status", "Date"
-        );
-        println!("{}", "-".repeat(70));
-        for note in &notes {
-            let id = &note.id[..8.min(note.id.len())];
-            let date = note
-                .created_at
-                .as_deref()
-                .and_then(|d| d.get(..10))
-                .unwrap_or("-");
-            let title = note
-                .title
-                .as_deref()
-                .or(note.content.as_deref())
-                .unwrap_or("(untitled)");
-            let title: String = if title.chars().count() > 60 {
-                title.chars().take(60).collect()
-            } else {
-                title.to_string()
-            };
-            println!(
-                "{:<10} {:<8} {:<14} {:<12} {}",
-                id, note.r#type, note.status, date, title
-            );
-        }
+        print_notes_table(&notes);
     }
 
     Ok(())

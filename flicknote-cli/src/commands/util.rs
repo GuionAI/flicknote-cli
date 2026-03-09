@@ -151,6 +151,37 @@ pub(crate) fn get_note(db: &Database, full_id: &str, user_id: &str) -> Result<No
     })
 }
 
+/// Print notes as a formatted table to stdout.
+pub(crate) fn print_notes_table(notes: &[Note]) {
+    println!(
+        "{:<10} {:<8} {:<14} {:<12} Title",
+        "ID", "Type", "Status", "Date"
+    );
+    println!("{}", "-".repeat(70));
+    for note in notes {
+        let id = &note.id[..8.min(note.id.len())];
+        let date = note
+            .created_at
+            .as_deref()
+            .and_then(|d| d.get(..10))
+            .unwrap_or("-");
+        let title = note
+            .title
+            .as_deref()
+            .or(note.content.as_deref())
+            .unwrap_or("(untitled)");
+        let title: String = if title.chars().count() > 60 {
+            title.chars().take(60).collect()
+        } else {
+            title.to_string()
+        };
+        println!(
+            "{:<10} {:<8} {:<14} {:<12} {}",
+            id, note.r#type, note.status, date, title
+        );
+    }
+}
+
 /// Return the effective project name: arg wins, then $FLICKNOTE_PROJECT, then None.
 pub(crate) fn resolve_project_arg(arg: &Option<String>) -> Option<String> {
     if arg.is_some() {
