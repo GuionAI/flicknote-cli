@@ -6,7 +6,7 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — CLI binary (clap-based commands: list, get, clip, login, sync)
+- **flicknote-cli** — CLI binary (`flicknote`): add, find, list, get, replace, append, remove, rename, insert, modify, upload, archive, unarchive, project, login, logout, sync, import, api, tui
 - **flicknote-core** — Shared library (db, config, schema, types, session, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)

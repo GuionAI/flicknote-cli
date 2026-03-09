@@ -4,9 +4,11 @@ Local-first note management CLI with cloud sync. Captures, queries, and manages 
 
 ## Features
 
-- **List & search notes** — filter by type, search text, limit results
-- **Get note details** — retrieve by full or partial UUID
-- **Clip URLs** — capture links as note entries
+- **Add & capture notes** — text, URLs (auto-detected as links), files
+- **List & search notes** — filter by type, project, or keyword (`find`)
+- **Get note details** — retrieve by full or partial UUID; view heading structure with `--tree`
+- **Edit notes** — replace, append, insert, remove, rename sections by ID
+- **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **Background sync** — daemon process with launchd integration (macOS)
 
@@ -39,27 +41,38 @@ cargo install --path flicknote-cli
 
 ```bash
 # Authenticate
-flicknote-cli login --email user@example.com
+flicknote login --email user@example.com
 
-# List recent notes
-flicknote-cli list
-flicknote-cli list --type link --limit 10
+# Add notes
+flicknote add "Meeting notes about API redesign"
+flicknote add https://example.com          # URL auto-detected as link note
+echo "long content" | flicknote add --project myproject
+
+# List and search
+flicknote list
+flicknote list --type link --limit 10
 flicknote find rust
-flicknote find rust effect         # OR match across multiple keywords
+flicknote find rust effect                 # OR match across multiple keywords
 
-# Get a specific note
-flicknote-cli get <note-id>
+# Get a specific note (use --tree to see section IDs)
+flicknote get <note-id>
+flicknote get <note-id> --tree
 
-# Clip a URL
-flicknote-cli clip https://example.com
+# Edit note content
+echo "updated content" | flicknote replace <note-id>
+echo "updated content" | flicknote replace <note-id> --section <section-id>
+echo "more content" | flicknote append <note-id>
+
+# Archive
+flicknote archive <note-id>
 
 # Manage sync daemon
-flicknote-cli sync start
-flicknote-cli sync status
-flicknote-cli sync stop
+flicknote sync start
+flicknote sync status
+flicknote sync stop
 
 # Install as launchd service (macOS)
-flicknote-cli sync install
+flicknote sync install
 ```
 
 ## Configuration
