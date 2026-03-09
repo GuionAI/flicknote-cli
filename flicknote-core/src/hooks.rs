@@ -118,7 +118,9 @@ mod tests {
     fn hook_exit_0_succeeds() {
         let dir = temp_hooks_dir();
         let hook = dir.path().join("on-modify");
-        fs::write(&hook, "#!/bin/sh\ncat > /dev/null\nexit 0\n").unwrap();
+        let out = dir.path().join("out");
+        let script = format!("#!/bin/sh\ncat > {out}\nexit 0\n", out = out.display());
+        fs::write(&hook, script).unwrap();
         fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
 
         let old = r#"{"id":"abc","content":"old"}"#;

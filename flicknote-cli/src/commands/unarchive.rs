@@ -17,16 +17,10 @@ pub(crate) fn run(db: &Database, args: &UnarchiveArgs) -> Result<(), CliError> {
     let full_id = resolve_archived_note_id(db, &args.id)?;
 
     db.write(|conn| {
-        let rows = conn.execute(
+        conn.execute(
             "UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE id = ?",
             params![now, full_id],
         )?;
-        if rows == 0 {
-            return Err(CliError::Other(format!(
-                "Note {} is not archived.",
-                &full_id[..8]
-            )));
-        }
         Ok(())
     })?;
 
