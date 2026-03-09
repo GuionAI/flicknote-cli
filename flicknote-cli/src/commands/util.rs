@@ -89,6 +89,30 @@ pub(crate) fn resolve_note_id(db: &Database, prefix: &str) -> Result<String, Cli
     })
 }
 
+pub(crate) fn resolve_archived_note_id(db: &Database, prefix: &str) -> Result<String, CliError> {
+    if !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+        return Err(CliError::NoteNotFound {
+            id: prefix.to_string(),
+        });
+    }
+
+    db.read(|conn| {
+        let mut stmt = conn
+            .prepare("SELECT id FROM notes WHERE id LIKE ? AND deleted_at IS NOT NULL LIMIT 2")?;
+        let mut rows = stmt.query(params![format!("{prefix}%")])?;
+        let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
+        let second = rows.next()?.is_some();
+
+        match (first, second) {
+            (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
+            (Some(id), false) => Ok(id),
+            (None, _) => Err(CliError::NoteNotFound {
+                id: prefix.to_string(),
+            }),
+        }
+    })
+}
+
 /// Fetch note content from DB, returning `None` for NULL/missing content.
 /// Shared by `get_note_content` and the append command.
 pub(crate) fn get_note_content_optional(

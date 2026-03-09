@@ -15,5 +15,6 @@ pub(crate) mod rename;
 pub(crate) mod replace;
 pub(crate) mod sync;
 pub(crate) mod tui;
+pub(crate) mod unarchive;
 pub(crate) mod upload;
 pub(crate) mod util;
