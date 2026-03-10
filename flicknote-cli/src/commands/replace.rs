@@ -52,6 +52,30 @@ fn write_note(
     })
 }
 
+/// Validate that replacement content starts with a heading.
+///
+/// When replacing a section, the piped content must begin with a heading — it is
+/// the root of the replacement subtree. Returns a descriptive error if not.
+fn validate_replacement_heading(
+    content: &str,
+    section_id: &str,
+    section_heading_text: &str,
+) -> Result<(), CliError> {
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    // Use heading_level() for ATX-spec detection (requires "# " — hash + space).
+    // Empty content falls through to the error branch; read_stdin_required() guards against it upstream.
+    let starts_with_heading = first_non_empty
+        .and_then(crate::markdown::heading_level)
+        .is_some();
+    if starts_with_heading {
+        return Ok(());
+    }
+    Err(CliError::Other(format!(
+        "error: replacement content must start with a heading (root of the subtree)\n\n  You are replacing a subtree rooted at:\n    [{}] {}",
+        section_id, section_heading_text,
+    )))
+}
+
 pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
     let user_id = flicknote_core::session::get_user_id(config)?;
     let full_id = resolve_note_id(db, &args.id)?;
@@ -67,6 +91,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
         let end = bounds.end;
 
         let new_body = read_stdin_required()?;
+        validate_replacement_heading(&new_body, section_id, &bounds.heading.text)?;
 
         // Shift entire piped content so its root heading matches section_level.
         // cap_heading_level finds the shallowest heading and shifts all headings relatively.
@@ -84,4 +109,66 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_replace_section_errors_if_no_leading_heading() {
+        let result =
+            validate_replacement_heading("Some body text without a heading", "kE", "Section Title");
+        assert!(result.is_err(), "body-only content should return Err");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("heading"),
+            "error should mention 'heading', got: {msg}"
+        );
+        assert!(
+            msg.contains("[kE]"),
+            "error should include section ID, got: {msg}"
+        );
+        assert!(
+            msg.contains("Section Title"),
+            "error should include heading text, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_replace_section_ok_with_leading_heading() {
+        let result = validate_replacement_heading(
+            "## Updated Section\n\nSome content here.",
+            "kE",
+            "Section Title",
+        );
+        assert!(
+            result.is_ok(),
+            "content starting with '## ' should return Ok"
+        );
+    }
+
+    #[test]
+    fn test_replace_section_errors_on_hash_no_space() {
+        // ATX spec requires "# " (hash + space) — "#NoSpace" is not a heading
+        let result = validate_replacement_heading("#NoSpace", "kE", "Section Title");
+        assert!(
+            result.is_err(),
+            "#NoSpace should not be accepted as a heading"
+        );
+    }
+
+    #[test]
+    fn test_replace_section_ok_with_leading_blank_lines() {
+        // Leading blank lines before a valid heading should still pass
+        let result = validate_replacement_heading(
+            "\n\n## Updated Section\n\nContent.",
+            "kE",
+            "Section Title",
+        );
+        assert!(
+            result.is_ok(),
+            "leading blank lines before heading should return Ok"
+        );
+    }
 }

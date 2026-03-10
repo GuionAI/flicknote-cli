@@ -231,7 +231,7 @@ impl HeadingNode {
 }
 
 /// Counts leading `#` characters on a line if followed by a space (valid heading).
-fn heading_level(line: &str) -> Option<usize> {
+pub(crate) fn heading_level(line: &str) -> Option<usize> {
     if !line.starts_with('#') {
         return None;
     }
