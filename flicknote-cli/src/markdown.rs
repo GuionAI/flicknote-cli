@@ -84,48 +84,40 @@ pub(crate) struct HeadingNode {
 
 /// Parse markdown content and extract headings with byte offsets.
 ///
-/// Skips headings inside fenced code blocks (``` or ~~~).
+/// Uses pulldown-cmark's OffsetIter to skip headings inside fenced and indented code blocks.
 pub(crate) fn parse_markdown(content: &str) -> Document {
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+
     let mut headings = Vec::new();
-    let mut in_code_block = false;
+    let mut current: Option<(usize, usize)> = None; // (level, byte_offset)
+    let mut text_buf = String::new();
 
-    for (offset, line) in line_offsets(content) {
-        let trimmed = line.trim_start();
-
-        // Track fenced code blocks
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block {
-            continue;
-        }
-
-        // Parse ATX headings: # Heading
-        if let Some(rest) = trimmed.strip_prefix('#') {
-            let mut level = 1usize;
-            let mut chars = rest.chars();
-            while chars.as_str().starts_with('#') {
-                level += 1;
-                chars.next();
+    for (event, range) in Parser::new_ext(content, Options::empty()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                current = Some((level as usize, range.start));
+                text_buf.clear();
             }
-            // Must be followed by space or be end of line
-            let remaining = chars.as_str();
-            if level <= 6 && (remaining.is_empty() || remaining.starts_with(' ')) {
-                let text = remaining.trim().to_string();
-                if !text.is_empty() {
-                    headings.push(Heading {
-                        level,
-                        text,
-                        offset,
-                        id: String::new(), // placeholder, filled below
-                    });
+            Event::Text(text) | Event::Code(text) if current.is_some() => {
+                text_buf.push_str(&text);
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((level, offset)) = current.take() {
+                    let text = text_buf.trim().to_string();
+                    if !text.is_empty() {
+                        headings.push(Heading {
+                            level,
+                            text,
+                            offset,
+                            id: String::new(),
+                        });
+                    }
                 }
             }
+            _ => {}
         }
     }
 
-    // Compute IDs with collision detection
     let heading_lines: Vec<String> = headings
         .iter()
         .map(|h| format!("{} {}", "#".repeat(h.level), h.text))
@@ -139,16 +131,6 @@ pub(crate) fn parse_markdown(content: &str) -> Document {
         content: content.to_string(),
         headings,
     }
-}
-
-/// Iterate over lines with their byte offsets.
-fn line_offsets(content: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut offset = 0;
-    content.split('\n').map(move |line| {
-        let start = offset;
-        offset += line.len() + 1; // +1 for the \n
-        (start, line)
-    })
 }
 
 impl Document {
@@ -245,75 +227,82 @@ pub(crate) fn heading_level(line: &str) -> Option<usize> {
 
 /// Shift all headings in `content` so the shallowest heading lands at `target_level`,
 /// preserving relative hierarchy. Non-heading lines are unchanged.
+/// Setext headings (underline style) are converted to ATX (`#`) when shifted.
 ///
 /// Examples (target_level = 3):
 ///   `## Intro / ### Sub`  →  `### Intro / #### Sub`  (offset +1)
 ///   `#### Deep / ##### Deeper`  →  `### Deep / #### Deeper`  (offset -1)
 ///   `### Right / #### Sub`  →  unchanged  (offset 0)
 pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+
     debug_assert!(
         target_level >= 1,
         "target_level must be >= 1 (heading levels start at 1)"
     );
 
-    // Compute min heading level, ignoring lines inside fenced code blocks.
-    let mut in_code_block = false;
-    let min_level_fenced = content
-        .lines()
-        .filter_map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                in_code_block = !in_code_block;
-                return None;
-            }
-            if in_code_block {
-                return None;
-            }
-            heading_level(line)
-        })
-        .min();
+    // Collect byte offsets → heading levels; pulldown-cmark skips code blocks natively
+    // and handles both ATX (#) and setext (underline) headings.
+    let heading_levels: std::collections::HashMap<usize, usize> =
+        Parser::new_ext(content, Options::empty())
+            .into_offset_iter()
+            .filter_map(|(event, range)| {
+                if let Event::Start(Tag::Heading { level, .. }) = event {
+                    Some((range.start, level as usize))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
-    // If the fence was never closed, we cannot reliably distinguish code content
-    // from real headings — fall back to a naive scan with no fence tracking.
-    let fence_unclosed = in_code_block;
-    let min_level = if fence_unclosed {
-        content.lines().filter_map(heading_level).min()
-    } else {
-        min_level_fenced
-    };
-
-    let Some(min_level) = min_level else {
+    if heading_levels.is_empty() {
         return content.to_string();
-    };
+    }
+
+    // Min level comes directly from the parsed levels — no secondary line walk needed.
+    let min_level = heading_levels
+        .values()
+        .copied()
+        .min()
+        .expect("heading_levels is non-empty");
 
     let offset = target_level as isize - min_level as isize;
     if offset == 0 {
         return content.to_string();
     }
 
-    // Apply offset, skipping lines inside closed fenced code blocks.
-    // When the fence was unclosed (malformed input), apply offset to all lines.
-    in_code_block = false;
+    // Apply offset to real heading lines only.
+    // Setext headings (text line + underline) are converted to ATX; their underlines are dropped.
+    let mut byte_off = 0usize;
+    let mut skip_next = false;
     content
-        .lines()
-        .map(|line| {
-            if !fence_unclosed {
-                let trimmed = line.trim_start();
-                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                    in_code_block = !in_code_block;
-                    return line.to_string();
-                }
-                if in_code_block {
-                    return line.to_string();
-                }
+        .split('\n')
+        .filter_map(|line| {
+            let off = byte_off;
+            byte_off += line.len() + 1;
+
+            if skip_next {
+                skip_next = false;
+                return None; // drop setext underline
             }
-            match heading_level(line) {
-                Some(hashes) => {
-                    let new_level = ((hashes as isize + offset) as usize).min(6);
-                    let text = &line[hashes..]; // includes the leading space
-                    format!("{}{}", "#".repeat(new_level), text)
+
+            if let Some(&stored_level) = heading_levels.get(&off) {
+                let new_level = ((stored_level as isize + offset) as usize).clamp(1, 6);
+                match heading_level(line) {
+                    Some(hashes) => {
+                        // ATX heading: reformat with new level
+                        let text = &line[hashes..]; // includes leading space
+                        Some(format!("{}{}", "#".repeat(new_level), text))
+                    }
+                    None => {
+                        // Setext heading: convert to ATX, mark underline for removal
+                        skip_next = true;
+                        let text = line.trim_end_matches('\r').trim();
+                        Some(format!("{} {}", "#".repeat(new_level), text))
+                    }
                 }
-                None => line.to_string(),
+            } else {
+                Some(line.to_string())
             }
         })
         .collect::<Vec<_>>()
@@ -329,8 +318,8 @@ pub(crate) fn replace_entire_section(
     end: usize,
     new_content: &str,
 ) -> String {
-    // Offsets come from line_offsets() which splits on '\n' (single ASCII byte),
-    // so all line-start positions are valid UTF-8 char boundaries.
+    // Offsets come from pulldown-cmark's OffsetIter which reports byte positions in the
+    // original source, so all line-start positions are valid UTF-8 char boundaries.
     debug_assert!(
         content.is_char_boundary(start) && content.is_char_boundary(end),
         "start/end must be valid char boundaries"
@@ -401,6 +390,28 @@ mod tests {
         assert_eq!(doc.headings.len(), 2);
         assert_eq!(doc.headings[0].text, "Real");
         assert_eq!(doc.headings[1].text, "Also Real");
+    }
+
+    #[test]
+    fn test_headings_in_indented_code_block_ignored() {
+        // 4-space indent = code block in CommonMark; pulldown-cmark handles this natively.
+        let md = "# Real\n\n    # Not a heading (indented code)\n\n## Also Real";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.headings.len(), 2);
+        assert_eq!(doc.headings[0].text, "Real");
+        assert_eq!(doc.headings[1].text, "Also Real");
+    }
+
+    #[test]
+    fn test_parse_heading_with_inline_code() {
+        // Inline code inside a heading is collected into the heading text (without backticks).
+        let md = "## Install `cargo`\n\nContent.";
+        let doc = parse_markdown(md);
+        assert_eq!(doc.headings.len(), 1);
+        assert_eq!(doc.headings[0].text, "Install cargo");
+        // Section ID must be stable and 2 chars
+        let id1 = section_id("## Install cargo");
+        assert_eq!(doc.headings[0].id, id1);
     }
 
     #[test]
@@ -711,7 +722,7 @@ mod cap_heading_tests {
 
     #[test]
     fn test_cap_headings_multiple_consecutive_code_blocks() {
-        // in_code_block must reset to false after each closed fence.
+        // Real headings between multiple closed fenced code blocks must all be shifted.
         let input =
             "## First\n\n```\n# comment1\n```\n\n## Second\n\n```\n# comment2\n```\n\n### Sub";
         let result = cap_heading_level(input, 3);
@@ -721,7 +732,7 @@ mod cap_heading_tests {
         );
         assert!(
             result.lines().any(|l| l == "### Second"),
-            "second H2 must shift to H3 (in_code_block must have reset)"
+            "second H2 must shift to H3"
         );
         assert!(
             result.lines().any(|l| l == "#### Sub"),
@@ -738,25 +749,61 @@ mod cap_heading_tests {
     }
 
     #[test]
+    fn test_cap_headings_ignores_indented_code_block() {
+        // 4-space indent = code block in CommonMark; pulldown-cmark handles natively.
+        // The "# comment" must not affect min_level calculation.
+        let input = "## Section\n\n    # comment\n\n### Sub";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.lines().any(|l| l == "### Section"),
+            "H2 must shift to H3"
+        );
+        assert!(
+            result.lines().any(|l| l == "#### Sub"),
+            "H3 must shift to H4"
+        );
+        assert!(
+            result.lines().any(|l| l == "    # comment"),
+            "indented code must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_headings_setext_converted_to_atx() {
+        // Setext H1 (underline with =) is converted to ATX and shifted.
+        // min_level=1, target=2, offset=+1 → H1→H2, H3→H4.
+        let input = "My Heading\n==========\n\nContent.\n\n### Sub";
+        let result = cap_heading_level(input, 2);
+        assert!(
+            result.lines().any(|l| l == "## My Heading"),
+            "setext H1 must convert to ATX H2"
+        );
+        assert!(
+            !result.lines().any(|l| l == "=========="),
+            "setext underline must be dropped"
+        );
+        assert!(
+            result.lines().any(|l| l == "#### Sub"),
+            "H3 must shift to H4"
+        );
+        assert!(result.lines().any(|l| l == "Content."), "body unchanged");
+    }
+
+    #[test]
     fn test_cap_headings_unterminated_code_block() {
-        // When a fence is unclosed (malformed input), the function falls back to naive
-        // scanning with no fence tracking — all heading-like lines affect min_level.
-        // With target_level=3: naive min_level=1 (from "# not closed"), offset=2.
-        // Both H2 headings shift by +2 to H4.
+        // With pulldown-cmark, an unclosed fence makes everything inside a code block.
+        // Only "## Real Heading" (before the fence) is a real heading.
+        // min_level = 2, target = 3, offset = +1 → "## Real Heading" → "### Real Heading".
+        // "## Also Real" is inside the unclosed code block → left as-is.
         let input = "## Real Heading\n\n```\n# not closed\n\n## Also Real\n\nText.";
         let result = cap_heading_level(input, 3);
         assert!(
-            result.lines().any(|l| l == "#### Real Heading"),
-            "H2 before unclosed fence must shift (naive fallback, offset=2)"
+            result.lines().any(|l| l == "### Real Heading"),
+            "H2 before unclosed fence must shift to H3"
         );
         assert!(
-            result.lines().any(|l| l == "#### Also Real"),
-            "H2 after unclosed fence must shift (naive fallback, not left as ## Also Real)"
-        );
-        // Verify it's not the unshifted version (which was the original defect).
-        assert!(
-            !result.lines().any(|l| l == "## Also Real"),
-            "H2 after unclosed fence must NOT be left unshifted"
+            result.lines().any(|l| l == "## Also Real"),
+            "H2 inside unclosed fence must be left as-is"
         );
     }
 }
@@ -767,8 +814,16 @@ mod replace_entire_section_tests {
 
     fn alpha_bounds(content: &str) -> (usize, usize) {
         let doc = parse_markdown(content);
-        let h = doc.headings.iter().find(|h| h.text == "Alpha").unwrap();
-        let idx = doc.headings.iter().position(|x| x.id == h.id).unwrap();
+        let h = doc
+            .headings
+            .iter()
+            .find(|h| h.text == "Alpha")
+            .expect("test fixture must contain an 'Alpha' heading");
+        let idx = doc
+            .headings
+            .iter()
+            .position(|x| x.id == h.id)
+            .expect("heading ID must exist in the document");
         let start = h.offset;
         let end = doc
             .headings
