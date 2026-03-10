@@ -255,7 +255,33 @@ pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
         target_level >= 1,
         "target_level must be >= 1 (heading levels start at 1)"
     );
-    let min_level = content.lines().filter_map(heading_level).min();
+
+    // Compute min heading level, ignoring lines inside fenced code blocks.
+    let mut in_code_block = false;
+    let min_level_fenced = content
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                in_code_block = !in_code_block;
+                return None;
+            }
+            if in_code_block {
+                return None;
+            }
+            heading_level(line)
+        })
+        .min();
+
+    // If the fence was never closed, we cannot reliably distinguish code content
+    // from real headings — fall back to a naive scan with no fence tracking.
+    let fence_unclosed = in_code_block;
+    let min_level = if fence_unclosed {
+        content.lines().filter_map(heading_level).min()
+    } else {
+        min_level_fenced
+    };
+
     let Some(min_level) = min_level else {
         return content.to_string();
     };
@@ -265,15 +291,30 @@ pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
         return content.to_string();
     }
 
+    // Apply offset, skipping lines inside closed fenced code blocks.
+    // When the fence was unclosed (malformed input), apply offset to all lines.
+    in_code_block = false;
     content
         .lines()
-        .map(|line| match heading_level(line) {
-            Some(hashes) => {
-                let new_level = ((hashes as isize + offset) as usize).min(6);
-                let text = &line[hashes..]; // includes the leading space
-                format!("{}{}", "#".repeat(new_level), text)
+        .map(|line| {
+            if !fence_unclosed {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+                    in_code_block = !in_code_block;
+                    return line.to_string();
+                }
+                if in_code_block {
+                    return line.to_string();
+                }
             }
-            None => line.to_string(),
+            match heading_level(line) {
+                Some(hashes) => {
+                    let new_level = ((hashes as isize + offset) as usize).min(6);
+                    let text = &line[hashes..]; // includes the leading space
+                    format!("{}{}", "#".repeat(new_level), text)
+                }
+                None => line.to_string(),
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -610,6 +651,112 @@ mod cap_heading_tests {
         assert!(
             result.contains("### Real Heading"),
             "valid H2 should demote to H3"
+        );
+    }
+
+    #[test]
+    fn test_cap_headings_ignores_hash_in_fenced_code_block() {
+        // # comment inside ```dockerfile``` must not affect min_level calculation.
+        // Without fix: min_level=1 (from "# comment"), offset=+1, "## Section" → "### Section".
+        // With fix:    min_level=2 (only real headings), offset=0, "## Section" unchanged.
+        let input =
+            "## Section\n\nText.\n\n```dockerfile\n# comment\nFROM alpine\n```\n\n### Sub\n\nMore.";
+        let result = cap_heading_level(input, 2);
+        // Exact line-level checks: the result must not promote/demote headings.
+        assert!(
+            result.lines().any(|l| l == "## Section"),
+            "H2 must stay as exactly '## Section', not demote to '### Section'"
+        );
+        assert!(
+            result.lines().any(|l| l == "### Sub"),
+            "H3 must stay as exactly '### Sub', not demote to '#### Sub'"
+        );
+        assert!(
+            result.lines().any(|l| l == "# comment"),
+            "code block comment '# comment' must pass through unchanged"
+        );
+        // Negative: none of the shifted variants should appear.
+        assert!(
+            !result.lines().any(|l| l == "### Section"),
+            "H2 must NOT become '### Section'"
+        );
+        assert!(
+            !result.lines().any(|l| l == "## comment"),
+            "code comment must NOT be shifted to '## comment'"
+        );
+    }
+
+    #[test]
+    fn test_cap_headings_ignores_hash_in_tilde_fenced_code_block() {
+        // Same as the backtick test but with ~~~bash fences.
+        let input = "## Section\n\nText.\n\n~~~bash\n# comment\necho hi\n~~~\n\n### Sub\n\nMore.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.lines().any(|l| l == "### Section"),
+            "H2 must shift to H3 via tilde fence"
+        );
+        assert!(
+            result.lines().any(|l| l == "#### Sub"),
+            "H3 must shift to H4"
+        );
+        assert!(
+            result.lines().any(|l| l == "# comment"),
+            "code comment inside tilde fence must pass through unchanged"
+        );
+        assert!(
+            !result.lines().any(|l| l == "## comment"),
+            "code comment must NOT be shifted"
+        );
+    }
+
+    #[test]
+    fn test_cap_headings_multiple_consecutive_code_blocks() {
+        // in_code_block must reset to false after each closed fence.
+        let input =
+            "## First\n\n```\n# comment1\n```\n\n## Second\n\n```\n# comment2\n```\n\n### Sub";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.lines().any(|l| l == "### First"),
+            "first H2 must shift to H3"
+        );
+        assert!(
+            result.lines().any(|l| l == "### Second"),
+            "second H2 must shift to H3 (in_code_block must have reset)"
+        );
+        assert!(
+            result.lines().any(|l| l == "#### Sub"),
+            "H3 must shift to H4"
+        );
+        assert!(
+            result.lines().any(|l| l == "# comment1"),
+            "first code comment must pass through unchanged"
+        );
+        assert!(
+            result.lines().any(|l| l == "# comment2"),
+            "second code comment must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn test_cap_headings_unterminated_code_block() {
+        // When a fence is unclosed (malformed input), the function falls back to naive
+        // scanning with no fence tracking — all heading-like lines affect min_level.
+        // With target_level=3: naive min_level=1 (from "# not closed"), offset=2.
+        // Both H2 headings shift by +2 to H4.
+        let input = "## Real Heading\n\n```\n# not closed\n\n## Also Real\n\nText.";
+        let result = cap_heading_level(input, 3);
+        assert!(
+            result.lines().any(|l| l == "#### Real Heading"),
+            "H2 before unclosed fence must shift (naive fallback, offset=2)"
+        );
+        assert!(
+            result.lines().any(|l| l == "#### Also Real"),
+            "H2 after unclosed fence must shift (naive fallback, not left as ## Also Real)"
+        );
+        // Verify it's not the unshifted version (which was the original defect).
+        assert!(
+            !result.lines().any(|l| l == "## Also Real"),
+            "H2 after unclosed fence must NOT be left unshifted"
         );
     }
 }
