@@ -1,8 +1,7 @@
 use clap::Args;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use rusqlite::params;
 
 use flicknote_core::hooks;
 
@@ -19,31 +18,27 @@ pub(crate) struct RenameArgs {
     name: String,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &RenameArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &RenameArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    let content = get_note_content(db, &full_id, &user_id, &args.id)?;
+    let content = get_note_content(db, &full_id)?;
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, &args.section, &args.id)?;
 
-    // Find end of heading line (just the line, not the whole section)
     let heading_line_end = content[bounds.start..]
         .find('\n')
         .map(|i| bounds.start + i)
         .unwrap_or(content.len());
 
-    // Build new heading line preserving level
     let prefix = "#".repeat(bounds.heading.level);
     let new_heading_line = format!("{prefix} {}", args.name);
 
-    // Splice: before heading + new heading line + everything after heading line
     let before = &content[..bounds.start];
     let after = &content[heading_line_end..];
     let new_content = format!("{before}{new_heading_line}{after}");
 
-    let old_note = get_note(db, &full_id, &user_id)?;
+    let old_note = get_note(db, &full_id)?;
     let mut new_note = old_note.clone();
     new_note.content = Some(new_content.trim().to_string());
     new_note.status = "ai_queued".to_string();
@@ -60,13 +55,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &RenameArgs) -> Result<(
         &config_dir,
     )?;
 
-    db.write(|conn| {
-        conn.execute(
-            "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE id = ? AND user_id = ?",
-            params![new_content.trim(), now, full_id, user_id],
-        )?;
-        Ok(())
-    })?;
+    db.update_note_content(&full_id, new_content.trim(), true)?;
 
     println!(
         "Renamed '{}' → '{}' in note {}.\n",

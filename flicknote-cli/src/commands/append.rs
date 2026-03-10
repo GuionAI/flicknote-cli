@@ -1,8 +1,7 @@
 use clap::Args;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use rusqlite::params;
 
 use flicknote_core::hooks;
 
@@ -14,13 +13,12 @@ pub(crate) struct AppendArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &AppendArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AppendArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
     // Get existing content
-    let existing = get_note_content_optional(db, &full_id, &user_id, &args.id)?;
+    let existing = get_note_content_optional(db, &full_id)?;
 
     // Get new content from stdin
     let new_content = read_stdin_required()?;
@@ -32,7 +30,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AppendArgs) -> Result<(
     };
 
     // Notify on-modify hook (may reject)
-    let old_note = get_note(db, &full_id, &user_id)?;
+    let old_note = get_note(db, &full_id)?;
     let mut new_note = old_note.clone();
     new_note.content = Some(combined.clone());
     new_note.updated_at = Some(now.clone());
@@ -48,14 +46,8 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AppendArgs) -> Result<(
         &config_dir,
     )?;
 
-    // Update -- no status change (do not re-queue for AI)
-    db.write(|conn| {
-        conn.execute(
-            "UPDATE notes SET content = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-            params![combined, now, full_id, user_id],
-        )?;
-        Ok(())
-    })?;
+    // Update — no status change (do not re-queue for AI)
+    db.update_note_content(&full_id, &combined, false)?;
 
     println!("Appended to note {}.", &full_id[..8]);
     Ok(())

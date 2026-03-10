@@ -1,12 +1,11 @@
 use clap::Args;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use rusqlite::params;
 
 use flicknote_core::hooks;
 
-use super::util::{find_section, get_note, get_note_content, read_stdin_required, resolve_note_id};
+use super::util::{find_section, get_note, read_stdin_required, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
@@ -19,18 +18,18 @@ pub(crate) struct ReplaceArgs {
 
 /// Run the on-modify hook and write updated content to the database.
 fn write_note(
-    db: &Database,
+    db: &dyn NoteDb,
     config: &Config,
     full_id: &str,
-    user_id: &str,
     new_content: &str,
-    now: &str,
 ) -> Result<(), CliError> {
-    let old_note = get_note(db, full_id, user_id)?;
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let old_note = get_note(db, full_id)?;
     let mut new_note = old_note.clone();
     new_note.content = Some(new_content.to_string());
     new_note.status = "ai_queued".to_string();
-    new_note.updated_at = Some(now.to_string());
+    new_note.updated_at = Some(now.clone());
 
     let old_json = serde_json::to_string(&old_note)?;
     let new_json = serde_json::to_string(&new_note)?;
@@ -43,27 +42,16 @@ fn write_note(
         &config_dir,
     )?;
 
-    db.write(|conn| {
-        conn.execute(
-            "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE id = ? AND user_id = ?",
-            params![new_content, now, full_id, user_id],
-        )?;
-        Ok(())
-    })
+    db.update_note_content(full_id, new_content, true)
 }
 
 /// Validate that replacement content starts with a heading.
-///
-/// When replacing a section, the piped content must begin with a heading — it is
-/// the root of the replacement subtree. Returns a descriptive error if not.
 fn validate_replacement_heading(
     content: &str,
     section_id: &str,
     section_heading_text: &str,
 ) -> Result<(), CliError> {
     let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    // Use heading_level() for ATX-spec detection (requires "# " — hash + space).
-    // Empty content falls through to the error branch; read_stdin_required() guards against it upstream.
     let starts_with_heading = first_non_empty
         .and_then(crate::markdown::heading_level)
         .is_some();
@@ -76,14 +64,13 @@ fn validate_replacement_heading(
     )))
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
-    let now = chrono::Utc::now().to_rfc3339();
 
     if let Some(section_id) = &args.section {
-        // Section-level replace (formerly `edit`). Use `flicknote remove` to delete a section.
-        let content = get_note_content(db, &full_id, &user_id, &args.id)?;
+        let content = db
+            .find_note_content(&full_id)?
+            .ok_or_else(|| CliError::Other("Note has no content".into()))?;
         let doc = crate::markdown::parse_markdown(&content);
         let bounds = find_section(&doc, section_id, &args.id)?;
         let heading_level = bounds.heading.level;
@@ -93,17 +80,15 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ReplaceArgs) -> Result<
         let new_body = read_stdin_required()?;
         validate_replacement_heading(&new_body, section_id, &bounds.heading.text)?;
 
-        // Shift entire piped content so its root heading matches section_level.
-        // cap_heading_level finds the shallowest heading and shifts all headings relatively.
         let shifted = crate::markdown::cap_heading_level(new_body.trim(), heading_level);
         let new_content = crate::markdown::replace_entire_section(&content, start, end, &shifted);
 
-        write_note(db, config, &full_id, &user_id, new_content.trim(), &now)?;
+        write_note(db, config, &full_id, new_content.trim())?;
         println!("Replaced section in note {}.\n", &full_id[..8]);
         print!("{}", crate::markdown::render_tree(new_content.trim()));
     } else {
         let content = read_stdin_required()?;
-        write_note(db, config, &full_id, &user_id, &content, &now)?;
+        write_note(db, config, &full_id, &content)?;
         println!("Replaced content for note {}.\n", &full_id[..8]);
         print!("{}", crate::markdown::render_tree(&content));
     }
@@ -150,7 +135,6 @@ mod tests {
 
     #[test]
     fn test_replace_section_errors_on_hash_no_space() {
-        // ATX spec requires "# " (hash + space) — "#NoSpace" is not a heading
         let result = validate_replacement_heading("#NoSpace", "kE", "Section Title");
         assert!(
             result.is_err(),
@@ -160,7 +144,6 @@ mod tests {
 
     #[test]
     fn test_replace_section_ok_with_leading_blank_lines() {
-        // Leading blank lines before a valid heading should still pass
         let result = validate_replacement_heading(
             "\n\n## Updated Section\n\nContent.",
             "kE",

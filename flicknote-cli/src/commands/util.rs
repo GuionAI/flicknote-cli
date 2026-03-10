@@ -1,7 +1,6 @@
-use flicknote_core::db::Database;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
-use rusqlite::params;
 use std::io::{IsTerminal, Read};
 
 use crate::markdown::Document;
@@ -51,104 +50,27 @@ pub(crate) fn find_section<'a>(
     })
 }
 
-pub(crate) fn resolve_note_id(db: &Database, prefix: &str) -> Result<String, CliError> {
-    // Reject LIKE wildcards — only hex digits and dashes are valid UUID characters
-    if !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return Err(CliError::NoteNotFound {
-            id: prefix.to_string(),
-        });
-    }
-
-    db.read(|conn| {
-        let mut stmt =
-            conn.prepare("SELECT id FROM notes WHERE id LIKE ? AND deleted_at IS NULL LIMIT 2")?;
-        let mut rows = stmt.query(params![format!("{prefix}%")])?;
-        let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-        let second = rows.next()?.is_some();
-
-        match (first, second) {
-            (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
-            (Some(id), false) => Ok(id),
-            (None, _) => Err(CliError::NoteNotFound {
-                id: prefix.to_string(),
-            }),
-        }
-    })
-}
-
-pub(crate) fn resolve_archived_note_id(db: &Database, prefix: &str) -> Result<String, CliError> {
-    if !prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return Err(CliError::NoteNotFound {
-            id: prefix.to_string(),
-        });
-    }
-
-    db.read(|conn| {
-        let mut stmt = conn
-            .prepare("SELECT id FROM notes WHERE id LIKE ? AND deleted_at IS NOT NULL LIMIT 2")?;
-        let mut rows = stmt.query(params![format!("{prefix}%")])?;
-        let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-        let second = rows.next()?.is_some();
-
-        match (first, second) {
-            (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
-            (Some(id), false) => Ok(id),
-            (None, _) => Err(CliError::NoteNotFound {
-                id: prefix.to_string(),
-            }),
-        }
-    })
+pub(crate) fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<String, CliError> {
+    db.resolve_note_id(prefix)
 }
 
 /// Fetch note content from DB, returning `None` for NULL/missing content.
-/// Shared by `get_note_content` and the append command.
 pub(crate) fn get_note_content_optional(
-    db: &Database,
+    db: &dyn NoteDb,
     full_id: &str,
-    user_id: &str,
-    display_id: &str,
 ) -> Result<Option<String>, CliError> {
-    db.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT content FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        )?;
-        let mut rows = stmt.query(params![full_id, user_id])?;
-        match rows.next()? {
-            Some(row) => Ok(row.get::<_, Option<String>>(0)?),
-            None => Err(CliError::NoteNotFound {
-                id: display_id.to_string(),
-            }),
-        }
-    })
+    db.find_note_content(full_id)
 }
 
 /// Fetch note content from DB. Shared by get --tree, get -s, and replace.
-pub(crate) fn get_note_content(
-    db: &Database,
-    full_id: &str,
-    user_id: &str,
-    display_id: &str,
-) -> Result<String, CliError> {
-    get_note_content_optional(db, full_id, user_id, display_id)?
+pub(crate) fn get_note_content(db: &dyn NoteDb, full_id: &str) -> Result<String, CliError> {
+    db.find_note_content(full_id)?
         .ok_or_else(|| CliError::Other("Note has no content".into()))
 }
 
 /// Fetch a full Note by ID. Returns error if not found or deleted.
-pub(crate) fn get_note(db: &Database, full_id: &str, user_id: &str) -> Result<Note, CliError> {
-    db.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-             project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
-             FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
-        )?;
-        let mut rows = stmt.query(params![full_id, user_id])?;
-        match rows.next()? {
-            Some(row) => Ok(Note::from_row(row)?),
-            None => Err(CliError::NoteNotFound {
-                id: full_id.to_string(),
-            }),
-        }
-    })
+pub(crate) fn get_note(db: &dyn NoteDb, full_id: &str) -> Result<Note, CliError> {
+    db.find_note(full_id)
 }
 
 /// Print notes as a formatted table to stdout.

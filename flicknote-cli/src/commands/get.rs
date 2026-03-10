@@ -1,8 +1,6 @@
 use clap::Args;
-use flicknote_core::config::Config;
-use flicknote_core::db::Database;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::types::Note;
 
 #[derive(Args)]
 pub(crate) struct GetArgs {
@@ -19,7 +17,7 @@ pub(crate) struct GetArgs {
     json: bool,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &GetArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, args: &GetArgs) -> Result<(), CliError> {
     // Reject LIKE wildcards
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {
@@ -29,9 +27,10 @@ pub(crate) fn run(db: &Database, config: &Config, args: &GetArgs) -> Result<(), 
 
     // Tree view or section extraction — both need parsed markdown
     if args.tree || args.section.is_some() {
-        let user_id = flicknote_core::session::get_user_id(config)?;
-        let full_id = super::util::resolve_note_id(db, &args.id)?;
-        let content = super::util::get_note_content(db, &full_id, &user_id, &args.id)?;
+        let full_id = db.resolve_note_id(&args.id)?;
+        let content = db
+            .find_note_content(&full_id)?
+            .ok_or_else(|| CliError::Other("Note has no content".into()))?;
         let doc = crate::markdown::parse_markdown(&content);
 
         if args.tree {
@@ -51,9 +50,6 @@ pub(crate) fn run(db: &Database, config: &Config, args: &GetArgs) -> Result<(), 
 
         let section_id = args.section.as_ref().unwrap();
         let bounds = super::util::find_section(&doc, section_id, &args.id)?;
-        // Skip the heading line, extract only the body using the pre-computed byte offsets.
-        // Avoids a second name-based scan which would return the wrong section for duplicate headings.
-        // `.unwrap_or(bounds.end)` is intentional: a heading with no body returns empty string.
         let body_start = content[bounds.start..]
             .find('\n')
             .map(|i| bounds.start + i + 1)
@@ -63,40 +59,11 @@ pub(crate) fn run(db: &Database, config: &Config, args: &GetArgs) -> Result<(), 
         return Ok(());
     }
 
-    let note = db.read(|conn| {
-        let (sql, param): (&str, Box<dyn rusqlite::types::ToSql>) = if args.id.len() < 36 {
-            (
-                "SELECT * FROM notes WHERE id LIKE ? AND deleted_at IS NULL LIMIT 1",
-                Box::new(format!("{}%", args.id)),
-            )
-        } else {
-            (
-                "SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL LIMIT 1",
-                Box::new(args.id.clone()),
-            )
-        };
+    let full_id = db.resolve_note_id(&args.id)?;
+    let note = db.find_note(&full_id)?;
 
-        let mut stmt = conn.prepare(sql)?;
-        stmt.query_row([param.as_ref()], Note::from_row)
-            .map_err(|e| match e {
-                rusqlite::Error::QueryReturnedNoRows => CliError::NoteNotFound {
-                    id: args.id.clone(),
-                },
-                other => CliError::from(other),
-            })
-    })?;
-
-    let project_name: Option<String> = if let Some(ref pid) = note.project_id {
-        db.read(|conn| {
-            match conn
-                .prepare("SELECT name FROM projects WHERE id = ? LIMIT 1")?
-                .query_row(rusqlite::params![pid], |row| row.get(0))
-            {
-                Ok(name) => Ok(Some(name)),
-                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(e) => Err(e.into()),
-            }
-        })?
+    let project_name = if let Some(ref pid) = note.project_id {
+        db.find_project_name_by_id(pid)?
     } else {
         None
     };

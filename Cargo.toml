@@ -18,6 +18,7 @@ async-trait = "0.1"
 thiserror = "2"
 uuid = { version = "1", features = ["v4"] }
 futures-lite = "2"
+postgres = { version = "0.19", features = ["with-chrono-0_4"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

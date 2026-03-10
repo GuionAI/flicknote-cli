@@ -1,8 +1,7 @@
 use clap::Args;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use rusqlite::params;
 
 use flicknote_core::hooks;
 
@@ -21,8 +20,7 @@ pub(crate) struct InsertArgs {
     after: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &InsertArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -36,7 +34,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(
         }
     };
 
-    let content = get_note_content(db, &full_id, &user_id, &args.id)?;
+    let content = get_note_content(db, &full_id)?;
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, section_name, &args.id)?;
 
@@ -58,7 +56,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(
         format!("{before}\n\n{}\n\n{after}", insert_content.trim_end())
     };
 
-    let old_note = get_note(db, &full_id, &user_id)?;
+    let old_note = get_note(db, &full_id)?;
     let mut new_note = old_note.clone();
     new_note.content = Some(new_content.trim().to_string());
     new_note.status = "ai_queued".to_string();
@@ -75,13 +73,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &InsertArgs) -> Result<(
         &config_dir,
     )?;
 
-    db.write(|conn| {
-        conn.execute(
-            "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE id = ? AND user_id = ?",
-            params![new_content.trim(), now, full_id, user_id],
-        )?;
-        Ok(())
-    })?;
+    db.update_note_content(&full_id, new_content.trim(), true)?;
 
     let position = if insert_before { "before" } else { "after" };
     println!(

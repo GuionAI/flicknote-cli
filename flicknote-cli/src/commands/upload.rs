@@ -1,9 +1,7 @@
 use clap::Args;
+use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use flicknote_core::session;
-use rusqlite::params;
 use std::path::PathBuf;
 
 use crate::api_client::ApiClient;
@@ -19,7 +17,7 @@ pub(crate) struct UploadArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result<(), CliError> {
     if !args.file.exists() {
         return Err(CliError::Other(format!(
             "File not found: {}",
@@ -34,12 +32,9 @@ pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(
         .ok_or_else(|| CliError::Other("Invalid filename".into()))?
         .to_string();
 
-    let user_id = session::get_user_id(config)?;
     let id = uuid::Uuid::new_v4().to_string();
 
     // Upload file to R2 first — don't create note until upload succeeds.
-    // Trade-off: if upload succeeds but DB insert fails, an orphaned file remains in R2.
-    // This is preferred over the alternative (DB first) which would leave a dangling note record.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -50,7 +45,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(
         Ok::<(), CliError>(())
     })?;
 
-    // Upload succeeded — now create the note locally
+    // Upload succeeded — now create the note
     let now = chrono::Utc::now().to_rfc3339();
     let metadata = serde_json::json!({
         "file": {
@@ -61,19 +56,20 @@ pub(crate) fn run(db: &Database, config: &Config, args: &UploadArgs) -> Result<(
     .to_string();
 
     let project_id = if let Some(ref name) = resolve_project_arg(&args.project) {
-        Some(resolve_or_create_project(db, &user_id, name)?)
+        Some(resolve_or_create_project(db, name)?)
     } else {
         None
     };
 
-    db.write(|conn| {
-        conn.execute(
-            "INSERT INTO notes (id, user_id, type, status, metadata, project_id, created_at, updated_at)
-             VALUES (?, ?, 'file', 'source_queued', ?, ?, ?, ?)",
-            params![id, user_id, metadata, project_id, now, now],
-        )?;
-
-        Ok(())
+    db.insert_note(&InsertNoteReq {
+        id: &id,
+        note_type: "file",
+        status: "source_queued",
+        title: None,
+        content: None,
+        metadata: Some(&metadata),
+        project_id: project_id.as_deref(),
+        now: &now,
     })?;
 
     println!("Created note {} with file {}", &id[..8], filename);

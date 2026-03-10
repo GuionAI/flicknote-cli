@@ -1,9 +1,11 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};
+use flicknote_core::backend::{NoteDb, SqliteBackend};
 use flicknote_core::config::Config;
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
+use flicknote_core::pg::PgBackend;
 
 mod api_client;
 mod commands;
@@ -77,48 +79,70 @@ fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let config = Config::load()?;
 
-    let Some(command) = cli.command else {
-        return commands::tui::run(&config);
+    if let Ok(pg_url) = std::env::var("FLICKNOTE_PG_URL") {
+        // Reject unsupported commands before attempting connection
+        if let Some(ref cmd) = cli.command {
+            let unsupported = matches!(
+                cmd,
+                Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Tui
+            );
+            if unsupported {
+                return Err(CliError::Other(
+                    "This command is not available in PG mode (FLICKNOTE_PG_URL is set)".into(),
+                ));
+            }
+        }
+
+        let user_id = std::env::var("FLICKNOTE_USER_ID").map_err(|_| {
+            CliError::Other(
+                "FLICKNOTE_USER_ID must be set when using FLICKNOTE_PG_URL \
+                 (e.g. FLICKNOTE_USER_ID=<your-uuid>)"
+                    .into(),
+            )
+        })?;
+        uuid::Uuid::parse_str(&user_id).map_err(|_| {
+            CliError::Other(format!(
+                "FLICKNOTE_USER_ID must be a valid UUID, got: {user_id:?}"
+            ))
+        })?;
+        let backend = PgBackend::connect(&pg_url, user_id)?;
+        dispatch(&cli, &config, &backend, true)
+    } else {
+        let db = Database::open_local(&config)?;
+        let user_id = flicknote_core::session::get_user_id(&config)?;
+        let backend = SqliteBackend { db, user_id };
+        dispatch(&cli, &config, &backend, false)
+    }
+}
+
+fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Result<(), CliError> {
+    let Some(ref command) = cli.command else {
+        if pg_mode {
+            return Err(CliError::Other("TUI not supported in PG mode".into()));
+        }
+        return commands::tui::run(config);
     };
 
     match command {
-        Commands::Add(args) => commands::add::run(&Database::open_local(&config)?, &config, &args),
-        Commands::Append(args) => {
-            commands::append::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Archive(args) => commands::archive::run(&Database::open_local(&config)?, &args),
-        Commands::Unarchive(args) => {
-            commands::unarchive::run(&Database::open_local(&config)?, &args)
-        }
-        Commands::List(args) => commands::list::run(&Database::open_local(&config)?, &args),
-        Commands::Find(args) => commands::find::run(&Database::open_local(&config)?, &args),
-        Commands::Get(args) => commands::get::run(&Database::open_local(&config)?, &config, &args),
-        Commands::Project(args) => commands::project::run(&Database::open_local(&config)?, &args),
-        Commands::Login(args) => commands::login::run(&config, &args),
-        Commands::Logout => commands::logout::run(&config),
-        Commands::Tui => commands::tui::run(&config),
-        Commands::Sync(args) => commands::sync::run(&config, &args),
-        Commands::Import(args) => {
-            commands::import::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Upload(args) => {
-            commands::upload::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Api(args) => commands::api::run(&config, &args),
-        Commands::Replace(args) => {
-            commands::replace::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Remove(args) => {
-            commands::remove::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Rename(args) => {
-            commands::rename::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Insert(args) => {
-            commands::insert::run(&Database::open_local(&config)?, &config, &args)
-        }
-        Commands::Modify(args) => {
-            commands::modify::run(&Database::open_local(&config)?, &config, &args)
-        }
+        Commands::Add(args) => commands::add::run(db, config, args),
+        Commands::Append(args) => commands::append::run(db, config, args),
+        Commands::Archive(args) => commands::archive::run(db, args),
+        Commands::Unarchive(args) => commands::unarchive::run(db, args),
+        Commands::List(args) => commands::list::run(db, args),
+        Commands::Find(args) => commands::find::run(db, args),
+        Commands::Get(args) => commands::get::run(db, args),
+        Commands::Project(args) => commands::project::run(db, args),
+        Commands::Replace(args) => commands::replace::run(db, config, args),
+        Commands::Remove(args) => commands::remove::run(db, config, args),
+        Commands::Rename(args) => commands::rename::run(db, config, args),
+        Commands::Insert(args) => commands::insert::run(db, config, args),
+        Commands::Modify(args) => commands::modify::run(db, config, args),
+        Commands::Import(args) => commands::import::run(db, config, args),
+        Commands::Upload(args) => commands::upload::run(db, config, args),
+        Commands::Login(args) => commands::login::run(config, args),
+        Commands::Logout => commands::logout::run(config),
+        Commands::Tui => commands::tui::run(config),
+        Commands::Sync(args) => commands::sync::run(config, args),
+        Commands::Api(args) => commands::api::run(config, args),
     }
 }

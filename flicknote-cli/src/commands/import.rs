@@ -1,12 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use flicknote_core::session;
-use rusqlite::params;
 
+use super::add::resolve_or_create_project;
 use super::util::resolve_project_arg;
 
 #[derive(Args)]
@@ -18,9 +17,7 @@ pub(crate) struct ImportArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(), CliError> {
-    let user_id = session::get_user_id(config)?;
-
+pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Result<(), CliError> {
     // Collect .md files
     let files = collect_md_files(&args.path)?;
     if files.is_empty() {
@@ -31,9 +28,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
     // Resolve project if specified
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(crate::commands::add::resolve_or_create_project(
-            db, &user_id, name,
-        )?)
+        Some(resolve_or_create_project(db, name)?)
     } else {
         None
     };
@@ -51,16 +46,16 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ImportArgs) -> Result<(
         let id = uuid::Uuid::new_v4().to_string();
         let title = crate::utils::extract_title(&content);
         let created_at = file_created_time(file);
-        let now = chrono::Utc::now().to_rfc3339();
 
-        db.write(|conn| {
-            conn.execute(
-                "INSERT INTO notes (id, user_id, type, status, title, content, project_id, created_at, updated_at)
-                 VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?, ?)",
-                params![id, user_id, title, content, project_id, created_at, now],
-            )?;
-
-            Ok(())
+        db.insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "ai_queued",
+            title: title.as_deref(),
+            content: Some(&content),
+            metadata: None,
+            project_id: project_id.as_deref(),
+            now: &created_at,
         })?;
 
         imported.push((id, title, file.clone()));

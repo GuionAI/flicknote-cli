@@ -1,12 +1,11 @@
 use clap::Args;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use flicknote_core::hooks;
-use rusqlite::params;
 
 use super::add::resolve_or_create_project;
-use super::util::{get_note, resolve_note_id};
+use super::util::resolve_note_id;
 
 #[derive(Args)]
 pub(crate) struct ModifyArgs {
@@ -17,12 +16,11 @@ pub(crate) struct ModifyArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
-    let user_id = flicknote_core::session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
     let now = chrono::Utc::now().to_rfc3339();
 
-    let old_note = get_note(db, &full_id, &user_id)?;
+    let old_note = db.find_note(&full_id)?;
 
     let Some(ref project_name) = args.project else {
         return Err(CliError::Other(
@@ -31,7 +29,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ModifyArgs) -> Result<(
     };
 
     let old_project_id = old_note.project_id.clone();
-    let new_project_id = resolve_or_create_project(db, &user_id, project_name)?;
+    let new_project_id = resolve_or_create_project(db, project_name)?;
 
     // No-op if already in same project
     if old_project_id.as_deref() == Some(new_project_id.as_str()) {
@@ -59,50 +57,9 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ModifyArgs) -> Result<(
         &config_dir,
     )?;
 
-    // Fetch old project name (for deletion message) before write
-    let old_project_name: Option<String> = if let Some(ref old_pid) = old_project_id {
-        db.read(|conn| {
-            let mut stmt = conn.prepare("SELECT name FROM projects WHERE id = ?")?;
-            let mut rows = stmt.query(params![old_pid])?;
-            if let Some(row) = rows.next()? {
-                Ok(Some(row.get::<_, String>(0)?))
-            } else {
-                Ok(None)
-            }
-        })?
-    } else {
-        None
-    };
-
-    // Update note project + conditionally delete empty old project
-    let deleted_old = db.write(|conn| {
-        let affected = conn.execute(
-            "UPDATE notes SET project_id = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-            params![new_project_id, now, full_id, user_id],
-        )?;
-        if affected == 0 {
-            return Err(CliError::NoteNotFound {
-                id: full_id.clone(),
-            });
-        }
-
-        if let Some(ref old_pid) = old_project_id {
-            let mut stmt = conn.prepare(
-                "SELECT COUNT(*) FROM notes WHERE project_id = ? AND deleted_at IS NULL",
-            )?;
-            let mut rows = stmt.query(params![old_pid])?;
-            let count: i64 = rows
-                .next()?
-                .ok_or_else(|| CliError::Other("COUNT(*) returned no rows".into()))?
-                .get::<_, i64>(0)?;
-
-            if count == 0 {
-                conn.execute("DELETE FROM projects WHERE id = ?", params![old_pid])?;
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    })?;
+    // Atomic: update note project + delete old project if now empty
+    let deleted_name =
+        db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
 
     println!(
         "Moved note {} to project \"{}\".",
@@ -110,7 +67,7 @@ pub(crate) fn run(db: &Database, config: &Config, args: &ModifyArgs) -> Result<(
         project_name
     );
 
-    if deleted_old && let Some(name) = old_project_name {
+    if let Some(name) = deleted_name {
         println!("Deleted empty project \"{}\".", name);
     }
 

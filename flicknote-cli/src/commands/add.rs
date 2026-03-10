@@ -1,9 +1,7 @@
 use clap::Args;
+use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use flicknote_core::session;
-use rusqlite::params;
 use std::io::{IsTerminal, Read};
 
 use super::util::resolve_project_arg;
@@ -17,8 +15,7 @@ pub(crate) struct AddArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), CliError> {
-    let user_id = session::get_user_id(config)?;
+pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &AddArgs) -> Result<(), CliError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -44,30 +41,37 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
 
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_or_create_project(db, &user_id, name)?)
+        Some(resolve_or_create_project(db, name)?)
     } else {
         None
     };
 
-    db.write(|conn| {
-        if is_url {
-            let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
-            conn.execute(
-                "INSERT INTO notes (id, user_id, type, status, title, metadata, project_id, created_at, updated_at)
-                 VALUES (?, ?, 'link', 'source_queued', NULL, ?, ?, ?, ?)",
-                params![id, user_id, metadata, project_id, now, now],
-            )?;
-        } else {
-            let title = crate::utils::extract_title(&content);
-            conn.execute(
-                "INSERT INTO notes (id, user_id, type, status, title, content, project_id, created_at, updated_at)
-                 VALUES (?, ?, 'normal', 'ai_queued', ?, ?, ?, ?, ?)",
-                params![id, user_id, title, content, project_id, now, now],
-            )?;
-        }
-
-        Ok(())
-    })?;
+    if is_url {
+        let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
+        db.insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "link",
+            status: "source_queued",
+            title: None,
+            content: None,
+            metadata: Some(&metadata),
+            project_id: project_id.as_deref(),
+            now: &now,
+        })?;
+    } else {
+        let title = crate::utils::extract_title(&content);
+        let title_ref = title.as_deref();
+        db.insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "ai_queued",
+            title: title_ref,
+            content: Some(&content),
+            metadata: None,
+            project_id: project_id.as_deref(),
+            now: &now,
+        })?;
+    }
 
     match effective_project.as_deref() {
         Some(name) => println!("Created note {} in project \"{name}\".", &id[..8]),
@@ -76,38 +80,12 @@ pub(crate) fn run(db: &Database, config: &Config, args: &AddArgs) -> Result<(), 
     Ok(())
 }
 
-pub(crate) fn resolve_or_create_project(
-    db: &Database,
-    user_id: &str,
-    name: &str,
-) -> Result<String, CliError> {
-    let existing = db.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT id FROM projects WHERE name = ? AND user_id = ? AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
-        )?;
-        let mut rows = stmt.query(params![name, user_id])?;
-        if let Some(row) = rows.next()? {
-            Ok(Some(row.get::<_, String>(0)?))
-        } else {
-            Ok(None)
-        }
-    })?;
-
-    if let Some(id) = existing {
+/// Resolve project by name, creating it if it doesn't exist.
+pub(crate) fn resolve_or_create_project(db: &dyn NoteDb, name: &str) -> Result<String, CliError> {
+    if let Some(id) = db.find_project_by_name(name)? {
         return Ok(id);
     }
-
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    db.write(|conn| {
-        conn.execute(
-            "INSERT INTO projects (id, user_id, name, is_archived, created_at)
-             VALUES (?, ?, ?, 0, ?)",
-            params![id, user_id, name, now],
-        )?;
-        Ok(())
-    })?;
-
+    let id = db.create_project(name)?;
     println!("Created project \"{name}\".");
     Ok(id)
 }

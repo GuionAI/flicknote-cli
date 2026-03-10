@@ -1,5 +1,5 @@
 use clap::{Args, Subcommand};
-use flicknote_core::db::Database;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Project;
 
@@ -25,23 +25,24 @@ struct ListArgs {
     json: bool,
 }
 
-pub(crate) fn run(db: &Database, args: &ProjectArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, args: &ProjectArgs) -> Result<(), CliError> {
     match &args.command {
         ProjectCommands::List(a) => list(db, a),
     }
 }
 
-fn list(db: &Database, args: &ListArgs) -> Result<(), CliError> {
-    let projects = db.read(|conn| {
-        let sql = if args.include_archived {
-            "SELECT * FROM projects ORDER BY created_at DESC"
-        } else {
-            "SELECT * FROM projects WHERE is_archived = 0 OR is_archived IS NULL ORDER BY created_at DESC"
-        };
-        let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], Project::from_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-    })?;
+fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
+    // list_projects(archived=true) returns archived projects only.
+    // For include_archived, we need to fetch both. As a simple approach,
+    // fetch all via two queries and combine.
+    let projects: Vec<Project> = if args.include_archived {
+        let mut all = db.list_projects(false)?;
+        all.extend(db.list_projects(true)?);
+        all.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        all
+    } else {
+        db.list_projects(false)?
+    };
 
     if args.json {
         println!(

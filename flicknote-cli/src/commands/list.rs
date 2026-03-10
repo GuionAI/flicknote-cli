@@ -1,8 +1,6 @@
 use clap::Args;
-use flicknote_core::db::Database;
+use flicknote_core::backend::{NoteDb, NoteFilter};
 use flicknote_core::error::CliError;
-use flicknote_core::types::Note;
-use rusqlite::params;
 
 use super::util::{print_notes_table, resolve_project_arg};
 
@@ -25,48 +23,32 @@ pub(crate) struct ListArgs {
     json: bool,
 }
 
-pub(crate) fn run(db: &Database, args: &ListArgs) -> Result<(), CliError> {
-    let notes = db.read(|conn| {
-        let base_condition = if args.archived {
-            "WHERE deleted_at IS NOT NULL"
-        } else {
-            "WHERE deleted_at IS NULL"
-        };
-        let mut sql = format!("SELECT * FROM notes {base_condition}");
-        let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = vec![];
+pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
+    let effective_project = resolve_project_arg(&args.project);
 
-        if let Some(ref t) = args.r#type {
-            sql.push_str(" AND type = ?");
-            params_vec.push(Box::new(t.clone()));
-        }
-        let effective_project = resolve_project_arg(&args.project);
-        if args.project.is_none() && let Some(ref name) = effective_project {
-            eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
-        }
-        if let Some(ref project_name) = effective_project {
-            let project_id: Option<String> = conn
-                .prepare(
-                    "SELECT id FROM projects WHERE name = ? AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
-                )?
-                .query_row(params![project_name], |row| row.get(0))
-                .ok();
+    if args.project.is_none()
+        && let Some(ref name) = effective_project
+    {
+        eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
+    }
 
-            if let Some(pid) = project_id {
-                sql.push_str(" AND project_id = ?");
-                params_vec.push(Box::new(pid));
-            } else {
-                eprintln!("Warning: no project found with name \"{project_name}\".");
-                return Ok(vec![]);
+    let project_id: Option<String> = if let Some(ref name) = effective_project {
+        match db.find_project_by_name(name)? {
+            Some(id) => Some(id),
+            None => {
+                eprintln!("Warning: no project found with name \"{name}\".");
+                return Ok(());
             }
         }
-        sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-        params_vec.push(Box::new(args.limit));
+    } else {
+        None
+    };
 
-        let mut stmt = conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params_vec.iter().map(std::convert::AsRef::as_ref).collect();
-        let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
+    let notes = db.list_notes(&NoteFilter {
+        project_id: project_id.as_deref(),
+        note_type: args.r#type.as_deref(),
+        archived: args.archived,
+        limit: args.limit,
     })?;
 
     if args.json {
