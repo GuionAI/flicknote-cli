@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get short SHA
+        id: sha
+        run: |
+          SHORT=$(git rev-parse --short HEAD)
+          if [ -z "$SHORT" ]; then
+            echo "Failed to get short SHA" >&2
+            exit 1
+          fi
+          echo "short=$SHORT" >> $GITHUB_OUTPUT
+
+      - name: Publish
+        uses: https://github.com/dagger/dagger-for-github@v8.2.0
+        env:
+          _EXPERIMENTAL_DAGGER_RUNNER_HOST: tcp://dagger-engine-0.dagger-headless.devops.svc:8080
+          REGISTRY: registry-docker-registry.devops.svc:5000
+        with:
+          version: "0.19.11"
+          verb: call
+          workdir: dagger
+          args: publish --source=../ --registry=$REGISTRY --image=flicknote-cli --tags=sha-${{ steps.sha.outputs.short }},latest
+
+      - name: Send notification
+        if: always()
+        continue-on-error: true
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_TO: ${{ secrets.TELEGRAM_TO }}
+          SHA: ${{ steps.sha.outputs.short }}
+          STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_TO" ]; then
+            echo "Telegram secrets not configured, skipping"
+            exit 0
+          fi
+          if [ "$STATUS" = "success" ]; then
+            MESSAGE="✅ <b>flicknote-cli built</b>
+          Tag: <code>sha-${SHA}</code>
+          <a href=\"${RUN_URL}\">View Run</a>"
+          else
+            MESSAGE="❌ <b>flicknote-cli build failed</b>
+          <a href=\"${RUN_URL}\">View Run</a>"
+          fi
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            -d chat_id="$TELEGRAM_TO" -d parse_mode="HTML" -d text="$MESSAGE"
