@@ -235,7 +235,7 @@ fn draw_detail(frame: &mut Frame, app: &App) {
     frame.render_widget(status, chunks[2]);
 }
 
-fn dimmed_note_list(app: &App) -> Vec<ListItem<'_>> {
+fn dimmed_note_list<'a, 'b>(app: &'a App<'b>) -> Vec<ListItem<'a>> {
     app.notes
         .iter()
         .map(|note| {

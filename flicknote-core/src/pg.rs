@@ -64,6 +64,9 @@ const PG_CREATE_PROJECT: &str = "INSERT INTO projects (id, user_id, name, is_arc
      VALUES ($1::uuid, $2::uuid, $3, false, $4)";
 const PG_COUNT_PROJECT_NOTES: &str = "SELECT COUNT(*) FROM notes WHERE user_id = $1::uuid AND project_id = $2::uuid AND deleted_at IS NULL";
 const PG_DELETE_PROJECT: &str = "DELETE FROM projects WHERE user_id = $1::uuid AND id = $2::uuid";
+const PG_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = $1 \
+     WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL AND user_id = $2::uuid \
+     ORDER BY deleted_at DESC LIMIT 1)";
 
 // ─── Row helpers ─────────────────────────────────────────────────────────────
 
@@ -323,6 +326,14 @@ impl NoteDb for PgBackend {
                 .borrow_mut()
                 .execute(PG_SET_DELETED_AT_NULL, &[&now, &self.user_id, &id])?;
         }
+        Ok(())
+    }
+
+    fn undo_last_delete(&self) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.client
+            .borrow_mut()
+            .execute(PG_UNDO_DELETE, &[&now, &self.user_id])?;
         Ok(())
     }
 

@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use flicknote_core::db::Database;
+use flicknote_core::backend::{NoteDb, NoteFilter};
 use flicknote_core::error::CliError;
 use flicknote_core::types::{Note, Project};
 
@@ -12,7 +12,7 @@ pub(crate) enum View {
     Search,
 }
 
-pub(crate) struct App {
+pub(crate) struct App<'a> {
     pub view: View,
     pub notes: Vec<Note>,
     pub selected: usize,
@@ -25,13 +25,13 @@ pub(crate) struct App {
     pub detail_visible_height: Cell<u16>,
     pub autocomplete_matches: Vec<String>,
     pub autocomplete_index: usize,
-    db: Database,
+    db: &'a dyn NoteDb,
 }
 
-impl App {
-    pub(crate) fn new(db: Database) -> Result<Self, CliError> {
-        let notes = Self::fetch_notes(&db, None)?;
-        let projects = Self::fetch_projects(&db)?;
+impl<'a> App<'a> {
+    pub(crate) fn new(db: &'a dyn NoteDb) -> Result<Self, CliError> {
+        let notes = Self::fetch_notes(db, None)?;
+        let projects = Self::fetch_projects(db)?;
         Ok(Self {
             view: View::List,
             notes,
@@ -49,40 +49,21 @@ impl App {
         })
     }
 
-    fn fetch_notes(db: &Database, search: Option<&str>) -> Result<Vec<Note>, CliError> {
-        db.read(|conn| {
-            let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match search {
-                Some(q) if !q.is_empty() => {
-                    let escaped = q.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-                    {
-                        let pattern = format!("%{escaped}%");
-                        (
-                            "SELECT * FROM notes WHERE deleted_at IS NULL AND (title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\') ORDER BY created_at DESC LIMIT 200".into(),
-                            vec![Box::new(pattern.clone()), Box::new(pattern)],
-                        )
-                    }
-                },
-                _ => (
-                    "SELECT * FROM notes WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 200".into(),
-                    vec![],
-                ),
-            };
-            let mut stmt = conn.prepare(&sql)?;
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(std::convert::AsRef::as_ref).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+    fn fetch_notes(db: &dyn NoteDb, search: Option<&str>) -> Result<Vec<Note>, CliError> {
+        let filter = NoteFilter {
+            project_id: None,
+            note_type: None,
+            archived: false,
+            limit: 200,
+        };
+        match search {
+            Some(q) if !q.is_empty() => db.search_notes(&[q.to_string()], &filter),
+            _ => db.list_notes(&filter),
+        }
     }
 
-    fn fetch_projects(db: &Database) -> Result<Vec<Project>, CliError> {
-        db.read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT * FROM projects WHERE is_archived = 0 OR is_archived IS NULL ORDER BY name",
-            )?;
-            let rows = stmt.query_map([], Project::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+    fn fetch_projects(db: &dyn NoteDb) -> Result<Vec<Project>, CliError> {
+        db.list_projects(false)
     }
 
     fn update_autocomplete(&mut self) {
@@ -158,13 +139,7 @@ impl App {
                 if let Some(note) = self.notes.get(self.selected) {
                     let id = note.id.clone();
                     let now = chrono::Utc::now().to_rfc3339();
-                    let result = self.db.write(|conn| {
-                        conn.execute(
-                            "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE id = ?",
-                            rusqlite::params![&now, &now, &id],
-                        )?;
-                        Ok(())
-                    });
+                    let result = self.db.set_note_deleted_at(&id, Some(&now));
                     if result.is_ok() {
                         self.notes.remove(self.selected);
                         if self.selected >= self.notes.len() && !self.notes.is_empty() {
@@ -174,27 +149,18 @@ impl App {
                 }
             }
             KeyCode::Char('r') => {
-                if let Ok(notes) = Self::fetch_notes(&self.db, self.search_filter()) {
+                if let Ok(notes) = Self::fetch_notes(self.db, self.search_filter()) {
                     self.notes = notes;
                     if self.selected >= self.notes.len() {
                         self.selected = self.notes.len().saturating_sub(1);
                     }
                 }
-                self.projects = Self::fetch_projects(&self.db).unwrap_or_default();
+                self.projects = Self::fetch_projects(self.db).unwrap_or_default();
             }
             KeyCode::Char('u') => {
-                let now = chrono::Utc::now().to_rfc3339();
-                let result = self.db.write(|conn| {
-                    conn.execute(
-                        "UPDATE notes SET deleted_at = NULL, updated_at = ? \
-                         WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL \
-                         ORDER BY deleted_at DESC LIMIT 1)",
-                        rusqlite::params![&now],
-                    )?;
-                    Ok(())
-                });
+                let result = self.db.undo_last_delete();
                 if result.is_ok()
-                    && let Ok(notes) = Self::fetch_notes(&self.db, self.search_filter())
+                    && let Ok(notes) = Self::fetch_notes(self.db, self.search_filter())
                 {
                     self.notes = notes;
                 }
@@ -248,20 +214,22 @@ impl App {
                 self.search_query = self.search_input.clone();
                 self.autocomplete_matches.clear();
                 if let Some(project_name) = self.search_query.strip_prefix("project:") {
-                    let project_name = project_name.trim().to_string();
-                    self.notes = self.db.read(|conn| {
-                        let mut stmt = conn.prepare(
-                            "SELECT n.* FROM notes n \
-                             JOIN projects p ON n.project_id = p.id \
-                             WHERE p.name = ? COLLATE NOCASE AND n.deleted_at IS NULL \
-                             ORDER BY n.created_at DESC LIMIT 200",
-                        )?;
-                        let rows =
-                            stmt.query_map(rusqlite::params![project_name], Note::from_row)?;
-                        rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-                    })?;
+                    let project_name = project_name.trim();
+                    let Some(project_id) = self.db.find_project_by_name(project_name)? else {
+                        self.notes = vec![];
+                        self.selected = 0;
+                        self.view = View::List;
+                        return Ok(());
+                    };
+                    let filter = NoteFilter {
+                        project_id: Some(project_id.as_str()),
+                        note_type: None,
+                        archived: false,
+                        limit: 200,
+                    };
+                    self.notes = self.db.list_notes(&filter)?;
                 } else {
-                    self.notes = Self::fetch_notes(&self.db, self.search_filter())?;
+                    self.notes = Self::fetch_notes(self.db, self.search_filter())?;
                 }
                 self.selected = 0;
                 self.view = View::List;

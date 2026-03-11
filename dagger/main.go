@@ -23,6 +23,7 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		WithExec([]string{
 			"cargo", "build", "--release",
 			"-p", "flicknote-cli",
+			"--no-default-features",
 			"--target", "x86_64-unknown-linux-musl",
 		}).
 		Sync(ctx)

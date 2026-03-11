@@ -1,5 +1,7 @@
+#[cfg(feature = "powersync")]
 use rusqlite::{params, types::ToSql};
 
+#[cfg(feature = "powersync")]
 use crate::db::Database;
 use crate::error::CliError;
 use crate::types::{Note, Project};
@@ -64,6 +66,11 @@ pub trait NoteDb {
     /// Set deleted_at to the given timestamp, or NULL when `deleted_at` is None.
     fn set_note_deleted_at(&self, id: &str, deleted_at: Option<&str>) -> Result<(), CliError>;
 
+    /// Restore the most recently deleted note (sets deleted_at = NULL).
+    /// Returns `Ok(())` for both "note restored" and "nothing to undo" — callers
+    /// cannot distinguish the two cases.
+    fn undo_last_delete(&self) -> Result<(), CliError>;
+
     // Project reads
     fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError>;
     fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError>;
@@ -84,6 +91,7 @@ pub trait NoteDb {
 
 // ─── SqliteBackend ───────────────────────────────────────────────────────────
 
+#[cfg(feature = "powersync")]
 pub struct SqliteBackend {
     pub db: Database,
     pub user_id: String,
@@ -92,41 +100,64 @@ pub struct SqliteBackend {
 // SQLite SQL constants — all scope by user_id.
 // id column is TEXT in SQLite schema, so LIKE works directly.
 
+#[cfg(feature = "powersync")]
 const SQ_RESOLVE: &str =
     "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NULL LIMIT 2";
+#[cfg(feature = "powersync")]
 const SQ_RESOLVE_ARCHIVED: &str =
     "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NOT NULL LIMIT 2";
+#[cfg(feature = "powersync")]
 const SQ_FIND: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
+#[cfg(feature = "powersync")]
 const SQ_FIND_CONTENT: &str =
     "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
+#[cfg(feature = "powersync")]
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+#[cfg(feature = "powersync")]
 const SQ_UPDATE_CONTENT: &str =
     "UPDATE notes SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
 const SQ_UPDATE_CONTENT_REQUEUE: &str = "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
 const SQ_SET_DELETED_AT: &str =
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
 const SQ_SET_DELETED_AT_NULL: &str =
     "UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
 const SQ_UPDATE_PROJECT: &str =
     "UPDATE notes SET project_id = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 
+#[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND name = ? \
      AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1";
+#[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_NAME: &str = "SELECT name FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
+#[cfg(feature = "powersync")]
 const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
      WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL) ORDER BY name";
+#[cfg(feature = "powersync")]
 const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
+#[cfg(feature = "powersync")]
 const SQ_CREATE_PROJECT: &str =
     "INSERT INTO projects (id, user_id, name, is_archived, created_at) VALUES (?, ?, ?, 0, ?)";
+#[cfg(feature = "powersync")]
 const SQ_COUNT_PROJECT_NOTES: &str =
     "SELECT COUNT(*) FROM notes WHERE user_id = ? AND project_id = ? AND deleted_at IS NULL";
+#[cfg(feature = "powersync")]
 const SQ_DELETE_PROJECT: &str = "DELETE FROM projects WHERE user_id = ? AND id = ?";
 
+#[cfg(feature = "powersync")]
+const SQ_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ? \
+     WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL AND user_id = ? \
+     ORDER BY deleted_at DESC LIMIT 1)";
+
+#[cfg(feature = "powersync")]
 impl NoteDb for SqliteBackend {
     fn user_id(&self) -> &str {
         &self.user_id
@@ -315,6 +346,14 @@ impl NoteDb for SqliteBackend {
         })
     }
 
+    fn undo_last_delete(&self) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.write(|conn| {
+            conn.execute(SQ_UNDO_DELETE, params![&now, &self.user_id])?;
+            Ok(())
+        })
+    }
+
     fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError> {
         self.db.read(|conn| {
             let mut stmt = conn.prepare(SQ_FIND_PROJECT)?;
@@ -407,6 +446,7 @@ impl NoteDb for SqliteBackend {
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[cfg(feature = "powersync")]
 mod tests {
     use super::*;
 

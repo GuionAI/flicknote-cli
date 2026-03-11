@@ -1,8 +1,11 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{Parser, Subcommand};
-use flicknote_core::backend::{NoteDb, SqliteBackend};
+use flicknote_core::backend::NoteDb;
+#[cfg(feature = "powersync")]
+use flicknote_core::backend::SqliteBackend;
 use flicknote_core::config::Config;
+#[cfg(feature = "powersync")]
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use flicknote_core::pg::PgBackend;
@@ -108,10 +111,17 @@ fn run() -> Result<(), CliError> {
         let backend = PgBackend::connect(&pg_url, user_id)?;
         dispatch(&cli, &config, &backend, true)
     } else {
-        let db = Database::open_local(&config)?;
-        let user_id = flicknote_core::session::get_user_id(&config)?;
-        let backend = SqliteBackend { db, user_id };
-        dispatch(&cli, &config, &backend, false)
+        #[cfg(not(feature = "powersync"))]
+        return Err(CliError::Other(
+            "No local database available — set FLICKNOTE_PG_URL to connect to Postgres".into(),
+        ));
+        #[cfg(feature = "powersync")]
+        {
+            let db = Database::open_local(&config)?;
+            let user_id = flicknote_core::session::get_user_id(&config)?;
+            let backend = SqliteBackend { db, user_id };
+            dispatch(&cli, &config, &backend, false)
+        }
     }
 }
 
@@ -120,7 +130,7 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Resul
         if pg_mode {
             return Err(CliError::Other("TUI not supported in PG mode".into()));
         }
-        return commands::tui::run(config);
+        return commands::tui::run(config, db);
     };
 
     match command {
@@ -141,7 +151,7 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Resul
         Commands::Upload(args) => commands::upload::run(db, config, args),
         Commands::Login(args) => commands::login::run(config, args),
         Commands::Logout => commands::logout::run(config),
-        Commands::Tui => commands::tui::run(config),
+        Commands::Tui => commands::tui::run(config, db),
         Commands::Sync(args) => commands::sync::run(config, args),
         Commands::Api(args) => commands::api::run(config, args),
     }

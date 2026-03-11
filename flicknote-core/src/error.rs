@@ -14,9 +14,11 @@ pub enum CliError {
         description: String,
     },
 
+    #[cfg(feature = "powersync")]
     #[error("PowerSync error: {0}")]
     PowerSync(#[from] powersync::error::PowerSyncError),
 
+    #[cfg(feature = "powersync")]
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 

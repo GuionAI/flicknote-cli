@@ -1,11 +1,10 @@
 use crate::tui::app::App;
+use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 use std::panic;
 
-pub(crate) fn run(config: &Config) -> Result<(), CliError> {
-    let db = Database::open_local(config)?;
+pub(crate) fn run(_config: &Config, db: &dyn NoteDb) -> Result<(), CliError> {
     let app = App::new(db)?;
 
     let terminal = ratatui::init();
