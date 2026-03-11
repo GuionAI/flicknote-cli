@@ -28,11 +28,11 @@ impl PgBackend {
 
 const PG_NOTE_COLS: &str = "id::text, user_id::text, type, status, title, content, summary, \
      is_flagged, project_id::text, metadata::text, source::text, \
-     external_id, created_at, updated_at, deleted_at";
+     external_id::text, created_at, updated_at, deleted_at";
 
 const PG_FIND: &str = "SELECT id::text, user_id::text, type, status, title, content, summary, \
      is_flagged, project_id::text, metadata::text, source::text, \
-     external_id, created_at, updated_at, deleted_at \
+     external_id::text, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid AND deleted_at IS NULL LIMIT 1";
 
 const PG_RESOLVE: &str = "SELECT id::text FROM notes WHERE user_id = ($1::text)::uuid AND id::text LIKE $2 \
@@ -43,13 +43,13 @@ const PG_FIND_CONTENT: &str = "SELECT content FROM notes WHERE user_id = ($1::te
      AND deleted_at IS NULL LIMIT 1";
 const PG_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
-     VALUES (($1::text)::uuid, ($2::text)::uuid, $3, $4, $5, $6, $7, ($8::text)::uuid, $9::text, $10::text)";
-const PG_UPDATE_CONTENT: &str = "UPDATE notes SET content = $1, updated_at = $2::text WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
-const PG_UPDATE_CONTENT_REQUEUE: &str = "UPDATE notes SET content = $1, status = 'ai_queued', updated_at = $2::text \
+     VALUES (($1::text)::uuid, ($2::text)::uuid, $3, $4, $5, $6, $7::text::jsonb, ($8::text)::uuid, ($9::text)::timestamptz, ($10::text)::timestamptz)";
+const PG_UPDATE_CONTENT: &str = "UPDATE notes SET content = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
+const PG_UPDATE_CONTENT_REQUEUE: &str = "UPDATE notes SET content = $1, status = 'ai_queued', updated_at = ($2::text)::timestamptz \
      WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
-const PG_SET_DELETED_AT: &str = "UPDATE notes SET deleted_at = $1::text, updated_at = $2::text WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
-const PG_SET_DELETED_AT_NULL: &str = "UPDATE notes SET deleted_at = NULL, updated_at = $1::text WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid";
-const PG_UPDATE_PROJECT: &str = "UPDATE notes SET project_id = ($1::text)::uuid, updated_at = $2::text WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
+const PG_SET_DELETED_AT: &str = "UPDATE notes SET deleted_at = ($1::text)::timestamptz, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
+const PG_SET_DELETED_AT_NULL: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ($1::text)::timestamptz WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid";
+const PG_UPDATE_PROJECT: &str = "UPDATE notes SET project_id = ($1::text)::uuid, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
 
 const PG_FIND_PROJECT: &str = "SELECT id::text FROM projects WHERE user_id = ($1::text)::uuid AND name = $2 AND NOT is_archived LIMIT 1";
 const PG_FIND_PROJECT_NAME: &str =
@@ -59,11 +59,11 @@ const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id::text, user_id::text, name, col
 const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id::text, user_id::text, name, color, is_archived::int, created_at \
      FROM projects WHERE user_id = ($1::text)::uuid AND is_archived ORDER BY name";
 const PG_CREATE_PROJECT: &str = "INSERT INTO projects (id, user_id, name, is_archived, created_at) \
-     VALUES (($1::text)::uuid, ($2::text)::uuid, $3, false, $4::text)";
+     VALUES (($1::text)::uuid, ($2::text)::uuid, $3, false, ($4::text)::timestamptz)";
 const PG_COUNT_PROJECT_NOTES: &str = "SELECT COUNT(*) FROM notes WHERE user_id = ($1::text)::uuid AND project_id = ($2::text)::uuid AND deleted_at IS NULL";
 const PG_DELETE_PROJECT: &str =
     "DELETE FROM projects WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid";
-const PG_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = $1::text \
+const PG_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ($1::text)::timestamptz \
      WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL AND user_id = ($2::text)::uuid \
      ORDER BY deleted_at DESC LIMIT 1)";
 
