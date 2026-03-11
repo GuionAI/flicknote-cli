@@ -20,6 +20,7 @@ pub struct Note {
 }
 
 impl Note {
+    #[cfg(feature = "powersync")]
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
@@ -61,6 +62,7 @@ pub struct Project {
 }
 
 impl Project {
+    #[cfg(feature = "powersync")]
     pub fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             id: row.get("id")?,
