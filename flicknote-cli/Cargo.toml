@@ -18,7 +18,7 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 libc = "0.2"
 dirs = "6"
-reqwest = { version = "0.12", features = ["json", "multipart", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "charset", "http2", "rustls-tls"] }
 mime_guess = "2"
 futures-util = "0.3"
 serde = { workspace = true }

@@ -13,10 +13,9 @@ allow = [
     "MPL-2.0",
     "Zlib",
     "Unicode-3.0",
+    "CDLA-Permissive-2.0",
 ]
-exceptions = [
-    { allow = ["OpenSSL"], crate = "ring" },
-]
+exceptions = []
 # Workspace crates are private/unlicensed
 [[licenses.clarify]]
 crate = "flicknote-cli"
