@@ -51,6 +51,7 @@ pub trait NoteDb {
 
     // Note reads
     fn find_note(&self, id: &str) -> Result<Note, CliError>;
+    fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
     fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
     fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError>;
     fn search_notes(
@@ -64,7 +65,14 @@ pub trait NoteDb {
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
     fn update_note_content(&self, id: &str, content: &str, requeue: bool) -> Result<(), CliError>;
     /// Set deleted_at to the given timestamp, or NULL when `deleted_at` is None.
-    fn set_note_deleted_at(&self, id: &str, deleted_at: Option<&str>) -> Result<(), CliError>;
+    /// `now` is used for the `updated_at` column and must match the timestamp
+    /// used in the hook payload so subscribers see consistent values.
+    fn set_note_deleted_at(
+        &self,
+        id: &str,
+        deleted_at: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError>;
 
     /// Restore the most recently deleted note (sets deleted_at = NULL).
     /// Returns `Ok(())` for both "note restored" and "nothing to undo" — callers
@@ -110,6 +118,10 @@ const SQ_RESOLVE_ARCHIVED: &str =
 const SQ_FIND: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_FIND_ARCHIVED: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NOT NULL LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_FIND_CONTENT: &str =
     "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
@@ -200,6 +212,17 @@ impl NoteDb for SqliteBackend {
     fn find_note(&self, id: &str) -> Result<Note, CliError> {
         self.db.read(|conn| {
             let mut stmt = conn.prepare(SQ_FIND)?;
+            let mut rows = stmt.query(params![self.user_id, id])?;
+            match rows.next()? {
+                Some(row) => Ok(Note::from_row(row)?),
+                None => Err(CliError::NoteNotFound { id: id.to_string() }),
+            }
+        })
+    }
+
+    fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_FIND_ARCHIVED)?;
             let mut rows = stmt.query(params![self.user_id, id])?;
             match rows.next()? {
                 Some(row) => Ok(Note::from_row(row)?),
@@ -334,8 +357,12 @@ impl NoteDb for SqliteBackend {
         })
     }
 
-    fn set_note_deleted_at(&self, id: &str, deleted_at: Option<&str>) -> Result<(), CliError> {
-        let now = chrono::Utc::now().to_rfc3339();
+    fn set_note_deleted_at(
+        &self,
+        id: &str,
+        deleted_at: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError> {
         self.db.write(|conn| {
             if let Some(ts) = deleted_at {
                 conn.execute(SQ_SET_DELETED_AT, params![ts, now, self.user_id, id])?;
@@ -642,7 +669,7 @@ mod tests {
         assert!(active.iter().any(|n| n.id == id));
 
         // Archive it
-        backend.set_note_deleted_at(&id, Some(&now)).unwrap();
+        backend.set_note_deleted_at(&id, Some(&now), &now).unwrap();
 
         // Should be gone from active
         let active_after = backend
@@ -667,7 +694,7 @@ mod tests {
         assert!(archived.iter().any(|n| n.id == id));
 
         // Unarchive
-        backend.set_note_deleted_at(&id, None).unwrap();
+        backend.set_note_deleted_at(&id, None, &now).unwrap();
         let active_restored = backend
             .list_notes(&NoteFilter {
                 project_id: None,
@@ -677,5 +704,40 @@ mod tests {
             })
             .unwrap();
         assert!(active_restored.iter().any(|n| n.id == id));
+    }
+
+    #[test]
+    fn test_find_archived_note() {
+        let backend = make_backend();
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Archived note"),
+                content: Some("content"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .unwrap();
+
+        // Not findable via find_archived_note before archiving
+        assert!(backend.find_archived_note(&id).is_err());
+
+        // Archive it
+        backend.set_note_deleted_at(&id, Some(&now), &now).unwrap();
+
+        // Now findable via find_archived_note
+        let note = backend.find_archived_note(&id).unwrap();
+        assert_eq!(note.id, id);
+        assert_eq!(note.title, Some("Archived note".to_string()));
+        assert!(note.deleted_at.is_some());
+
+        // No longer findable via find_note (active-only)
+        assert!(backend.find_note(&id).is_err());
     }
 }

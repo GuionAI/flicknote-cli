@@ -34,6 +34,10 @@ const PG_FIND: &str = "SELECT id::text, user_id::text, type, status, title, cont
      is_flagged, project_id::text, metadata::text, source::text, \
      external_id::text, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid AND deleted_at IS NULL LIMIT 1";
+const PG_FIND_ARCHIVED: &str = "SELECT id::text, user_id::text, type, status, title, content, summary, \
+     is_flagged, project_id::text, metadata::text, source::text, \
+     external_id::text, created_at, updated_at, deleted_at \
+     FROM notes WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid AND deleted_at IS NOT NULL LIMIT 1";
 
 const PG_RESOLVE: &str = "SELECT id::text FROM notes WHERE user_id = ($1::text)::uuid AND id::text LIKE $2 \
      AND deleted_at IS NULL LIMIT 2";
@@ -152,6 +156,17 @@ impl NoteDb for PgBackend {
             .client
             .borrow_mut()
             .query(PG_FIND, &[&self.user_id, &id])?;
+        rows.first()
+            .map(note_from_pg_row)
+            .transpose()?
+            .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
+    }
+
+    fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_FIND_ARCHIVED, &[&self.user_id, &id])?;
         rows.first()
             .map(note_from_pg_row)
             .transpose()?
@@ -315,8 +330,12 @@ impl NoteDb for PgBackend {
         Ok(())
     }
 
-    fn set_note_deleted_at(&self, id: &str, deleted_at: Option<&str>) -> Result<(), CliError> {
-        let now = chrono::Utc::now().to_rfc3339();
+    fn set_note_deleted_at(
+        &self,
+        id: &str,
+        deleted_at: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError> {
         if let Some(ts) = deleted_at {
             self.client
                 .borrow_mut()

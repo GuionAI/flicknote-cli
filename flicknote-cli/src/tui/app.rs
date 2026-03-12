@@ -139,7 +139,7 @@ impl<'a> App<'a> {
                 if let Some(note) = self.notes.get(self.selected) {
                     let id = note.id.clone();
                     let now = chrono::Utc::now().to_rfc3339();
-                    let result = self.db.set_note_deleted_at(&id, Some(&now));
+                    let result = self.db.set_note_deleted_at(&id, Some(&now), &now);
                     if result.is_ok() {
                         self.notes.remove(self.selected);
                         if self.selected >= self.notes.len() && !self.notes.is_empty() {

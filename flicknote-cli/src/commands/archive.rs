@@ -1,6 +1,8 @@
 use clap::Args;
 use flicknote_core::backend::NoteDb;
+use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::hooks;
 
 #[derive(Args)]
 pub(crate) struct ArchiveArgs {
@@ -8,10 +10,27 @@ pub(crate) struct ArchiveArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, args: &ArchiveArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ArchiveArgs) -> Result<(), CliError> {
     let now = chrono::Utc::now().to_rfc3339();
     let full_id = db.resolve_note_id(&args.id)?;
-    db.set_note_deleted_at(&full_id, Some(&now))?;
+
+    let old_note = db.find_note(&full_id)?;
+    let mut new_note = old_note.clone();
+    new_note.deleted_at = Some(now.clone());
+    new_note.updated_at = Some(now.clone());
+
+    let old_json = serde_json::to_string(&old_note)?;
+    let new_json = serde_json::to_string(&new_note)?;
+    let config_dir = config.paths.config_dir.to_string_lossy();
+    hooks::run_on_archive(
+        &config.paths.hooks_dir,
+        &old_json,
+        &new_json,
+        "archive",
+        &config_dir,
+    )?;
+
+    db.set_note_deleted_at(&full_id, Some(&now), &now)?;
     println!("Archived note {}.", &full_id[..8]);
     Ok(())
 }
