@@ -27,6 +27,76 @@ fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
     .into()
 }
 
+/// Postgres/PostgREST error codes that will never succeed on retry.
+/// Mirrors the iOS PostgresFatalCodes pattern (PowerSyncService.swift).
+const FATAL_PG_PREFIXES: &[&str] = &[
+    "22", // Class 22 — Data Exception
+    "23", // Class 23 — Integrity Constraint Violation (FK, unique, not-null)
+];
+
+const FATAL_PG_CODES: &[&str] = &[
+    "42501",    // INSUFFICIENT PRIVILEGE (RLS violation)
+    "42703",    // undefined column
+    "42P01",    // undefined table
+    "PGRST203", // PostgREST: table not found
+    "PGRST204", // PostgREST: column not found
+];
+
+/// Check if a Supabase/PostgREST error body contains a non-transient PG error.
+/// Returns `Some(code)` if the error is fatal (will never succeed on retry),
+/// or `None` if the code is unrecognised, missing, or the body is not JSON.
+/// `None` does not mean the error is confirmed transient — it means unknown.
+fn extract_fatal_code(body: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(body).ok().or_else(|| {
+        log::debug!("extract_fatal_code: body is not JSON, treating as unknown: {body}");
+        None
+    })?;
+    let code = parsed.get("code").and_then(|v| v.as_str()).or_else(|| {
+        log::debug!("extract_fatal_code: no `code` field in body, treating as unknown");
+        None
+    })?;
+
+    for prefix in FATAL_PG_PREFIXES {
+        if code.starts_with(prefix) {
+            return Some(code.to_string());
+        }
+    }
+    if FATAL_PG_CODES.contains(&code) {
+        return Some(code.to_string());
+    }
+    None
+}
+
+/// Classify an HTTP response as success, fatal (discard), or transient (retry).
+enum UploadOutcome {
+    Success,
+    Fatal(String),
+    Transient(String),
+}
+
+async fn classify_response(
+    resp: reqwest::Response,
+    op: &str,
+    table: &str,
+    id: &str,
+) -> UploadOutcome {
+    let status = resp.status();
+    if status.is_success() {
+        return UploadOutcome::Success;
+    }
+    let body = resp
+        .text()
+        .await
+        .unwrap_or_else(|e| format!("<body read error: {e}>"));
+    if let Some(code) = extract_fatal_code(&body) {
+        UploadOutcome::Fatal(format!(
+            "HTTP {status} PG {code}: {op} {table}/{id} — {body}"
+        ))
+    } else {
+        UploadOutcome::Transient(format!("HTTP {status}: {op} {table}/{id} failed: {body}"))
+    }
+}
+
 struct FlickNoteConnector {
     db: PowerSyncDatabase,
     auth: GoTrueClient,
@@ -52,15 +122,20 @@ async fn run_upload(
     let mut transactions = db.crud_transactions();
 
     while let Some(mut tx) = transactions.try_next().await? {
+        let mut fatal_msg: Option<String> = None;
+        let mut transient_msg: Option<String> = None;
+
         for crud in std::mem::take(&mut tx.crud) {
             let table = &crud.table;
             let id = &crud.id;
 
-            match crud.update_type {
+            // Single match on crud.update_type — UpdateType is not Copy,
+            // so we derive both op and resp in one match to avoid use-after-move.
+            let (op, resp) = match crud.update_type {
                 UpdateType::Put => {
                     let mut data = crud.data.unwrap_or_default();
                     data.insert("id".into(), serde_json::Value::String(id.clone()));
-                    let resp = client
+                    let r = client
                         .post(format!("{supabase_url}/rest/v1/{table}"))
                         .header("apikey", supabase_anon_key)
                         .header("Authorization", format!("Bearer {token}"))
@@ -69,17 +144,11 @@ async fn run_upload(
                         .send()
                         .await
                         .map_err(|e| ps_err(format!("Upload PUT failed: {e}")))?;
-                    if !resp.status().is_success() {
-                        let body = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|e| format!("<body read error: {e}>"));
-                        return Err(ps_err(format!("PUT {table}/{id} failed: {body}")));
-                    }
+                    ("PUT", r)
                 }
                 UpdateType::Patch => {
                     let data = crud.data.unwrap_or_default();
-                    let resp = client
+                    let r = client
                         .patch(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
                         .header("apikey", supabase_anon_key)
                         .header("Authorization", format!("Bearer {token}"))
@@ -87,36 +156,52 @@ async fn run_upload(
                         .send()
                         .await
                         .map_err(|e| ps_err(format!("Upload PATCH failed: {e}")))?;
-                    if !resp.status().is_success() {
-                        let body = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|e| format!("<body read error: {e}>"));
-                        return Err(ps_err(format!("PATCH {table}/{id} failed: {body}")));
-                    }
+                    ("PATCH", r)
                 }
                 UpdateType::Delete => {
-                    let resp = client
+                    let r = client
                         .delete(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
                         .header("apikey", supabase_anon_key)
                         .header("Authorization", format!("Bearer {token}"))
                         .send()
                         .await
                         .map_err(|e| ps_err(format!("Upload DELETE failed: {e}")))?;
-                    if !resp.status().is_success() {
-                        let body = resp
-                            .text()
-                            .await
-                            .unwrap_or_else(|e| format!("<body read error: {e}>"));
-                        return Err(ps_err(format!("DELETE {table}/{id} failed: {body}")));
-                    }
+                    ("DELETE", r)
+                }
+            };
+
+            match classify_response(resp, op, table, id).await {
+                UploadOutcome::Success => {}
+                UploadOutcome::Fatal(msg) => {
+                    fatal_msg = Some(msg);
+                    break; // stop processing this transaction's entries
+                }
+                UploadOutcome::Transient(msg) => {
+                    transient_msg = Some(msg);
+                    break; // stop processing, will retry
                 }
             }
         }
-        // Complete each transaction individually so successfully-uploaded entries
-        // are removed from ps_crud before processing the next batch. Without this,
-        // a mid-batch failure would re-upload all prior entries on the next cycle,
-        // causing phantom DELETEs (404) and duplicate PUTs.
+
+        // Handle outcome AFTER the for loop (tx is not moved inside the loop)
+        if let Some(msg) = fatal_msg {
+            log::error!("Non-transient error, discarding transaction: {msg}");
+            tx.complete().await.map_err(|e| {
+                ps_err(format!(
+                    "Failed to discard fatal transaction (original: {msg}): {e}"
+                ))
+            })?; // discard entire transaction atomically
+            continue; // next transaction
+        }
+        if let Some(msg) = transient_msg {
+            return Err(ps_err(msg)); // retry on next poll cycle
+        }
+
+        // All entries succeeded — complete each transaction individually so
+        // successfully-uploaded entries are removed from ps_crud before processing
+        // the next batch. Without this, a mid-batch failure would re-upload all
+        // prior entries on the next cycle, causing phantom DELETEs (404) and
+        // duplicate PUTs.
         tx.complete().await?;
     }
 
@@ -318,4 +403,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Sync daemon stopped");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_fatal_code_fk_violation() {
+        let body = r#"{"code":"23503","details":"Key is not present in table \"projects\".","hint":null,"message":"insert or update on table \"notes\" violates foreign key constraint"}"#;
+        assert_eq!(extract_fatal_code(body), Some("23503".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fatal_code_rls_violation() {
+        let body = r#"{"code":"42501","message":"new row violates row-level security policy"}"#;
+        assert_eq!(extract_fatal_code(body), Some("42501".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fatal_code_transient() {
+        let body = r#"{"code":"08006","message":"connection failure"}"#;
+        assert_eq!(extract_fatal_code(body), None);
+    }
+
+    #[test]
+    fn test_extract_fatal_code_not_json() {
+        assert_eq!(extract_fatal_code("Internal Server Error"), None);
+    }
+
+    #[test]
+    fn test_extract_fatal_code_postgrest() {
+        let body = r#"{"code":"PGRST204","message":"column not found"}"#;
+        assert_eq!(extract_fatal_code(body), Some("PGRST204".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fatal_code_class22_data_exception() {
+        let body = r#"{"code":"22001","message":"value too long for type character varying(255)"}"#;
+        assert_eq!(extract_fatal_code(body), Some("22001".to_string()));
+    }
+
+    #[test]
+    fn test_extract_fatal_code_missing_code_field() {
+        // Supabase auth-layer errors omit "code" — should be treated as unknown (transient)
+        let body = r#"{"error":"invalid_grant","error_description":"Refresh Token Not Found"}"#;
+        assert_eq!(extract_fatal_code(body), None);
+    }
 }
