@@ -6,6 +6,10 @@ use flicknote_core::hooks;
 use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
 
+use super::upload_util::{
+    cleanup_uploaded_file, is_uploadable_file, mime_from_extension, note_type_for_extension,
+    upload_file_blocking,
+};
 use super::util::resolve_project_arg;
 
 #[derive(Args)]
@@ -39,7 +43,22 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
         }
     };
 
-    let is_url = content.starts_with("http://") || content.starts_with("https://");
+    let from_arg = args.value.is_some();
+    let is_url_arg = content.starts_with("http://") || content.starts_with("https://");
+
+    let path = std::path::Path::new(&content);
+    let looks_like_file_path =
+        from_arg && !is_url_arg && path.extension().is_some() && path.file_name().is_some();
+
+    if from_arg && looks_like_file_path && !is_uploadable_file(&content) {
+        return Err(CliError::Other(format!(
+            "File not found or unsupported: {}",
+            content
+        )));
+    }
+
+    let is_file = from_arg && is_uploadable_file(&content);
+    let is_url = !is_file && is_url_arg;
 
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
@@ -50,7 +69,54 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
 
     let config_dir = config.paths.config_dir.to_string_lossy();
 
-    if is_url {
+    if is_file {
+        let file_path = std::path::PathBuf::from(&content);
+        let filename = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| CliError::Other("Invalid filename".into()))?
+            .to_string();
+
+        upload_file_blocking(config, &id, &file_path)?;
+
+        let note_type = note_type_for_extension(&filename);
+        let metadata = serde_json::json!({
+            "file": {
+                "name": filename,
+                "type": mime_from_extension(&filename)
+            }
+        })
+        .to_string();
+
+        if let Err(e) = db.insert_note(&InsertNoteReq {
+            id: &id,
+            note_type,
+            status: "source_queued",
+            title: None,
+            content: None,
+            metadata: Some(&metadata),
+            project_id: project_id.as_deref(),
+            now: &now,
+        }) {
+            #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+            let _ = cleanup_uploaded_file(config, &id);
+            return Err(e);
+        }
+
+        let note_for_hook = build_hook_note(
+            &id,
+            db.user_id(),
+            note_type,
+            "source_queued",
+            project_id.clone(),
+            None,
+            None,
+            Some(metadata.clone()),
+            &now,
+        );
+        let note_json = serde_json::to_string(&note_for_hook)?;
+        hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
+    } else if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
         let note_for_hook = build_hook_note(
             &id,
@@ -112,7 +178,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
 
 /// Build a `Note` for the on-add hook payload.
 #[allow(clippy::too_many_arguments)]
-fn build_hook_note(
+pub(crate) fn build_hook_note(
     id: &str,
     user_id: &str,
     note_type: &str,

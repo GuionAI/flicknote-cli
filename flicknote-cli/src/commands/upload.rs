@@ -2,10 +2,13 @@ use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::hooks;
 use std::path::PathBuf;
 
-use crate::api_client::ApiClient;
-use crate::commands::add::resolve_or_create_project;
+use crate::commands::add::{build_hook_note, resolve_or_create_project};
+use crate::commands::upload_util::{
+    cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file_blocking,
+};
 use crate::commands::util::resolve_project_arg;
 
 #[derive(Args)]
@@ -34,18 +37,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
 
     let id = uuid::Uuid::new_v4().to_string();
 
-    // Upload file to R2 first — don't create note until upload succeeds.
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let client = ApiClient::new(config).await?;
-        println!("Uploading {}...", filename);
-        client.upload_file(&id, &args.file).await?;
-        Ok::<(), CliError>(())
-    })?;
+    upload_file_blocking(config, &id, &args.file)?;
 
-    // Upload succeeded — now create the note
     let now = chrono::Utc::now().to_rfc3339();
     let metadata = serde_json::json!({
         "file": {
@@ -61,124 +54,38 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
         None
     };
 
-    db.insert_note(&InsertNoteReq {
+    let note_type = note_type_for_extension(&filename);
+
+    if let Err(e) = db.insert_note(&InsertNoteReq {
         id: &id,
-        note_type: "file",
+        note_type,
         status: "source_queued",
         title: None,
         content: None,
         metadata: Some(&metadata),
         project_id: project_id.as_deref(),
         now: &now,
-    })?;
+    }) {
+        #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+        let _ = cleanup_uploaded_file(config, &id);
+        return Err(e);
+    }
+
+    let config_dir = config.paths.config_dir.to_string_lossy();
+    let note_for_hook = build_hook_note(
+        &id,
+        db.user_id(),
+        note_type,
+        "source_queued",
+        project_id.clone(),
+        None,
+        None,
+        Some(metadata.clone()),
+        &now,
+    );
+    let note_json = serde_json::to_string(&note_for_hook)?;
+    hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
 
     println!("Created note {} with file {}", &id[..8], filename);
     Ok(())
-}
-
-fn mime_from_extension(filename: &str) -> &'static str {
-    let ext = std::path::Path::new(filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match ext.as_str() {
-        // Images
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "svg" => "image/svg+xml",
-        // Audio
-        "ogg" => "audio/ogg",
-        "mp3" => "audio/mpeg",
-        "wav" => "audio/wav",
-        "m4a" => "audio/mp4",
-        // Video
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "avi" => "video/x-msvideo",
-        "webm" => "video/webm",
-        // Documents
-        "pdf" => "application/pdf",
-        "doc" => "application/msword",
-        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "ppt" => "application/vnd.ms-powerpoint",
-        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "xls" => "application/vnd.ms-excel",
-        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        _ => "application/octet-stream",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_common_image_types() {
-        assert_eq!(mime_from_extension("photo.jpg"), "image/jpeg");
-        assert_eq!(mime_from_extension("photo.jpeg"), "image/jpeg");
-        assert_eq!(mime_from_extension("image.png"), "image/png");
-        assert_eq!(mime_from_extension("anim.gif"), "image/gif");
-        assert_eq!(mime_from_extension("pic.webp"), "image/webp");
-        assert_eq!(mime_from_extension("icon.svg"), "image/svg+xml");
-    }
-
-    #[test]
-    fn test_audio_types() {
-        assert_eq!(mime_from_extension("song.mp3"), "audio/mpeg");
-        assert_eq!(mime_from_extension("clip.wav"), "audio/wav");
-        assert_eq!(mime_from_extension("voice.m4a"), "audio/mp4");
-        assert_eq!(mime_from_extension("track.ogg"), "audio/ogg");
-    }
-
-    #[test]
-    fn test_video_types() {
-        assert_eq!(mime_from_extension("movie.mp4"), "video/mp4");
-        assert_eq!(mime_from_extension("clip.mov"), "video/quicktime");
-        assert_eq!(mime_from_extension("old.avi"), "video/x-msvideo");
-        assert_eq!(mime_from_extension("stream.webm"), "video/webm");
-    }
-
-    #[test]
-    fn test_document_types() {
-        assert_eq!(mime_from_extension("file.pdf"), "application/pdf");
-        assert_eq!(
-            mime_from_extension("doc.docx"),
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        );
-    }
-
-    #[test]
-    fn test_unknown_extension() {
-        assert_eq!(mime_from_extension("file.xyz"), "application/octet-stream");
-    }
-
-    #[test]
-    fn test_no_extension() {
-        assert_eq!(mime_from_extension("README"), "application/octet-stream");
-    }
-
-    #[test]
-    fn test_case_insensitive() {
-        assert_eq!(mime_from_extension("photo.JPG"), "image/jpeg");
-        assert_eq!(mime_from_extension("file.PDF"), "application/pdf");
-    }
-
-    #[test]
-    fn test_dotfile() {
-        assert_eq!(
-            mime_from_extension(".gitignore"),
-            "application/octet-stream"
-        );
-    }
-
-    #[test]
-    fn test_multiple_dots() {
-        assert_eq!(
-            mime_from_extension("archive.tar.gz"),
-            "application/octet-stream"
-        );
-    }
 }
