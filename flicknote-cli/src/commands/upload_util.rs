@@ -58,6 +58,7 @@ pub(crate) fn mime_from_extension(filename: &str) -> &'static str {
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "xls" => "application/vnd.ms-excel",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "csv" => "text/csv",
         _ => "application/octet-stream",
     }
 }
@@ -72,7 +73,7 @@ pub(crate) fn note_type_for_extension(filename: &str) -> &'static str {
 
 const UPLOADABLE_EXTENSIONS: &[&str] = &[
     "png", "jpg", "jpeg", "gif", "webp", "svg", "pdf", "doc", "docx", "ppt", "pptx", "xls", "xlsx",
-    "ogg", "mp3", "wav", "m4a", "mp4", "mov", "avi", "webm",
+    "ogg", "mp3", "wav", "m4a", "mp4", "mov", "avi", "webm", "csv",
 ];
 
 fn extension_of(filename: &str) -> String {
@@ -129,6 +130,16 @@ mod tests {
             mime_from_extension("doc.docx"),
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         );
+        assert_eq!(mime_from_extension("data.csv"), "text/csv");
+    }
+
+    #[test]
+    fn test_is_uploadable_csv_file() {
+        let path = std::env::temp_dir().join("test_upload_util.csv");
+        std::fs::write(&path, b"a,b,c").unwrap();
+        let result = is_uploadable_file(path.to_str().unwrap());
+        std::fs::remove_file(&path).unwrap();
+        assert!(result, "should detect real csv file as uploadable");
     }
 
     #[test]
