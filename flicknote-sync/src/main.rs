@@ -107,6 +107,27 @@ struct FlickNoteConnector {
     supabase_anon_key: String,
 }
 
+/// Un-wrap JSON strings that contain objects/arrays (fixes double-marshal for jsonb columns).
+/// PowerSync stores jsonb as text, so crud.data has them as Value::String.
+/// Supabase expects Value::Object for jsonb columns.
+fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, value) in data.iter_mut() {
+        if let serde_json::Value::String(s) = value {
+            match serde_json::from_str::<serde_json::Value>(s) {
+                Ok(parsed) if parsed.is_object() || parsed.is_array() => {
+                    *value = parsed;
+                }
+                Err(e) if s.starts_with('{') || s.starts_with('[') => {
+                    log::debug!(
+                        "unwrap_json_strings: field `{key}` looks like JSON but failed to parse: {e}"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Inner upload logic shared by the BackendConnector impl and the polling loop.
 /// Caller is responsible for holding `upload_guard` before calling.
 ///
@@ -135,6 +156,7 @@ async fn run_upload(
                 UpdateType::Put => {
                     let mut data = crud.data.unwrap_or_default();
                     data.insert("id".into(), serde_json::Value::String(id.clone()));
+                    unwrap_json_strings(&mut data);
                     let r = client
                         .post(format!("{supabase_url}/rest/v1/{table}"))
                         .header("apikey", supabase_anon_key)
@@ -147,7 +169,8 @@ async fn run_upload(
                     ("PUT", r)
                 }
                 UpdateType::Patch => {
-                    let data = crud.data.unwrap_or_default();
+                    let mut data = crud.data.unwrap_or_default();
+                    unwrap_json_strings(&mut data);
                     let r = client
                         .patch(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
                         .header("apikey", supabase_anon_key)
@@ -159,6 +182,7 @@ async fn run_upload(
                     ("PATCH", r)
                 }
                 UpdateType::Delete => {
+                    // No payload — unwrap_json_strings not needed.
                     let r = client
                         .delete(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
                         .header("apikey", supabase_anon_key)
@@ -449,5 +473,30 @@ mod tests {
         // Supabase auth-layer errors omit "code" — should be treated as unknown (transient)
         let body = r#"{"error":"invalid_grant","error_description":"Refresh Token Not Found"}"#;
         assert_eq!(extract_fatal_code(body), None);
+    }
+
+    #[test]
+    fn test_unwrap_json_strings() {
+        let mut data = serde_json::Map::new();
+        data.insert("title".into(), serde_json::Value::String("Hello".into()));
+        data.insert(
+            "metadata".into(),
+            serde_json::Value::String(r#"{"file":{"name":"photo.jpg"}}"#.into()),
+        );
+        data.insert(
+            "tags".into(),
+            serde_json::Value::String(r#"["rust","cli"]"#.into()),
+        );
+        // Primitive JSON values ("42", "true") must stay as strings — guard is is_object()||is_array().
+        data.insert("count".into(), serde_json::Value::String("42".into()));
+        data.insert("flag".into(), serde_json::Value::String("true".into()));
+        data.insert("source".into(), serde_json::Value::Null);
+        unwrap_json_strings(&mut data);
+        assert_eq!(data["title"], serde_json::Value::String("Hello".into())); // plain string unchanged
+        assert!(data["metadata"].is_object()); // JSON object string → Value::Object
+        assert!(data["tags"].is_array()); // JSON array string → Value::Array
+        assert_eq!(data["count"], serde_json::Value::String("42".into())); // primitive JSON unchanged
+        assert_eq!(data["flag"], serde_json::Value::String("true".into())); // primitive JSON unchanged
+        assert!(data["source"].is_null()); // null unchanged
     }
 }
