@@ -40,6 +40,12 @@ Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 - Config via XDG dirs (`~/.config/flicknote/`) or env vars
 - Data stored at `~/.local/share/flicknote/`
 
+## CI (Woodpecker)
+
+- **Never use `set -eo pipefail`** in Woodpecker pipeline scripts — Woodpecker runs commands with `/bin/sh`, not bash. `pipefail` is a bash-only option. Use `set -e` only.
+- Hardcode versions inline in curl URLs — don't use shell variables that might not interpolate in all shells
+- Mirror fb's `.woodpecker/containers.yaml` patterns exactly when writing pipeline configs
+
 ## Commit Style
 
 ```

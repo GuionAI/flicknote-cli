@@ -5,14 +5,15 @@ when:
 steps:
   - name: build-and-publish
     image: ghcr.io/tta-lab/moon-ci:latest
+    environment:
+      _EXPERIMENTAL_DAGGER_RUNNER_HOST: tcp://dagger-engine-0.dagger-headless.devops.svc:8080
     commands:
       - |
-        set -eo pipefail
+        set -e
         moon setup
         export PATH="/root/.moon/bin:/root/.proto/bin:$PATH"
-        DAGGER_VERSION="v0.19.11"
         ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
-        curl -fsSL "https://github.com/dagger/dagger/releases/download/${DAGGER_VERSION}/dagger_${DAGGER_VERSION}_linux_${ARCH}.tar.gz" | tar -xz -C /usr/local/bin/ dagger
+        curl -fsSL "https://github.com/dagger/dagger/releases/download/v0.19.11/dagger_v0.19.11_linux_$ARCH.tar.gz" | tar -xz -C /usr/local/bin/ dagger
         export REGISTRY=registry-docker-registry.devops.svc:5000
         export IMAGE_TAGS="sha-${CI_COMMIT_SHA:0:7},latest"
         moon run flicknote-cli:push
