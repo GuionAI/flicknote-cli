@@ -21,6 +21,8 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		From("rust:bookworm").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "musl-tools", "libclang-dev"}).
+		// Point bindgen/clang to musl headers for cross-compilation (stdarg.h etc.)
+		WithEnvVariable("BINDGEN_EXTRA_CLANG_ARGS", "-I/usr/include/x86_64-linux-musl").
 		WithDirectory("/app", source).
 		WithWorkdir("/app").
 		WithExec([]string{
