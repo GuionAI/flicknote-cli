@@ -38,7 +38,7 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 
 	// Minimal image — binaries only, used as a copy source by other builds
 	return dag.Container().
-		From("alpine:3.21").
+		From("alpine:3.23").
 		WithFile(
 			"/usr/local/bin/flicknote",
 			builder.File("/app/target/x86_64-unknown-linux-musl/release/flicknote"),
