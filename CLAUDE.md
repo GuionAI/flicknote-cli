@@ -43,6 +43,7 @@ Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 ## CI (Woodpecker)
 
 - **Never use `set -eo pipefail`** in Woodpecker pipeline scripts — Woodpecker runs commands with `/bin/sh`, not bash. `pipefail` is a bash-only option. Use `set -e` only.
+- **Use `$$` for shell variables and secrets** in Woodpecker commands — Woodpecker substitutes `${VAR}` before passing to shell. Use `$${VAR}` to pass `$VAR` literally to the shell. CI variables like `CI_COMMIT_SHA` don't need `$$` (Woodpecker substitutes them).
 - Hardcode versions inline in curl URLs — don't use shell variables that might not interpolate in all shells
 - Mirror fb's `.woodpecker/containers.yaml` patterns exactly when writing pipeline configs
 
