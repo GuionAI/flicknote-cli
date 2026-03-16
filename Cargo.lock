@@ -4085,7 +4085,7 @@ dependencies = [
 [[package]]
 name = "taskchampion"
 version = "3.0.2-pre"
-source = "git+https://github.com/tta-lab/taskchampion?rev=c98679ab5e444ff554b47d631827a5db2824d261#c98679ab5e444ff554b47d631827a5db2824d261"
+source = "git+https://github.com/tta-lab/taskchampion?tag=v3.0.2-pre-flicktask#09d19ab98f2de6292443222a46cbd28a63991cc2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4100,6 +4100,7 @@ dependencies = [
  "getrandom 0.4.2",
  "google-cloud-storage",
  "log",
+ "powersync_sqlite_nostd",
  "reqwest",
  "reqwest-middleware",
  "ring",
