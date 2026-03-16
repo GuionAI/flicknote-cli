@@ -122,5 +122,15 @@ pub fn app_schema() -> Schema {
         },
     ));
 
+    schema.tables.push(Table::create(
+        "tc_operations",
+        vec![
+            Column::text("user_id"),
+            Column::text("data"),
+            Column::text("created_at"),
+        ],
+        |_| {},
+    ));
+
     schema
 }
