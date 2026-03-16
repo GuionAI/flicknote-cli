@@ -82,13 +82,20 @@ fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let config = Config::load()?;
 
+    // Commands that don't need a database connection or session
+    if let Some(ref cmd) = cli.command {
+        match cmd {
+            Commands::Login(args) => return commands::login::run(&config, args),
+            Commands::Logout => return commands::logout::run(&config),
+            Commands::Sync(args) => return commands::sync::run(&config, args),
+            _ => {}
+        }
+    }
+
     if let Ok(pg_url) = std::env::var("FLICKNOTE_PG_URL") {
         // Reject unsupported commands before attempting connection
         if let Some(ref cmd) = cli.command {
-            let unsupported = matches!(
-                cmd,
-                Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Tui
-            );
+            let unsupported = matches!(cmd, Commands::Tui);
             if unsupported {
                 return Err(CliError::Other(
                     "This command is not available in PG mode (FLICKNOTE_PG_URL is set)".into(),
@@ -149,10 +156,9 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Resul
         Commands::Modify(args) => commands::modify::run(db, config, args),
         Commands::Import(args) => commands::import::run(db, config, args),
         Commands::Upload(args) => commands::upload::run(db, config, args),
-        Commands::Login(args) => commands::login::run(config, args),
-        Commands::Logout => commands::logout::run(config),
         Commands::Tui => commands::tui::run(config, db),
-        Commands::Sync(args) => commands::sync::run(config, args),
         Commands::Api(args) => commands::api::run(config, args),
+        // Login/Logout/Sync are handled before dispatch() is called
+        Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),
     }
 }

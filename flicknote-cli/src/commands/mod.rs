@@ -2,6 +2,7 @@ pub(crate) mod add;
 pub(crate) mod api;
 pub(crate) mod append;
 pub(crate) mod archive;
+pub(crate) mod daemon;
 pub(crate) mod find;
 pub(crate) mod get;
 pub(crate) mod import;

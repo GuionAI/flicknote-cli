@@ -67,6 +67,14 @@ pub(crate) fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
         }
 
         println!("Authenticated");
-        Ok(())
-    })
+        Ok::<(), CliError>(())
+    })?;
+
+    // Install launchd service — this boots out any existing service first,
+    // then bootstraps fresh. The daemon starts immediately (KeepAlive + RunAtLoad)
+    // and creates the local DB on startup.
+    super::daemon::install(config)?;
+    println!("Sync daemon installed and started");
+
+    Ok(())
 }
