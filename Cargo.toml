@@ -23,7 +23,7 @@ postgres = { version = "0.19", features = ["with-chrono-0_4"] }
 anyhow = "1"
 toml = "0.8"
 dirs = "6"
-taskchampion = { git = "https://github.com/tta-lab/taskchampion", tag = "v3.0.2-pre-flicktask-3", default-features = false, features = ["storage-powersync"] }
+taskchampion = { git = "https://github.com/tta-lab/taskchampion", tag = "v3.0.2-pre-flicktask-4", default-features = false, features = ["storage-powersync"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"
