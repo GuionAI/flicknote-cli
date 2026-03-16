@@ -11,13 +11,16 @@ import (
 type FlicknoteCli struct{}
 
 // Build produces a minimal container image with the static flicknote binary.
-// Uses rust:alpine (musl libc) — produces a fully static binary.
+// Uses rust:bookworm-slim (glibc) to cross-compile to musl target — bindgen
+// needs dlopen for libclang which doesn't work on Alpine/musl.
 // Syncs the builder stage to surface compile errors early (Dagger uses lazy eval).
 func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*dagger.Container, error) {
+	// Use glibc-based image for building — bindgen needs dlopen for libclang,
+	// which doesn't work on musl (Alpine). Cross-compile to musl target instead.
 	builder, err := dag.Container().
-		From("rust:alpine").
-		WithExec([]string{"apk", "add", "--no-cache", "musl-dev", "build-base", "clang-dev", "clang-static", "llvm-dev"}).
-		WithEnvVariable("LIBCLANG_STATIC", "1").
+		From("rust:bookworm-slim").
+		WithExec([]string{"apt-get", "update"}).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "musl-tools", "libclang-dev"}).
 		WithExec([]string{"rustup", "target", "add", "x86_64-unknown-linux-musl"}).
 		WithDirectory("/app", source).
 		WithWorkdir("/app").
