@@ -1,0 +1,43 @@
+$schema: 'https://moonrepo.dev/schemas/tasks.json'
+
+inheritedBy:
+  tag: 'rust'
+
+fileGroups:
+  sources:
+    - 'src/**/*.rs'
+    - 'Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+
+tasks:
+  fmt:
+    command: 'cargo fmt --check'
+    inputs:
+      - '@group(sources)'
+    options:
+      runInCI: true
+
+  lint:
+    command: 'cargo clippy --all-targets -- -D warnings'
+    inputs:
+      - '@group(sources)'
+    options:
+      runInCI: true
+
+  test:
+    command: 'cargo test'
+    inputs:
+      - '@group(sources)'
+    options:
+      runInCI: true
+
+  deny:
+    script: |
+      command -v cargo-deny || cargo install cargo-deny --locked
+      cargo deny check
+    inputs:
+      - '/deny.toml'
+      - '/Cargo.lock'
+    options:
+      runInCI: true

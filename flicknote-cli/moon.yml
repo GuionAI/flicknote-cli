@@ -1,0 +1,21 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+tags: ['rust']
+
+dependsOn:
+  - 'flicknote-core'
+  - 'flicknote-auth'
+
+tasks:
+  push:
+    script: |
+      cd ${workspaceRoot}/dagger && dagger call publish \
+        --source=../ \
+        --registry=${REGISTRY} \
+        --image=flicknote-cli \
+        --tags=${IMAGE_TAGS:-latest}
+    env:
+      _EXPERIMENTAL_DAGGER_RUNNER_HOST: 'tcp://dagger-engine-0.dagger-headless.devops.svc:8080'
+    options:
+      runInCI: false

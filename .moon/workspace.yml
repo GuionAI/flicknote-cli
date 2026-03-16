@@ -1,0 +1,12 @@
+$schema: 'https://moonrepo.dev/schemas/workspace.json'
+
+projects:
+  - 'flicknote-core'
+  - 'flicknote-auth'
+  - 'flicknote-cli'
+  - 'flicknote-sync'
+  - 'flicktask-cli'
+
+vcs:
+  client: 'git'
+  defaultBranch: 'main'
