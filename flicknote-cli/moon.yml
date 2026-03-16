@@ -10,7 +10,7 @@ dependsOn:
 tasks:
   push:
     script: |
-      cd ${workspaceRoot}/dagger && dagger call publish \
+      cd dagger && dagger call publish \
         --source=../ \
         --registry=${REGISTRY} \
         --image=flicknote-cli \
@@ -19,3 +19,4 @@ tasks:
       _EXPERIMENTAL_DAGGER_RUNNER_HOST: 'tcp://dagger-engine-0.dagger-headless.devops.svc:8080'
     options:
       runInCI: true
+      runFromWorkspaceRoot: true
