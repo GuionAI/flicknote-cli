@@ -47,6 +47,13 @@ Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 - Hardcode versions inline in curl URLs — don't use shell variables that might not interpolate in all shells
 - Mirror fb's `.woodpecker/containers.yaml` patterns exactly when writing pipeline configs
 
+## Skills
+
+The `skills/` directory contains command reference docs for AI agents:
+
+- `skills/flicknote.md` — FlickNote CLI command reference
+- `skills/flicktask.md` — FlickTask CLI command reference
+
 ## Commit Style
 
 ```
