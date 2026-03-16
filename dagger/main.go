@@ -16,7 +16,8 @@ type FlicknoteCli struct{}
 func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*dagger.Container, error) {
 	builder, err := dag.Container().
 		From("rust:alpine").
-		WithExec([]string{"apk", "add", "--no-cache", "musl-dev", "build-base", "clang-dev"}).
+		WithExec([]string{"apk", "add", "--no-cache", "musl-dev", "build-base", "clang-dev", "clang-static", "llvm-dev"}).
+		WithEnvVariable("LIBCLANG_STATIC", "1").
 		WithExec([]string{"rustup", "target", "add", "x86_64-unknown-linux-musl"}).
 		WithDirectory("/app", source).
 		WithWorkdir("/app").
