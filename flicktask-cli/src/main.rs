@@ -16,7 +16,7 @@ mod task_tree;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(e) = run().await {
-        eprintln!("Error: {e}");
+        eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }
