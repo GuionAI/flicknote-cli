@@ -21,7 +21,6 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		From("rust:bookworm").
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "musl-tools", "libclang-dev"}).
-		WithExec([]string{"rustup", "target", "add", "x86_64-unknown-linux-musl"}).
 		WithDirectory("/app", source).
 		WithWorkdir("/app").
 		WithExec([]string{
