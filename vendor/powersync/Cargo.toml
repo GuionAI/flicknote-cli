@@ -1,0 +1,51 @@
+[package]
+name = "powersync"
+version = "0.0.4"
+
+edition = "2024"
+license = "Apache-2.0"
+authors = ["JourneyApps"]
+keywords = ["sqlite", "powersync"]
+homepage = "https://powersync.com"
+readme = "README.md"
+description = "Experimental PowerSync SDK for Rust applications."
+
+[lib]
+crate-type = ["lib"]
+
+[features]
+tokio = ["dep:tokio"]
+smol = ["dep:async-io"]
+ffi = []
+
+[dependencies]
+async-channel = "2.5.0"
+async-lock = "3.4.1"
+async-io = { version = "2.6.0", optional = true }
+async-trait = "0.1.89"
+async-oneshot = "0.5.9"
+atomic_enum = "0.3.0"
+event-listener = "5.4.1"
+futures-lite = "2.6.1"
+http-client = { version = "6.5.3", default-features = false }
+log = "0.4.28"
+pin-project-lite = "0.2.16"
+rusqlite = { version = "0.38.0", features = ["load_extension"] }
+scopeguard = "1.2.0"
+serde = { version = "1.0.219", features = ["derive", "rc"] }
+serde_json = { version = "1.0.143", features = ["raw_value"] }
+thiserror = "2.0.16"
+tokio = { version = "1", features = ["time", "rt"], optional = true }
+url = "2.5.7"
+serde_with = "3.15.0"
+powersync_core = { version = "=0.4.11", features = ["static"] }
+
+[lints.clippy]
+clone_on_copy = "allow"
+derivable_impls = "allow"
+
+[dev-dependencies]
+async-executor = "1.13.3"
+async-task = "4.7.1"
+futures-lite = "2.6.1"
+futures-test = "0.3.31"

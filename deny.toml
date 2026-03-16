@@ -33,6 +33,10 @@ license-files = []
 crate = "flicknote-sync"
 expression = "MIT"
 license-files = []
+[[licenses.clarify]]
+crate = "flicktask-cli"
+expression = "MIT"
+license-files = []
 
 [bans]
 multiple-versions = "warn"
@@ -55,4 +59,7 @@ ignore = [
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = ["https://github.com/powersync-ja/powersync-native"]
+allow-git = [
+    "https://github.com/powersync-ja/powersync-native",
+    "https://github.com/tta-lab/taskchampion",
+]

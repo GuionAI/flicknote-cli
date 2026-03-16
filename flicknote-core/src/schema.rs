@@ -82,5 +82,45 @@ pub fn app_schema() -> Schema {
         |_| {},
     ));
 
+    schema.tables.push(Table::create(
+        "tc_tasks",
+        vec![
+            Column::text("user_id"),
+            Column::text("data"),
+            Column::text("entry_at"),
+            Column::text("status"),
+            Column::text("description"),
+            Column::text("priority"),
+            Column::text("modified_at"),
+            Column::text("due_at"),
+            Column::text("scheduled_at"),
+            Column::text("start_at"),
+            Column::text("end_at"),
+            Column::text("wait_at"),
+            Column::text("parent_id"),
+            Column::text("project_id"),
+        ],
+        |t| {
+            t.indexes = vec![
+                Index {
+                    name: "tc_tasks_status".into(),
+                    columns: vec![IndexedColumn {
+                        name: "status".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
+                Index {
+                    name: "tc_tasks_parent".into(),
+                    columns: vec![IndexedColumn {
+                        name: "parent_id".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
+            ];
+        },
+    ));
+
     schema
 }

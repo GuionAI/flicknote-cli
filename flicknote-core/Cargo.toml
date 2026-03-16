@@ -17,7 +17,7 @@ http-client = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }
-dirs = "6"
+dirs = { workspace = true }
 postgres = { workspace = true }
 chrono = "0.4"
 uuid = { workspace = true }

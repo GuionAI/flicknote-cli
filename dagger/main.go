@@ -23,6 +23,7 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		WithExec([]string{
 			"cargo", "build", "--release",
 			"-p", "flicknote-cli",
+			"-p", "flicktask-cli",
 			"--no-default-features",
 			"--target", "x86_64-unknown-linux-musl",
 		}).
@@ -31,14 +32,18 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		return nil, fmt.Errorf("build flicknote-cli: %w", err)
 	}
 
-	// Minimal image — binary only, used as a copy source by other builds
+	// Minimal image — binaries only, used as a copy source by other builds
 	return dag.Container().
 		From("alpine:3.21").
 		WithFile(
 			"/usr/local/bin/flicknote",
 			builder.File("/app/target/x86_64-unknown-linux-musl/release/flicknote"),
 		).
-		WithExec([]string{"chmod", "+x", "/usr/local/bin/flicknote"}), nil
+		WithFile(
+			"/usr/local/bin/flicktask",
+			builder.File("/app/target/x86_64-unknown-linux-musl/release/flicktask"),
+		).
+		WithExec([]string{"chmod", "+x", "/usr/local/bin/flicknote", "/usr/local/bin/flicktask"}), nil
 }
 
 // Publish builds and pushes the image to the registry with the given tags.

@@ -4,12 +4,13 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 ## Architecture
 
-Rust workspace with 4 crates:
+Rust workspace with 5 crates:
 
 - **flicknote-cli** — CLI binary (`flicknote`): add, find, list, get, replace, append, remove, rename, insert, modify, upload, archive, unarchive, project, login, logout, sync, import, api, tui
 - **flicknote-core** — Shared library (db, config, schema, types, session, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)
+- **flicktask-cli** — CLI binary (`flicktask`): tree-based task management via TaskChampion + PowerSync. Commands: add, get, done, delete, start, stop, edit, tag, untag, annotate, move, list, tree, plan, undo
 
 ## Build & Test
 
@@ -48,4 +49,4 @@ refactor(scope): description
 chore(scope): description
 ```
 
-Scopes: `cli`, `core`, `auth`, `sync`, `ci`
+Scopes: `cli`, `core`, `auth`, `sync`, `task`, `ci`
