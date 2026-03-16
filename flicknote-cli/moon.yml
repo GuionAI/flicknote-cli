@@ -18,4 +18,4 @@ tasks:
     env:
       _EXPERIMENTAL_DAGGER_RUNNER_HOST: 'tcp://dagger-engine-0.dagger-headless.devops.svc:8080'
     options:
-      runInCI: false
+      runInCI: true
