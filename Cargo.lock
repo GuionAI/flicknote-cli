@@ -3415,7 +3415,7 @@ dependencies = [
 [[package]]
 name = "taskchampion"
 version = "3.0.2-pre"
-source = "git+https://github.com/tta-lab/taskchampion?tag=v3.0.2-pre-flicktask-2#56223a984b6121030ccbe3aa1fcbea70ff232f6d"
+source = "git+https://github.com/tta-lab/taskchampion?tag=v3.0.2-pre-flicktask-3#6eb881de0b51c037336d3181d99018b38b68efc7"
 dependencies = [
  "anyhow",
  "async-trait",
