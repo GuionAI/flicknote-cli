@@ -28,16 +28,8 @@ steps:
         from_secret: telegram_to
     commands:
       - |
-        SHORT_SHA=${CI_COMMIT_SHA:0:7}
-        if [ -f .build-success ]; then
-          MESSAGE="✅ <b>flicknote-cli built</b>
-        Tag: <code>sha-${SHORT_SHA}</code>
-        <a href=\"${CI_PIPELINE_FORGE_URL}\">View Run</a>"
-        else
-          MESSAGE="❌ <b>flicknote-cli build failed</b>
-        <a href=\"${CI_PIPELINE_FORGE_URL}\">View Run</a>"
-        fi
-        curl --fail -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-          -d chat_id="${TELEGRAM_TO}" -d parse_mode="HTML" -d text="${MESSAGE}"
+        if [ -f .build-success ]; then EMOJI="✅"; STATUS="success"; else EMOJI="❌"; STATUS="failure"; fi
+        MESSAGE=$$(printf '%s <b>flicknote-cli %s</b>\n<b>Tag:</b> <code>sha-${CI_COMMIT_SHA:0:7}</code>\n<a href="${CI_PIPELINE_FORGE_URL}">View Run</a>' "$${EMOJI}" "$${STATUS}")
+        curl --fail -s -X POST "https://api.telegram.org/bot$${TELEGRAM_TOKEN}/sendMessage" -d chat_id="$${TELEGRAM_TO}" -d parse_mode="HTML" -d text="$${MESSAGE}"
     when:
       - status: [success, failure]
