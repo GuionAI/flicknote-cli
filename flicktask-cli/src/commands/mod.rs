@@ -10,6 +10,7 @@ pub mod delete;
 pub mod done;
 pub mod edit;
 pub mod get;
+pub mod import;
 pub mod list;
 pub mod move_task;
 pub mod plan;
@@ -64,6 +65,8 @@ pub enum Commands {
     Plan(plan::PlanArgs),
     /// Undo the last change
     Undo(undo::UndoArgs),
+    /// Import tasks from taskwarrior export JSON (piped via stdin)
+    Import(import::ImportArgs),
 }
 
 pub async fn dispatch(
@@ -87,5 +90,6 @@ pub async fn dispatch(
         Commands::Tree(args) => tree::run(replica, args).await,
         Commands::Plan(args) => plan::run(replica, args).await,
         Commands::Undo(args) => undo::run(replica, args).await,
+        Commands::Import(args) => import::run(replica, args).await,
     }
 }
