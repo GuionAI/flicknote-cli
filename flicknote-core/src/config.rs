@@ -6,6 +6,7 @@ pub struct Config {
     pub supabase_anon_key: String,
     pub powersync_url: String,
     pub api_url: String,
+    pub web_url: Option<String>,
     pub paths: ConfigPaths,
 }
 
@@ -54,6 +55,7 @@ impl Config {
         let mut supabase_anon_key = String::new();
         let mut powersync_url = String::new();
         let mut api_url = String::new();
+        let mut web_url: Option<String> = None;
 
         if config_file.exists()
             && let Ok(raw) = fs::read_to_string(&config_file)
@@ -71,6 +73,9 @@ impl Config {
             if let Some(v) = json.get("apiUrl").and_then(|v| v.as_str()) {
                 api_url = v.to_string();
             }
+            if let Some(v) = json.get("webUrl").and_then(|v| v.as_str()) {
+                web_url = Some(v.to_string());
+            }
         }
 
         if let Ok(v) = std::env::var("FLICKNOTE_SUPABASE_URL") {
@@ -84,6 +89,9 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FLICKNOTE_API_URL") {
             api_url = v;
+        }
+        if let Ok(v) = std::env::var("FLICKNOTE_WEB_URL") {
+            web_url = Some(v);
         }
 
         let paths = ConfigPaths {
@@ -101,6 +109,7 @@ impl Config {
             supabase_anon_key,
             powersync_url,
             api_url,
+            web_url,
             paths,
         })
     }

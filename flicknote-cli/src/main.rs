@@ -69,6 +69,8 @@ enum Commands {
     Insert(commands::insert::InsertArgs),
     /// Modify note metadata (e.g. move to another project)
     Modify(commands::modify::ModifyArgs),
+    /// Open a note in the browser
+    Open(commands::open::OpenArgs),
 }
 
 fn main() {
@@ -154,6 +156,7 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Resul
         Commands::Rename(args) => commands::rename::run(db, config, args),
         Commands::Insert(args) => commands::insert::run(db, config, args),
         Commands::Modify(args) => commands::modify::run(db, config, args),
+        Commands::Open(args) => commands::open::run(db, config, args),
         Commands::Import(args) => commands::import::run(db, config, args),
         Commands::Upload(args) => commands::upload::run(db, config, args),
         Commands::Tui => commands::tui::run(config, db),
