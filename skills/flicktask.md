@@ -17,14 +17,16 @@ flicktask add "Implement OAuth2 flow"
 flicktask add "Write tests" --parent a1b2c3d4 --priority H --due 2026-03-20
 flicktask add "Research API" --tag backend --project auth
 flicktask add "Task with UDA" --set foo=bar --set baz=qux
+flicktask add "Focus today" --scheduled today
 
 # Options:
-#   --parent <id>        Parent task (8-char hex or full UUID)
-#   --due <YYYY-MM-DD>   Due date
-#   --priority H|M|L     Priority
-#   --tag <name>         Tag (repeatable: --tag a --tag b)
-#   --project <name>     Project name
-#   --set <KEY=VALUE>    UDA value (repeatable)
+#   --parent <id>          Parent task (8-char hex or full UUID)
+#   --due <date>           Due date (YYYY-MM-DD or relative: today, tomorrow, 2days, eod, etc.)
+#   --scheduled <date>     Scheduled date — puts task in today's list
+#   --priority H|M|L       Priority
+#   --tag <name>           Tag (repeatable: --tag a --tag b)
+#   --project <name>       Project name
+#   --set <KEY=VALUE>      UDA value (repeatable)
 ```
 
 ## Listing Tasks
@@ -143,6 +145,38 @@ cat plan.md | flicktask plan a1b2c3d4 --replace
 ```bash
 # Import from taskwarrior export JSON (stdin)
 task export | flicktask import
+```
+
+## Finding Tasks
+
+```bash
+flicktask find <keyword> [keyword...]           # OR match, pending only
+flicktask find --completed <keyword>            # search completed tasks
+```
+
+## Today
+
+```bash
+flicktask today list                            # tasks scheduled for today
+flicktask today add <id> [id...]                # schedule tasks for today
+flicktask today remove <id> [id...]             # unschedule tasks
+flicktask today completed                       # tasks completed today
+```
+
+## Relative Dates
+
+All date flags (`--due`, `--wait`, `--scheduled`) support:
+- Absolute: `2026-03-20`
+- Relative: `today`, `tomorrow`, `yesterday`, `now`
+- Duration: `2days`, `1wk`, `3mo`, `9hrs`
+- Boundaries: `eod`, `eow`, `eom`, `eoy`, `sow`, `som`, `soy`
+- Weekdays: `mon`, `tue`, `wed`, `thu`, `fri`, `sat`, `sun`
+- Far future: `later`, `someday` (for `--wait`)
+
+```bash
+flicktask add "desc" --due tomorrow --scheduled today
+flicktask edit <id> --due eow --scheduled 2days
+flicktask add "someday" --wait later
 ```
 
 ## Exporting

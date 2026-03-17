@@ -78,6 +78,7 @@ pub mod delete;
 pub mod done;
 pub mod edit;
 pub mod export;
+pub mod find;
 pub mod get;
 pub mod import;
 pub mod list;
@@ -86,6 +87,7 @@ pub mod plan;
 pub mod start;
 pub mod stop;
 pub mod tag;
+pub mod today;
 pub mod tree;
 pub mod undo;
 pub mod untag;
@@ -138,6 +140,10 @@ pub enum Commands {
     Import(import::ImportArgs),
     /// Export tasks as taskwarrior-compatible JSON
     Export(export::ExportArgs),
+    /// Find tasks by keywords (OR match)
+    Find(find::FindArgs),
+    /// Manage today's task focus list
+    Today(today::TodayArgs),
 }
 
 pub async fn dispatch(
@@ -163,5 +169,7 @@ pub async fn dispatch(
         Commands::Undo(args) => undo::run(replica, args).await,
         Commands::Import(args) => import::run(replica, args).await,
         Commands::Export(args) => export::run(replica, args).await,
+        Commands::Find(args) => find::run(replica, args).await,
+        Commands::Today(args) => today::run(replica, args).await,
     }
 }

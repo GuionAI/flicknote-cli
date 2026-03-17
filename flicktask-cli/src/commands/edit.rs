@@ -16,7 +16,7 @@ pub struct EditArgs {
     #[arg(long)]
     pub description: Option<String>,
 
-    /// Due date (YYYY-MM-DD)
+    /// Due date — supports YYYY-MM-DD or relative (today, tomorrow, 2days, eod, etc.)
     #[arg(long)]
     pub due: Option<String>,
 
@@ -28,9 +28,13 @@ pub struct EditArgs {
     #[arg(long)]
     pub parent: Option<String>,
 
-    /// Wait date (YYYY-MM-DD)
+    /// Wait date — supports YYYY-MM-DD or relative (today, tomorrow, 2days, eod, later, etc.)
     #[arg(long)]
     pub wait: Option<String>,
+
+    /// Scheduled date — supports YYYY-MM-DD or relative (today, tomorrow, 2days, eod, etc.)
+    #[arg(long)]
+    pub scheduled: Option<String>,
 
     /// Project name
     #[arg(long)]
@@ -72,6 +76,10 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: EditArgs) -> Res
         if let Some(wait_str) = args.wait {
             let wait = parse_date(&wait_str)?;
             task.set_wait(Some(wait), ops)?;
+        }
+        if let Some(sched_str) = args.scheduled {
+            let sched = parse_date(&sched_str)?;
+            task.set_value("scheduled", Some(sched.timestamp().to_string()), ops)?;
         }
         if let Some(project) = args.project {
             task.set_value("project", Some(project), ops)?;
