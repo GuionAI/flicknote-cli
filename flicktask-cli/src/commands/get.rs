@@ -24,6 +24,7 @@ const KNOWN_PROPS: &[&str] = &[
     "project",
     "parent",
     "tags",
+    "position",
 ];
 
 #[derive(Args)]

@@ -38,9 +38,30 @@ impl TaskTree {
             }
         }
 
-        // Sort children by UUID for deterministic output
+        // Sort children by (position, entry) — positioned first in order,
+        // then unpositioned by creation time, then by UUID as final tiebreaker.
         for list in children.values_mut() {
-            list.sort();
+            list.sort_by(|a, b| {
+                let task_a = tasks.get(a);
+                let task_b = tasks.get(b);
+                let pos_a = task_a.and_then(|t| t.get_value("position"));
+                let pos_b = task_b.and_then(|t| t.get_value("position"));
+
+                match (pos_a, pos_b) {
+                    // Both have positions — lexicographic compare
+                    (Some(pa), Some(pb)) => pa.cmp(pb),
+                    // Only a has position — a comes first
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    // Only b has position — b comes first
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    // Neither has position — sort by entry timestamp, then UUID
+                    (None, None) => {
+                        let entry_a = task_a.and_then(|t| t.get_value("entry"));
+                        let entry_b = task_b.and_then(|t| t.get_value("entry"));
+                        entry_a.cmp(&entry_b).then_with(|| a.cmp(b))
+                    }
+                }
+            });
         }
 
         Self {
@@ -110,6 +131,32 @@ impl TaskTree {
                 }
             }
         }
+    }
+
+    /// Get the position values of siblings under a parent (in order).
+    /// `parent` is `Some(uuid)` for a child task, `None` for root tasks.
+    /// `exclude` optionally removes a UUID from results (for move operations —
+    /// the task being moved should not appear in its own sibling list).
+    /// Returns vec of `(uuid, position_string)` for siblings that have positions.
+    pub fn sibling_positions(
+        &self,
+        parent: Option<Uuid>,
+        tasks: &HashMap<Uuid, Task>,
+        exclude: Option<Uuid>,
+    ) -> Vec<(Uuid, String)> {
+        let siblings = match parent {
+            Some(p) => self.children(p),
+            None => self.roots(),
+        };
+        siblings
+            .into_iter()
+            .filter(|uuid| exclude != Some(*uuid))
+            .filter_map(|uuid| {
+                let task = tasks.get(&uuid)?;
+                let pos = task.get_value("position")?;
+                Some((uuid, pos.to_string()))
+            })
+            .collect()
     }
 
     /// Returns 8-char hex IDs of pending direct children — shared guard for done/delete.

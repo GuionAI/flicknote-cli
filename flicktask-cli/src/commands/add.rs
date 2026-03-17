@@ -37,9 +37,24 @@ pub struct AddArgs {
     /// Set a UDA value (key=value, repeatable)
     #[arg(long = "set", value_name = "KEY=VALUE")]
     pub set: Vec<String>,
+
+    /// Insert after this sibling task ID (8-char hex or full UUID)
+    #[arg(long, conflicts_with = "before")]
+    pub after: Option<String>,
+
+    /// Insert before this sibling task ID (8-char hex or full UUID)
+    #[arg(long, conflicts_with = "after")]
+    pub before: Option<String>,
 }
 
 pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: AddArgs) -> Result<()> {
+    // Resolve parent UUID early (before creating task, so we can use it later)
+    let resolved_parent_uuid: Option<Uuid> = if let Some(ref parent_id) = args.parent {
+        Some(resolve_id(replica, parent_id).await?)
+    } else {
+        None
+    };
+
     let mut ops = Operations::new();
 
     let uuid = Uuid::new_v4();
@@ -54,8 +69,7 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: AddArgs) -> Resu
     let now = taskchampion::chrono::Utc::now();
     task.set_value("entry", Some(now.timestamp().to_string()), &mut ops)?;
 
-    if let Some(parent_id) = args.parent {
-        let parent_uuid = resolve_id(replica, &parent_id).await?;
+    if let Some(parent_uuid) = resolved_parent_uuid {
         task.set_value("parent", Some(parent_uuid.to_string()), &mut ops)?;
     }
 
@@ -93,6 +107,116 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: AddArgs) -> Resu
     let task_json = crate::tw_json::task_to_tw_json(&uuid.to_string(), &task);
     let final_json = crate::hooks::run_on_add(&task_json)?;
     super::apply_hook_fields(&final_json, &task_json, &mut task, &mut ops)?;
+
+    // Compute position for sibling ordering (after hooks, before commit)
+    if resolved_parent_uuid.is_some() || args.after.is_some() || args.before.is_some() {
+        let (position, inferred_parent) =
+            if let Some(ref after_id) = args.after {
+                let after_uuid = resolve_id(replica, after_id).await?;
+                let all_tasks = replica.all_tasks().await.context("Failed to load tasks")?;
+                let after_task = all_tasks
+                    .get(&after_uuid)
+                    .with_context(|| format!("Task {after_id} not found"))?;
+
+                let sibling_parent = match after_task.get_value("parent") {
+                    None => None,
+                    Some(p) => Some(Uuid::parse_str(p).with_context(|| {
+                        format!("Task {after_id} has invalid parent UUID: {p:?}")
+                    })?),
+                };
+
+                // Validate cross-parent consistency
+                if let Some(explicit) = resolved_parent_uuid
+                    && sibling_parent != Some(explicit)
+                {
+                    anyhow::bail!("Task {} is not a child of the specified parent", after_id);
+                }
+
+                let tree = crate::task_tree::TaskTree::from_tasks(&all_tasks);
+                let siblings = tree.sibling_positions(sibling_parent, &all_tasks, None);
+                let after_pos = after_task.get_value("position");
+
+                let pos = if let Some(a_pos) = after_pos {
+                    let next_pos = siblings
+                        .iter()
+                        .skip_while(|(u, _)| *u != after_uuid)
+                        .nth(1)
+                        .map(|(_, p)| p.as_str());
+                    match next_pos {
+                        Some(np) => crate::position::between_position(a_pos, np)?,
+                        None => crate::position::append_position(Some(a_pos))?,
+                    }
+                } else {
+                    // after_uuid has no position (pre-existing task) — append at end
+                    eprintln!(
+                        "Warning: anchor task {} has no position — appending at end",
+                        after_id
+                    );
+                    let last = siblings.last().map(|(_, p)| p.as_str());
+                    crate::position::append_position(last)?
+                };
+                (pos, sibling_parent)
+            } else if let Some(ref before_id) = args.before {
+                let before_uuid = resolve_id(replica, before_id).await?;
+                let all_tasks = replica.all_tasks().await.context("Failed to load tasks")?;
+                let before_task = all_tasks
+                    .get(&before_uuid)
+                    .with_context(|| format!("Task {before_id} not found"))?;
+
+                let sibling_parent = match before_task.get_value("parent") {
+                    None => None,
+                    Some(p) => Some(Uuid::parse_str(p).with_context(|| {
+                        format!("Task {before_id} has invalid parent UUID: {p:?}")
+                    })?),
+                };
+
+                if let Some(explicit) = resolved_parent_uuid
+                    && sibling_parent != Some(explicit)
+                {
+                    anyhow::bail!("Task {} is not a child of the specified parent", before_id);
+                }
+
+                let tree = crate::task_tree::TaskTree::from_tasks(&all_tasks);
+                let siblings = tree.sibling_positions(sibling_parent, &all_tasks, None);
+                let before_pos = before_task.get_value("position");
+
+                let pos = if let Some(b_pos) = before_pos {
+                    let prev_pos = siblings
+                        .iter()
+                        .take_while(|(u, _)| *u != before_uuid)
+                        .last()
+                        .map(|(_, p)| p.as_str());
+                    match prev_pos {
+                        Some(pp) => crate::position::between_position(pp, b_pos)?,
+                        None => crate::position::prepend_position(Some(b_pos))?,
+                    }
+                } else {
+                    eprintln!(
+                        "Warning: anchor task {} has no position — prepending at start",
+                        before_id
+                    );
+                    let first = siblings.first().map(|(_, p)| p.as_str());
+                    crate::position::prepend_position(first)?
+                };
+                (pos, sibling_parent)
+            } else {
+                // No --after/--before: append at end of parent's children
+                let all_tasks = replica.all_tasks().await.context("Failed to load tasks")?;
+                let tree = crate::task_tree::TaskTree::from_tasks(&all_tasks);
+                let siblings = tree.sibling_positions(resolved_parent_uuid, &all_tasks, None);
+                let last = siblings.last().map(|(_, p)| p.as_str());
+                (crate::position::append_position(last)?, None)
+            };
+
+        // If parent was inferred from --after/--before, set it now (after hooks)
+        if resolved_parent_uuid.is_none()
+            && let Some(p_uuid) = inferred_parent
+        {
+            task.set_value("parent", Some(p_uuid.to_string()), &mut ops)?;
+        }
+
+        task.set_value("position", Some(position), &mut ops)?;
+    }
 
     replica
         .commit_operations(ops)

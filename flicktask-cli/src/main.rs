@@ -13,6 +13,8 @@ mod hooks;
 #[cfg(feature = "powersync")]
 mod ids;
 #[cfg(feature = "powersync")]
+mod position;
+#[cfg(feature = "powersync")]
 mod task_tree;
 #[cfg(feature = "powersync")]
 mod tw_json;

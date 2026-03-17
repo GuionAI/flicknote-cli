@@ -98,6 +98,7 @@ pub fn app_schema() -> Schema {
             Column::text("end_at"),
             Column::text("wait_at"),
             Column::text("parent_id"),
+            Column::text("position"),
             Column::text("project_id"),
         ],
         |t| {
@@ -117,6 +118,21 @@ pub fn app_schema() -> Schema {
                         ascending: true,
                         type_name: "TEXT".into(),
                     }],
+                },
+                Index {
+                    name: "tc_tasks_parent_position".into(),
+                    columns: vec![
+                        IndexedColumn {
+                            name: "parent_id".into(),
+                            ascending: true,
+                            type_name: "TEXT".into(),
+                        },
+                        IndexedColumn {
+                            name: "position".into(),
+                            ascending: true,
+                            type_name: "TEXT".into(),
+                        },
+                    ],
                 },
             ];
         },

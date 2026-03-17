@@ -17,6 +17,7 @@ const STRUCTURAL_SKIP: &[&str] = &[
     "description",
     "priority",
     "project",
+    "position",
 ];
 
 /// Apply UDA fields added/changed by a hook back to the task via `set_value`.

@@ -31,6 +31,7 @@ struct TaskSpec {
     parent: Uuid,
     description: String,
     annotation: Option<String>,
+    position: String,
 }
 
 pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: PlanArgs) -> Result<()> {
@@ -92,6 +93,7 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: PlanArgs) -> Res
         task.set_status(Status::Pending, &mut ops)?;
         task.set_value("entry", Some(now.timestamp().to_string()), &mut ops)?;
         task.set_value("parent", Some(spec.parent.to_string()), &mut ops)?;
+        task.set_value("position", Some(spec.position.clone()), &mut ops)?;
 
         if let Some(ref ann_text) = spec.annotation {
             task.add_annotation(
@@ -139,10 +141,27 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: PlanArgs) -> Res
 /// Purely synchronous — no async, no recursion via Box::pin.
 fn plan_tasks(parent: Uuid, sections: &[Section], start: usize, end: usize) -> Vec<TaskSpec> {
     let mut result = Vec::new();
-    let mut i = start;
 
-    while i < end {
-        let section = &sections[i];
+    // Collect direct children at this level first to count siblings
+    let mut direct_children: Vec<(usize, usize)> = Vec::new(); // (section_idx, child_end)
+    {
+        let mut j = start;
+        while j < end {
+            let child_start = j + 1;
+            let mut child_end = child_start;
+            while child_end < end && sections[child_end].level > sections[j].level {
+                child_end += 1;
+            }
+            direct_children.push((j, child_end));
+            j = child_end;
+        }
+    }
+
+    // Generate positions for this batch of siblings
+    let positions = crate::position::sequential_positions(direct_children.len());
+
+    for (idx, (section_idx, child_end)) in direct_children.iter().enumerate() {
+        let section = &sections[*section_idx];
         let task_uuid = Uuid::new_v4();
 
         result.push(TaskSpec {
@@ -154,21 +173,15 @@ fn plan_tasks(parent: Uuid, sections: &[Section], start: usize, end: usize) -> V
             } else {
                 Some(section.body.trim().to_string())
             },
+            position: positions[idx].clone(),
         });
 
-        // Find child sections (deeper level immediately following)
-        let child_start = i + 1;
-        let mut child_end = child_start;
-        while child_end < end && sections[child_end].level > section.level {
-            child_end += 1;
-        }
-
-        if child_end > child_start {
-            let mut children = plan_tasks(task_uuid, sections, child_start, child_end);
+        // Recurse into children
+        let sub_start = *section_idx + 1;
+        if *child_end > sub_start {
+            let mut children = plan_tasks(task_uuid, sections, sub_start, *child_end);
             result.append(&mut children);
         }
-
-        i = child_end;
     }
 
     result

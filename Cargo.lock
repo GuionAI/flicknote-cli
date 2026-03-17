@@ -904,7 +904,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1073,6 +1073,7 @@ dependencies = [
  "dirs",
  "flicknote-auth",
  "flicknote-core",
+ "fractional_index",
  "serde",
  "serde_json",
  "taskchampion",
@@ -1118,6 +1119,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fractional_index"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce01fad85c73f947e62a39152c7b0f785af7f44859da36e421c42a3023bcbe3a"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2533,7 +2543,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2856,7 +2866,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2869,7 +2879,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3416,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "taskchampion"
 version = "3.0.2-pre"
-source = "git+https://github.com/tta-lab/taskchampion?tag=v3.0.2-pre-flicktask-4#67e80e77545c2333372744042f448390d9c881e0"
+source = "git+https://github.com/tta-lab/taskchampion?tag=v3.0.2-pre-flicktask-5#7f23c9156dc5fa0deccf55801f9f544b0a0a2be4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3446,10 +3456,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.3.0",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
