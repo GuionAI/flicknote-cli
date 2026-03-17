@@ -27,7 +27,10 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: UntagArgs) -> Re
         .with_context(|| format!("Invalid tag: {:?}", args.tag))?;
 
     let mut ops = Operations::new();
-    task.remove_tag(&tag, &mut ops)?;
+    super::with_on_modify(&uuid, task, &mut ops, |task, ops| {
+        task.remove_tag(&tag, ops)?;
+        Ok(())
+    })?;
 
     replica
         .commit_operations(ops)

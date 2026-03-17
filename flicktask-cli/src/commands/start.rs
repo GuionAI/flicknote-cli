@@ -19,7 +19,10 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: StartArgs) -> Re
         .with_context(|| format!("Task {} not found", args.id))?;
 
     let mut ops = Operations::new();
-    task.start(&mut ops)?;
+    super::with_on_modify(&uuid, task, &mut ops, |task, ops| {
+        task.start(ops)?;
+        Ok(())
+    })?;
 
     replica
         .commit_operations(ops)

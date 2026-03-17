@@ -1076,6 +1076,7 @@ dependencies = [
  "serde",
  "serde_json",
  "taskchampion",
+ "tempfile",
  "tokio",
  "toml",
  "uuid",

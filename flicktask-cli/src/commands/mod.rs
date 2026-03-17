@@ -1,14 +1,83 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use taskchampion::{PowerSyncStorage, Replica};
+use taskchampion::{Operations, PowerSyncStorage, Replica, Task, Uuid};
 
 use crate::config::FlicktaskConfig;
+
+/// Structural fields that hooks must not override via raw set_value.
+/// Combined with `tw_json::TIMESTAMP_KEYS` to form the full skip set.
+const STRUCTURAL_SKIP: &[&str] = &[
+    "uuid",
+    "tags",
+    "annotations",
+    "urgency",
+    "id",
+    "parent",
+    "status",
+    "description",
+    "priority",
+    "project",
+];
+
+/// Apply UDA fields added/changed by a hook back to the task via `set_value`.
+/// Only processes scalar string UDAs (branch, project_path, spawner, pr_id, etc.).
+/// Skips structural fields, timestamps, and core task fields — hooks cannot
+/// override description/status/priority/parent via this path (they must use typed setters).
+pub fn apply_hook_fields(
+    final_json: &serde_json::Value,
+    pre_json: &serde_json::Value,
+    task: &mut Task,
+    ops: &mut Operations,
+) -> anyhow::Result<()> {
+    let Some(obj) = final_json.as_object() else {
+        return Ok(());
+    };
+    for (key, value) in obj {
+        if STRUCTURAL_SKIP.contains(&key.as_str())
+            || crate::tw_json::TIMESTAMP_KEYS.contains(&key.as_str())
+        {
+            continue;
+        }
+        let Some(str_val) = value.as_str() else {
+            eprintln!(
+                "flicktask: hook returned non-string value for {key:?} — skipping (hooks must use string values for UDAs)"
+            );
+            continue;
+        };
+        let pre_val = pre_json.get(key).and_then(|v| v.as_str());
+        if pre_val != Some(str_val) {
+            task.set_value(key, Some(str_val.to_string()), ops)?;
+        }
+    }
+    Ok(())
+}
+
+/// Snapshot → mutate → run on-modify hook → apply hook fields back.
+///
+/// Extracts the repeated pattern from all single-task modify commands.
+pub fn with_on_modify<F>(
+    uuid: &Uuid,
+    task: &mut Task,
+    ops: &mut Operations,
+    mutate: F,
+) -> anyhow::Result<()>
+where
+    F: FnOnce(&mut Task, &mut Operations) -> anyhow::Result<()>,
+{
+    let uuid_str = uuid.to_string();
+    let original_json = crate::tw_json::task_to_tw_json(&uuid_str, task);
+    mutate(task, ops)?;
+    let modified_json = crate::tw_json::task_to_tw_json(&uuid_str, task);
+    let final_json = crate::hooks::run_on_modify(&original_json, &modified_json)?;
+    apply_hook_fields(&final_json, &modified_json, task, ops)
+}
 
 pub mod add;
 pub mod annotate;
 pub mod delete;
 pub mod done;
 pub mod edit;
+pub mod export;
 pub mod get;
 pub mod import;
 pub mod list;
@@ -67,6 +136,8 @@ pub enum Commands {
     Undo(undo::UndoArgs),
     /// Import tasks from taskwarrior export JSON (piped via stdin)
     Import(import::ImportArgs),
+    /// Export tasks as taskwarrior-compatible JSON
+    Export(export::ExportArgs),
 }
 
 pub async fn dispatch(
@@ -91,5 +162,6 @@ pub async fn dispatch(
         Commands::Plan(args) => plan::run(replica, args).await,
         Commands::Undo(args) => undo::run(replica, args).await,
         Commands::Import(args) => import::run(replica, args).await,
+        Commands::Export(args) => export::run(replica, args).await,
     }
 }

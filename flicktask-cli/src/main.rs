@@ -9,9 +9,13 @@ mod config;
 #[cfg(feature = "powersync")]
 mod display;
 #[cfg(feature = "powersync")]
+mod hooks;
+#[cfg(feature = "powersync")]
 mod ids;
 #[cfg(feature = "powersync")]
 mod task_tree;
+#[cfg(feature = "powersync")]
+mod tw_json;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {

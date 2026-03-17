@@ -145,6 +145,14 @@ cat plan.md | flicktask plan a1b2c3d4 --replace
 task export | flicktask import
 ```
 
+## Exporting
+
+```bash
+flicktask export                    # all pending tasks as taskwarrior-compatible JSON
+flicktask export --completed        # completed tasks
+flicktask export <id>               # single task
+```
+
 ## ID Format
 
 Task IDs are 8-character hex strings (e.g. `a1b2c3d4`). Full UUIDs are also accepted. IDs are printed after every create/edit operation.

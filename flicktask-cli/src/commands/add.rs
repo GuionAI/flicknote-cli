@@ -79,6 +79,11 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: AddArgs) -> Resu
         task.set_value(key, Some(value.to_string()), &mut ops)?;
     }
 
+    // Run on-add hooks — may enrich task (e.g. add branch, project_path)
+    let task_json = crate::tw_json::task_to_tw_json(&uuid.to_string(), &task);
+    let final_json = crate::hooks::run_on_add(&task_json)?;
+    super::apply_hook_fields(&final_json, &task_json, &mut task, &mut ops)?;
+
     replica
         .commit_operations(ops)
         .await

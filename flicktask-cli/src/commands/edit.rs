@@ -58,37 +58,33 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: EditArgs) -> Res
         .with_context(|| format!("Task {} not found", args.id))?;
 
     let mut ops = Operations::new();
-
-    if let Some(desc) = args.description {
-        task.set_description(desc, &mut ops)?;
-    }
-
-    if let Some(due_str) = args.due {
-        let due = parse_date(&due_str)?;
-        task.set_due(Some(due), &mut ops)?;
-    }
-
-    if let Some(priority) = args.priority {
-        task.set_priority(priority, &mut ops)?;
-    }
-
-    if let Some(wait_str) = args.wait {
-        let wait = parse_date(&wait_str)?;
-        task.set_wait(Some(wait), &mut ops)?;
-    }
-
-    if let Some(project) = args.project {
-        task.set_value("project", Some(project), &mut ops)?;
-    }
-
-    if let Some(p_uuid) = parent_uuid {
-        task.set_value("parent", Some(p_uuid.to_string()), &mut ops)?;
-    }
-
-    for kv in args.set {
-        let (key, value) = parse_kv(&kv)?;
-        task.set_value(key, Some(value.to_string()), &mut ops)?;
-    }
+    super::with_on_modify(&uuid, task, &mut ops, |task, ops| {
+        if let Some(desc) = args.description {
+            task.set_description(desc, ops)?;
+        }
+        if let Some(due_str) = args.due {
+            let due = parse_date(&due_str)?;
+            task.set_due(Some(due), ops)?;
+        }
+        if let Some(priority) = args.priority {
+            task.set_priority(priority, ops)?;
+        }
+        if let Some(wait_str) = args.wait {
+            let wait = parse_date(&wait_str)?;
+            task.set_wait(Some(wait), ops)?;
+        }
+        if let Some(project) = args.project {
+            task.set_value("project", Some(project), ops)?;
+        }
+        if let Some(p_uuid) = parent_uuid {
+            task.set_value("parent", Some(p_uuid.to_string()), ops)?;
+        }
+        for kv in args.set {
+            let (key, value) = parse_kv(&kv)?;
+            task.set_value(key, Some(value.to_string()), ops)?;
+        }
+        Ok(())
+    })?;
 
     replica
         .commit_operations(ops)

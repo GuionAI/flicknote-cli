@@ -10,7 +10,7 @@ Rust workspace with 5 crates:
 - **flicknote-core** — Shared library (db, config, schema, types, session, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)
-- **flicktask-cli** — CLI binary (`flicktask`): tree-based task management via TaskChampion + PowerSync. Commands: add, get, done, delete, start, stop, edit, tag, untag, annotate, move, list, tree, plan, undo, import
+- **flicktask-cli** — CLI binary (`flicktask`): tree-based task management via TaskChampion + PowerSync. Commands: add, get, done, delete, start, stop, edit, tag, untag, annotate, move, list, tree, plan, undo, import, export
 
 ## Build & Test
 
@@ -64,3 +64,14 @@ chore(scope): description
 ```
 
 Scopes: `cli`, `core`, `auth`, `sync`, `task`, `ci`
+
+## Hook Protocol
+
+flicktask implements the taskwarrior-compatible hook protocol.
+
+- **Hooks dir:** `~/.config/flicktask/hooks/`
+- **on-add-\*** — triggered by `flicktask add`
+- **on-modify-\*** — triggered by `edit`, `done`, `delete`, `start`, `stop`, `tag`, `untag`, `annotate`, `move`
+- Hooks run in alphabetical order. Non-zero exit aborts the operation.
+- Same stdin/stdout JSON protocol as taskwarrior — ttal's hook shims work unchanged.
+- Install ttal hooks with: `ttal doctor --fix` (once ttal is updated to target flicktask hooks dir too)

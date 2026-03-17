@@ -39,6 +39,14 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: DoneArgs) -> Res
     };
 
     let mut ops = Operations::new();
+
+    // Snapshot primary only if it's actually pending — hook fires for primary only, and only
+    // when the mutation actually happens (avoids spurious on-modify for no-op done calls).
+    let primary_original_json = all_tasks
+        .get(&uuid)
+        .filter(|t| matches!(t.get_status(), Status::Pending))
+        .map(|t| crate::tw_json::task_to_tw_json(&uuid.to_string(), t));
+
     for task_uuid in &to_mark {
         if let Some(task) = all_tasks
             .get_mut(task_uuid)
@@ -46,6 +54,13 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: DoneArgs) -> Res
         {
             task.done(&mut ops)?;
         }
+    }
+
+    // Run hook for primary task after its mutation (only if it was pending before)
+    if let (Some(original_json), Some(task)) = (primary_original_json, all_tasks.get_mut(&uuid)) {
+        let modified_json = crate::tw_json::task_to_tw_json(&uuid.to_string(), task);
+        let final_json = crate::hooks::run_on_modify(&original_json, &modified_json)?;
+        super::apply_hook_fields(&final_json, &modified_json, task, &mut ops)?;
     }
 
     replica

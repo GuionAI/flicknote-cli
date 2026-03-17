@@ -57,13 +57,15 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: MoveArgs) -> Res
         .with_context(|| format!("Task {} not found", args.id))?;
 
     let mut ops = Operations::new();
-
-    if let Some(p_uuid) = new_parent_uuid {
-        task.set_value("parent", Some(p_uuid.to_string()), &mut ops)?;
-    } else {
-        // Clear parent (move to root)
-        task.set_value("parent", None, &mut ops)?;
-    }
+    super::with_on_modify(&uuid, task, &mut ops, |task, ops| {
+        if let Some(p_uuid) = new_parent_uuid {
+            task.set_value("parent", Some(p_uuid.to_string()), ops)?;
+        } else {
+            // Clear parent (move to root)
+            task.set_value("parent", None, ops)?;
+        }
+        Ok(())
+    })?;
 
     replica
         .commit_operations(ops)

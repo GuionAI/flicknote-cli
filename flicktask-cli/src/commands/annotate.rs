@@ -38,13 +38,16 @@ pub async fn run(replica: &mut Replica<PowerSyncStorage>, args: AnnotateArgs) ->
         .with_context(|| format!("Task {} not found", args.id))?;
 
     let mut ops = Operations::new();
-    task.add_annotation(
-        Annotation {
-            entry: taskchampion::chrono::Utc::now(),
-            description: message,
-        },
-        &mut ops,
-    )?;
+    super::with_on_modify(&uuid, task, &mut ops, |task, ops| {
+        task.add_annotation(
+            Annotation {
+                entry: taskchampion::chrono::Utc::now(),
+                description: message,
+            },
+            ops,
+        )?;
+        Ok(())
+    })?;
 
     replica
         .commit_operations(ops)
