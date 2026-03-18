@@ -13,6 +13,14 @@ pub(crate) struct ProjectArgs {
 enum ProjectCommands {
     /// List projects
     List(ListArgs),
+    /// Create a new project
+    Add(AddProjectArgs),
+}
+
+#[derive(Args)]
+struct AddProjectArgs {
+    /// Project name
+    name: String,
 }
 
 #[derive(Args)]
@@ -28,7 +36,19 @@ struct ListArgs {
 pub(crate) fn run(db: &dyn NoteDb, args: &ProjectArgs) -> Result<(), CliError> {
     match &args.command {
         ProjectCommands::List(a) => list(db, a),
+        ProjectCommands::Add(a) => add(db, a),
     }
+}
+
+fn add(db: &dyn NoteDb, args: &AddProjectArgs) -> Result<(), CliError> {
+    if db.find_project_by_name(&args.name)?.is_some() {
+        return Err(CliError::ProjectAlreadyExists {
+            name: args.name.clone(),
+        });
+    }
+    let id = db.create_project(&args.name)?;
+    println!("Created project \"{}\" ({}).", args.name, &id[..8]);
+    Ok(())
 }
 
 fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {

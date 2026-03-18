@@ -4,14 +4,14 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::hooks;
 
-use super::add::resolve_or_create_project;
+use super::add::resolve_project;
 use super::util::resolve_note_id;
 
 #[derive(Args)]
 pub(crate) struct ModifyArgs {
     /// Note ID (full UUID or prefix)
     id: String,
-    /// Move note to this project (creates project if it doesn't exist)
+    /// Move note to this project
     #[arg(short = 'p', long = "project")]
     project: Option<String>,
 }
@@ -29,7 +29,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result
     };
 
     let old_project_id = old_note.project_id.clone();
-    let new_project_id = resolve_or_create_project(db, project_name)?;
+    let new_project_id = resolve_project(db, project_name)?;
 
     // No-op if already in same project
     if old_project_id.as_deref() == Some(new_project_id.as_str()) {

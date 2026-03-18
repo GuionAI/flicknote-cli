@@ -5,14 +5,14 @@ use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use super::add::resolve_or_create_project;
+use super::add::resolve_project;
 use super::util::resolve_project_arg;
 
 #[derive(Args)]
 pub(crate) struct ImportArgs {
     /// Path to a .md file or directory of .md files
     path: PathBuf,
-    /// Assign to project by name (creates if it doesn't exist)
+    /// Assign to project by name
     #[arg(long)]
     project: Option<String>,
 }
@@ -28,7 +28,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
     // Resolve project if specified
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_or_create_project(db, name)?)
+        Some(resolve_project(db, name)?)
     } else {
         None
     };

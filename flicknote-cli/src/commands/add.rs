@@ -16,7 +16,7 @@ use super::util::resolve_project_arg;
 pub(crate) struct AddArgs {
     /// Note content or URL. Reads from stdin if omitted.
     value: Option<String>,
-    /// Assign to project by name (creates project if it doesn't exist)
+    /// Assign to project by name
     #[arg(long)]
     project: Option<String>,
 }
@@ -62,7 +62,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
 
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_or_create_project(db, name)?)
+        Some(resolve_project(db, name)?)
     } else {
         None
     };
@@ -208,12 +208,12 @@ pub(crate) fn build_hook_note(
     }
 }
 
-/// Resolve project by name, creating it if it doesn't exist.
-pub(crate) fn resolve_or_create_project(db: &dyn NoteDb, name: &str) -> Result<String, CliError> {
-    if let Some(id) = db.find_project_by_name(name)? {
-        return Ok(id);
+/// Resolve project by name. Returns an error with a hint if the project doesn't exist.
+pub(crate) fn resolve_project(db: &dyn NoteDb, name: &str) -> Result<String, CliError> {
+    match db.find_project_by_name(name)? {
+        Some(id) => Ok(id),
+        None => Err(CliError::ProjectNotFound {
+            name: name.to_string(),
+        }),
     }
-    let id = db.create_project(name)?;
-    println!("Created project \"{name}\".");
-    Ok(id)
 }

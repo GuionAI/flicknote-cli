@@ -8,6 +8,14 @@ pub enum CliError {
     #[error("Note not found: {id}")]
     NoteNotFound { id: String },
 
+    #[error(
+        "project \"{name}\" not found — create it first with: flicknote project add \"{name}\""
+    )]
+    ProjectNotFound { name: String },
+
+    #[error("project \"{name}\" already exists")]
+    ProjectAlreadyExists { name: String },
+
     #[error("Auth {operation} failed: {description}")]
     Auth {
         operation: String,

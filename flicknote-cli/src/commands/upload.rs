@@ -5,7 +5,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::hooks;
 use std::path::PathBuf;
 
-use crate::commands::add::{build_hook_note, resolve_or_create_project};
+use crate::commands::add::{build_hook_note, resolve_project};
 use crate::commands::upload_util::{
     cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file_blocking,
 };
@@ -49,7 +49,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
     .to_string();
 
     let project_id = if let Some(ref name) = resolve_project_arg(&args.project) {
-        Some(resolve_or_create_project(db, name)?)
+        Some(resolve_project(db, name)?)
     } else {
         None
     };
