@@ -1,5 +1,5 @@
 ---
-name: flicknote-cli
+name: flicknote
 description: "FlickNote CLI for managing notes — add, list, get, replace, and organize by project"
 ---
 

@@ -1,5 +1,5 @@
 ---
-name: flicktask-cli
+name: flicktask
 description: "FlickTask CLI for tree-based task management via TaskChampion + PowerSync"
 ---
 
