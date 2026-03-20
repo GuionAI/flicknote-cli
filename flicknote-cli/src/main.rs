@@ -1,6 +1,6 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use flicknote_core::backend::NoteDb;
 #[cfg(feature = "powersync")]
 use flicknote_core::backend::SqliteBackend;
@@ -13,7 +13,6 @@ use flicknote_core::pg::PgBackend;
 mod api_client;
 mod commands;
 mod markdown;
-mod tui;
 mod utils;
 
 #[derive(Parser)]
@@ -25,6 +24,14 @@ mod utils;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Launch interactive TUI
+    #[arg(short = 't', long = "tui")]
+    tui: bool,
+
+    /// Project filter (used with -t)
+    #[arg(long = "project", requires = "tui")]
+    project: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -49,8 +56,6 @@ enum Commands {
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
     Logout,
-    /// Interactive TUI for browsing notes
-    Tui,
     /// Manage sync daemon
     Sync(commands::sync::SyncArgs),
     /// Import markdown files as notes
@@ -94,17 +99,24 @@ fn run() -> Result<(), CliError> {
         }
     }
 
-    if let Ok(pg_url) = std::env::var("FLICKNOTE_PG_URL") {
-        // Reject unsupported commands before attempting connection
-        if let Some(ref cmd) = cli.command {
-            let unsupported = matches!(cmd, Commands::Tui);
-            if unsupported {
-                return Err(CliError::Other(
-                    "This command is not available in PG mode (FLICKNOTE_PG_URL is set)".into(),
-                ));
-            }
+    if cli.tui {
+        let mut cmd = std::process::Command::new("flicknote-tui");
+        if let Some(ref project) = cli.project {
+            cmd.arg("--project").arg(project);
         }
+        let status = cmd.status().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                CliError::Other(
+                    "flicknote-tui not found — install it with: make install-tui".into(),
+                )
+            } else {
+                CliError::Other(format!("failed to launch flicknote-tui: {e}"))
+            }
+        })?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
 
+    if let Ok(pg_url) = std::env::var("FLICKNOTE_PG_URL") {
         let user_id = std::env::var("FLICKNOTE_USER_ID").map_err(|_| {
             CliError::Other(
                 "FLICKNOTE_USER_ID must be set when using FLICKNOTE_PG_URL \
@@ -118,7 +130,7 @@ fn run() -> Result<(), CliError> {
             ))
         })?;
         let backend = PgBackend::connect(&pg_url, user_id)?;
-        dispatch(&cli, &config, &backend, true)
+        dispatch(&cli, &config, &backend)
     } else {
         #[cfg(not(feature = "powersync"))]
         return Err(CliError::Other(
@@ -129,17 +141,17 @@ fn run() -> Result<(), CliError> {
             let db = Database::open_local(&config)?;
             let user_id = flicknote_core::session::get_user_id(&config)?;
             let backend = SqliteBackend { db, user_id };
-            dispatch(&cli, &config, &backend, false)
+            dispatch(&cli, &config, &backend)
         }
     }
 }
 
-fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Result<(), CliError> {
+fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
-        if pg_mode {
-            return Err(CliError::Other("TUI not supported in PG mode".into()));
-        }
-        return commands::tui::run(config, db);
+        Cli::command()
+            .print_help()
+            .map_err(|e| CliError::Other(e.to_string()))?;
+        return Ok(());
     };
 
     match command {
@@ -159,7 +171,6 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb, pg_mode: bool) -> Resul
         Commands::Open(args) => commands::open::run(db, config, args),
         Commands::Import(args) => commands::import::run(db, config, args),
         Commands::Upload(args) => commands::upload::run(db, config, args),
-        Commands::Tui => commands::tui::run(config, db),
         Commands::Api(args) => commands::api::run(config, args),
         // Login/Logout/Sync are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),

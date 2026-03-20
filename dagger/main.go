@@ -37,6 +37,16 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 		return nil, fmt.Errorf("build flicknote-cli: %w", err)
 	}
 
+	// Build Go TUI binary in a separate stage
+	goContainer := dag.Container().
+		From("golang:1.24-bookworm").
+		WithDirectory("/src/flicknote-tui", source.Directory("flicknote-tui")).
+		WithWorkdir("/src/flicknote-tui").
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithEnvVariable("GOOS", "linux").
+		WithEnvVariable("GOARCH", "amd64").
+		WithExec([]string{"go", "build", "-o", "/out/flicknote-tui", "."})
+
 	// Minimal image — binaries only, used as a copy source by other builds
 	return dag.Container().
 		From("alpine:3.23").
@@ -48,7 +58,8 @@ func (m *FlicknoteCli) Build(ctx context.Context, source *dagger.Directory) (*da
 			"/usr/local/bin/flicktask",
 			builder.File("/app/target/x86_64-unknown-linux-musl/release/flicktask"),
 		).
-		WithExec([]string{"chmod", "+x", "/usr/local/bin/flicknote", "/usr/local/bin/flicktask"}), nil
+		WithFile("/usr/local/bin/flicknote-tui", goContainer.File("/out/flicknote-tui")).
+		WithExec([]string{"chmod", "+x", "/usr/local/bin/flicknote", "/usr/local/bin/flicktask", "/usr/local/bin/flicknote-tui"}), nil
 }
 
 // Publish builds and pushes the image to the registry with the given tags.

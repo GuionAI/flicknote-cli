@@ -90,10 +90,13 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
     if args.json {
         let json_output = serde_json::json!({
             "id": note.id,
+            "type": note.r#type,
             "title": note.title,
             "project": project_name,
             "summary": note.summary,
             "content": note.content,
+            "created_at": note.created_at,
+            "updated_at": note.updated_at,
         });
         println!(
             "{}",

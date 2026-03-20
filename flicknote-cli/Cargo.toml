@@ -26,8 +26,6 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 mime_guess = "2"
 futures-util = "0.3"
 serde = { workspace = true }
-ratatui = "0.29"
-crossterm = "0.28"
 pulldown-cmark = { version = "0.13.1", default-features = false }
 sha2 = "0.10"
 open = "5"
