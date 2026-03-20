@@ -7,8 +7,8 @@ use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
 
 use super::upload_util::{
-    cleanup_uploaded_file, is_uploadable_file, mime_from_extension, note_type_for_extension,
-    upload_file_blocking,
+    cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, mime_from_extension,
+    note_type_for_extension, upload_file_blocking,
 };
 use super::util::resolve_project_arg;
 
@@ -25,7 +25,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let content = match &args.value {
+    let mut content = match &args.value {
         Some(v) => v.to_owned(),
         None => {
             if std::io::stdin().is_terminal() {
@@ -50,14 +50,24 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
     let looks_like_file_path =
         from_arg && !is_url_arg && path.extension().is_some() && path.file_name().is_some();
 
-    if from_arg && looks_like_file_path && !is_uploadable_file(&content) {
+    let is_text_file = from_arg && looks_like_file_path && is_readable_text_file(&content);
+
+    if from_arg && looks_like_file_path && !is_uploadable_file(&content) && !is_text_file {
         return Err(CliError::Other(format!(
             "File not found or unsupported: {}",
             content
         )));
     }
 
-    let is_file = from_arg && is_uploadable_file(&content);
+    // Read text file content into `content` so the rest of the function treats it as normal text
+    if is_text_file {
+        let path = content.clone();
+        content = std::fs::read_to_string(&path)
+            .map_err(|e| CliError::Other(format!("Failed to read {}: {}", path, e)))?;
+        content = content.trim_end().to_string();
+    }
+
+    let is_file = from_arg && !is_text_file && is_uploadable_file(&content);
     let is_url = !is_file && is_url_arg;
 
     let effective_project = resolve_project_arg(&args.project);
@@ -142,7 +152,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             now: &now,
         })?;
     } else {
-        let title = crate::utils::extract_title(&content);
+        let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let note_for_hook = build_hook_note(
             &id,
             db.user_id(),
@@ -150,7 +160,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             "ai_queued",
             project_id.clone(),
             title.clone(),
-            Some(content.clone()),
+            Some(stripped_content.clone()),
             None,
             &now,
         );
@@ -162,7 +172,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             note_type: "normal",
             status: "ai_queued",
             title: title_ref,
-            content: Some(&content),
+            content: Some(&stripped_content),
             metadata: None,
             project_id: project_id.as_deref(),
             now: &now,

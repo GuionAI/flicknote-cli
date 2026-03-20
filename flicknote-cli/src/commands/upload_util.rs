@@ -84,13 +84,22 @@ fn extension_of(filename: &str) -> String {
         .to_lowercase()
 }
 
-pub(crate) fn is_uploadable_file(value: &str) -> bool {
+fn file_has_extension(value: &str, allowed: &[&str]) -> bool {
     let path = std::path::Path::new(value);
     if !path.exists() || !path.is_file() {
         return false;
     }
-    let ext = extension_of(value);
-    UPLOADABLE_EXTENSIONS.contains(&ext.as_str())
+    allowed.contains(&extension_of(value).as_str())
+}
+
+pub(crate) fn is_uploadable_file(value: &str) -> bool {
+    file_has_extension(value, UPLOADABLE_EXTENSIONS)
+}
+
+const READABLE_TEXT_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
+
+pub(crate) fn is_readable_text_file(value: &str) -> bool {
+    file_has_extension(value, READABLE_TEXT_EXTENSIONS)
 }
 
 #[cfg(test)]
@@ -203,5 +212,64 @@ mod tests {
         assert!(!is_uploadable_file(""));
         assert!(!is_uploadable_file("just some text"));
         assert!(!is_uploadable_file("https://example.com"));
+    }
+
+    #[test]
+    fn test_md_file_detected_as_readable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("notes.md");
+        std::fs::write(&md_path, "# My Note\n\nSome content.").unwrap();
+
+        let path_str = md_path.to_str().unwrap();
+        assert!(is_readable_text_file(path_str));
+        assert!(!is_uploadable_file(path_str));
+    }
+
+    #[test]
+    fn test_txt_file_detected_as_readable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let txt_path = dir.path().join("notes.txt");
+        std::fs::write(&txt_path, "Plain text content.").unwrap();
+
+        let path_str = txt_path.to_str().unwrap();
+        assert!(is_readable_text_file(path_str));
+        assert!(!is_uploadable_file(path_str));
+    }
+
+    #[test]
+    fn test_png_not_readable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_path = dir.path().join("image.png");
+        std::fs::write(&png_path, [0x89, 0x50, 0x4E, 0x47]).unwrap();
+
+        let path_str = png_path.to_str().unwrap();
+        assert!(!is_readable_text_file(path_str));
+        assert!(is_uploadable_file(path_str));
+    }
+
+    #[test]
+    fn test_nonexistent_md_not_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.md");
+        assert!(!is_readable_text_file(missing.to_str().unwrap()));
+    }
+
+    #[test]
+    fn test_markdown_extension_detected_as_readable_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notes.markdown");
+        std::fs::write(&path, "# Note\n\nContent.").unwrap();
+
+        let path_str = path.to_str().unwrap();
+        assert!(is_readable_text_file(path_str));
+        assert!(!is_uploadable_file(path_str));
+    }
+
+    #[test]
+    fn test_nonexistent_md_path_errors_not_treated_as_content() {
+        // A nonexistent .md path must NOT be detected as a readable text file.
+        // This ensures add.rs hits the "File not found or unsupported" error path
+        // rather than silently treating the path string as note content.
+        assert!(!is_readable_text_file("nonexistent_note_12345.md"));
     }
 }

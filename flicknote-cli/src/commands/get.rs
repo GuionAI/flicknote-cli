@@ -30,12 +30,17 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
     // Tree view or section extraction — both need parsed markdown
     if args.tree || args.section.is_some() {
         let full_id = db.resolve_note_id(&args.id)?;
-        let content = db
-            .find_note_content(&full_id)?
-            .ok_or_else(|| CliError::Other("Note has no content".into()))?;
-        let doc = crate::markdown::parse_markdown(&content);
+        let note = db.find_note(&full_id)?;
+        let content = note.content.as_deref().unwrap_or("");
 
         if args.tree {
+            // Synthesize H1 from title for tree display, since stored content no longer has H1
+            let display_content = if let Some(ref t) = note.title {
+                format!("# {t}\n\n{content}")
+            } else {
+                content.to_string()
+            };
+            let doc = crate::markdown::parse_markdown(&display_content);
             let tree = doc.build_tree();
 
             if tree.is_empty() {
@@ -50,6 +55,14 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
             return Ok(());
         }
 
+        // --section: operates on raw stored content (no H1 synthesis needed — sections are H2+)
+        // H1 is stored separately as title to avoid duplication in stored content
+        if note.content.is_none() {
+            return Err(CliError::Other(
+                "This note has no text content (link or file note)".into(),
+            ));
+        }
+        let doc = crate::markdown::parse_markdown(content);
         let section_id = args.section.as_ref().unwrap();
         let bounds = super::util::find_section(&doc, section_id, &args.id)?;
         let body_start = content[bounds.start..]

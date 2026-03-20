@@ -44,7 +44,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let title = crate::utils::extract_title(&content);
+        let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let created_at = file_created_time(file);
 
         db.insert_note(&InsertNoteReq {
@@ -52,7 +52,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
             note_type: "normal",
             status: "ai_queued",
             title: title.as_deref(),
-            content: Some(&content),
+            content: Some(&stripped_content),
             metadata: None,
             project_id: project_id.as_deref(),
             now: &created_at,
