@@ -94,6 +94,31 @@ impl Config {
             web_url = Some(v);
         }
 
+        // Fallback: per-field built-in defaults if nothing else configured that field.
+        // Each field is guarded independently so a user can override just one env var
+        // (e.g. FLICKNOTE_POWERSYNC_URL) without losing their custom value when
+        // other fields fall back to the built-in set.
+        if supabase_url.is_empty()
+            || supabase_anon_key.is_empty()
+            || powersync_url.is_empty()
+            || api_url.is_empty()
+        {
+            let env = std::env::var("FLICKNOTE_ENV").unwrap_or_else(|_| "dev".into());
+            let (s_url, s_key, ps_url, a_url) = builtin_defaults(&env);
+            if supabase_url.is_empty() {
+                supabase_url = s_url.into();
+            }
+            if supabase_anon_key.is_empty() {
+                supabase_anon_key = s_key.into();
+            }
+            if powersync_url.is_empty() {
+                powersync_url = ps_url.into();
+            }
+            if api_url.is_empty() {
+                api_url = a_url.into();
+            }
+        }
+
         let paths = ConfigPaths {
             config_dir,
             data_dir,
@@ -125,6 +150,9 @@ impl Config {
     }
 
     /// Validate that required fields are set. Call before operations that need them.
+    /// Under normal usage built-in defaults fill these fields, but explicit empty-string
+    /// env vars (e.g. `FLICKNOTE_SUPABASE_URL=`) or a broken config.json can still
+    /// result in empty values.
     pub fn validate(&self) -> Result<(), crate::error::CliError> {
         if self.supabase_url.is_empty() {
             return Err(crate::error::CliError::Other(
@@ -144,5 +172,139 @@ impl Config {
             ));
         }
         Ok(())
+    }
+}
+
+fn builtin_defaults(env: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match env {
+        "prod" => (
+            "https://auth.flicknote.app",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFocGNqYW1maGJpb3BqZG5laW5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA0NTc1NDIsImV4cCI6MjA2NjAzMzU0Mn0.g6B2UohS8Zw_mrsDljAB7n6feUTvpmMVvvsf7VMRXA4",
+            "https://sync.flicknote.app",
+            "https://api.flicknote.app/api/v1",
+        ),
+        _ => (
+            "https://dev-auth.flicknote.app",
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1NTM1NTg4LCJleHAiOjE5MjMyMTU1ODh9.7ErMPvghlVm6mew-IKjSShP1Lf6wTCbNgs9ufuh3yqo",
+            "https://dev-sync.flicknote.app",
+            "https://dev-api.flicknote.app/api/v1",
+        ),
+    }
+}
+
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    // Env vars are process-wide — use a mutex to prevent test interference
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_clean_env<F: FnOnce()>(flicknote_env: Option<&str>, f: F) {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let keys = [
+            "FLICKNOTE_ENV",
+            "FLICKNOTE_SUPABASE_URL",
+            "FLICKNOTE_SUPABASE_KEY",
+            "FLICKNOTE_POWERSYNC_URL",
+            "FLICKNOTE_API_URL",
+            "FLICKNOTE_WEB_URL",
+        ];
+        let saved: Vec<_> = keys.iter().map(|k| std::env::var(k).ok()).collect();
+
+        for key in &keys {
+            unsafe { std::env::remove_var(key) };
+        }
+        if let Some(env) = flicknote_env {
+            unsafe { std::env::set_var("FLICKNOTE_ENV", env) };
+        }
+
+        f();
+
+        for (key, val) in keys.iter().zip(saved) {
+            match val {
+                Some(v) => unsafe { std::env::set_var(key, v) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+
+    #[test]
+    fn test_builtin_defaults_dev() {
+        let (url, key, ps, api) = builtin_defaults("dev");
+        assert_eq!(url, "https://dev-auth.flicknote.app");
+        assert_eq!(ps, "https://dev-sync.flicknote.app");
+        assert_eq!(api, "https://dev-api.flicknote.app/api/v1");
+        assert!(!key.is_empty());
+    }
+
+    #[test]
+    fn test_builtin_defaults_prod() {
+        let (url, key, ps, api) = builtin_defaults("prod");
+        assert_eq!(url, "https://auth.flicknote.app");
+        assert_eq!(ps, "https://sync.flicknote.app");
+        assert_eq!(api, "https://api.flicknote.app/api/v1");
+        assert!(!key.is_empty());
+    }
+
+    #[test]
+    fn test_builtin_defaults_unknown_falls_back_to_dev() {
+        let (url, _, _, _) = builtin_defaults("staging");
+        assert_eq!(url, "https://dev-auth.flicknote.app");
+    }
+
+    #[test]
+    fn test_env_var_overrides_builtin() {
+        with_clean_env(None, || {
+            unsafe { std::env::set_var("FLICKNOTE_SUPABASE_URL", "https://custom.example.com") };
+            unsafe {
+                std::env::set_var(
+                    "XDG_CONFIG_HOME",
+                    std::env::temp_dir()
+                        .join("flicknote-test-cfg")
+                        .to_str()
+                        .unwrap(),
+                )
+            };
+            unsafe {
+                std::env::set_var(
+                    "XDG_DATA_HOME",
+                    std::env::temp_dir()
+                        .join("flicknote-test-data")
+                        .to_str()
+                        .unwrap(),
+                )
+            };
+            let cfg = Config::load().expect("Config::load should succeed");
+            assert_eq!(cfg.supabase_url, "https://custom.example.com");
+        });
+    }
+
+    #[test]
+    fn test_config_file_overrides_builtin() {
+        with_clean_env(None, || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let cfg_dir = tmp.path().join("flicknote");
+            std::fs::create_dir_all(&cfg_dir).unwrap();
+            let cfg_file = cfg_dir.join("config.json");
+            std::fs::write(
+                &cfg_file,
+                r#"{"supabaseUrl":"https://file.example.com","supabaseAnonKey":"key","powersyncUrl":"https://ps.example.com","apiUrl":"https://api.example.com/v1"}"#,
+            )
+            .unwrap();
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+            unsafe {
+                std::env::set_var(
+                    "XDG_DATA_HOME",
+                    std::env::temp_dir()
+                        .join("flicknote-test-data2")
+                        .to_str()
+                        .unwrap(),
+                )
+            };
+            let cfg = Config::load().expect("Config::load should succeed");
+            assert_eq!(cfg.supabase_url, "https://file.example.com");
+        });
     }
 }

@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: macos-13
+            target: x86_64-apple-darwin
+            suffix: Darwin_x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: Darwin_arm64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            suffix: Linux_x86_64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev musl-tools
+
+      - name: Set bindgen clang args (Linux)
+        if: runner.os == 'Linux'
+        run: echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include/x86_64-linux-musl" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p flicknote-cli -p flicktask-cli -p flicknote-sync
+
+      - name: Package
+        run: |
+          ARCHIVE="flicknote_${GITHUB_REF_NAME}_${{ matrix.suffix }}.tar.gz"
+          tar -czf "$ARCHIVE" -C target/${{ matrix.target }}/release flicknote flicktask flicknote-sync
+          shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.suffix }}
+          path: |
+            flicknote_*.tar.gz
+            flicknote_*.tar.gz.sha256
+
+  release:
+    name: Upload to R2 + Update Homebrew
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Verify SHA256 checksums
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for suffix in Darwin_arm64 Darwin_x86_64 Linux_x86_64; do
+            expected=$(awk '{print $1}' "flicknote_${TAG}_${suffix}.tar.gz.sha256")
+            actual=$(shasum -a 256 "flicknote_${TAG}_${suffix}.tar.gz" | awk '{print $1}')
+            if [ "$expected" != "$actual" ]; then
+              echo "SHA256 mismatch for ${suffix}: expected=$expected actual=$actual"
+              exit 1
+            fi
+            echo "OK ${suffix}: ${actual}"
+          done
+
+      - name: Install rclone
+        uses: rclone/setup-rclone@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to R2
+        env:
+          RCLONE_CONFIG_R2_TYPE: s3
+          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
+          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          RCLONE_CONFIG_R2_ACL: private
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          rclone copy "flicknote_${TAG}_Darwin_arm64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
+          rclone copy "flicknote_${TAG}_Darwin_x86_64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
+          rclone copy "flicknote_${TAG}_Linux_x86_64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          R2_BASE_URL: https://releases.flicknote.app
+        run: |
+          set -e
+
+          DARWIN_ARM64_SHA=$(awk '{print $1}' "flicknote_${TAG}_Darwin_arm64.tar.gz.sha256")
+          DARWIN_X86_SHA=$(awk '{print $1}' "flicknote_${TAG}_Darwin_x86_64.tar.gz.sha256")
+          LINUX_X86_SHA=$(awk '{print $1}' "flicknote_${TAG}_Linux_x86_64.tar.gz.sha256")
+
+          VERSION="${TAG#v}"
+          BASE_URL="${R2_BASE_URL}/flicknote-cli/${TAG}"
+
+          cat > flicknote.rb <<~FORMULA
+          class Flicknote < Formula
+            desc "Local-first note and task management CLI with cloud sync"
+            homepage "https://github.com/guionai/flicknote-cli"
+            license "MIT"
+            version "${VERSION}"
+
+            on_macos do
+              on_arm do
+                url "${BASE_URL}/flicknote_${TAG}_Darwin_arm64.tar.gz"
+                sha256 "${DARWIN_ARM64_SHA}"
+              end
+              on_intel do
+                url "${BASE_URL}/flicknote_${TAG}_Darwin_x86_64.tar.gz"
+                sha256 "${DARWIN_X86_SHA}"
+              end
+            end
+
+            on_linux do
+              on_intel do
+                url "${BASE_URL}/flicknote_${TAG}_Linux_x86_64.tar.gz"
+                sha256 "${LINUX_X86_SHA}"
+              end
+            end
+
+            def install
+              bin.install "flicknote"
+              bin.install "flicktask"
+              bin.install "flicknote-sync"
+            end
+
+            test do
+              assert_match "flicknote", shell_output("#{bin}/flicknote --help")
+              assert_match "flicktask", shell_output("#{bin}/flicktask list --help")
+            end
+          end
+          FORMULA
+
+          WORK_DIR=$(mktemp -d)
+          gh repo clone guionai/homebrew-tap "${WORK_DIR}/tap"
+          cd "${WORK_DIR}/tap"
+          mkdir -p Formula
+          cp "$OLDPWD/flicknote.rb" Formula/flicknote.rb
+          git config user.name "guionai-bot"
+          git config user.email "bot@guionai.com"
+          git add Formula/flicknote.rb
+          git commit -m "feat(formula): update flicknote to ${TAG}"
+          git push
