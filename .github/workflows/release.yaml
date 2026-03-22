@@ -13,10 +13,10 @@ jobs:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             suffix: Darwin_x86_64
           - os: macos-latest
@@ -63,6 +63,7 @@ jobs:
   release:
     name: Upload to R2 + Update Homebrew
     needs: build
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
