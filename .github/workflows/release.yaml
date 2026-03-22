@@ -159,4 +159,5 @@ jobs:
           git config user.email "bot@guionai.com"
           git add Formula/flicknote.rb
           git commit -m "feat(formula): update flicknote to ${TAG}"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/guionai/homebrew-tap.git"
           git push
