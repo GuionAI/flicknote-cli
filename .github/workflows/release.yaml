@@ -112,7 +112,7 @@ jobs:
           VERSION="${TAG#v}"
           BASE_URL="${R2_BASE_URL}/flicknote-cli/${TAG}"
 
-          cat > flicknote.rb <<~FORMULA
+          cat > flicknote.rb <<FORMULA
           class Flicknote < Formula
             desc "Local-first note and task management CLI with cloud sync"
             homepage "https://github.com/guionai/flicknote-cli"
