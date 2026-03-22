@@ -12,7 +12,7 @@ flicknote-core = { path = "../flicknote-core" }
 flicknote-auth = { path = "../flicknote-auth" }
 powersync = { workspace = true }
 rusqlite = { workspace = true }
-http-client = { workspace = true, features = ["curl_client"] }
+http-client = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "http2", "rustls-tls"] }

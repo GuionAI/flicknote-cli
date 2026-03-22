@@ -5,7 +5,8 @@ use async_trait::async_trait;
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::{config::Config, schema::app_schema};
 use futures_lite::StreamExt;
-use http_client::isahc::IsahcClient;
+mod http_adapter;
+use http_adapter::ReqwestHttpClient;
 use powersync::{
     BackendConnector, ConnectionPool, PowerSyncCredentials, PowerSyncDatabase, SyncOptions,
     UpdateType, env::PowerSyncEnvironment, error::PowerSyncError,
@@ -329,7 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     PowerSyncEnvironment::powersync_auto_extension()?;
 
     let pool = ConnectionPool::open(&config.paths.db_file)?;
-    let client = Arc::new(IsahcClient::new());
+    let client = Arc::new(ReqwestHttpClient::new());
     let env =
         PowerSyncEnvironment::custom(client, pool, Box::new(PowerSyncEnvironment::tokio_timer()));
 
