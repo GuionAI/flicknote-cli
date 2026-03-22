@@ -85,25 +85,17 @@ jobs:
             echo "OK ${suffix}: ${actual}"
           done
 
-      - name: Install rclone
-        uses: rclone/setup-rclone@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload to R2
         env:
-          RCLONE_CONFIG_R2_TYPE: s3
-          RCLONE_CONFIG_R2_PROVIDER: Cloudflare
-          RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
-          RCLONE_CONFIG_R2_ACL: private
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           TAG: ${{ github.ref_name }}
         run: |
-          rclone copy "flicknote_${TAG}_Darwin_arm64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
-          rclone copy "flicknote_${TAG}_Darwin_x86_64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
-          rclone copy "flicknote_${TAG}_Linux_x86_64.tar.gz" "r2:${R2_BUCKET}/flicknote-cli/${TAG}/"
+          for suffix in Darwin_arm64 Darwin_x86_64 Linux_x86_64; do
+            aws s3 cp "flicknote_${TAG}_${suffix}.tar.gz" "s3://${R2_BUCKET}/flicknote-cli/${TAG}/"
+          done
 
       - name: Update Homebrew formula
         env:
