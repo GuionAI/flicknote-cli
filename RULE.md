@@ -74,6 +74,12 @@ echo "content" | flicknote insert <id> --after <section-id>
 # IDs are 2-character base62 (0–9, A–Z, a–z) — run --tree to find them; H1 headings have no ID
 ```
 
+## Open in Browser
+
+```bash
+flicknote open <id>    # open note in browser
+```
+
 ## Archive
 
 ```bash

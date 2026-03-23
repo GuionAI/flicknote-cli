@@ -111,6 +111,12 @@ flicknote modify abc12345 --project newproject   # move note to a different proj
 
 Projects are created automatically if they don't exist. An empty project is deleted automatically after the last note is moved out.
 
+## Opening Notes in Browser
+
+```bash
+flicknote open abc12345    # open note in browser
+```
+
 ## Archiving Notes
 
 ```bash
