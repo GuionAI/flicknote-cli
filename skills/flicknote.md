@@ -57,6 +57,13 @@ flicknote get abc12345 --section 3K
 
 # JSON output
 flicknote get abc12345 --json
+
+# Read an archived note
+flicknote get abc12345 --archived
+
+# Works with other flags
+flicknote get abc12345 --archived --tree
+flicknote get abc12345 --archived --json
 ```
 
 To target a section, first run `--tree` to see IDs, then use the ID with `--section`:

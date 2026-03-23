@@ -17,6 +17,9 @@ pub(crate) struct GetArgs {
     /// Output as JSON
     #[arg(long)]
     json: bool,
+    /// Read an archived note (looks up from archived notes instead of active)
+    #[arg(long)]
+    archived: bool,
 }
 
 pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<(), CliError> {
@@ -27,10 +30,25 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
         });
     }
 
+    let resolve = |id: &str| {
+        if args.archived {
+            db.resolve_archived_note_id(id)
+        } else {
+            db.resolve_note_id(id)
+        }
+    };
+    let find = |id: &str| {
+        if args.archived {
+            db.find_archived_note(id)
+        } else {
+            db.find_note(id)
+        }
+    };
+
     // Tree view or section extraction — both need parsed markdown
     if args.tree || args.section.is_some() {
-        let full_id = db.resolve_note_id(&args.id)?;
-        let note = db.find_note(&full_id)?;
+        let full_id = resolve(&args.id)?;
+        let note = find(&full_id)?;
         let content = note.content.as_deref().unwrap_or("");
 
         if args.tree {
@@ -74,8 +92,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
         return Ok(());
     }
 
-    let full_id = db.resolve_note_id(&args.id)?;
-    let note = db.find_note(&full_id)?;
+    let full_id = resolve(&args.id)?;
+    let note = find(&full_id)?;
 
     let note_json = serde_json::to_string(&note)?;
     let config_dir = config.paths.config_dir.to_string_lossy();
