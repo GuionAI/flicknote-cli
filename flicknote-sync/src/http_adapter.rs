@@ -1,5 +1,7 @@
 use async_trait::async_trait;
+use futures_lite::StreamExt;
 use http_client::{HttpClient, http_types};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
 #[derive(Debug)]
 pub(crate) struct ReqwestHttpClient {
@@ -45,6 +47,8 @@ impl HttpClient for ReqwestHttpClient {
         let status = http_types::StatusCode::try_from(resp.status().as_u16()).map_err(|e| {
             http_types::Error::from_str(http_types::StatusCode::InternalServerError, e.to_string())
         })?;
+        let content_length = resp.content_length().map(|l| l as usize);
+
         let mut response = http_types::Response::new(status);
 
         for (name, value) in resp.headers() {
@@ -61,11 +65,16 @@ impl HttpClient for ReqwestHttpClient {
             }
         }
 
-        let body_bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| http_types::Error::new(http_types::StatusCode::InternalServerError, e))?;
-        response.set_body(body_bytes.as_ref());
+        // Stream the response body instead of eagerly buffering with bytes().await.
+        // PowerSync's sync/stream endpoint is a long-lived streaming connection —
+        // the old code blocked here until the server closed the connection.
+        let byte_stream = resp
+            .bytes_stream()
+            .map(|result| result.map_err(std::io::Error::other));
+        let stream_reader = tokio_util::io::StreamReader::new(byte_stream);
+        let compat_reader = stream_reader.compat();
+        let buf_reader = futures_lite::io::BufReader::new(compat_reader);
+        response.set_body(http_types::Body::from_reader(buf_reader, content_length));
 
         Ok(response)
     }
