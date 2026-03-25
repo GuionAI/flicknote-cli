@@ -11,9 +11,24 @@ pub(crate) struct LoginArgs {
     /// OAuth provider
     #[arg(long, conflicts_with = "email", value_parser = ["google", "apple"])]
     provider: Option<String>,
+    /// Force re-authentication (fixes stuck sync without data loss)
+    #[arg(long)]
+    force: bool,
 }
 
 pub(crate) fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
+    if config.paths.session_file.exists() {
+        if !args.force {
+            return Err(CliError::Other(
+                "Already logged in. Use `flicknote login --force` to re-authenticate (e.g. after sync issues).".into(),
+            ));
+        }
+        // --force: stop daemon and clear stale session before re-auth
+        super::daemon::stop(config)?;
+        super::daemon::uninstall()?;
+        std::fs::remove_file(&config.paths.session_file)?;
+    }
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

@@ -10,7 +10,7 @@ rand = "0.9"
 base64 = "0.22"
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true, features = ["net", "macros", "rt", "io-util"] }
+tokio = { workspace = true, features = ["net", "macros", "rt", "io-util", "sync"] }
 thiserror = { workspace = true }
 url = "2"
 urlencoding = "2"

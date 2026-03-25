@@ -100,7 +100,7 @@ async fn classify_response(
 
 struct FlickNoteConnector {
     db: PowerSyncDatabase,
-    auth: GoTrueClient,
+    auth: Arc<GoTrueClient>,
     upload_guard: Arc<tokio::sync::Mutex<()>>,
     http_client: reqwest::Client,
     powersync_url: String,
@@ -337,11 +337,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = PowerSyncDatabase::new(env, app_schema());
     db.async_tasks().spawn_with_tokio();
 
-    let auth = GoTrueClient::new(
+    let auth = Arc::new(GoTrueClient::new(
         &config.supabase_url,
         &config.supabase_anon_key,
         &config.paths.session_file,
-    );
+    ));
 
     let upload_guard = Arc::new(tokio::sync::Mutex::new(()));
     let http_client = reqwest::Client::new();
@@ -349,7 +349,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let connector = FlickNoteConnector {
         db: db.clone(),
-        auth,
+        auth: Arc::clone(&auth),
         upload_guard: Arc::clone(&upload_guard),
         http_client,
         powersync_url: config.powersync_url.clone(),
@@ -360,18 +360,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poll_db = db.clone();
     let poll_supabase_url = config.supabase_url.clone();
     let poll_anon_key = config.supabase_anon_key.clone();
-    let poll_session_file = config.paths.session_file.clone();
     let poll_guard = Arc::clone(&upload_guard);
 
     log::info!("Sync daemon connecting (pid {})", std::process::id());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
 
-    let poll_auth = GoTrueClient::new(
-        &config.supabase_url,
-        &config.supabase_anon_key,
-        &poll_session_file,
-    );
+    let poll_auth = Arc::clone(&auth);
     let mut poll_handle = tokio::spawn(async move {
         let mut consecutive_failures: u32 = 0;
         // Skip first tick — Trigger B from stream establishment handles existing entries.

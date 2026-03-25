@@ -8,6 +8,7 @@ pub struct GoTrueClient {
     gotrue_url: String,
     anon_key: String,
     session_file: std::path::PathBuf,
+    refresh_guard: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,6 +52,7 @@ impl GoTrueClient {
             gotrue_url: format!("{supabase_url}/auth/v1"),
             anon_key: anon_key.to_string(),
             session_file: session_file.into(),
+            refresh_guard: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -174,21 +176,41 @@ impl GoTrueClient {
         Ok(session)
     }
 
-    /// Read session from file, refresh if expired
+    /// Read session from file, refresh if expired.
+    ///
+    /// Safe to call concurrently — serializes refresh internally to prevent
+    /// Supabase's refresh token reuse detection from revoking the token family.
+    ///
+    /// After acquiring the lock, the session is re-read from disk. If a concurrent
+    /// caller already refreshed (refresh_token changed), the fresh session is returned
+    /// directly, avoiding a redundant — and potentially harmful — second refresh attempt.
     pub async fn get_session(&self) -> Result<AuthSession, AuthError> {
+        let _guard = self.refresh_guard.lock().await;
+
         let stored = load_session(&self.session_file)?;
 
-        if let Some(expires_at) = stored.expires_at {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            if now + 60 >= expires_at {
-                return self.refresh_token(&stored.refresh_token).await;
-            }
+        let Some(expires_at) = stored.expires_at else {
+            return Ok(stored);
+        };
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        if now + 60 < expires_at {
+            return Ok(stored);
         }
 
-        Ok(stored)
+        // Token is near expiry. A concurrent caller may have already refreshed —
+        // re-read from disk to check. If the refresh_token changed, the session is
+        // already fresh; return it without a second network call.
+        let current = load_session(&self.session_file)?;
+        if current.refresh_token != stored.refresh_token {
+            return Ok(current);
+        }
+
+        self.refresh_token(&stored.refresh_token).await
     }
 
     /// POST /token?grant_type=refresh_token
@@ -205,7 +227,11 @@ impl GoTrueClient {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(AuthError::Api("Token refresh failed".into()));
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(AuthError::Api(format!(
+                "Token refresh failed ({status}): {body}"
+            )));
         }
 
         let session: AuthSession = resp.json().await?;
