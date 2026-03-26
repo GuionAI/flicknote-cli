@@ -145,7 +145,9 @@ pub fn app_schema() -> Schema {
             Column::text("data"),
             Column::text("created_at"),
         ],
-        |_| {},
+        |t| {
+            t.options.local_only = true;
+        },
     ));
 
     schema.tables.push(Table::create(
