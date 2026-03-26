@@ -80,7 +80,7 @@ pub(crate) fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
-    // build_find_sql logic is now internal to SqliteBackend / PgBackend.
-    // The following tests verify the search behavior via the NoteDb trait
-    // in backend::tests. No pure-SQL tests needed here.
+    // Search logic is now internal to SqliteBackend / PostgRestBackend.
+    // Tests verify search behavior via the NoteDb trait in backend::tests.
+    // No pure-SQL tests needed here.
 }

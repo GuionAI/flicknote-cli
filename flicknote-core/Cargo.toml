@@ -18,7 +18,7 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }
 dirs = { workspace = true }
-postgres = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "charset", "http2", "rustls-tls"] }
 chrono = "0.4"
 uuid = { workspace = true }
 

@@ -30,8 +30,8 @@ pub enum CliError {
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
-    #[error("Postgres error: {0}")]
-    Postgres(#[from] postgres::Error),
+    #[error("HTTP error: {0}")]
+    Http(String),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),

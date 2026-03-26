@@ -941,6 +941,7 @@ mod tests {
             powersync_url: String::new(),
             api_url: String::new(),
             web_url: None,
+            postgrest_url: None,
             paths: ConfigPaths {
                 config_dir: dir.path().to_path_buf(),
                 data_dir: dir.path().to_path_buf(),

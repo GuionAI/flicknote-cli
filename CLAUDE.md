@@ -28,7 +28,7 @@ Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 - **rusqlite** — SQLite with bundled + load_extension
 - **clap** — CLI framework (derive macros)
 - **tokio** — async runtime
-- **reqwest** — HTTP client (auth)
+- **reqwest** — HTTP client (auth + PostgREST backend)
 - **serde/serde_json** — serialization
 
 ## Project Conventions

@@ -4,7 +4,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod hooks;
-pub mod pg;
+pub mod postgrest;
 #[cfg(feature = "powersync")]
 pub mod schema;
 pub mod session;
