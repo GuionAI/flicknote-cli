@@ -4,7 +4,7 @@ use rusqlite::{params, types::ToSql};
 #[cfg(feature = "powersync")]
 use crate::db::Database;
 use crate::error::CliError;
-use crate::types::{Note, Project};
+use crate::types::{Keyterm, Note, Project, Prompt};
 
 // ─── Filter / request types ──────────────────────────────────────────────────
 
@@ -83,6 +83,8 @@ pub trait NoteDb {
     fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError>;
     fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError>;
     fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError>;
+    fn find_project(&self, id: &str) -> Result<Project, CliError>;
+    fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError>;
 
     // Project writes
     fn create_project(&self, name: &str) -> Result<String, CliError>;
@@ -95,6 +97,70 @@ pub trait NoteDb {
         new_project_id: &str,
         old_project_id: Option<&str>,
     ) -> Result<Option<String>, CliError>;
+
+    /// Update project metadata. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
+    fn update_project(
+        &self,
+        id: &str,
+        prompt_id: Option<Option<&str>>,
+        keyterm_id: Option<Option<&str>>,
+        color: Option<Option<&str>>,
+    ) -> Result<(), CliError>;
+
+    fn delete_project(&self, id: &str) -> Result<(), CliError>;
+
+    // Note metadata writes
+    fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError>;
+    fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError>;
+
+    // Note reads (extended)
+    fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError>;
+    fn list_note_topics(
+        &self,
+        note_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError>;
+
+    // Prompt operations
+    fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError>;
+    fn insert_prompt(
+        &self,
+        id: &str,
+        title: &str,
+        description: Option<&str>,
+        prompt: &str,
+        now: &str,
+    ) -> Result<(), CliError>;
+    fn find_prompt(&self, id: &str) -> Result<Prompt, CliError>;
+    fn list_prompts(&self) -> Result<Vec<Prompt>, CliError>;
+    fn update_prompt(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<(), CliError>;
+    fn delete_prompt(&self, id: &str) -> Result<(), CliError>;
+
+    // Keyterm operations
+    fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError>;
+    fn insert_keyterm(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        content: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError>;
+    fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError>;
+    fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError>;
+    fn update_keyterm(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        content: Option<&str>,
+    ) -> Result<(), CliError>;
+    fn delete_keyterm(&self, id: &str) -> Result<(), CliError>;
 }
 
 // ─── SqliteBackend ───────────────────────────────────────────────────────────
@@ -150,10 +216,10 @@ const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND nam
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_NAME: &str = "SELECT name FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects \
      WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL) ORDER BY name";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects \
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
 #[cfg(feature = "powersync")]
 const SQ_CREATE_PROJECT: &str =
@@ -168,6 +234,49 @@ const SQ_DELETE_PROJECT: &str = "DELETE FROM projects WHERE user_id = ? AND id =
 const SQ_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ? \
      WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL AND user_id = ? \
      ORDER BY deleted_at DESC LIMIT 1)";
+
+#[cfg(feature = "powersync")]
+const SQ_UPDATE_TITLE: &str =
+    "UPDATE notes SET title = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
+const SQ_UPDATE_FLAGGED: &str =
+    "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
+const SQ_COUNT_NOTES: &str = "SELECT COUNT(*) FROM notes WHERE user_id = ? AND deleted_at IS NULL";
+#[cfg(feature = "powersync")]
+const SQ_COUNT_NOTES_ARCHIVED: &str =
+    "SELECT COUNT(*) FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL";
+#[cfg(feature = "powersync")]
+const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions WHERE user_id = ? AND type = 'topic' AND note_id IN ";
+
+#[cfg(feature = "powersync")]
+const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id LIKE ? LIMIT 2";
+#[cfg(feature = "powersync")]
+const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
+
+#[cfg(feature = "powersync")]
+const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id LIKE ? LIMIT 2";
+#[cfg(feature = "powersync")]
+const SQ_INSERT_PROMPT: &str = "INSERT INTO prompts (id, user_id, title, description, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)";
+#[cfg(feature = "powersync")]
+const SQ_FIND_PROMPT: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE user_id = ? AND id = ? LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE user_id = ? ORDER BY created_at DESC";
+#[cfg(feature = "powersync")]
+const SQ_DELETE_PROMPT: &str = "DELETE FROM prompts WHERE user_id = ? AND id = ?";
+
+#[cfg(feature = "powersync")]
+const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id LIKE ? LIMIT 2";
+#[cfg(feature = "powersync")]
+const SQ_INSERT_KEYTERM: &str = "INSERT INTO keyterms (id, user_id, name, description, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)";
+#[cfg(feature = "powersync")]
+const SQ_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? AND id = ? LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? ORDER BY name";
+#[cfg(feature = "powersync")]
+const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
 
 #[cfg(feature = "powersync")]
 impl NoteDb for SqliteBackend {
@@ -466,6 +575,350 @@ impl NoteDb for SqliteBackend {
             } else {
                 Ok(None)
             }
+        })
+    }
+
+    fn find_project(&self, id: &str) -> Result<Project, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_FIND_PROJECT_BY_ID)?;
+            let mut rows = stmt.query(params![self.user_id, id])?;
+            match rows.next()? {
+                Some(row) => Ok(Project::from_row(row)?),
+                None => Err(CliError::Other(format!("Project not found: {id}"))),
+            }
+        })
+    }
+
+    fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_RESOLVE_PROJECT)?;
+            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
+            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
+            let second = rows.next()?.is_some();
+            match (first, second) {
+                (Some(_), true) => Err(CliError::Other(format!(
+                    "Ambiguous project ID prefix: {prefix}"
+                ))),
+                (Some(id), false) => Ok(id),
+                (None, _) => Err(CliError::Other(format!("Project not found: {prefix}"))),
+            }
+        })
+    }
+
+    fn update_project(
+        &self,
+        id: &str,
+        prompt_id: Option<Option<&str>>,
+        keyterm_id: Option<Option<&str>>,
+        color: Option<Option<&str>>,
+    ) -> Result<(), CliError> {
+        // All UPDATEs run inside a single write closure; PowerSync wraps each
+        // write call in an implicit transaction, so this is atomic (#4).
+        self.db.write(|conn| {
+            if let Some(val) = prompt_id {
+                if let Some(v) = val {
+                    conn.execute(
+                        "UPDATE projects SET prompt_id = ? WHERE user_id = ? AND id = ?",
+                        params![v, self.user_id, id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE projects SET prompt_id = NULL WHERE user_id = ? AND id = ?",
+                        params![self.user_id, id],
+                    )?;
+                }
+            }
+            if let Some(val) = keyterm_id {
+                if let Some(v) = val {
+                    conn.execute(
+                        "UPDATE projects SET keyterm_id = ? WHERE user_id = ? AND id = ?",
+                        params![v, self.user_id, id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE projects SET keyterm_id = NULL WHERE user_id = ? AND id = ?",
+                        params![self.user_id, id],
+                    )?;
+                }
+            }
+            if let Some(val) = color {
+                if let Some(v) = val {
+                    conn.execute(
+                        "UPDATE projects SET color = ? WHERE user_id = ? AND id = ?",
+                        params![v, self.user_id, id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE projects SET color = NULL WHERE user_id = ? AND id = ?",
+                        params![self.user_id, id],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_project(&self, id: &str) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            let affected = conn.execute(SQ_ARCHIVE_PROJECT, params![self.user_id, id])?;
+            if affected == 0 {
+                return Err(CliError::Other(format!("Project not found: {id}")));
+            }
+            Ok(())
+        })
+    }
+
+    fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.write(|conn| {
+            let affected = conn.execute(SQ_UPDATE_TITLE, params![title, now, self.user_id, id])?;
+            if affected == 0 {
+                return Err(CliError::NoteNotFound { id: id.to_string() });
+            }
+            Ok(())
+        })
+    }
+
+    fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let val: i64 = if flagged { 1 } else { 0 };
+        self.db.write(|conn| {
+            let affected = conn.execute(SQ_UPDATE_FLAGGED, params![val, now, self.user_id, id])?;
+            if affected == 0 {
+                return Err(CliError::NoteNotFound { id: id.to_string() });
+            }
+            Ok(())
+        })
+    }
+
+    fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
+        let base_sql = if filter.archived {
+            SQ_COUNT_NOTES_ARCHIVED
+        } else {
+            SQ_COUNT_NOTES
+        };
+        let mut sql = base_sql.to_string();
+        let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
+
+        if let Some(t) = filter.note_type {
+            sql.push_str(" AND type = ?");
+            params_vec.push(Box::new(t.to_string()));
+        }
+        if let Some(pid) = filter.project_id {
+            sql.push_str(" AND project_id = ?");
+            params_vec.push(Box::new(pid.to_string()));
+        }
+
+        self.db.read(|conn| {
+            let param_refs: Vec<&dyn ToSql> =
+                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+            let count: i64 = conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))?;
+            count
+                .try_into()
+                .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
+        })
+    }
+
+    fn list_note_topics(
+        &self,
+        note_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
+        if note_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("{SQ_LIST_TOPICS}({placeholders})");
+        self.db.read(|conn| {
+            let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
+            for id in note_ids {
+                params_vec.push(Box::new(id.to_string()));
+            }
+            let param_refs: Vec<&dyn ToSql> =
+                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
+            let mut stmt = conn.prepare(&sql)?;
+            let mut map: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (note_id, value) = row?;
+                map.entry(note_id).or_default().push(value);
+            }
+            Ok(map)
+        })
+    }
+
+    fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_RESOLVE_PROMPT)?;
+            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
+            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
+            let second = rows.next()?.is_some();
+            match (first, second) {
+                (Some(_), true) => Err(CliError::Other(format!(
+                    "Ambiguous prompt ID prefix: {prefix}"
+                ))),
+                (Some(id), false) => Ok(id),
+                (None, _) => Err(CliError::Other(format!("Prompt not found: {prefix}"))),
+            }
+        })
+    }
+
+    fn insert_prompt(
+        &self,
+        id: &str,
+        title: &str,
+        description: Option<&str>,
+        prompt: &str,
+        now: &str,
+    ) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            conn.execute(
+                SQ_INSERT_PROMPT,
+                params![id, self.user_id, title, description, prompt, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_FIND_PROMPT)?;
+            let mut rows = stmt.query(params![self.user_id, id])?;
+            match rows.next()? {
+                Some(row) => Ok(Prompt::from_row(row)?),
+                None => Err(CliError::Other(format!("Prompt not found: {id}"))),
+            }
+        })
+    }
+
+    fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_LIST_PROMPTS)?;
+            let rows = stmt.query_map(params![self.user_id], Prompt::from_row)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
+        })
+    }
+
+    fn update_prompt(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            if let Some(v) = title {
+                conn.execute(
+                    "UPDATE prompts SET title = ? WHERE user_id = ? AND id = ?",
+                    params![v, self.user_id, id],
+                )?;
+            }
+            if let Some(v) = description {
+                conn.execute(
+                    "UPDATE prompts SET description = ? WHERE user_id = ? AND id = ?",
+                    params![v, self.user_id, id],
+                )?;
+            }
+            if let Some(v) = prompt {
+                conn.execute(
+                    "UPDATE prompts SET prompt = ? WHERE user_id = ? AND id = ?",
+                    params![v, self.user_id, id],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            conn.execute(SQ_DELETE_PROMPT, params![self.user_id, id])?;
+            Ok(())
+        })
+    }
+
+    fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_RESOLVE_KEYTERM)?;
+            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
+            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
+            let second = rows.next()?.is_some();
+            match (first, second) {
+                (Some(_), true) => Err(CliError::Other(format!(
+                    "Ambiguous keyterm ID prefix: {prefix}"
+                ))),
+                (Some(id), false) => Ok(id),
+                (None, _) => Err(CliError::Other(format!("Keyterm not found: {prefix}"))),
+            }
+        })
+    }
+
+    fn insert_keyterm(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        content: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            conn.execute(
+                SQ_INSERT_KEYTERM,
+                params![id, self.user_id, name, description, content, now, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_FIND_KEYTERM)?;
+            let mut rows = stmt.query(params![self.user_id, id])?;
+            match rows.next()? {
+                Some(row) => Ok(Keyterm::from_row(row)?),
+                None => Err(CliError::Other(format!("Keyterm not found: {id}"))),
+            }
+        })
+    }
+
+    fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
+        self.db.read(|conn| {
+            let mut stmt = conn.prepare(SQ_LIST_KEYTERMS)?;
+            let rows = stmt.query_map(params![self.user_id], Keyterm::from_row)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
+        })
+    }
+
+    fn update_keyterm(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        content: Option<&str>,
+    ) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.write(|conn| {
+            if let Some(v) = name {
+                conn.execute("UPDATE keyterms SET name = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
+            }
+            if let Some(v) = description {
+                conn.execute("UPDATE keyterms SET description = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
+            }
+            if let Some(v) = content {
+                conn.execute("UPDATE keyterms SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
+            }
+            Ok(())
+        })
+    }
+
+    fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
+        self.db.write(|conn| {
+            conn.execute(SQ_DELETE_KEYTERM, params![self.user_id, id])?;
+            Ok(())
         })
     }
 }

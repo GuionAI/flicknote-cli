@@ -74,32 +74,60 @@ pub(crate) fn get_note(db: &dyn NoteDb, full_id: &str) -> Result<Note, CliError>
 }
 
 /// Print notes as a formatted table to stdout.
-pub(crate) fn print_notes_table(notes: &[Note]) {
+/// Columns: ID (full uuid) | Type | Title | Project | Topics | Flagged | Created
+pub(crate) fn print_notes_table(
+    notes: &[Note],
+    topics_map: &std::collections::HashMap<String, Vec<String>>,
+    project_names: &std::collections::HashMap<String, String>,
+) {
     println!(
-        "{:<10} {:<8} {:<14} {:<12} Title",
-        "ID", "Type", "Status", "Date"
+        "{:<36} {:<8} {:<30} {:<15} {:<20} {:<7} Created",
+        "ID", "Type", "Title", "Project", "Topics", "Flagged"
     );
-    println!("{}", "-".repeat(70));
+    println!("{}", "-".repeat(130));
     for note in notes {
-        let id = &note.id[..8.min(note.id.len())];
         let date = note
             .created_at
             .as_deref()
             .and_then(|d| d.get(..10))
             .unwrap_or("-");
-        let title = note
-            .title
-            .as_deref()
-            .or(note.content.as_deref())
-            .unwrap_or("(untitled)");
-        let title: String = if title.chars().count() > 60 {
-            title.chars().take(60).collect()
+        let title = note.title.as_deref().unwrap_or("(untitled)");
+        let title: String = if title.chars().count() > 28 {
+            let truncated: String = title.chars().take(27).collect();
+            format!("{truncated}…")
         } else {
             title.to_string()
         };
+        let project = note
+            .project_id
+            .as_ref()
+            .and_then(|pid| project_names.get(pid))
+            .map(std::string::String::as_str)
+            .unwrap_or("-");
+        let project: String = if project.chars().count() > 13 {
+            let truncated: String = project.chars().take(12).collect();
+            format!("{truncated}…")
+        } else {
+            project.to_string()
+        };
+        let topics = topics_map
+            .get(&note.id)
+            .map(|v| v.join(", "))
+            .unwrap_or_default();
+        let topics: String = if topics.chars().count() > 18 {
+            let truncated: String = topics.chars().take(17).collect();
+            format!("{truncated}…")
+        } else {
+            topics
+        };
+        let flagged = if note.is_flagged == Some(1) {
+            "✓"
+        } else {
+            ""
+        };
         println!(
-            "{:<10} {:<8} {:<14} {:<12} {}",
-            id, note.r#type, note.status, date, title
+            "{:<36} {:<8} {:<30} {:<15} {:<20} {:<7} {}",
+            note.id, note.r#type, title, project, topics, flagged, date
         );
     }
 }

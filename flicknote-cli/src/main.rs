@@ -40,18 +40,26 @@ enum Commands {
     Add(commands::add::AddArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
-    /// Archive a note (soft-delete)
-    Archive(commands::archive::ArchiveArgs),
-    /// Unarchive a note (restore from archive)
-    Unarchive(commands::unarchive::UnarchiveArgs),
+    /// Delete a note (soft-delete) or remove a section
+    Delete(commands::delete::DeleteArgs),
+    /// Restore a deleted note
+    Restore(commands::restore::RestoreArgs),
     /// List notes
     List(commands::list::ListArgs),
+    /// Count notes matching filters
+    Count(commands::count::CountArgs),
     /// Find notes by keyword (OR match across title, content, summary)
     Find(commands::find::FindArgs),
-    /// Get a note by ID
-    Get(commands::get::GetArgs),
+    /// Show note details with full metadata
+    Detail(commands::detail::DetailArgs),
+    /// Show note content with section IDs
+    Content(commands::content::ContentArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
+    /// Manage prompts
+    Prompt(commands::prompt::PromptArgs),
+    /// Manage keyterm sets
+    Keyterm(commands::keyterm::KeytermArgs),
     /// Authenticate with FlickNote
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
@@ -64,15 +72,11 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Interact with FlickNote API directly
     Api(commands::api::ApiArgs),
-    /// Replace entire note content
-    Replace(commands::replace::ReplaceArgs),
-    /// Remove a section from a note by heading name
-    Remove(commands::remove::RemoveArgs),
     /// Rename a section heading in a note
     Rename(commands::rename::RenameArgs),
     /// Insert content before or after a section
     Insert(commands::insert::InsertArgs),
-    /// Modify note metadata (e.g. move to another project)
+    /// Modify note content (via stdin) and/or metadata
     Modify(commands::modify::ModifyArgs),
     /// Open a note in the browser
     Open(commands::open::OpenArgs),
@@ -157,14 +161,16 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError>
     match command {
         Commands::Add(args) => commands::add::run(db, config, args),
         Commands::Append(args) => commands::append::run(db, config, args),
-        Commands::Archive(args) => commands::archive::run(db, config, args),
-        Commands::Unarchive(args) => commands::unarchive::run(db, config, args),
+        Commands::Delete(args) => commands::delete::run(db, config, args),
+        Commands::Restore(args) => commands::restore::run(db, config, args),
         Commands::List(args) => commands::list::run(db, args),
+        Commands::Count(args) => commands::count::run(db, args),
         Commands::Find(args) => commands::find::run(db, args),
-        Commands::Get(args) => commands::get::run(db, config, args),
+        Commands::Detail(args) => commands::detail::run(db, config, args),
+        Commands::Content(args) => commands::content::run(db, args),
         Commands::Project(args) => commands::project::run(db, args),
-        Commands::Replace(args) => commands::replace::run(db, config, args),
-        Commands::Remove(args) => commands::remove::run(db, config, args),
+        Commands::Prompt(args) => commands::prompt::run(db, args),
+        Commands::Keyterm(args) => commands::keyterm::run(db, args),
         Commands::Rename(args) => commands::rename::run(db, config, args),
         Commands::Insert(args) => commands::insert::run(db, config, args),
         Commands::Modify(args) => commands::modify::run(db, config, args),

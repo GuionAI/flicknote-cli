@@ -3,47 +3,88 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::hooks;
+use std::io::{IsTerminal, Read};
 
 use super::add::resolve_project;
-use super::util::resolve_note_id;
+use super::util::{find_section, resolve_note_id};
+
+/// Read stdin if it is not a terminal. Returns `None` when stdin is a terminal
+/// (no piped input), or `Some(content)` when content was successfully read.
+/// Trims trailing whitespace. Returns an error if stdin is non-terminal but empty.
+fn try_read_stdin() -> Result<Option<String>, CliError> {
+    if std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    let trimmed = buf.trim_end().to_string();
+    if trimmed.is_empty() {
+        return Err(CliError::Other("No content provided via stdin".into()));
+    }
+    Ok(Some(trimmed))
+}
 
 #[derive(Args)]
 pub(crate) struct ModifyArgs {
     /// Note ID (full UUID or prefix)
     id: String,
+    /// Replace only the named section by section ID (2-char base62)
+    #[arg(short = 's', long = "section")]
+    section: Option<String>,
+    /// Stdin includes the heading line (otherwise heading is preserved)
+    #[arg(long)]
+    with_heading: bool,
     /// Move note to this project
     #[arg(short = 'p', long = "project")]
     project: Option<String>,
+    /// Set new title
+    #[arg(long)]
+    title: Option<String>,
+    /// Mark note as flagged
+    #[arg(long, conflicts_with = "unflagged")]
+    flagged: bool,
+    /// Remove flagged status
+    #[arg(long, conflicts_with = "flagged")]
+    unflagged: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let old_note = db.find_note(&full_id)?;
-
-    let Some(ref project_name) = args.project else {
-        return Err(CliError::Other(
-            "Nothing to modify. Use --project <name> to change the note's project.".into(),
-        ));
-    };
-
-    let old_project_id = old_note.project_id.clone();
-    let new_project_id = resolve_project(db, project_name)?;
-
-    // No-op if already in same project
-    if old_project_id.as_deref() == Some(new_project_id.as_str()) {
-        println!(
-            "Note {} is already in project \"{}\".",
-            &full_id[..8],
-            project_name
-        );
+/// Validate that replacement content starts with a heading.
+fn validate_replacement_heading(
+    content: &str,
+    section_id: &str,
+    section_heading_text: &str,
+) -> Result<(), CliError> {
+    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
+    let starts_with_heading = first_non_empty
+        .and_then(crate::markdown::heading_level)
+        .is_some();
+    if starts_with_heading {
         return Ok(());
     }
+    Err(CliError::Other(format!(
+        "error: replacement content must start with a heading (root of the subtree)\n\n  You are replacing a subtree rooted at:\n    [{}] {}",
+        section_id, section_heading_text,
+    )))
+}
 
-    // Run on-modify hook before writing
+/// Run the on-modify hook and write updated content to the database.
+///
+/// `action` is forwarded to the hook as the operation type:
+/// - `"replace"` for whole-note or whole-section content replacement
+/// - `"modify"` for partial section body updates
+fn write_content(
+    db: &dyn NoteDb,
+    config: &Config,
+    full_id: &str,
+    new_content: &str,
+    action: &str,
+) -> Result<(), CliError> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let old_note = db.find_note(full_id)?;
     let mut new_note = old_note.clone();
-    new_note.project_id = Some(new_project_id.clone());
+    new_note.content = Some(new_content.to_string());
+    new_note.status = "ai_queued".to_string();
     new_note.updated_at = Some(now.clone());
 
     let old_json = serde_json::to_string(&old_note)?;
@@ -53,23 +94,155 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result
         &config.paths.hooks_dir,
         &old_json,
         &new_json,
-        "modify",
+        action,
         &config_dir,
     )?;
 
-    // Atomic: update note project + delete old project if now empty
-    let deleted_name =
-        db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
+    db.update_note_content(full_id, new_content, true)
+}
 
-    println!(
-        "Moved note {} to project \"{}\".",
-        &full_id[..8],
-        project_name
-    );
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id)?;
 
-    if let Some(name) = deleted_name {
-        println!("Deleted empty project \"{}\".", name);
+    // Read stdin atomically: check terminal + read in one step to avoid TOCTOU races.
+    let stdin_content = try_read_stdin()?;
+
+    let has_metadata =
+        args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
+
+    // --section without stdin is an error
+    if args.section.is_some() && stdin_content.is_none() {
+        return Err(CliError::Other(
+            "--section requires content from stdin".into(),
+        ));
+    }
+
+    // --with-heading without --section is meaningless
+    if args.with_heading && args.section.is_none() {
+        return Err(CliError::Other("--with-heading requires --section".into()));
+    }
+
+    if stdin_content.is_none() && !has_metadata {
+        return Err(CliError::Other(
+            "Nothing to modify. Provide content via stdin and/or use --project, --title, --flagged, --unflagged.".into(),
+        ));
+    }
+
+    // Step 1: content replacement (if stdin has content)
+    if let Some(new_body) = stdin_content {
+        if let Some(ref section_id) = args.section {
+            let content = db
+                .find_note_content(&full_id)?
+                .ok_or_else(|| CliError::Other("Note has no content".into()))?;
+            let doc = crate::markdown::parse_markdown(&content);
+            let bounds = find_section(&doc, section_id, &args.id)?;
+            let heading_level = bounds.heading.level;
+            let start = bounds.start;
+            let end = bounds.end;
+
+            if args.with_heading {
+                // stdin includes heading — validate it starts with a heading
+                validate_replacement_heading(&new_body, section_id, &bounds.heading.text)?;
+                let shifted = crate::markdown::cap_heading_level(new_body.trim(), heading_level);
+                let new_content =
+                    crate::markdown::replace_entire_section(&content, start, end, &shifted);
+                write_content(db, config, &full_id, new_content.trim(), "replace")?;
+                println!("Replaced section in note {}.\n", &full_id[..8]);
+                print!("{}", crate::markdown::render_tree(new_content.trim()));
+            } else {
+                // stdin is body-only — preserve original heading
+                let original_heading_end = content[start..]
+                    .find('\n')
+                    .map(|i| start + i + 1)
+                    .unwrap_or(end);
+                let preserved_heading = content[start..original_heading_end].trim_end();
+                let new_section = format!("{preserved_heading}\n\n{}", new_body.trim());
+                let new_content =
+                    crate::markdown::replace_entire_section(&content, start, end, &new_section);
+                write_content(db, config, &full_id, new_content.trim(), "modify")?;
+                println!("Replaced section body in note {}.\n", &full_id[..8]);
+                print!("{}", crate::markdown::render_tree(new_content.trim()));
+            }
+        } else {
+            // Replace all content
+            write_content(db, config, &full_id, &new_body, "replace")?;
+            println!("Replaced content for note {}.\n", &full_id[..8]);
+            print!("{}", crate::markdown::render_tree(&new_body));
+        }
+    }
+
+    // Step 2: metadata updates
+    if let Some(ref project_name) = args.project {
+        let old_note = db.find_note(&full_id)?;
+        let old_project_id = old_note.project_id.clone();
+        let new_project_id = resolve_project(db, project_name)?;
+
+        if old_project_id.as_deref() == Some(new_project_id.as_str()) {
+            println!(
+                "Note {} is already in project \"{}\".",
+                &full_id[..8],
+                project_name
+            );
+        } else {
+            let deleted_name =
+                db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
+            println!(
+                "Moved note {} to project \"{}\".",
+                &full_id[..8],
+                project_name
+            );
+            if let Some(name) = deleted_name {
+                println!("Deleted empty project \"{}\".", name);
+            }
+        }
+    }
+
+    if let Some(ref new_title) = args.title {
+        db.update_note_title(&full_id, new_title)?;
+        println!("Updated title for note {}.", &full_id[..8]);
+    }
+
+    if args.flagged {
+        db.update_note_flagged(&full_id, true)?;
+        println!("Flagged note {}.", &full_id[..8]);
+    } else if args.unflagged {
+        db.update_note_flagged(&full_id, false)?;
+        println!("Unflagged note {}.", &full_id[..8]);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_replacement_heading_errors_if_no_heading() {
+        let result =
+            validate_replacement_heading("Some body text without a heading", "kE", "Section Title");
+        assert!(result.is_err(), "body-only content should return Err");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("heading"),
+            "error should mention 'heading', got: {msg}"
+        );
+        assert!(
+            msg.contains("[kE]"),
+            "error should include section ID, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_replacement_heading_ok_with_heading() {
+        let result = validate_replacement_heading(
+            "## Updated Section\n\nSome content here.",
+            "kE",
+            "Section Title",
+        );
+        assert!(
+            result.is_ok(),
+            "content starting with '## ' should return Ok"
+        );
+    }
 }

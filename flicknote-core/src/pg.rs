@@ -5,7 +5,7 @@ use postgres::{Client, NoTls};
 
 use crate::backend::{InsertNoteReq, NoteDb, NoteFilter, validate_id_prefix};
 use crate::error::CliError;
-use crate::types::{Note, Project};
+use crate::types::{Keyterm, Note, Project, Prompt};
 
 pub struct PgBackend {
     client: RefCell<Client>,
@@ -58,10 +58,37 @@ const PG_UPDATE_PROJECT: &str = "UPDATE notes SET project_id = ($1::text)::uuid,
 const PG_FIND_PROJECT: &str = "SELECT id::text FROM projects WHERE user_id = ($1::text)::uuid AND name = $2 AND NOT is_archived LIMIT 1";
 const PG_FIND_PROJECT_NAME: &str =
     "SELECT name FROM projects WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid LIMIT 1";
-const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id::text, user_id::text, name, color, is_archived::int, created_at \
+const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id::text, user_id::text, name, color, prompt_id::text, keyterm_id::text, is_archived::int, created_at \
      FROM projects WHERE user_id = ($1::text)::uuid AND NOT is_archived ORDER BY name";
-const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id::text, user_id::text, name, color, is_archived::int, created_at \
+const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id::text, user_id::text, name, color, prompt_id::text, keyterm_id::text, is_archived::int, created_at \
      FROM projects WHERE user_id = ($1::text)::uuid AND is_archived ORDER BY name";
+const PG_FIND_PROJECT_BY_ID: &str = "SELECT id::text, user_id::text, name, color, prompt_id::text, keyterm_id::text, is_archived::int, created_at \
+     FROM projects WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid LIMIT 1";
+const PG_RESOLVE_PROJECT: &str =
+    "SELECT id::text FROM projects WHERE user_id = ($1::text)::uuid AND id::text LIKE $2 LIMIT 2";
+const PG_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = true WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid";
+const PG_UPDATE_NOTE_TITLE: &str = "UPDATE notes SET title = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
+const PG_UPDATE_NOTE_FLAGGED: &str = "UPDATE notes SET is_flagged = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid";
+const PG_COUNT_NOTES: &str =
+    "SELECT COUNT(*) FROM notes WHERE user_id = ($1::text)::uuid AND deleted_at IS NULL";
+const PG_COUNT_NOTES_ARCHIVED: &str =
+    "SELECT COUNT(*) FROM notes WHERE user_id = ($1::text)::uuid AND deleted_at IS NOT NULL";
+
+const PG_INSERT_PROMPT: &str = "INSERT INTO prompts (id, user_id, title, description, prompt, created_at) VALUES (($1::text)::uuid, ($2::text)::uuid, $3, $4, $5, ($6::text)::timestamptz)";
+const PG_FIND_PROMPT: &str = "SELECT id::text, user_id::text, title, description, prompt, created_at FROM prompts WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid LIMIT 1";
+const PG_LIST_PROMPTS: &str = "SELECT id::text, user_id::text, title, description, prompt, created_at FROM prompts WHERE user_id = ($1::text)::uuid ORDER BY created_at DESC";
+const PG_RESOLVE_PROMPT: &str =
+    "SELECT id::text FROM prompts WHERE user_id = ($1::text)::uuid AND id::text LIKE $2 LIMIT 2";
+const PG_DELETE_PROMPT: &str =
+    "DELETE FROM prompts WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid";
+
+const PG_INSERT_KEYTERM: &str = "INSERT INTO keyterms (id, user_id, name, description, content, created_at, updated_at) VALUES (($1::text)::uuid, ($2::text)::uuid, $3, $4, $5, ($6::text)::timestamptz, ($6::text)::timestamptz)";
+const PG_FIND_KEYTERM: &str = "SELECT id::text, user_id::text, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid LIMIT 1";
+const PG_LIST_KEYTERMS: &str = "SELECT id::text, user_id::text, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ($1::text)::uuid ORDER BY name";
+const PG_RESOLVE_KEYTERM: &str =
+    "SELECT id::text FROM keyterms WHERE user_id = ($1::text)::uuid AND id::text LIKE $2 LIMIT 2";
+const PG_DELETE_KEYTERM: &str =
+    "DELETE FROM keyterms WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid";
 const PG_CREATE_PROJECT: &str = "INSERT INTO projects (id, user_id, name, is_archived, created_at) \
      VALUES (($1::text)::uuid, ($2::text)::uuid, $3, false, ($4::text)::timestamptz)";
 const PG_COUNT_PROJECT_NOTES: &str = "SELECT COUNT(*) FROM notes WHERE user_id = ($1::text)::uuid AND project_id = ($2::text)::uuid AND deleted_at IS NULL";
@@ -109,8 +136,33 @@ fn project_from_pg_row(row: &postgres::Row) -> Result<Project, postgres::Error> 
         user_id: row.try_get("user_id")?,
         name: row.try_get("name")?,
         color: row.try_get("color")?,
+        prompt_id: row.try_get("prompt_id")?,
+        keyterm_id: row.try_get("keyterm_id")?,
         is_archived: row.try_get::<_, Option<i32>>("is_archived")?.map(i64::from),
         created_at: ts_col(row, "created_at")?,
+    })
+}
+
+fn prompt_from_pg_row(row: &postgres::Row) -> Result<Prompt, postgres::Error> {
+    Ok(Prompt {
+        id: row.try_get("id")?,
+        user_id: row.try_get("user_id")?,
+        title: row.try_get("title")?,
+        description: row.try_get("description")?,
+        prompt: row.try_get("prompt")?,
+        created_at: ts_col(row, "created_at")?,
+    })
+}
+
+fn keyterm_from_pg_row(row: &postgres::Row) -> Result<Keyterm, postgres::Error> {
+    Ok(Keyterm {
+        id: row.try_get("id")?,
+        user_id: row.try_get("user_id")?,
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        content: row.try_get("content")?,
+        created_at: ts_col(row, "created_at")?,
+        updated_at: ts_col(row, "updated_at")?,
     })
 }
 
@@ -434,5 +486,338 @@ impl NoteDb for PgBackend {
 
         tx.commit()?;
         Ok(old_name)
+    }
+
+    fn find_project(&self, id: &str) -> Result<Project, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_FIND_PROJECT_BY_ID, &[&self.user_id, &id])?;
+        rows.first()
+            .map(project_from_pg_row)
+            .transpose()?
+            .ok_or_else(|| CliError::Other(format!("Project not found: {id}")))
+    }
+
+    fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_RESOLVE_PROJECT, &[&self.user_id, &format!("{prefix}%")])?;
+        match rows.len() {
+            0 => Err(CliError::Other(format!("Project not found: {prefix}"))),
+            1 => Ok(rows[0].get(0)),
+            _ => Err(CliError::Other(format!(
+                "Ambiguous project ID prefix: {prefix}"
+            ))),
+        }
+    }
+
+    fn update_project(
+        &self,
+        id: &str,
+        prompt_id: Option<Option<&str>>,
+        keyterm_id: Option<Option<&str>>,
+        color: Option<Option<&str>>,
+    ) -> Result<(), CliError> {
+        // Wrap all UPDATEs in a transaction for atomicity (#4).
+        let mut client = self.client.borrow_mut();
+        let mut tx = client.transaction()?;
+        if let Some(val) = prompt_id {
+            if let Some(v) = val {
+                tx.execute("UPDATE projects SET prompt_id = ($1::text)::uuid WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+            } else {
+                tx.execute("UPDATE projects SET prompt_id = NULL WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid", &[&self.user_id, &id])?;
+            }
+        }
+        if let Some(val) = keyterm_id {
+            if let Some(v) = val {
+                tx.execute("UPDATE projects SET keyterm_id = ($1::text)::uuid WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+            } else {
+                tx.execute("UPDATE projects SET keyterm_id = NULL WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid", &[&self.user_id, &id])?;
+            }
+        }
+        if let Some(val) = color {
+            if let Some(v) = val {
+                tx.execute("UPDATE projects SET color = $1 WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+            } else {
+                tx.execute("UPDATE projects SET color = NULL WHERE user_id = ($1::text)::uuid AND id = ($2::text)::uuid", &[&self.user_id, &id])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn delete_project(&self, id: &str) -> Result<(), CliError> {
+        let affected = self
+            .client
+            .borrow_mut()
+            .execute(PG_ARCHIVE_PROJECT, &[&self.user_id, &id])?;
+        if affected == 0 {
+            return Err(CliError::Other(format!("Project not found: {id}")));
+        }
+        Ok(())
+    }
+
+    fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = self
+            .client
+            .borrow_mut()
+            .execute(PG_UPDATE_NOTE_TITLE, &[&title, &now, &self.user_id, &id])?;
+        if affected == 0 {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        Ok(())
+    }
+
+    fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = self.client.borrow_mut().execute(
+            PG_UPDATE_NOTE_FLAGGED,
+            &[&flagged, &now, &self.user_id, &id],
+        )?;
+        if affected == 0 {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        Ok(())
+    }
+
+    fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
+        let base_sql = if filter.archived {
+            PG_COUNT_NOTES_ARCHIVED
+        } else {
+            PG_COUNT_NOTES
+        };
+        let mut sql = base_sql.to_string();
+        let user_id_box: Box<dyn postgres::types::ToSql + Sync> = Box::new(self.user_id.clone());
+        let mut params_storage: Vec<Box<dyn postgres::types::ToSql + Sync>> = vec![user_id_box];
+        let mut param_idx = 2usize;
+
+        if let Some(t) = filter.note_type {
+            sql.push_str(&format!(" AND type = ${param_idx}"));
+            params_storage.push(Box::new(t.to_string()));
+            param_idx += 1;
+        }
+        if let Some(pid) = filter.project_id {
+            sql.push_str(&format!(" AND project_id = (${param_idx}::text)::uuid"));
+            params_storage.push(Box::new(pid.to_string()));
+        }
+
+        let param_refs: Vec<&(dyn postgres::types::ToSql + Sync)> = params_storage
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
+        let row = self
+            .client
+            .borrow_mut()
+            .query_one(sql.as_str(), param_refs.as_slice())?;
+        let count: i64 = row.get(0);
+        count
+            .try_into()
+            .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
+    }
+
+    fn list_note_topics(
+        &self,
+        note_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
+        if note_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let mut param_idx = 2usize;
+        let placeholders: Vec<String> = note_ids
+            .iter()
+            .map(|_| {
+                let p = format!("(${param_idx}::text)::uuid");
+                param_idx += 1;
+                p
+            })
+            .collect();
+        let sql = format!(
+            "SELECT note_id::text, value FROM note_extractions WHERE user_id = ($1::text)::uuid AND type = 'topic' AND note_id IN ({})",
+            placeholders.join(", ")
+        );
+        let user_id_box: Box<dyn postgres::types::ToSql + Sync> = Box::new(self.user_id.clone());
+        let mut params_storage: Vec<Box<dyn postgres::types::ToSql + Sync>> = vec![user_id_box];
+        for id in note_ids {
+            params_storage.push(Box::new(id.to_string()));
+        }
+        let param_refs: Vec<&(dyn postgres::types::ToSql + Sync)> = params_storage
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect();
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(sql.as_str(), param_refs.as_slice())?;
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for row in &rows {
+            let note_id: String = row.get("note_id");
+            let value: String = row.get("value");
+            map.entry(note_id).or_default().push(value);
+        }
+        Ok(map)
+    }
+
+    fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_RESOLVE_PROMPT, &[&self.user_id, &format!("{prefix}%")])?;
+        match rows.len() {
+            0 => Err(CliError::Other(format!("Prompt not found: {prefix}"))),
+            1 => Ok(rows[0].get(0)),
+            _ => Err(CliError::Other(format!(
+                "Ambiguous prompt ID prefix: {prefix}"
+            ))),
+        }
+    }
+
+    fn insert_prompt(
+        &self,
+        id: &str,
+        title: &str,
+        description: Option<&str>,
+        prompt: &str,
+        now: &str,
+    ) -> Result<(), CliError> {
+        self.client.borrow_mut().execute(
+            PG_INSERT_PROMPT,
+            &[&id, &self.user_id, &title, &description, &prompt, &now],
+        )?;
+        Ok(())
+    }
+
+    fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_FIND_PROMPT, &[&self.user_id, &id])?;
+        rows.first()
+            .map(prompt_from_pg_row)
+            .transpose()?
+            .ok_or_else(|| CliError::Other(format!("Prompt not found: {id}")))
+    }
+
+    fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_LIST_PROMPTS, &[&self.user_id])?;
+        rows.iter()
+            .map(prompt_from_pg_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CliError::Postgres)
+    }
+
+    fn update_prompt(
+        &self,
+        id: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        prompt: Option<&str>,
+    ) -> Result<(), CliError> {
+        let mut client = self.client.borrow_mut();
+        if let Some(v) = title {
+            client.execute("UPDATE prompts SET title = $1 WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+        }
+        if let Some(v) = description {
+            client.execute("UPDATE prompts SET description = $1 WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+        }
+        if let Some(v) = prompt {
+            client.execute("UPDATE prompts SET prompt = $1 WHERE user_id = ($2::text)::uuid AND id = ($3::text)::uuid", &[&v, &self.user_id, &id])?;
+        }
+        Ok(())
+    }
+
+    fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
+        self.client
+            .borrow_mut()
+            .execute(PG_DELETE_PROMPT, &[&self.user_id, &id])?;
+        Ok(())
+    }
+
+    fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
+        validate_id_prefix(prefix)?;
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_RESOLVE_KEYTERM, &[&self.user_id, &format!("{prefix}%")])?;
+        match rows.len() {
+            0 => Err(CliError::Other(format!("Keyterm not found: {prefix}"))),
+            1 => Ok(rows[0].get(0)),
+            _ => Err(CliError::Other(format!(
+                "Ambiguous keyterm ID prefix: {prefix}"
+            ))),
+        }
+    }
+
+    fn insert_keyterm(
+        &self,
+        id: &str,
+        name: &str,
+        description: Option<&str>,
+        content: Option<&str>,
+        now: &str,
+    ) -> Result<(), CliError> {
+        self.client.borrow_mut().execute(
+            PG_INSERT_KEYTERM,
+            &[&id, &self.user_id, &name, &description, &content, &now],
+        )?;
+        Ok(())
+    }
+
+    fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_FIND_KEYTERM, &[&self.user_id, &id])?;
+        rows.first()
+            .map(keyterm_from_pg_row)
+            .transpose()?
+            .ok_or_else(|| CliError::Other(format!("Keyterm not found: {id}")))
+    }
+
+    fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
+        let rows = self
+            .client
+            .borrow_mut()
+            .query(PG_LIST_KEYTERMS, &[&self.user_id])?;
+        rows.iter()
+            .map(keyterm_from_pg_row)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(CliError::Postgres)
+    }
+
+    fn update_keyterm(
+        &self,
+        id: &str,
+        name: Option<&str>,
+        description: Option<&str>,
+        content: Option<&str>,
+    ) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut client = self.client.borrow_mut();
+        if let Some(v) = name {
+            client.execute("UPDATE keyterms SET name = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid", &[&v, &now, &self.user_id, &id])?;
+        }
+        if let Some(v) = description {
+            client.execute("UPDATE keyterms SET description = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid", &[&v, &now, &self.user_id, &id])?;
+        }
+        if let Some(v) = content {
+            client.execute("UPDATE keyterms SET content = $1, updated_at = ($2::text)::timestamptz WHERE user_id = ($3::text)::uuid AND id = ($4::text)::uuid", &[&v, &now, &self.user_id, &id])?;
+        }
+        Ok(())
+    }
+
+    fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
+        self.client
+            .borrow_mut()
+            .execute(PG_DELETE_KEYTERM, &[&self.user_id, &id])?;
+        Ok(())
     }
 }

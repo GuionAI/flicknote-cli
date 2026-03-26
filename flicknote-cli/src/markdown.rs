@@ -335,6 +335,50 @@ pub(crate) fn replace_entire_section(
     }
 }
 
+/// Render content with 2-char section IDs injected after each heading (including H1).
+///
+/// Output format:
+///   # My Note [Xk]
+///   ## Section [Fb]
+///   ...content...
+///
+/// Unlike `render_tree()`, this includes H1 headings with IDs since the content
+/// view needs all headings targetable.
+pub(crate) fn render_content_with_ids(content: &str) -> String {
+    let doc = parse_markdown(content);
+    if doc.headings.is_empty() {
+        return content.to_string();
+    }
+
+    // Build a map from byte offset -> heading id
+    let offset_to_id: std::collections::HashMap<usize, &str> = doc
+        .headings
+        .iter()
+        .map(|h| (h.offset, h.id.as_str()))
+        .collect();
+
+    let mut result = String::with_capacity(content.len() + doc.headings.len() * 8);
+    let mut byte_off = 0usize;
+
+    for line in content.split('\n') {
+        if let Some(id) = offset_to_id.get(&byte_off) {
+            result.push_str(line);
+            result.push_str(&format!(" [{id}]"));
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+        byte_off += line.len() + 1;
+    }
+
+    // Remove trailing newline if original content didn't end with one
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+
+    result
+}
+
 /// Render the full tree for a markdown content string (for post-mutation output).
 pub(crate) fn render_tree(content: &str) -> String {
     let doc = parse_markdown(content);

@@ -5,10 +5,10 @@ use flicknote_core::error::CliError;
 use flicknote_core::hooks;
 
 #[derive(Args)]
-pub(crate) struct GetArgs {
+pub(crate) struct DetailArgs {
     /// Note ID (full UUID or short prefix)
     id: String,
-    /// Extract a specific section by heading name (case-insensitive contains match)
+    /// Extract a specific section by section ID (2-char base62)
     #[arg(short = 's', long = "section")]
     section: Option<String>,
     /// Show markdown heading structure
@@ -22,8 +22,7 @@ pub(crate) struct GetArgs {
     archived: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<(), CliError> {
-    // Reject LIKE wildcards
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &DetailArgs) -> Result<(), CliError> {
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {
             id: args.id.clone(),
@@ -52,7 +51,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
         let content = note.content.as_deref().unwrap_or("");
 
         if args.tree {
-            // Synthesize H1 from title for tree display, since stored content no longer has H1
             let display_content = if let Some(ref t) = note.title {
                 format!("# {t}\n\n{content}")
             } else {
@@ -73,8 +71,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
             return Ok(());
         }
 
-        // --section: operates on raw stored content (no H1 synthesis needed — sections are H2+)
-        // H1 is stored separately as title to avoid duplication in stored content
+        // --section: operates on raw stored content
         if note.content.is_none() {
             return Err(CliError::Other(
                 "This note has no text content (link or file note)".into(),
@@ -111,8 +108,10 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
             "type": note.r#type,
             "title": note.title,
             "project": project_name,
+            "project_id": note.project_id,
             "summary": note.summary,
             "content": note.content,
+            "is_flagged": note.is_flagged,
             "created_at": note.created_at,
             "updated_at": note.updated_at,
         });
@@ -121,29 +120,36 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &GetArgs) -> Result<()
             serde_json::to_string_pretty(&json_output).map_err(CliError::Json)?
         );
     } else {
+        println!("ID:         {}", note.id);
+        println!("Type:       {}", note.r#type);
         println!(
             "Title:      {}",
             note.title.as_deref().unwrap_or("(untitled)")
         );
-        println!("ID:         {}", note.id);
-        println!("Type:       {}", note.r#type);
-        println!("Status:     {}", note.status);
-        println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
-        println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
-        if let Some(ref name) = project_name {
-            println!("Project:    {name}");
+        if let Some(ref summary) = note.summary {
+            println!("Summary:    {summary}");
         }
-        if let Some(ref source) = note.source {
-            println!("Source:     {source}");
+        if let Some(ref pid) = note.project_id {
+            let name = project_name.as_deref().unwrap_or("(unknown)");
+            println!("Project:    {name} ({pid})");
         }
         if note.is_flagged == Some(1) {
             println!("Flagged:    yes");
         }
-        if let Some(ref summary) = note.summary {
-            println!("\n── Summary ──\n{summary}");
-        }
+        println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
+        println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
         if let Some(ref content) = note.content {
-            println!("\n── Content ──\n{content}");
+            println!("\nContent:");
+            // Synthesize H1 from title for display, then render with IDs
+            let display_content = if let Some(ref t) = note.title {
+                format!("# {t}\n\n{content}")
+            } else {
+                content.clone()
+            };
+            println!(
+                "{}",
+                crate::markdown::render_content_with_ids(&display_content)
+            );
         }
         if let Some(url) = note.link_url() {
             println!("Link:       {url}");

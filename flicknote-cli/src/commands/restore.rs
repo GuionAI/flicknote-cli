@@ -5,12 +5,12 @@ use flicknote_core::error::CliError;
 use flicknote_core::hooks;
 
 #[derive(Args)]
-pub(crate) struct UnarchiveArgs {
+pub(crate) struct RestoreArgs {
     /// Note ID (full UUID or prefix)
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UnarchiveArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &RestoreArgs) -> Result<(), CliError> {
     let now = chrono::Utc::now().to_rfc3339();
     let full_id = db.resolve_archived_note_id(&args.id)?;
 
@@ -31,6 +31,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UnarchiveArgs) -> Res
     )?;
 
     db.set_note_deleted_at(&full_id, None, &now)?;
-    println!("Unarchived note {}.", &full_id[..8]);
+    println!("Restored note {}.", &full_id[..8]);
     Ok(())
 }

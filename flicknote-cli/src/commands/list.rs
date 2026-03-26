@@ -57,7 +57,23 @@ pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
             serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
         );
     } else {
-        print_notes_table(&notes);
+        // Fetch topics for all notes
+        let note_id_refs: Vec<&str> = notes.iter().map(|n| n.id.as_str()).collect();
+        let topics_map = db.list_note_topics(&note_id_refs)?;
+
+        // Fetch project names for all notes
+        let mut project_names: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for note in &notes {
+            if let Some(ref pid) = note.project_id
+                && !project_names.contains_key(pid)
+                && let Some(name) = db.find_project_name_by_id(pid)?
+            {
+                project_names.insert(pid.clone(), name);
+            }
+        }
+
+        print_notes_table(&notes, &topics_map, &project_names);
     }
 
     Ok(())

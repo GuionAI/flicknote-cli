@@ -1,6 +1,6 @@
 ---
 name: flicknote
-description: "FlickNote CLI for managing notes — add, list, get, replace, and organize by project"
+description: "FlickNote CLI for managing notes — add, list, detail, modify, and organize by project"
 ---
 
 # FlickNote CLI
@@ -30,7 +30,7 @@ Content with **markdown** and $variables safely handled
 EOF
 ```
 
-## Listing Notes
+## Listing & Finding Notes
 
 ```bash
 flicknote list                          # recent notes (default: 20)
@@ -41,40 +41,57 @@ flicknote list --type link              # filter by type (normal, voice, link)
 flicknote list --limit 50               # more results
 flicknote list --archived               # show archived notes
 flicknote list --json                   # JSON output
+flicknote count                         # count active notes
+flicknote count --project myproject     # count in project
+flicknote count "API"                   # count by keyword filter
 ```
+
+List columns: ID (full UUID) | Type | Title | Project | Topics | Flagged | Created
 
 ## Reading Notes
 
 ```bash
-# Get full note details
-flicknote get abc12345
+# Full metadata + content with section IDs
+flicknote detail abc12345
+
+# Content-only with section IDs after each heading
+flicknote content abc12345
 
 # See heading structure with section IDs
-flicknote get abc12345 --tree
+flicknote detail abc12345 --tree
 
-# Extract a specific section — use ID from --tree output (e.g. 3K)
-flicknote get abc12345 --section 3K
+# Extract a specific section — use ID from --tree or content output (e.g. 3K)
+flicknote detail abc12345 --section 3K
+flicknote content abc12345 --section 3K
 
 # JSON output
-flicknote get abc12345 --json
+flicknote detail abc12345 --json
 
 # Read an archived note
-flicknote get abc12345 --archived
+flicknote detail abc12345 --archived
 
 # Works with other flags
-flicknote get abc12345 --archived --tree
-flicknote get abc12345 --archived --json
+flicknote detail abc12345 --archived --tree
+flicknote detail abc12345 --archived --json
+```
+
+Content output format:
+```
+# My Note [Xk]
+## Summary [Fb]
+...content...
+## Key Points [eg]
+...content...
 ```
 
 To target a section, first run `--tree` to see IDs, then use the ID with `--section`:
 
 ```bash
-flicknote get abc12345 --tree
+flicknote detail abc12345 --tree
 # └─ # My Note
 #    ├─ [3K] ## Summary
 #    └─ [aZ] ## Details
-# Note: H1 headings are not shown with IDs and cannot be targeted with --section
-flicknote get abc12345 --section 3K
+flicknote detail abc12345 --section 3K
 ```
 
 ## Editing Notes
@@ -83,17 +100,20 @@ All content-writing commands read from **stdin only** — pipe content in or use
 
 ```bash
 # Replace entire note content (stdin required)
-echo "Completely new content" | flicknote replace abc12345
-cat updated.md | flicknote replace abc12345
+echo "Completely new content" | flicknote modify abc12345
+cat updated.md | flicknote modify abc12345
 
-# Replace a section by ID (run --tree first to get the ID)
-echo "updated content" | flicknote replace abc12345 --section 3K
+# Replace a section by ID (stdin = body only, heading is preserved)
+echo "updated body content" | flicknote modify abc12345 --section 3K
+
+# Replace a section including new heading (stdin starts with heading)
+echo "## New Name\nupdated content" | flicknote modify abc12345 --section 3K --with-heading
 
 # Append to an existing note (stdin required, adds with \n\n separator)
 echo "more content" | flicknote append abc12345
 
-# Remove a section by ID
-flicknote remove abc12345 --section 3K
+# Remove a section by ID (use delete --section)
+flicknote delete abc12345 --section 3K
 
 # Rename a section heading (preserves heading level and body)
 flicknote rename abc12345 --section 3K "Final"
@@ -103,17 +123,23 @@ echo "## Preface\nContext for this doc" | flicknote insert abc12345 --before 3K
 echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after aZ
 ```
 
-Mutating commands (`replace`, `remove`, `rename`, `insert`) print the updated `--tree` after making changes, so you can see new IDs without a separate `--tree` call.
+Mutating commands print the updated `--tree` after making changes, so you can see new IDs without a separate call.
 
 **Warning: Don't pipe flicknote content through sed/awk.** Content with code blocks, backticks, `$`, or `\` gets silently corrupted by shell substitution. Instead:
-- Use `flicknote replace` with a heredoc for the new content
+- Use `flicknote modify` with a heredoc for the new content
 - Use `flicknote insert --before/--after` to add sections
-- Use `flicknote remove` to delete sections
+- Use `flicknote delete --section` to remove sections
 
-## Moving Notes Between Projects
+## Modifying Note Metadata
 
 ```bash
 flicknote modify abc12345 --project newproject   # move note to a different project
+flicknote modify abc12345 --title "New Title"    # rename the note
+flicknote modify abc12345 --flagged              # flag the note
+flicknote modify abc12345 --unflagged            # unflag the note
+
+# Combine content replacement with metadata in one call
+cat updated.md | flicknote modify abc12345 --project newproject --flagged
 ```
 
 Projects are created automatically if they don't exist. An empty project is deleted automatically after the last note is moved out.
@@ -124,12 +150,45 @@ Projects are created automatically if they don't exist. An empty project is dele
 flicknote open abc12345    # open note in browser
 ```
 
-## Archiving Notes
+## Deleting & Restoring Notes
 
 ```bash
-flicknote archive abc12345     # archive a note (soft-delete, hidden from normal listing)
-flicknote unarchive abc12345   # restore an archived note
-flicknote list --archived      # list archived notes
+flicknote delete abc12345      # soft-delete a note (hidden from normal listing)
+flicknote restore abc12345     # restore a deleted note
+flicknote list --archived      # list deleted notes
+```
+
+## Projects
+
+```bash
+flicknote project list                  # list projects
+flicknote project add myproject         # create a project
+flicknote project detail abc12345       # show project details
+flicknote project modify abc12345 --prompt <uuid>    # associate a prompt
+flicknote project modify abc12345 --keyterm <uuid>   # associate keyterms
+flicknote project modify abc12345 --color "#FF5733"  # set color
+flicknote project modify abc12345 --prompt none      # clear prompt
+flicknote project delete abc12345       # archive/delete a project
+```
+
+## Prompts
+
+```bash
+flicknote prompt add --title "My Prompt" --prompt "You are a ..."
+flicknote prompt list
+flicknote prompt detail abc12345
+flicknote prompt modify abc12345 --title "New Title"
+flicknote prompt delete abc12345
+```
+
+## Keyterms
+
+```bash
+flicknote keyterm add --name "My Terms" --content "term1: definition\nterm2: definition"
+flicknote keyterm list
+flicknote keyterm detail abc12345
+flicknote keyterm modify abc12345 --content "updated content"
+flicknote keyterm delete abc12345
 ```
 
 ## Uploading Files
@@ -148,8 +207,6 @@ flicknote upload report.pdf
 | `link` | `flicknote add "https://..."` | URL auto-detected |
 | `file` | `flicknote upload <path>` | Uploaded file |
 | `voice` | Mobile app | Voice memo (transcribed) |
-
-Projects are created automatically by `--project` — no separate project creation needed.
 
 ## Not for Common Use
 
