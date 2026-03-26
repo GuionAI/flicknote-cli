@@ -189,5 +189,16 @@ pub fn app_schema() -> Schema {
         },
     ));
 
+    schema.tables.push(Table::create(
+        "tc_tag_colors",
+        vec![
+            Column::text("user_id"),
+            Column::text("name"),
+            Column::text("color"),
+            Column::text("created_at"),
+        ],
+        |_| {},
+    ));
+
     schema
 }
