@@ -187,45 +187,6 @@ pub fn app_schema() -> Schema {
     ));
 
     schema.tables.push(Table::create(
-        "tc_annotations",
-        vec![
-            Column::text("user_id"),
-            Column::text("task_id"),
-            Column::text("entry_at"),
-            Column::text("description"),
-        ],
-        |t| {
-            t.indexes = vec![Index {
-                name: "tc_annotations_task".into(),
-                columns: vec![IndexedColumn {
-                    name: "task_id".into(),
-                    ascending: true,
-                    type_name: "TEXT".into(),
-                }],
-            }];
-        },
-    ));
-
-    schema.tables.push(Table::create(
-        "tc_tags",
-        vec![
-            Column::text("user_id"),
-            Column::text("task_id"),
-            Column::text("name"),
-        ],
-        |t| {
-            t.indexes = vec![Index {
-                name: "tc_tags_task".into(),
-                columns: vec![IndexedColumn {
-                    name: "task_id".into(),
-                    ascending: true,
-                    type_name: "TEXT".into(),
-                }],
-            }];
-        },
-    ));
-
-    schema.tables.push(Table::create(
         "tc_tag_colors",
         vec![
             Column::text("user_id"),
