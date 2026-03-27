@@ -48,17 +48,21 @@ pub(crate) struct ModifyArgs {
     unflagged: bool,
 }
 
+/// Check whether content starts with a heading (ATX or setext).
+fn content_starts_with_heading(content: &str) -> bool {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    Parser::new_ext(content, Options::empty())
+        .next()
+        .is_some_and(|e| matches!(e, Event::Start(Tag::Heading { .. })))
+}
+
 /// Validate that replacement content starts with a heading.
 fn validate_replacement_heading(
     content: &str,
     section_id: &str,
     section_heading_text: &str,
 ) -> Result<(), CliError> {
-    let first_non_empty = content.lines().find(|l| !l.trim().is_empty());
-    let starts_with_heading = first_non_empty
-        .and_then(crate::markdown::heading_level)
-        .is_some();
-    if starts_with_heading {
+    if content_starts_with_heading(content) {
         return Ok(());
     }
     Err(CliError::Other(format!(
@@ -150,7 +154,14 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result
                 println!("Replaced section in note {}.\n", &full_id[..8]);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             } else {
-                // stdin is body-only — preserve original heading
+                // stdin is body-only — reject if it starts with a heading (ATX or setext)
+                if content_starts_with_heading(&new_body) {
+                    return Err(CliError::Other(
+                        "stdin starts with a heading — did you mean to use --with-heading?".into(),
+                    ));
+                }
+
+                // preserve original heading
                 let original_heading_end = content[start..]
                     .find('\n')
                     .map(|i| start + i + 1)
@@ -244,5 +255,28 @@ mod tests {
             result.is_ok(),
             "content starting with '## ' should return Ok"
         );
+    }
+
+    #[test]
+    fn test_content_starts_with_heading_atx() {
+        assert!(content_starts_with_heading("# Heading"));
+        assert!(content_starts_with_heading("## Heading"));
+        assert!(content_starts_with_heading("### Heading"));
+        assert!(content_starts_with_heading("\n## Heading after blank"));
+    }
+
+    #[test]
+    fn test_content_starts_with_heading_setext() {
+        assert!(content_starts_with_heading("My Section\n=========="));
+        assert!(content_starts_with_heading("My Section\n----------"));
+        assert!(content_starts_with_heading("\nMy Section\n=========="));
+    }
+
+    #[test]
+    fn test_content_starts_with_heading_false() {
+        assert!(!content_starts_with_heading("plain text"));
+        assert!(!content_starts_with_heading("some body\n\nmore text"));
+        assert!(!content_starts_with_heading(""));
+        assert!(!content_starts_with_heading("#NoSpace"));
     }
 }

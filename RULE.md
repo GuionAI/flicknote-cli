@@ -16,59 +16,69 @@ Some content with **markdown** and $variables
 EOF
 ```
 
-## List
+## List & Find
 
 ```bash
 flicknote list --project <name>
 flicknote find "keyword"
 flicknote find "keyword1" "keyword2"    # OR match
 flicknote list --json
+flicknote count                         # count active notes
+flicknote count --project <name>        # count in project
 ```
 
 ## Read
 
 ```bash
-flicknote get <id>
-flicknote get <id> --tree                     # heading structure with section IDs
-flicknote get <id> --section <section-id>     # use ID from --tree output (e.g. 3K)
-flicknote get <id> --json
-flicknote get <id> --archived               # read an archived note
+flicknote detail <id>
+flicknote detail <id> --tree                  # heading structure with section IDs
+flicknote detail <id> --section <section-id>  # use ID from --tree output (e.g. 3K)
+flicknote detail <id> --json
+flicknote detail <id> --archived              # read an archived note
+flicknote content <id>                        # content-only with section IDs
+flicknote content <id> --section <section-id>
 ```
 
 To target a section, first run `--tree` to see IDs, then use the ID:
 
 ```bash
-flicknote get abc12345 --tree
+flicknote detail abc12345 --tree
 # └─ # My Note
 #    ├─ [3K] ## Summary
 #    └─ [aZ] ## Details
 # Note: H1 headings are not shown with IDs and cannot be targeted with --section
-flicknote get abc12345 --section 3K
+flicknote detail abc12345 --section 3K
 ```
 
-## Replace / Append
+## Modify / Append
 
 ```bash
-echo "new content" | flicknote replace <id>
-echo "new content" | flicknote replace <id> --section <section-id>
+echo "new content" | flicknote modify <id>
+echo "new content" | flicknote modify <id> --section <section-id>          # body only, heading preserved
+echo "## New Heading\ncontent" | flicknote modify <id> --section <section-id> --with-heading  # replaces heading too
+# Without --with-heading: stdin must NOT start with # (errors if it does)
+# With --with-heading: stdin MUST start with # (errors if it doesn't)
 echo "more content" | flicknote append <id>
+flicknote modify <id> --project <name>       # move to project
+flicknote modify <id> --title "New Title"    # rename
+flicknote modify <id> --flagged              # flag/unflag
 ```
 
 For multiline content with special characters, use heredoc:
 
 ```bash
-cat <<'EOF' | flicknote replace <id>
+cat <<'EOF' | flicknote modify <id>
 # Updated Note
 Content with **markdown** and $variables
 EOF
 ```
 
-Mutating commands (`replace`, `remove`, `rename`, `insert`) print the updated `--tree` after making changes.
+Mutating commands (`modify`, `delete`, `rename`, `insert`) print the updated `--tree` after making changes.
 
 ## Section Operations
 
 ```bash
-flicknote remove <id> --section <section-id>
+flicknote delete <id> --section <section-id>
 flicknote rename <id> --section <section-id> "New Name"
 echo "content" | flicknote insert <id> --before <section-id>
 echo "content" | flicknote insert <id> --after <section-id>
@@ -81,10 +91,11 @@ echo "content" | flicknote insert <id> --after <section-id>
 flicknote open <id>    # open note in browser
 ```
 
-## Archive
+## Delete & Restore
 
 ```bash
-flicknote archive <id>
+flicknote delete <id>
+flicknote restore <id>
 ```
 
-Never pipe flicknote content through sed/awk — use replace/insert instead.
+Never pipe flicknote content through sed/awk — use modify/insert instead.

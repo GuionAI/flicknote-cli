@@ -104,9 +104,10 @@ echo "Completely new content" | flicknote modify abc12345
 cat updated.md | flicknote modify abc12345
 
 # Replace a section by ID (stdin = body only, heading is preserved)
+# stdin must NOT start with # — errors if it does (use --with-heading instead)
 echo "updated body content" | flicknote modify abc12345 --section 3K
 
-# Replace a section including new heading (stdin starts with heading)
+# Replace a section including new heading (stdin MUST start with #)
 echo "## New Name\nupdated content" | flicknote modify abc12345 --section 3K --with-heading
 
 # Append to an existing note (stdin required, adds with \n\n separator)
