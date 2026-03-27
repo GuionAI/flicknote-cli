@@ -1,5 +1,7 @@
 use flicknote_core::backend::NoteDb;
+use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::hooks;
 use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
 
@@ -71,6 +73,40 @@ pub(crate) fn get_note_content(db: &dyn NoteDb, full_id: &str) -> Result<String,
 /// Fetch a full Note by ID. Returns error if not found or deleted.
 pub(crate) fn get_note(db: &dyn NoteDb, full_id: &str) -> Result<Note, CliError> {
     db.find_note(full_id)
+}
+
+/// Run the on-modify hook and write updated content to the database.
+///
+/// `action` is forwarded to the hook as the operation type:
+/// - `"replace"` for whole-note or whole-section content replacement
+/// - `"modify"` for partial section body updates
+pub(crate) fn write_content(
+    db: &dyn NoteDb,
+    config: &Config,
+    full_id: &str,
+    new_content: &str,
+    action: &str,
+) -> Result<(), CliError> {
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let old_note = db.find_note(full_id)?;
+    let mut new_note = old_note.clone();
+    new_note.content = Some(new_content.to_string());
+    new_note.status = "ai_queued".to_string();
+    new_note.updated_at = Some(now.clone());
+
+    let old_json = serde_json::to_string(&old_note)?;
+    let new_json = serde_json::to_string(&new_note)?;
+    let config_dir = config.paths.config_dir.to_string_lossy();
+    hooks::run_on_modify(
+        &config.paths.hooks_dir,
+        &old_json,
+        &new_json,
+        action,
+        &config_dir,
+    )?;
+
+    db.update_note_content(full_id, new_content, true)
 }
 
 /// Print notes as a formatted table to stdout.

@@ -6,6 +6,7 @@ pub(crate) mod count;
 pub(crate) mod daemon;
 pub(crate) mod delete;
 pub(crate) mod detail;
+pub(crate) mod edit;
 pub(crate) mod find;
 pub(crate) mod import;
 pub(crate) mod insert;

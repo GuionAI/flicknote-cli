@@ -42,6 +42,8 @@ enum Commands {
     Append(commands::append::AppendArgs),
     /// Delete a note (soft-delete) or remove a section
     Delete(commands::delete::DeleteArgs),
+    /// Edit a note in $EDITOR, or create a new note from editor
+    Edit(commands::edit::EditArgs),
     /// Restore a deleted note
     Restore(commands::restore::RestoreArgs),
     /// List notes
@@ -168,6 +170,7 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError>
         Commands::Add(args) => commands::add::run(db, config, args),
         Commands::Append(args) => commands::append::run(db, config, args),
         Commands::Delete(args) => commands::delete::run(db, config, args),
+        Commands::Edit(args) => commands::edit::run(db, config, args),
         Commands::Restore(args) => commands::restore::run(db, config, args),
         Commands::List(args) => commands::list::run(db, args),
         Commands::Count(args) => commands::count::run(db, args),
