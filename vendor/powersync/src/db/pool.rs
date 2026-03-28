@@ -43,6 +43,7 @@ impl ConnectionPool {
         for _ in 0..5 {
             let reader = Connection::open(&path)?;
             reader.pragma_update(None, "query_only", true)?;
+            reader.pragma_update(None, "busy_timeout", 30_000)?;
             readers.push(reader);
         }
 

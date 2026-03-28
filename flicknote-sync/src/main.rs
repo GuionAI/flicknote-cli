@@ -7,17 +7,12 @@ use flicknote_core::{config::Config, schema::app_schema};
 use futures_lite::StreamExt;
 mod http_adapter;
 use http_adapter::ReqwestHttpClient;
+use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use powersync::{
     BackendConnector, ConnectionPool, PowerSyncCredentials, PowerSyncDatabase, SyncOptions,
     UpdateType, env::PowerSyncEnvironment, error::PowerSyncError,
 };
-
-/// How often the polling loop checks for pending CRUD entries from the CLI process.
-/// 5s balances latency against unnecessary auth round-trips on idle daemons.
-const POLL_INTERVAL_SECS: u64 = 5;
-
-/// After this many consecutive poll failures, escalate from warn to error.
-const FAILURE_ESCALATE_THRESHOLD: u32 = 3;
+use tokio::sync::mpsc;
 
 /// Helper to convert arbitrary errors into PowerSyncError via http_client::Error
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
@@ -129,8 +124,12 @@ fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-/// Inner upload logic shared by the BackendConnector impl and the polling loop.
+/// Inner upload logic shared by the BackendConnector impl and the fsnotify watcher.
 /// Caller is responsible for holding `upload_guard` before calling.
+///
+/// Returns `true` if at least one CRUD transaction was processed and committed,
+/// `false` if ps_crud was empty. Callers may use this to decide whether to
+/// run a WAL checkpoint after upload.
 ///
 /// The token is fetched once per call by the caller. Supabase tokens are typically
 /// valid for 1 hour, so any realistic upload batch completes well within the window.
@@ -140,8 +139,9 @@ async fn run_upload(
     token: &str,
     supabase_url: &str,
     supabase_anon_key: &str,
-) -> Result<(), PowerSyncError> {
+) -> Result<bool, PowerSyncError> {
     let mut transactions = db.crud_transactions();
+    let mut did_upload = false;
 
     while let Some(mut tx) = transactions.try_next().await? {
         let mut fatal_msg: Option<String> = None;
@@ -216,10 +216,11 @@ async fn run_upload(
                     "Failed to discard fatal transaction (original: {msg}): {e}"
                 ))
             })?; // discard entire transaction atomically
+            did_upload = true;
             continue; // next transaction
         }
         if let Some(msg) = transient_msg {
-            return Err(ps_err(msg)); // retry on next poll cycle
+            return Err(ps_err(msg)); // retry on next cycle
         }
 
         // All entries succeeded — complete each transaction individually so
@@ -228,9 +229,61 @@ async fn run_upload(
         // prior entries on the next cycle, causing phantom DELETEs (404) and
         // duplicate PUTs.
         tx.complete().await?;
+        did_upload = true;
     }
 
-    Ok(())
+    Ok(did_upload)
+}
+
+/// Force a WAL TRUNCATE checkpoint to reclaim disk space after bulk uploads.
+///
+/// Called from the fsnotify watcher path after a successful upload — never from
+/// inside upload_data() (the SDK callback), where it could contend with the
+/// download actor during active sync.
+///
+/// TRUNCATE blocks writers briefly until all readers finish their current
+/// transaction. In the CLI daemon context readers are mostly idle (no UI watches),
+/// so the wait is sub-millisecond in practice.
+async fn checkpoint_wal(db: &PowerSyncDatabase) {
+    match db.writer().await {
+        Ok(writer) => match writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+            Ok(_) => log::debug!("WAL checkpoint completed"),
+            Err(e) => {
+                log::warn!("WAL checkpoint failed (next attempt after next successful upload): {e}")
+            }
+        },
+        Err(e) => log::warn!("WAL checkpoint: could not acquire writer: {e}"),
+    }
+}
+
+/// Acquire the upload guard, get a fresh token, run_upload, and checkpoint if anything uploaded.
+/// Shared by both the startup path and the watcher loop to avoid divergence.
+/// `context` is used as a log prefix (e.g. "Startup upload", "Upload").
+async fn try_upload_and_checkpoint(
+    db: &PowerSyncDatabase,
+    client: &reqwest::Client,
+    auth: &GoTrueClient,
+    guard: &tokio::sync::Mutex<()>,
+    supabase_url: &str,
+    supabase_anon_key: &str,
+    context: &str,
+) {
+    let _guard = guard.lock().await;
+    let token = match auth.get_session().await {
+        Ok(s) => s.access_token,
+        Err(e) => {
+            log::warn!("{context}: auth error: {e}");
+            return;
+        }
+    };
+    match run_upload(db, client, &token, supabase_url, supabase_anon_key).await {
+        Ok(did_upload) => {
+            if did_upload {
+                checkpoint_wal(db).await;
+            }
+        }
+        Err(e) => log::warn!("{context}: upload failed: {e}"),
+    }
 }
 
 #[async_trait]
@@ -251,6 +304,8 @@ impl BackendConnector for FlickNoteConnector {
     async fn upload_data(&self) -> Result<(), PowerSyncError> {
         let _guard = self.upload_guard.lock().await;
         let token = self.get_token().await?;
+        // Ignore the bool — checkpoint is only safe to call from the watcher path,
+        // not here (SDK callback fires during active sync alongside the download actor).
         run_upload(
             &self.db,
             &self.http_client,
@@ -258,7 +313,8 @@ impl BackendConnector for FlickNoteConnector {
             &self.supabase_url,
             &self.supabase_anon_key,
         )
-        .await
+        .await?;
+        Ok(())
     }
 }
 
@@ -345,7 +401,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let upload_guard = Arc::new(tokio::sync::Mutex::new(()));
     let http_client = reqwest::Client::new();
-    let poll_client = http_client.clone();
+    let upload_client = http_client.clone();
 
     let connector = FlickNoteConnector {
         db: db.clone(),
@@ -357,68 +413,128 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         supabase_anon_key: config.supabase_anon_key.clone(),
     };
 
-    let poll_db = db.clone();
-    let poll_supabase_url = config.supabase_url.clone();
-    let poll_anon_key = config.supabase_anon_key.clone();
-    let poll_guard = Arc::clone(&upload_guard);
-
     log::info!("Sync daemon connecting (pid {})", std::process::id());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
 
-    let poll_auth = Arc::clone(&auth);
-    let mut poll_handle = tokio::spawn(async move {
-        let mut consecutive_failures: u32 = 0;
-        // Skip first tick — Trigger B from stream establishment handles existing entries.
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(POLL_INTERVAL_SECS));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        interval.tick().await;
-        loop {
-            interval.tick().await;
-            let _guard = poll_guard.lock().await;
-            let token = match poll_auth.get_session().await {
-                Ok(s) => s.access_token,
-                Err(e) => {
-                    consecutive_failures += 1;
-                    if consecutive_failures >= FAILURE_ESCALATE_THRESHOLD {
-                        log::error!("Polling upload: auth error ({consecutive_failures}x): {e}");
-                    } else {
-                        log::warn!("Polling upload: auth error: {e}");
-                    }
-                    continue;
+    // Reclaim leftover WAL from previous sessions. Without this, a daemon restart
+    // after a crash during bulk import would inherit a bloated WAL and immediately
+    // re-enter the BUSY_SNAPSHOT death spiral. Log-and-continue: a missing WAL
+    // (fresh DB) or brief lock is non-fatal — the post-upload checkpoint will clean
+    // up during normal operation.
+    log::debug!("Running startup WAL checkpoint");
+    checkpoint_wal(&db).await;
+
+    // Watch the WAL file for cross-process writes from the CLI.
+    // PowerSync's in-process ps_crud watch can't detect writes from a separate process
+    // (e.g. `flicknote add`). Watching the WAL file catches any SQLite write regardless
+    // of which process wrote it, with ~200ms trailing-debounce latency.
+    let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(16);
+
+    // Build the WAL filename ("<db_file>-wal") for event filtering.
+    // The WAL may not exist yet on a fresh DB, so watch the parent dir and
+    // filter by filename — handles both cases without runtime switching.
+    let wal_filename = {
+        let mut name = config
+            .paths
+            .db_file
+            .file_name()
+            .ok_or("db_file path has no filename component")?
+            .to_os_string();
+        name.push("-wal");
+        name
+    };
+    let db_dir = config
+        .paths
+        .db_file
+        .parent()
+        .ok_or("db_file path has no parent directory")?
+        .to_path_buf();
+    let wal_fname_clone = wal_filename.clone();
+
+    let mut fs_watcher = RecommendedWatcher::new(
+        move |res: Result<notify::Event, notify::Error>| match res {
+            Err(e) => log::error!("fs_watcher error (uploads may stall): {e}"),
+            Ok(event) => {
+                if !matches!(event.kind, EventKind::Modify(_)) {
+                    return;
                 }
-            };
-            if let Err(e) = run_upload(
-                &poll_db,
-                &poll_client,
-                &token,
-                &poll_supabase_url,
-                &poll_anon_key,
-            )
-            .await
-            {
-                consecutive_failures += 1;
-                if consecutive_failures >= FAILURE_ESCALATE_THRESHOLD {
-                    log::error!("Polling upload failed ({consecutive_failures}x): {e}");
-                } else {
-                    log::warn!("Polling upload failed: {e}");
+                let is_wal = event
+                    .paths
+                    .iter()
+                    .any(|p| p.file_name().is_some_and(|f| f == wal_fname_clone));
+                if is_wal && trigger_tx.try_send(()).is_err() {
+                    log::debug!("WAL trigger channel full — event dropped (burst in progress)");
                 }
-            } else {
-                consecutive_failures = 0;
-                log::debug!("Polling upload: completed");
             }
+        },
+        NotifyConfig::default(),
+    )?;
+    fs_watcher.watch(&db_dir, RecursiveMode::NonRecursive)?;
+
+    let upload_db = db.clone();
+    let upload_supabase_url = config.supabase_url.clone();
+    let upload_anon_key = config.supabase_anon_key.clone();
+    let upload_guard_clone = Arc::clone(&upload_guard);
+    let upload_auth_clone = Arc::clone(&auth);
+
+    let mut upload_handle = tokio::spawn(async move {
+        // Initial upload on startup — pick up any ps_crud entries written before
+        // the daemon started (e.g. CLI ran while daemon was down).
+        try_upload_and_checkpoint(
+            &upload_db,
+            &upload_client,
+            &upload_auth_clone,
+            &upload_guard_clone,
+            &upload_supabase_url,
+            &upload_anon_key,
+            "Startup upload",
+        )
+        .await;
+
+        loop {
+            // Block until a WAL change is detected.
+            if trigger_rx.recv().await.is_none() {
+                break; // watcher dropped — daemon shutting down
+            }
+
+            // Trailing debounce: collapse burst writes (e.g. bulk import) into a
+            // single upload attempt. Fire only after 200ms of silence.
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => break,
+                    v = trigger_rx.recv() => {
+                        if v.is_none() { return; } // channel closed
+                        // more events arrived — reset the silence window
+                    }
+                }
+            }
+
+            try_upload_and_checkpoint(
+                &upload_db,
+                &upload_client,
+                &upload_auth_clone,
+                &upload_guard_clone,
+                &upload_supabase_url,
+                &upload_anon_key,
+                "Upload",
+            )
+            .await;
         }
     });
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
-        res = &mut poll_handle => {
-            let Err(e) = res;
-            log::error!("Poll task exited unexpectedly: {e}");
+        res = &mut upload_handle => {
+            if let Err(e) = res {
+                log::error!("Upload task panicked: {e}");
+                db.disconnect().await;
+                log::info!("Sync daemon stopped");
+                return Err(e.into());
+            }
         }
     }
-    poll_handle.abort();
+    upload_handle.abort();
     db.disconnect().await;
     log::info!("Sync daemon stopped");
 
