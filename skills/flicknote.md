@@ -98,9 +98,11 @@ flicknote detail abc12345 --section 3K
 
 All content-writing commands read from **stdin only** — pipe content in or use heredoc.
 
+> **Warning:** `flicknote modify <id>` without `--section` **replaces the entire note content** with stdin. To edit only a section, always use `--section <id>`.
+
 ```bash
 # Replace entire note content (stdin required)
-echo "Completely new content" | flicknote modify abc12345
+echo "Completely new content" | flicknote modify abc12345  # ⚠️ replaces ENTIRE note
 cat updated.md | flicknote modify abc12345
 
 # Replace a section by ID (stdin = body only, heading is preserved)

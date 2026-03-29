@@ -52,8 +52,10 @@ flicknote detail abc12345 --section 3K
 
 ## Modify / Append
 
+> **Warning:** `flicknote modify <id>` without `--section` **replaces the entire note content** with stdin. Always use `--section <id>` to edit just one section.
+
 ```bash
-echo "new content" | flicknote modify <id>
+echo "new content" | flicknote modify <id>                                  # ⚠️ replaces ENTIRE note
 echo "new content" | flicknote modify <id> --section <section-id>          # body only, heading preserved
 echo "## New Heading\ncontent" | flicknote modify <id> --section <section-id> --with-heading  # replaces heading too
 # Without --with-heading: stdin must NOT start with # (errors if it does)
