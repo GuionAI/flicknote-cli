@@ -5,7 +5,6 @@ projects:
   - 'flicknote-auth'
   - 'flicknote-cli'
   - 'flicknote-sync'
-  - 'flicktask-cli'
 
 vcs:
   client: 'git'

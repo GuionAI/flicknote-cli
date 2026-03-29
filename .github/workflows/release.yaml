@@ -43,12 +43,12 @@ jobs:
         run: echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include/x86_64-linux-musl" >> "$GITHUB_ENV"
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }} -p flicknote-cli -p flicktask-cli -p flicknote-sync
+        run: cargo build --release --target ${{ matrix.target }} -p flicknote-cli -p flicknote-sync
 
       - name: Package
         run: |
           ARCHIVE="flicknote_${GITHUB_REF_NAME}_${{ matrix.suffix }}.tar.gz"
-          tar -czf "$ARCHIVE" -C target/${{ matrix.target }}/release flicknote flicktask flicknote-sync
+          tar -czf "$ARCHIVE" -C target/${{ matrix.target }}/release flicknote flicknote-sync
           shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256"
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
 
@@ -139,13 +139,11 @@ jobs:
 
             def install
               bin.install "flicknote"
-              bin.install "flicktask"
               bin.install "flicknote-sync"
             end
 
             test do
               assert_match "flicknote", shell_output("#{bin}/flicknote --help")
-              assert_match "flicktask", shell_output("#{bin}/flicktask list --help")
             end
           end
           FORMULA
