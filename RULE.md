@@ -37,6 +37,7 @@ flicknote detail <id> --json
 flicknote detail <id> --archived              # read an archived note
 flicknote content <id>                        # content-only with section IDs
 flicknote content <id> --section <section-id>
+flicknote content <id> --raw                  # pure markdown, no section ID annotations (safe for piping)
 ```
 
 To target a section, first run `--tree` to see IDs, then use the ID:

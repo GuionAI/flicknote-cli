@@ -57,12 +57,16 @@ flicknote detail abc12345
 # Content-only with section IDs after each heading
 flicknote content abc12345
 
+# Content-only as pure markdown — no section ID annotations (safe for piping to sed/awk)
+flicknote content abc12345 --raw
+
 # See heading structure with section IDs
 flicknote detail abc12345 --tree
 
 # Extract a specific section — use ID from --tree or content output (e.g. 3K)
 flicknote detail abc12345 --section 3K
 flicknote content abc12345 --section 3K
+flicknote content abc12345 --section 3K --raw   # raw section content, no ID annotation
 
 # JSON output
 flicknote detail abc12345 --json
@@ -128,7 +132,13 @@ echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after aZ
 
 Mutating commands print the updated `--tree` after making changes, so you can see new IDs without a separate call.
 
-**Warning: Don't pipe flicknote content through sed/awk.** Content with code blocks, backticks, `$`, or `\` gets silently corrupted by shell substitution. Instead:
+**Warning: Don't pipe the default `flicknote content` output through sed/awk.** The section IDs (`[Xk]` annotations) will be included in the output and corrupt diffs. Use `--raw` to get pure markdown without annotations, then pipe safely:
+
+```bash
+flicknote content abc12345 --raw | sed 's/foo/bar/g'
+```
+
+For content modifications, prefer:
 - Use `flicknote modify` with a heredoc for the new content
 - Use `flicknote insert --before/--after` to add sections
 - Use `flicknote delete --section` to remove sections

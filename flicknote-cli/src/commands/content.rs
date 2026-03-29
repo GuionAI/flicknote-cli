@@ -9,6 +9,9 @@ pub(crate) struct ContentArgs {
     /// Extract a specific section by section ID (2-char base62)
     #[arg(short = 's', long = "section")]
     section: Option<String>,
+    /// Output raw markdown without section ID annotations (safe for piping to sed/awk)
+    #[arg(long = "raw")]
+    raw: bool,
 }
 
 pub(crate) fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliError> {
@@ -32,21 +35,21 @@ pub(crate) fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliError> {
         content.to_string()
     };
 
-    if let Some(ref section_id) = args.section {
-        // For --section we need to parse with IDs and extract
+    // Select which content to render: a specific section, or the full note.
+    // Sections are trimmed to strip leading/trailing whitespace from the slice.
+    // Full-note content is not trimmed to preserve the synthesized H1 prefix.
+    let output = if let Some(ref section_id) = args.section {
         let doc = crate::markdown::parse_markdown(&display_content);
         let bounds = super::util::find_section(&doc, section_id, &args.id)?;
-        let section_content = &display_content[bounds.start..bounds.end];
-        // Inject IDs into the section content only
-        print!(
-            "{}",
-            crate::markdown::render_content_with_ids(section_content.trim())
-        );
+        display_content[bounds.start..bounds.end].trim().to_string()
     } else {
-        print!(
-            "{}",
-            crate::markdown::render_content_with_ids(&display_content)
-        );
+        display_content
+    };
+
+    if args.raw {
+        print!("{output}");
+    } else {
+        print!("{}", crate::markdown::render_content_with_ids(&output));
     }
 
     Ok(())
