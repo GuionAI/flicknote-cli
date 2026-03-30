@@ -73,11 +73,23 @@ fn validate_replacement_heading(
 pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
 
-    // Read stdin atomically: check terminal + read in one step to avoid TOCTOU races.
-    let stdin_content = try_read_stdin()?;
-
     let has_metadata =
         args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
+
+    // When metadata flags are set and no --section, skip stdin entirely to avoid blocking
+    // in non-terminal contexts (agent/script) where stdin is open but nothing is piped.
+    let metadata_only = has_metadata && args.section.is_none();
+    let stdin_content = if metadata_only {
+        if !std::io::stdin().is_terminal() {
+            eprintln!(
+                "warning: piped content ignored because metadata flags are set without --section. \
+                 To also replace note content, use --section."
+            );
+        }
+        None
+    } else {
+        try_read_stdin()?
+    };
 
     // --section without stdin is an error
     if args.section.is_some() && stdin_content.is_none() {
