@@ -1,0 +1,37 @@
+config_version = "0"
+
+exclude_patterns = ["target/**", "vendor/**", "docs/**", "dagger/**"]
+
+test_patterns = ["**/*_test.go", "**/*_test.rs"]
+
+[smells]
+mode = "comment"
+
+[[source]]
+name = "default"
+default = true
+
+[[plugin]]
+name = "clippy"
+mode = "block"
+
+# mode = "block" applies to `qlty check` runs (e.g. qlty check --all).
+# The pre-push hook uses --no-formatters, so rustfmt does not block during push.
+[[plugin]]
+name = "rustfmt"
+mode = "block"
+
+# Pinned to 2.10.1 — qlty default was not resolving a compatible version.
+[[plugin]]
+name = "golangci-lint"
+version = "2.10.1"
+mode = "block"
+target = { type = "parent_with", path = "go.mod" }
+
+[[plugin]]
+name = "trufflehog"
+mode = "block"
+
+[[plugin]]
+name = "osv-scanner"
+mode = "block"

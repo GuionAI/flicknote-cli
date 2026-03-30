@@ -46,4 +46,4 @@ clean:
 	cargo clean
 
 setup:
-	git config core.hooksPath .githooks
+	qlty githooks install

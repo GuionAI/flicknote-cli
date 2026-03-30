@@ -22,6 +22,23 @@ cargo fmt --check          # format check
 
 Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 
+## Git Hooks (qlty)
+
+This repo uses qlty for git hooks and unified linting. Install once with `qlty githooks install` (or `make setup`).
+
+- **pre-commit** runs `qlty fmt` — auto-formats staged Rust files
+- **pre-push** runs `qlty check` — clippy, golangci-lint, trufflehog, osv-scanner (uses `--skip-errored-plugins`, so a misconfigured plugin silently produces no output rather than blocking)
+
+Manual usage:
+
+```bash
+qlty check          # check changed files
+qlty check --all    # check full repo
+qlty fmt            # auto-format
+```
+
+Note: CI uses moon for lint/test/deny — qlty is for local development only.
+
 ## Key Dependencies
 
 - **powersync** — local path dependency (SQLite sync engine)
