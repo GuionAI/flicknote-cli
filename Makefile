@@ -25,7 +25,6 @@ install: install-rust install-tui
 install-rust:
 	cargo install --path flicknote-cli
 	cargo install --path flicknote-sync
-	cargo install --path flicktask-cli
 
 install-tui:
 	cd flicknote-tui && go install .
@@ -40,7 +39,6 @@ reinstall: reinstall-rust install-tui
 reinstall-rust:
 	cargo install --path flicknote-cli --force
 	cargo install --path flicknote-sync --force
-	cargo install --path flicktask-cli --force
 
 clean:
 	cargo clean
