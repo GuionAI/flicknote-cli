@@ -8,7 +8,7 @@ use crate::{
     },
     util::SerializedJsonObject,
 };
-use rusqlite::params;
+use rusqlite::{TransactionBehavior, params};
 use std::{
     cell::Cell,
     collections::HashMap,
@@ -85,7 +85,7 @@ impl<'a> SyncStream<'a> {
         let serialized = serde_json::to_string(cmd)?;
 
         let mut writer = self.db.writer().await?;
-        let writer = writer.transaction()?;
+        let writer = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         {
             let mut stmt = writer.prepare_cached("SELECT powersync_control(?, ?)")?;
@@ -208,6 +208,7 @@ impl Drop for StreamSubscriptionGroup {
     }
 }
 
+#[derive(Clone)]
 pub struct StreamSubscription {
     group: Arc<StreamSubscriptionGroup>,
 }

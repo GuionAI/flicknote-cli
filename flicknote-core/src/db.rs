@@ -1,8 +1,10 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
-use http_client::{Error, HttpClient, Request, Response, http_types::StatusCode};
-use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
+use powersync::{
+    ConnectionPool, PowerSyncDatabase,
+    env::PowerSyncEnvironment,
+    error::PowerSyncError,
+    http::{HttpClient, Request, Response},
+};
 
 use crate::config::Config;
 use crate::schema::app_schema;
@@ -13,8 +15,8 @@ struct NoopHttpClient;
 
 #[async_trait]
 impl HttpClient for NoopHttpClient {
-    async fn send(&self, _req: Request) -> Result<Response, Error> {
-        Ok(Response::new(StatusCode::ServiceUnavailable))
+    async fn send(&self, _req: Request) -> Result<Response, PowerSyncError> {
+        Err(std::io::Error::other("local-only mode: no HTTP client").into())
     }
 }
 
@@ -32,11 +34,8 @@ impl Database {
 
         let pool = ConnectionPool::open(&config.paths.db_file)?;
 
-        let env = PowerSyncEnvironment::custom(
-            Arc::new(NoopHttpClient),
-            pool,
-            Box::new(PowerSyncEnvironment::tokio_timer()),
-        );
+        let env =
+            PowerSyncEnvironment::custom(NoopHttpClient, pool, PowerSyncEnvironment::tokio_timer());
 
         let schema = app_schema();
         let db = PowerSyncDatabase::new(env, schema);

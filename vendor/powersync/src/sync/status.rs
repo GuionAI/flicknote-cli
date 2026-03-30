@@ -50,17 +50,12 @@ impl SyncStatus {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub enum UploadStatus {
+    #[default]
     Idle,
     Uploading,
     Error(PowerSyncError),
-}
-
-impl Default for UploadStatus {
-    fn default() -> Self {
-        Self::Idle
-    }
 }
 
 #[derive(Default)]
@@ -128,6 +123,13 @@ impl SyncStatusData {
         }
 
         None
+    }
+
+    /// This is only meant to be used for internal use-cases where this SDK is used to implement
+    /// another PowerSync SDK.
+    #[doc(hidden)]
+    pub fn internal_streams(&self) -> &[ActiveStreamSubscription] {
+        &self.downloading.streams
     }
 
     /// All sync streams currently being tracked in the database.

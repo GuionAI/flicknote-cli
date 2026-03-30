@@ -4,6 +4,8 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::db::async_support::AsyncDatabaseTasks;
+use crate::db::watch::ListenerConfiguration;
+use crate::schema::SchemaOrCustom;
 use crate::sync::coordinator::SyncCoordinator;
 use crate::{
     CrudTransaction, SyncOptions,
@@ -13,7 +15,6 @@ use crate::{
     },
     env::PowerSyncEnvironment,
     error::PowerSyncError,
-    schema::Schema,
     sync::{download::DownloadActor, status::SyncStatusData, upload::UploadActor},
 };
 use futures_lite::stream::{once, once_future};
@@ -47,11 +48,18 @@ impl PowerSyncDatabase {
     const PS_DATA_PREFIX: &'static str = "ps_data__";
     const PS_DATA_LOCAL_PREFIX: &'static str = "ps_data_local__";
 
-    pub fn new(env: PowerSyncEnvironment, schema: Schema) -> Self {
+    /// Creates a new PowerSync database using the connection pool and HTTP client from the given
+    /// [PowerSyncEnvironment].
+    ///
+    /// On first use, the database will instantiate a PowerSync schema. Typically, a [Schema]
+    /// instance would be passed for schemas. For cases where the schema is defined externally as a
+    /// JSON object understood by the PowerSync SQLite core extension, it can also be passed as a
+    /// [serde_json::value::RawValue] reference.
+    pub fn new(env: PowerSyncEnvironment, schema: impl Into<SchemaOrCustom>) -> Self {
         let coordinator = Arc::new(SyncCoordinator::default());
 
         Self {
-            inner: Arc::new(InnerPowerSyncState::new(env, schema, &coordinator)),
+            inner: Arc::new(InnerPowerSyncState::new(env, schema.into(), &coordinator)),
             sync: coordinator,
         }
     }
@@ -96,8 +104,7 @@ impl PowerSyncDatabase {
         emit_initially: bool,
         tables: Tables,
     ) -> impl Stream<Item = ()> + 'static {
-        self.inner.env.pool.update_notifiers().listen(
-            emit_initially,
+        let config = ListenerConfiguration::if_matches(
             tables
                 .into_iter()
                 .flat_map(|s| {
@@ -110,7 +117,24 @@ impl PowerSyncDatabase {
                     ]
                 })
                 .collect(),
-        )
+            emit_initially,
+        );
+
+        self.inner
+            .env
+            .pool
+            .update_notifiers()
+            .listen(config)
+            .map(|_| ())
+    }
+
+    /// Returns a stream emitting an item whenever any table in the local database is written to.
+    pub fn watch_all_updates(&self) -> impl Stream<Item = HashSet<String>> + 'static {
+        self.inner
+            .env
+            .pool
+            .update_notifiers()
+            .listen(ListenerConfiguration::all())
     }
 
     /// Returns an asynchronous [Stream] emitting snapshots of a `SELECT` statement every time
@@ -279,12 +303,12 @@ impl PowerSyncDatabase {
     }
 
     /// Obtains a [LeasedConnection] that can be used to run read-only queries on this database.
-    pub async fn reader(&self) -> Result<impl LeasedConnection, PowerSyncError> {
+    pub async fn reader(&self) -> Result<LeasedConnection, PowerSyncError> {
         self.inner.reader().await
     }
 
     /// Obtains a [LeasedConnection] allowing reading and writing queries.
-    pub async fn writer(&self) -> Result<impl LeasedConnection, PowerSyncError> {
+    pub async fn writer(&self) -> Result<LeasedConnection, PowerSyncError> {
         self.inner.writer().await
     }
 

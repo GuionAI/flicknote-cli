@@ -1,6 +1,6 @@
 use event_listener::EventListener;
 use futures_lite::{FutureExt, Stream, StreamExt, ready};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 use std::sync::{Mutex, Weak};
 use std::time::Duration;
 use std::{
@@ -9,13 +9,13 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::schema::SchemaOrCustom;
 use crate::{
     db::{
         core_extension::CoreExtensionVersion, pool::LeasedConnection, streams::SyncStreamTracker,
     },
     env::PowerSyncEnvironment,
     error::PowerSyncError,
-    schema::Schema,
     sync::{MAX_OP_ID, coordinator::SyncCoordinator, status::SyncStatus, status::SyncStatusData},
     util::SharedFuture,
 };
@@ -28,7 +28,7 @@ pub struct InnerPowerSyncState {
     /// The schema passed to the database.
     ///
     /// This is forwarded to the sync client for raw tables.
-    pub schema: Arc<Schema>,
+    pub schema: Arc<SchemaOrCustom>,
     /// A container for the current sync status.
     pub status: SyncStatus,
     /// A collection of currently-referenced sync stream subscriptions.
@@ -41,7 +41,11 @@ pub struct InnerPowerSyncState {
 }
 
 impl InnerPowerSyncState {
-    pub fn new(env: PowerSyncEnvironment, schema: Schema, sync: &Arc<SyncCoordinator>) -> Self {
+    pub fn new(
+        env: PowerSyncEnvironment,
+        schema: SchemaOrCustom,
+        sync: &Arc<SyncCoordinator>,
+    ) -> Self {
         Self {
             env,
             did_initialize: SharedFuture::new(),
@@ -73,7 +77,9 @@ impl InnerPowerSyncState {
     }
 
     fn update_schema_internal(&self, conn: &Connection) -> Result<(), PowerSyncError> {
-        self.schema.validate()?;
+        if let SchemaOrCustom::Schema(schema) = self.schema.as_ref() {
+            schema.validate()?;
+        };
 
         let serialized_schema = serde_json::to_string(&self.schema)?;
         conn.prepare("SELECT powersync_replace_schema(?)")?
@@ -91,7 +97,7 @@ impl InnerPowerSyncState {
         write_checkpoint: Option<i64>,
     ) -> Result<(), PowerSyncError> {
         let mut writer = self.writer().await?;
-        let writer = writer.transaction()?;
+        let writer = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         writer.execute("DELETE FROM ps_crud WHERE id <= ?", params![last_client_id])?;
         let mut target_op: i64 = MAX_OP_ID;
@@ -112,12 +118,12 @@ impl InnerPowerSyncState {
         Ok(())
     }
 
-    pub async fn reader(&self) -> Result<impl LeasedConnection, PowerSyncError> {
+    pub async fn reader(&self) -> Result<LeasedConnection, PowerSyncError> {
         self.initialize().await?;
         Ok(self.env.pool.reader().await)
     }
 
-    pub async fn writer(&self) -> Result<impl LeasedConnection, PowerSyncError> {
+    pub async fn writer(&self) -> Result<LeasedConnection, PowerSyncError> {
         self.initialize().await?;
         Ok(self.env.pool.writer().await)
     }
@@ -125,7 +131,7 @@ impl InnerPowerSyncState {
     pub async fn sync_iteration_delay(&self) {
         let delay = {
             let guard = self.retry_delay.lock().unwrap();
-            guard.clone()
+            *guard
         };
 
         if let Some(delay) = delay {

@@ -3,17 +3,17 @@ use std::sync::Arc;
 use futures_lite::{StreamExt, future, stream::Boxed as BoxedStream};
 use log::{debug, info, trace, warn};
 use rusqlite::{
-    Connection, ToSql, params,
+    Connection, ToSql, TransactionBehavior, params,
     types::{ToSqlOutput, ValueRef},
 };
 use serde::Serialize;
 use serde_json::value::RawValue;
 
+use crate::schema::SchemaOrCustom;
 use crate::{
     SyncOptions,
     db::internal::InnerPowerSyncState,
     error::PowerSyncError,
-    schema::Schema,
     sync::{
         download::http::sync_stream,
         instruction::{CloseSyncStream, Instruction, LogSeverity},
@@ -53,9 +53,12 @@ impl DownloadClient {
             }?;
 
             trace!("Handling event {event:?}");
-            let mut conn = self.db.writer().await?;
+            let instructions = {
+                let mut conn = self.db.writer().await?;
+                event.invoke_control(&mut conn)?
+            };
 
-            for instr in event.invoke_control(&mut conn)? {
+            for instr in instructions {
                 trace!("Handling instruction {instr:?}");
 
                 match instr {
@@ -182,7 +185,7 @@ impl DownloadEvent {
     /// Forwards the event to the core extension, and returns instructions that the SDK needs to
     /// perform.
     pub fn invoke_control(self, conn: &mut Connection) -> Result<Vec<Instruction>, PowerSyncError> {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
         let instructions = {
             let mut stmt = tx.prepare_cached("SELECT powersync_control(?, ?)")?;
@@ -226,7 +229,7 @@ impl ToSql for PowerSyncControlArgument {
 #[derive(Debug, Serialize)]
 pub struct StartDownloadIteration {
     pub parameters: serde_json::Value,
-    pub schema: Arc<Schema>,
+    pub schema: Arc<SchemaOrCustom>,
     pub include_defaults: bool,
     pub active_streams: Vec<StreamKey>,
 }

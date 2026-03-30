@@ -3,10 +3,11 @@ use std::io;
 use std::sync::Arc;
 use std::{borrow::Cow, fmt::Display};
 
-use http_client::http_types::StatusCode;
 use rusqlite::Error as SqliteError;
 use rusqlite::types::FromSqlError;
 use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, PowerSyncError>;
 
 /// A [RawPowerSyncError], but boxed.
 ///
@@ -35,9 +36,10 @@ impl From<serde_json::Error> for PowerSyncError {
     }
 }
 
-impl From<http_client::Error> for PowerSyncError {
-    fn from(value: http_client::Error) -> Self {
-        RawPowerSyncError::Http { inner: value }.into()
+#[cfg(feature = "reqwest")]
+impl From<reqwest::Error> for PowerSyncError {
+    fn from(value: reqwest::Error) -> Self {
+        RawPowerSyncError::Reqwest { inner: value }.into()
     }
 }
 
@@ -46,6 +48,12 @@ impl From<RawPowerSyncError> for PowerSyncError {
         PowerSyncError {
             inner: Arc::new(value),
         }
+    }
+}
+
+impl From<io::Error> for PowerSyncError {
+    fn from(value: io::Error) -> Self {
+        RawPowerSyncError::IO { inner: value }.into()
     }
 }
 
@@ -82,20 +90,25 @@ pub(crate) enum RawPowerSyncError {
     /// Wraps `serde_json` errors.
     #[error("Internal error while converting JSON: {inner}")]
     JsonConversion { inner: serde_json::Error },
+    #[error("Error decoding stream from sync service: {desc}")]
+    SyncServiceResponseParsing { desc: &'static str },
     /// Used when a backend connector returns an invalid URI as a service URL.
     #[error("Invalid PowerSync endpoint: {inner}")]
     InvalidPowerSyncEndpoint { inner: url::ParseError },
-    /// HTTP errors while downloading sync lines.
-    #[error("HTTP error: {inner}")]
-    Http { inner: http_client::Error },
     /// A generic IO error that occurred in the SDK.
     #[error("IO error: {inner}")]
     IO {
         #[from]
         inner: io::Error,
     },
+    #[cfg(feature = "reqwest")]
+    #[error("HTTP error: {inner}")]
+    Reqwest {
+        #[from]
+        inner: reqwest::Error,
+    },
     #[error("The PowerSync service did not accept credentials returned by connector")]
     InvalidCredentials,
     #[error("Unexpected HTTP status code from PowerSync service: {code}")]
-    UnexpectedStatusCode { code: StatusCode },
+    UnexpectedStatusCode { code: u16 },
 }

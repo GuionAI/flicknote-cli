@@ -13,7 +13,6 @@ serde_json = { workspace = true }
 tokio = { workspace = true }
 powersync = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
-http-client = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }

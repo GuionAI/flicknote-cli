@@ -6,8 +6,6 @@ use async_trait::async_trait;
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::{config::Config, schema::app_schema};
 use futures_lite::StreamExt;
-mod http_adapter;
-use http_adapter::ReqwestHttpClient;
 use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use powersync::{
     BackendConnector, ConnectionPool, PowerSyncCredentials, PowerSyncDatabase, SyncOptions,
@@ -15,13 +13,9 @@ use powersync::{
 };
 use tokio::sync::mpsc;
 
-/// Helper to convert arbitrary errors into PowerSyncError via http_client::Error
+/// Helper to convert arbitrary errors into PowerSyncError.
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
-    http_client::http_types::Error::from_str(
-        http_client::http_types::StatusCode::InternalServerError,
-        msg.to_string(),
-    )
-    .into()
+    std::io::Error::other(msg.to_string()).into()
 }
 
 /// Postgres/PostgREST error codes that will never succeed on retry.
@@ -489,9 +483,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     PowerSyncEnvironment::powersync_auto_extension()?;
 
     let pool = ConnectionPool::open(&config.paths.db_file)?;
-    let client = Arc::new(ReqwestHttpClient::new());
-    let env =
-        PowerSyncEnvironment::custom(client, pool, Box::new(PowerSyncEnvironment::tokio_timer()));
+    let env = PowerSyncEnvironment::custom(
+        reqwest::Client::new(),
+        pool,
+        PowerSyncEnvironment::tokio_timer(),
+    );
 
     let db = PowerSyncDatabase::new(env, app_schema());
     db.async_tasks().spawn_with_tokio();

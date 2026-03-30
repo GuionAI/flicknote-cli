@@ -1,19 +1,17 @@
-use std::{str::FromStr, sync::Arc};
+use std::borrow::Cow;
+use std::sync::Arc;
 
-use futures_lite::{AsyncBufReadExt, Stream, StreamExt, stream};
-use http_client::{
-    Request, Response,
-    http_types::{Mime, StatusCode},
-};
-use serde::Deserialize;
-use serde_with::{DisplayFromStr, serde_as};
-
+use crate::http::{Request, Response};
+use crate::util::LineSplitter;
 use crate::{
     db::internal::InnerPowerSyncState,
     error::{PowerSyncError, RawPowerSyncError},
     sync::{connector::PowerSyncCredentials, download::sync_iteration::DownloadEvent},
     util::BsonObjects,
 };
+use futures_lite::{Stream, StreamExt, stream};
+use serde::Deserialize;
+use serde_with::{DisplayFromStr, serde_as};
 
 /// Requests a stream of [DownloadEvent]s (more specifically text or binary lines) by opening a
 /// connection to the PowerSync service.
@@ -23,31 +21,36 @@ pub fn sync_stream(
     request_body: String,
 ) -> impl Stream<Item = Result<DownloadEvent, PowerSyncError>> {
     let response = async move {
-        let url = auth.parsed_endpoint()?;
-        let url = url.join("sync/stream").unwrap();
-        let json = Mime::from_str("application/json").unwrap();
+        let request = Request {
+            method: "POST",
+            url: auth.parsed_endpoint("sync/stream")?,
+            headers: {
+                let mut headers: Vec<(&str, Cow<'_, str>)> = vec![];
+                headers.push(("Content-Type", "application/json".into()));
+                headers.push(("Authorization", format!("Token {}", auth.token).into()));
+                headers.push((
+                    "Accept",
+                    "application/vnd.powersync.bson-stream;q=0.9,application/x-ndjson;q=0.8".into(),
+                ));
 
-        let mut request = Request::post(url);
-        request.set_content_type(json);
-        request.append_header("Authorization", format!("Token {}", auth.token));
-        request.append_header(
-            "Accept",
-            "application/vnd.powersync.bson-stream;q=0.9,application/x-ndjson;q=0.8",
-        );
-        request.set_body(request_body);
+                headers
+            },
+            body: Some(request_body.into_bytes()),
+        };
 
         let response = db.env.client.send(request).await?;
-        check_ok(&response)?;
+        check_ok(response.status)?;
 
         Ok::<Response, PowerSyncError>(response)
     };
 
     let stream = stream::once_future(response);
 
-    StreamExt::flat_map(stream, |response| {
-        let items = response_to_lines(response);
-
-        stream::once(Ok(DownloadEvent::ConnectionEstablished)).chain(items)
+    StreamExt::flat_map(stream, |response| match response {
+        Err(e) => stream::once(Err(e)).boxed(),
+        Ok(response) => stream::once(Ok(DownloadEvent::ConnectionEstablished))
+            .chain(response_to_lines(Ok(response)))
+            .boxed(),
     })
 }
 
@@ -57,20 +60,25 @@ pub async fn write_checkpoint(
     client_id: &str,
     auth: PowerSyncCredentials,
 ) -> Result<i64, PowerSyncError> {
-    let url = auth.parsed_endpoint()?;
-    let mut url = url.join("write-checkpoint2.json").unwrap();
+    let mut url = auth.parsed_endpoint("write-checkpoint2.json")?;
     url.set_query(Some(&format!("client_id={}", client_id)));
 
-    let mut request = Request::get(url);
-    request.set_content_type(Mime::from_str("application/json").unwrap());
-    request.append_header("Authorization", format!("Token {}", auth.token));
-    request.append_header(
-        "Accept",
-        "application/vnd.powersync.bson-stream;q=0.9,application/x-ndjson;q=0.8",
-    );
+    let request = Request {
+        method: "GET",
+        url,
+        headers: {
+            let mut headers: Vec<(&str, Cow<'_, str>)> = vec![];
+            headers.push(("Content-Type", "application/json".into()));
+            headers.push(("Authorization", format!("Token {}", auth.token).into()));
+            headers.push(("Accept", "application/json".into()));
 
-    let mut response = db.env.client.send(request).await?;
-    check_ok(&response)?;
+            headers
+        },
+        body: None,
+    };
+
+    let response = db.env.client.send(request).await?;
+    check_ok(response.status)?;
 
     #[derive(Deserialize)]
     struct WriteCheckpointResponse {
@@ -84,19 +92,17 @@ pub async fn write_checkpoint(
         write_checkpoint: i64,
     }
 
-    let response: WriteCheckpointResponse = response
-        .body_json()
-        .await
-        .map_err(|e| RawPowerSyncError::Http { inner: e })?;
+    let body_bytes = response.body.read_fully().await?;
 
+    let response: WriteCheckpointResponse = serde_json::from_slice(&body_bytes)?;
     Ok(response.data.write_checkpoint)
 }
 
-fn check_ok(response: &Response) -> Result<(), PowerSyncError> {
-    match response.status() {
-        StatusCode::Ok => Ok(()),
-        StatusCode::Unauthorized => Err(RawPowerSyncError::InvalidCredentials.into()),
-        code => Err(RawPowerSyncError::UnexpectedStatusCode { code }.into()),
+fn check_ok(code: u16) -> Result<(), PowerSyncError> {
+    match code {
+        200 => Ok(()),
+        401 => Err(RawPowerSyncError::InvalidCredentials.into()),
+        _ => Err(RawPowerSyncError::UnexpectedStatusCode { code }.into()),
     }
 }
 
@@ -112,22 +118,23 @@ fn response_to_lines(
         Err(e) => return stream::once(Err::<DownloadEvent, PowerSyncError>(e)).boxed(),
     };
 
-    let is_bson = matches!(response.content_type(), Some(mime) if mime.basetype() == "application"
-                && mime.subtype() == "vnd.powersync.bson-stream");
+    let is_bson = match &response.content_type {
+        None => false,
+        Some(value) => value.contains("vnd.powersync.bson-stream"),
+    };
 
     if is_bson {
-        BsonObjects::new(response)
+        BsonObjects::new(response.body.reader)
             .map(|event| match event {
                 Ok(line) => Ok(DownloadEvent::BinaryLine { data: line }),
-                Err(e) => Err(RawPowerSyncError::IO { inner: e }.into()),
+                Err(e) => Err(e),
             })
             .boxed()
     } else {
-        response
-            .lines()
+        LineSplitter::from(response.body.reader)
             .map(|event| match event {
                 Ok(line) => Ok(DownloadEvent::TextLine { data: line }),
-                Err(e) => Err(RawPowerSyncError::IO { inner: e }.into()),
+                Err(e) => Err(e),
             })
             .boxed()
     }
