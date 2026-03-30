@@ -235,30 +235,74 @@ async fn run_upload(
     Ok(did_upload)
 }
 
-/// Force a WAL TRUNCATE checkpoint to reclaim disk space after bulk uploads.
+/// Force a WAL TRUNCATE checkpoint using a standalone rusqlite connection.
 ///
-/// Called from the fsnotify watcher path after a successful upload — never from
-/// inside upload_data() (the SDK callback), where it could contend with the
-/// download actor during active sync.
+/// Opens its own connection to the DB file, bypassing PowerSync's writer mutex
+/// entirely. This means the checkpoint can run even during the BUSY_SNAPSHOT
+/// death spiral — it competes only at the SQLite file-lock level, not the Rust
+/// mutex level.
 ///
-/// TRUNCATE blocks writers briefly until all readers finish their current
-/// transaction. In the CLI daemon context readers are mostly idle (no UI watches),
-/// so the wait is sub-millisecond in practice.
-async fn checkpoint_wal(db: &PowerSyncDatabase) {
-    match db.writer().await {
-        Ok(writer) => match writer.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
-            Ok(_) => log::debug!("WAL checkpoint completed"),
-            Err(e) => {
-                log::warn!("WAL checkpoint failed (next attempt after next successful upload): {e}")
-            }
-        },
-        Err(e) => log::warn!("WAL checkpoint: could not acquire writer: {e}"),
+/// `busy_timeout` is set to 5 000 ms so TRUNCATE retries at the SQLite level
+/// while pool readers finish their short transactions, rather than failing
+/// immediately with SQLITE_BUSY.
+///
+/// Reads the `(busy, log, checkpointed)` return tuple from PRAGMA so failures
+/// are never silently swallowed.
+///
+/// This function is **synchronous** (blocking rusqlite I/O). Async callers must
+/// wrap it with `tokio::task::spawn_blocking`.
+///
+/// `label` identifies the call site in log output (e.g. `"startup"`, `"pre-upload"`,
+/// `"post-upload"`, `"periodic"`) so production logs are unambiguous.
+fn checkpoint_wal_standalone(db_path: &Path, label: &str) {
+    let conn = match rusqlite::Connection::open(db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("WAL checkpoint [{label}]: could not open db: {e}");
+            return;
+        }
+    };
+    if let Err(e) = conn.pragma_update(None, "busy_timeout", 5_000i64) {
+        log::warn!("WAL checkpoint [{label}]: could not set busy_timeout: {e}");
+        return;
     }
+    match conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+        Ok((
+            row.get::<_, i32>(0)?,
+            row.get::<_, i32>(1)?,
+            row.get::<_, i32>(2)?,
+        ))
+    }) {
+        Ok((busy, log, checkpointed)) => {
+            if busy == 0 {
+                log::info!(
+                    "WAL checkpoint [{label}]: truncated ({log} pages, {checkpointed} checkpointed)"
+                );
+            } else {
+                log::warn!(
+                    "WAL checkpoint [{label}]: incomplete (busy=1, {log} log pages, {checkpointed} checkpointed)"
+                );
+            }
+        }
+        Err(e) => log::warn!("WAL checkpoint [{label}]: failed: {e}"),
+    }
+    // Connection dropped here — no persistent state
 }
 
-/// Acquire the upload guard, get a fresh token, run_upload, and checkpoint if anything uploaded.
+/// Acquire the upload guard, get a fresh token, run_upload, and checkpoint.
 /// Shared by both the startup path and the watcher loop to avoid divergence.
 /// `context` is used as a log prefix (e.g. "Startup upload", "Upload").
+///
+/// Checkpoints are run before AND after upload:
+///
+/// - Pre-upload: shrink WAL before write contention begins — helps break the
+///   BUSY_SNAPSHOT spiral if WAL was already large entering this cycle.
+/// - Post-upload: checkpoint regardless of whether ps_crud was empty;
+///   TRUNCATE on a small WAL is a no-op, so it's always safe to run.
+///
+/// Both checkpoint calls use `spawn_blocking` since `checkpoint_wal_standalone`
+/// does blocking I/O (rusqlite open + 5 s busy_timeout).
+#[allow(clippy::too_many_arguments)]
 async fn try_upload_and_checkpoint(
     db: &PowerSyncDatabase,
     client: &reqwest::Client,
@@ -267,8 +311,19 @@ async fn try_upload_and_checkpoint(
     supabase_url: &str,
     supabase_anon_key: &str,
     context: &str,
+    db_path: &Path,
 ) {
     let _guard = guard.lock().await;
+
+    // Pre-upload checkpoint: shrink WAL before write contention begins.
+    let pre_path = db_path.to_path_buf();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || checkpoint_wal_standalone(&pre_path, "pre-upload"))
+            .await
+    {
+        log::error!("Pre-upload WAL checkpoint task panicked: {e}");
+    }
+
     let token = match auth.get_session().await {
         Ok(s) => s.access_token,
         Err(e) => {
@@ -277,9 +332,15 @@ async fn try_upload_and_checkpoint(
         }
     };
     match run_upload(db, client, &token, supabase_url, supabase_anon_key).await {
-        Ok(did_upload) => {
-            if did_upload {
-                checkpoint_wal(db).await;
+        Ok(_) => {
+            // Post-upload checkpoint: reclaim space from crud completions this cycle.
+            let post_path = db_path.to_path_buf();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                checkpoint_wal_standalone(&post_path, "post-upload")
+            })
+            .await
+            {
+                log::error!("Post-upload WAL checkpoint task panicked: {e}");
             }
         }
         Err(e) => log::warn!("{context}: upload failed: {e}"),
@@ -413,17 +474,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         supabase_anon_key: config.supabase_anon_key.clone(),
     };
 
+    // Reclaim leftover WAL from previous sessions BEFORE connecting sync actors.
+    // A standalone connection doesn't need the PowerSyncDatabase — it runs against
+    // the raw file, so it works before db.connect() starts the download actor.
+    // Without this, a bloated WAL inherited from a crashed session immediately
+    // triggers the BUSY_SNAPSHOT death spiral.
+    // spawn_blocking keeps blocking rusqlite I/O off the async executor thread.
+    log::info!("Running startup WAL checkpoint");
+    let startup_db_path = config.paths.db_file.clone();
+    if let Err(e) =
+        tokio::task::spawn_blocking(move || checkpoint_wal_standalone(&startup_db_path, "startup"))
+            .await
+    {
+        log::error!("Startup WAL checkpoint task panicked: {e}");
+    }
+
     log::info!("Sync daemon connecting (pid {})", std::process::id());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
-
-    // Reclaim leftover WAL from previous sessions. Without this, a daemon restart
-    // after a crash during bulk import would inherit a bloated WAL and immediately
-    // re-enter the BUSY_SNAPSHOT death spiral. Log-and-continue: a missing WAL
-    // (fresh DB) or brief lock is non-fatal — the post-upload checkpoint will clean
-    // up during normal operation.
-    log::debug!("Running startup WAL checkpoint");
-    checkpoint_wal(&db).await;
 
     // Watch the WAL file for cross-process writes from the CLI.
     // PowerSync's in-process ps_crud watch can't detect writes from a separate process
@@ -477,6 +545,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let upload_anon_key = config.supabase_anon_key.clone();
     let upload_guard_clone = Arc::clone(&upload_guard);
     let upload_auth_clone = Arc::clone(&auth);
+    let upload_db_path = config.paths.db_file.clone();
 
     let mut upload_handle = tokio::spawn(async move {
         // Initial upload on startup — pick up any ps_crud entries written before
@@ -489,6 +558,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &upload_supabase_url,
             &upload_anon_key,
             "Startup upload",
+            &upload_db_path,
         )
         .await;
 
@@ -518,8 +588,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &upload_supabase_url,
                 &upload_anon_key,
                 "Upload",
+                &upload_db_path,
             )
             .await;
+        }
+    });
+
+    // Periodic checkpoint every 30s — independent of upload success or download
+    // actor state. Breaks the BUSY_SNAPSHOT death spiral even when uploads stall.
+    let checkpoint_db_path = config.paths.db_file.clone();
+    let mut checkpoint_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await; // skip the immediate first tick
+        loop {
+            interval.tick().await;
+            let path = checkpoint_db_path.clone();
+            if let Err(e) =
+                tokio::task::spawn_blocking(move || checkpoint_wal_standalone(&path, "periodic"))
+                    .await
+            {
+                log::error!("Periodic WAL checkpoint task panicked: {e}");
+            }
         }
     });
 
@@ -528,13 +617,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         res = &mut upload_handle => {
             if let Err(e) = res {
                 log::error!("Upload task panicked: {e}");
+                upload_handle.abort();
+                checkpoint_handle.abort();
                 db.disconnect().await;
                 log::info!("Sync daemon stopped");
                 return Err(e.into());
             }
         }
+        res = &mut checkpoint_handle => {
+            match res {
+                Ok(_) => log::error!("Checkpoint task exited unexpectedly"),
+                Err(ref e) => log::error!("Checkpoint task panicked: {e}"),
+            }
+            upload_handle.abort();
+            checkpoint_handle.abort();
+            db.disconnect().await;
+            log::info!("Sync daemon stopped");
+            return Err(format!("Checkpoint task exited: {res:?}").into());
+        }
     }
     upload_handle.abort();
+    checkpoint_handle.abort();
     db.disconnect().await;
     log::info!("Sync daemon stopped");
 
