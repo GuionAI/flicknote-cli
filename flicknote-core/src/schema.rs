@@ -187,6 +187,21 @@ pub fn app_schema() -> Schema {
     ));
 
     schema.tables.push(Table::create(
+        "settings",
+        vec![
+            Column::text("language"),
+            Column::text("iana_tz"),
+            Column::text("base_keyterms"),
+            Column::text("role"),
+            Column::text("entity_alias"),
+            Column::text("asr_model"),
+            Column::text("diarization_rule"),
+            Column::text("tc_config"),
+        ],
+        |_| {},
+    ));
+
+    schema.tables.push(Table::create(
         "tc_tag_colors",
         vec![
             Column::text("user_id"),
