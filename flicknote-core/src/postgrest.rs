@@ -211,18 +211,16 @@ impl PostgRestBackend {
 
         let status = resp.status().as_u16();
 
-        // PostgREST v10: 406 = no rows for single-object request.
-        // PostgREST v11+: 404 with PGRST116 code = no rows.
+        // PostgREST returns 406 for PGRST116 (singular response with no/many rows).
         if status == 406 {
             return Err(CliError::Http(format!("not found in {table}")));
         }
+        // 404 covers PGRST125 (invalid path), PGRST205 (table not found),
+        // PGRST202 (function not found), etc.
         if status == 404 {
             let body = resp
                 .text()
                 .unwrap_or_else(|e| format!("[body read failed: {e}]"));
-            if body.contains("PGRST116") {
-                return Err(CliError::Http(format!("not found in {table}")));
-            }
             return Err(CliError::Http(format!("{table} query failed: {body}")));
         }
         if !resp.status().is_success() {
@@ -346,7 +344,7 @@ impl PostgRestBackend {
     }
 
     /// Returns `true` if this error came from `get_one` finding no rows
-    /// (PostgREST 406 v10 or 404-PGRST116 v11+).
+    /// (PostgREST 406 / PGRST116).
     fn is_not_found_err(e: &CliError, table: &str) -> bool {
         matches!(e, CliError::Http(msg) if msg == &format!("not found in {table}"))
     }
