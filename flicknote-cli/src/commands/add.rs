@@ -2,8 +2,6 @@ use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::hooks;
-use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
 
 use super::upload_util::{
@@ -77,8 +75,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
         None
     };
 
-    let config_dir = config.paths.config_dir.to_string_lossy();
-
     if is_file {
         let file_path = std::path::PathBuf::from(&content);
         let filename = file_path
@@ -112,35 +108,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             let _ = cleanup_uploaded_file(config, &id);
             return Err(e);
         }
-
-        let note_for_hook = build_hook_note(
-            &id,
-            db.user_id(),
-            note_type,
-            "source_queued",
-            project_id.clone(),
-            None,
-            None,
-            Some(metadata.clone()),
-            &now,
-        );
-        let note_json = serde_json::to_string(&note_for_hook)?;
-        hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
     } else if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
-        let note_for_hook = build_hook_note(
-            &id,
-            db.user_id(),
-            "link",
-            "source_queued",
-            project_id.clone(),
-            None,
-            None,
-            Some(metadata.clone()),
-            &now,
-        );
-        let note_json = serde_json::to_string(&note_for_hook)?;
-        hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
         db.insert_note(&InsertNoteReq {
             id: &id,
             note_type: "link",
@@ -153,19 +122,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
         })?;
     } else {
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
-        let note_for_hook = build_hook_note(
-            &id,
-            db.user_id(),
-            "normal",
-            "ai_queued",
-            project_id.clone(),
-            title.clone(),
-            Some(stripped_content.clone()),
-            None,
-            &now,
-        );
-        let note_json = serde_json::to_string(&note_for_hook)?;
-        hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
         let title_ref = title.as_deref();
         db.insert_note(&InsertNoteReq {
             id: &id,
@@ -184,38 +140,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
         None => println!("Created note {}.", &id[..8]),
     }
     Ok(())
-}
-
-/// Build a `Note` for the on-add hook payload.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_hook_note(
-    id: &str,
-    user_id: &str,
-    note_type: &str,
-    status: &str,
-    project_id: Option<String>,
-    title: Option<String>,
-    content: Option<String>,
-    metadata: Option<String>,
-    now: &str,
-) -> Note {
-    Note {
-        id: id.to_string(),
-        user_id: user_id.to_string(),
-        r#type: note_type.to_string(),
-        status: status.to_string(),
-        title,
-        content,
-        summary: None,
-        is_flagged: None,
-        project_id,
-        metadata,
-        source: None,
-        external_id: None,
-        created_at: Some(now.to_string()),
-        updated_at: Some(now.to_string()),
-        deleted_at: None,
-    }
 }
 
 /// Resolve project by name. Returns an error with a hint if the project doesn't exist.

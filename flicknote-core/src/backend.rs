@@ -948,7 +948,6 @@ mod tests {
                 session_file: dir.path().join("session.json"),
                 db_file: dir.path().join("test.db"),
                 log_file: dir.path().join("test.log"),
-                hooks_dir: dir.path().join("hooks"),
             },
         };
 

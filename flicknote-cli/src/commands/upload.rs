@@ -2,10 +2,9 @@ use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::hooks;
 use std::path::PathBuf;
 
-use crate::commands::add::{build_hook_note, resolve_project};
+use crate::commands::add::resolve_project;
 use crate::commands::upload_util::{
     cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file_blocking,
 };
@@ -70,21 +69,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
         let _ = cleanup_uploaded_file(config, &id);
         return Err(e);
     }
-
-    let config_dir = config.paths.config_dir.to_string_lossy();
-    let note_for_hook = build_hook_note(
-        &id,
-        db.user_id(),
-        note_type,
-        "source_queued",
-        project_id.clone(),
-        None,
-        None,
-        Some(metadata.clone()),
-        &now,
-    );
-    let note_json = serde_json::to_string(&note_for_hook)?;
-    hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
 
     println!("Created note {} with file {}", &id[..8], filename);
     Ok(())

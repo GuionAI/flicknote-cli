@@ -3,7 +3,6 @@ pub mod config;
 #[cfg(feature = "powersync")]
 pub mod db;
 pub mod error;
-pub mod hooks;
 #[cfg(feature = "storage-pgwire")]
 pub mod pgwire;
 #[cfg(feature = "powersync")]

@@ -70,7 +70,7 @@ fn validate_replacement_heading(
     )))
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
 
     let has_metadata =
@@ -127,7 +127,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result
                 let shifted = crate::markdown::cap_heading_level(new_body.trim(), heading_level);
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &shifted);
-                write_content(db, config, &full_id, new_content.trim(), "replace")?;
+                write_content(db, &full_id, new_content.trim())?;
                 println!("Replaced section in note {}.\n", &full_id[..8]);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             } else {
@@ -147,13 +147,13 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &ModifyArgs) -> Result
                 let new_section = format!("{preserved_heading}\n\n{}", new_body.trim());
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &new_section);
-                write_content(db, config, &full_id, new_content.trim(), "modify")?;
+                write_content(db, &full_id, new_content.trim())?;
                 println!("Replaced section body in note {}.\n", &full_id[..8]);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             }
         } else {
             // Replace all content
-            write_content(db, config, &full_id, &new_body, "replace")?;
+            write_content(db, &full_id, &new_body)?;
             println!("Replaced content for note {}.\n", &full_id[..8]);
             print!("{}", crate::markdown::render_tree(&new_body));
         }
