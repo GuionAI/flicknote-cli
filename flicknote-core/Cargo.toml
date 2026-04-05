@@ -6,8 +6,10 @@ edition = "2024"
 [features]
 default = ["powersync"]
 powersync = ["dep:powersync", "dep:rusqlite"]
+storage-pgwire = ["dep:postgres", "dep:base64"]
 
 [dependencies]
+postgres = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -17,8 +19,8 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }
 dirs = { workspace = true }
-reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "charset", "http2", "rustls-tls"] }
 chrono = "0.4"
+base64 = { workspace = true, optional = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "storage-pgwire")]
+use crate::error::CliError;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
@@ -41,6 +44,57 @@ impl Note {
         })
     }
 
+    #[cfg(feature = "storage-pgwire")]
+    pub fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
+        Ok(Self {
+            id: row
+                .try_get("id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            user_id: row
+                .try_get("user_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            r#type: row
+                .try_get("type")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            status: row
+                .try_get("status")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            title: row
+                .try_get("title")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            content: row
+                .try_get("content")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            summary: row
+                .try_get("summary")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            is_flagged: row
+                .try_get::<_, Option<i64>>("is_flagged")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            project_id: row
+                .try_get("project_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            metadata: row
+                .try_get("metadata")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            source: row
+                .try_get("source")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            external_id: row
+                .try_get("external_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            deleted_at: row
+                .try_get("deleted_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+        })
+    }
+
     pub fn link_url(&self) -> Option<String> {
         let meta = self.metadata.as_ref()?;
         let v: serde_json::Value = serde_json::from_str(meta).ok()?;
@@ -50,7 +104,6 @@ impl Note {
             .map(std::string::ToString::to_string)
     }
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
@@ -75,6 +128,36 @@ impl Project {
             keyterm_id: row.get("keyterm_id")?,
             is_archived: row.get("is_archived")?,
             created_at: row.get("created_at")?,
+        })
+    }
+
+    #[cfg(feature = "storage-pgwire")]
+    pub fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
+        Ok(Self {
+            id: row
+                .try_get("id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            user_id: row
+                .try_get("user_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            name: row
+                .try_get("name")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            color: row
+                .try_get("color")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            prompt_id: row
+                .try_get("prompt_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            keyterm_id: row
+                .try_get("keyterm_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            is_archived: row
+                .try_get::<_, Option<i64>>("is_archived")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
 }
@@ -103,6 +186,32 @@ impl Prompt {
     }
 }
 
+#[cfg(feature = "storage-pgwire")]
+impl Prompt {
+    pub fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
+        Ok(Self {
+            id: row
+                .try_get("id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            user_id: row
+                .try_get("user_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            title: row
+                .try_get("title")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            description: row
+                .try_get("description")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            prompt: row
+                .try_get("prompt")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Keyterm {
     pub id: String,
@@ -125,6 +234,35 @@ impl Keyterm {
             content: row.get("content")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
+        })
+    }
+}
+
+#[cfg(feature = "storage-pgwire")]
+impl Keyterm {
+    pub fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
+        Ok(Self {
+            id: row
+                .try_get("id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            user_id: row
+                .try_get("user_id")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            name: row
+                .try_get("name")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            description: row
+                .try_get("description")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            content: row
+                .try_get("content")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            created_at: row
+                .try_get("created_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
+            updated_at: row
+                .try_get("updated_at")
+                .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
 }

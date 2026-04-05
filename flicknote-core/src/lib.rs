@@ -4,7 +4,8 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod hooks;
-pub mod postgrest;
+#[cfg(feature = "storage-pgwire")]
+pub mod pgwire;
 #[cfg(feature = "powersync")]
 pub mod schema;
 pub mod session;

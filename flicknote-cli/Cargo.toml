@@ -8,8 +8,9 @@ name = "flicknote"
 path = "src/main.rs"
 
 [features]
-default = ["powersync"]
+default = ["powersync", "storage-pgwire"]
 powersync = ["flicknote-core/powersync"]
+storage-pgwire = ["flicknote-core/storage-pgwire"]
 
 [dependencies]
 flicknote-core = { path = "../flicknote-core", default-features = false }

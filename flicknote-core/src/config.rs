@@ -7,7 +7,6 @@ pub struct Config {
     pub powersync_url: String,
     pub api_url: String,
     pub web_url: Option<String>,
-    pub postgrest_url: Option<String>,
     pub paths: ConfigPaths,
 }
 
@@ -57,7 +56,6 @@ impl Config {
         let mut powersync_url = String::new();
         let mut api_url = String::new();
         let mut web_url: Option<String> = None;
-        let mut postgrest_url: Option<String> = None;
 
         if config_file.exists()
             && let Ok(raw) = fs::read_to_string(&config_file)
@@ -78,9 +76,6 @@ impl Config {
             if let Some(v) = json.get("webUrl").and_then(|v| v.as_str()) {
                 web_url = Some(v.to_string());
             }
-            if let Some(v) = json.get("postgrestUrl").and_then(|v| v.as_str()) {
-                postgrest_url = Some(v.to_string());
-            }
         }
 
         if let Ok(v) = std::env::var("FLICKNOTE_SUPABASE_URL") {
@@ -97,9 +92,6 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FLICKNOTE_WEB_URL") {
             web_url = Some(v);
-        }
-        if let Ok(v) = std::env::var("FLICKNOTE_POSTGREST_URL") {
-            postgrest_url = Some(v);
         }
 
         // Fallback: per-field built-in defaults if nothing else configured that field.
@@ -143,7 +135,6 @@ impl Config {
             powersync_url,
             api_url,
             web_url,
-            postgrest_url,
             paths,
         })
     }

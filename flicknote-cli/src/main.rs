@@ -8,7 +8,6 @@ use flicknote_core::config::Config;
 #[cfg(feature = "powersync")]
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
-use flicknote_core::postgrest::PostgRestBackend;
 
 mod api_client;
 mod commands;
@@ -122,39 +121,29 @@ fn run() -> Result<(), CliError> {
         std::process::exit(status.code().unwrap_or(1));
     }
 
-    if let Some(ref postgrest_url) = config.postgrest_url {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| CliError::Other(format!("Failed to create runtime: {e}")))?;
-        let auth = flicknote_auth::client::GoTrueClient::new(
-            &config.supabase_url,
-            &config.supabase_anon_key,
-            &config.paths.session_file,
-        );
-        let session = rt
-            .block_on(auth.get_session())
-            .map_err(|_| CliError::NotAuthenticated)?;
-        let backend = PostgRestBackend::new(
-            postgrest_url,
-            config.supabase_anon_key.clone(),
-            session.access_token,
-            session.user.id,
-        );
+    // Backend selection: FLICKNOTE_TOKEN → pgwire, else → SQLite
+    #[cfg(feature = "storage-pgwire")]
+    if let Ok(token) = std::env::var("FLICKNOTE_TOKEN") {
+        let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+            CliError::Other("pgwire mode (FLICKNOTE_TOKEN set) requires DATABASE_URL".into())
+        })?;
+        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url, &token)?;
+        return dispatch(&cli, &config, &backend);
+    }
+
+    #[cfg(not(feature = "powersync"))]
+    return Err(CliError::Other(
+        "No storage backend available — set FLICKNOTE_TOKEN + DATABASE_URL for pgwire, \
+         or build with powersync feature for local storage"
+            .into(),
+    ));
+
+    #[cfg(feature = "powersync")]
+    {
+        let db = Database::open_local(&config)?;
+        let user_id = flicknote_core::session::get_user_id(&config)?;
+        let backend = SqliteBackend { db, user_id };
         dispatch(&cli, &config, &backend)
-    } else {
-        #[cfg(not(feature = "powersync"))]
-        return Err(CliError::Other(
-            "No local database available — set FLICKNOTE_POSTGREST_URL or postgrestUrl in config.json"
-                .into(),
-        ));
-        #[cfg(feature = "powersync")]
-        {
-            let db = Database::open_local(&config)?;
-            let user_id = flicknote_core::session::get_user_id(&config)?;
-            let backend = SqliteBackend { db, user_id };
-            dispatch(&cli, &config, &backend)
-        }
     }
 }
 

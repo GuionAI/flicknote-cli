@@ -30,6 +30,10 @@ pub enum CliError {
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
+    #[cfg(feature = "storage-pgwire")]
+    #[error("Database error: {0}")]
+    Database(String),
+
     #[error("HTTP error: {0}")]
     Http(String),
 
