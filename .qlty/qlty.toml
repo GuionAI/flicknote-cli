@@ -26,7 +26,6 @@ mode = "block"
 name = "golangci-lint"
 version = "2.10.1"
 mode = "block"
-target = { type = "parent_with", path = "go.mod" }
 
 [[plugin]]
 name = "trufflehog"
