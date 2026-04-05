@@ -1,4 +1,1 @@
 edition = "2024"
-# Prevents qlty's per-file rustfmt invocation from failing when it copies a
-# single file to a temp dir without the referenced module files present.
-skip_children = true
