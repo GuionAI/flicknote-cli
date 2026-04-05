@@ -40,7 +40,6 @@ type Model struct {
 	height int
 
 	// Status
-	statusMsg string
 	err       error
 }
 
