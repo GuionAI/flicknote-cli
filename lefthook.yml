@@ -1,0 +1,19 @@
+pre-commit:
+  parallel: true
+  commands:
+    cargo-fmt:
+      run: cargo fmt --check -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
+
+pre-push:
+  parallel: true
+  commands:
+    cargo-clippy:
+      run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+    cargo-deny:
+      run: cargo deny check
+    go-vet:
+      root: "flicknote-tui"
+      run: go vet ./...
+    golangci-lint:
+      root: "flicknote-tui"
+      run: golangci-lint run ./...
