@@ -37,8 +37,6 @@ qlty check --all    # check full repo
 qlty fmt            # auto-format
 ```
 
-Note: CI uses moon for lint/test/deny — qlty is for local development only.
-
 ## Key Dependencies
 
 - **powersync** — local path dependency (SQLite sync engine)
@@ -56,12 +54,15 @@ Note: CI uses moon for lint/test/deny — qlty is for local development only.
 - Config via XDG dirs (`~/.config/flicknote/`) or env vars
 - Data stored at `~/.local/share/flicknote/`
 
-## CI (Woodpecker)
+## CI (GitHub Actions)
 
-- **Never use `set -eo pipefail`** in Woodpecker pipeline scripts — Woodpecker runs commands with `/bin/sh`, not bash. `pipefail` is a bash-only option. Use `set -e` only.
-- **Use `$$` for shell variables and secrets** in Woodpecker commands — Woodpecker substitutes `${VAR}` before passing to shell. Use `$${VAR}` to pass `$VAR` literally to the shell. CI variables like `CI_COMMIT_SHA` don't need `$$` (Woodpecker substitutes them).
-- Hardcode versions inline in curl URLs — don't use shell variables that might not interpolate in all shells
-- Mirror fb's `.woodpecker/containers.yaml` patterns exactly when writing pipeline configs
+This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon). qlty runs in CI directly.
+
+- **pr.yaml** — three parallel jobs: Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build), qlty scan
+- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy + qlty scan)
+- **release.yml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + tta-lab/homebrew-ttal
+
+Commit scope: `ci`
 
 ## Skills
 

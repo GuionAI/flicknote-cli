@@ -2,6 +2,10 @@
 name = "flicknote-sync"
 version = "0.1.0"
 edition = "2024"
+description = "Background sync daemon for FlickNote CLI"
+homepage = "https://github.com/guionai/flicknote-cli"
+repository = "https://github.com/guionai/flicknote-cli"
+license = "MIT"
 
 [[bin]]
 name = "flicknote-sync"

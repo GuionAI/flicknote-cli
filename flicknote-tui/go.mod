@@ -1,4 +1,4 @@
-module forgejo.guion.ai/guionai/flicknote-cli/flicknote-tui
+module github.com/guionai/flicknote-cli/flicknote-tui
 
 go 1.24.2
 
