@@ -134,7 +134,7 @@ pub fn app_schema() -> Schema {
             Column::text("end_at"),
             Column::text("wait_at"),
             Column::text("parent_id"),
-            Column::text("position"),
+            Column::text("note_id"),
             Column::text("project_id"),
         ],
         |t| {
@@ -154,21 +154,6 @@ pub fn app_schema() -> Schema {
                         ascending: true,
                         type_name: "TEXT".into(),
                     }],
-                },
-                Index {
-                    name: "tc_tasks_parent_position".into(),
-                    columns: vec![
-                        IndexedColumn {
-                            name: "parent_id".into(),
-                            ascending: true,
-                            type_name: "TEXT".into(),
-                        },
-                        IndexedColumn {
-                            name: "position".into(),
-                            ascending: true,
-                            type_name: "TEXT".into(),
-                        },
-                    ],
                 },
             ];
         },
@@ -193,21 +178,8 @@ pub fn app_schema() -> Schema {
             Column::text("iana_tz"),
             Column::text("base_keyterms"),
             Column::text("role"),
-            Column::text("entity_alias"),
             Column::text("asr_model"),
-            Column::text("diarization_rule"),
             Column::text("tc_config"),
-        ],
-        |_| {},
-    ));
-
-    schema.tables.push(Table::create(
-        "tc_tag_colors",
-        vec![
-            Column::text("user_id"),
-            Column::text("name"),
-            Column::text("color"),
-            Column::text("created_at"),
         ],
         |_| {},
     ));
