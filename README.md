@@ -103,7 +103,7 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 5 crates:
+Rust workspace with 4 crates + 1 Go binary:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
@@ -111,6 +111,7 @@ Rust workspace with 5 crates:
 | `flicknote-core` | library | Database, config, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | binary | Background sync daemon |
+| `flicknote-tui` | binary (Go) | Terminal UI (`flicknote tui`) |
 
 ## License
 

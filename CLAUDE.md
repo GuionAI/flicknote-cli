@@ -37,8 +37,6 @@ qlty check --all    # check full repo
 qlty fmt            # auto-format
 ```
 
-Note: CI uses moon for lint/test/deny — qlty is for local development only.
-
 ## Key Dependencies
 
 - **powersync** — local path dependency (SQLite sync engine)
@@ -60,9 +58,9 @@ Note: CI uses moon for lint/test/deny — qlty is for local development only.
 
 This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon). qlty runs in CI directly.
 
-- **pr.yaml** — cargo fmt/clippy/test/deny + Go TUI vet/build + qlty scan
-- **ci.yaml** — Rust build + cargo fmt/clippy + qlty scan
-- **release.yaml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + tta-lab/homebrew-ttal
+- **pr.yaml** — three parallel jobs: Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build), qlty scan
+- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy + qlty scan)
+- **release.yml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + tta-lab/homebrew-ttal
 
 Commit scope: `ci`
 
