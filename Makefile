@@ -1,7 +1,5 @@
 .PHONY: build test check fmt clippy install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
 
-PKGS := -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
-
 build:
 	cargo build
 
