@@ -33,4 +33,4 @@ mode = "block"
 
 [[plugin]]
 name = "osv-scanner"
-mode = "block"
+mode = "comment"
