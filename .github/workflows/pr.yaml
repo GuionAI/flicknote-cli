@@ -32,10 +32,10 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Check formatting
-        run: cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --check
+        run: make fmt
 
       - name: Lint with clippy
-        run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+        run: make clippy
 
       - name: Run tests
         run: cargo test

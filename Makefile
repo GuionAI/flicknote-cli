@@ -1,5 +1,7 @@
 .PHONY: build test check fmt clippy install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
 
+PKGS := -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
+
 build:
 	cargo build
 
@@ -15,10 +17,10 @@ test:
 check: fmt clippy test
 
 fmt:
-	cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --check
+	cargo fmt $(PKGS) --check
 
 clippy:
-	cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+	cargo clippy $(PKGS) --all-targets -- -D warnings
 
 install: install-rust install-tui
 
