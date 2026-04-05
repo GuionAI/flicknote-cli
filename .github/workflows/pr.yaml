@@ -43,7 +43,10 @@ jobs:
           echo "$HOME/.qlty/bin" >> $GITHUB_PATH
 
       - name: Format code
-        run: qlty fmt
+        run: cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
+
+      - name: Lint with clippy
+        run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
 
       - name: Lint and security scan
         run: qlty check --all --no-progress

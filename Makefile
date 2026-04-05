@@ -15,10 +15,10 @@ test:
 check: fmt clippy test
 
 fmt:
-	qlty fmt
+	cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --check
 
 clippy:
-	qlty check --no-progress
+	cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
 
 install: install-rust install-tui
 
