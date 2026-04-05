@@ -54,7 +54,7 @@ jobs:
           echo "$HOME/.qlty/bin" >> $GITHUB_PATH
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: cargo fmt --check -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
 
       - name: Lint with clippy
         run: cargo clippy --all-targets -- -D warnings
