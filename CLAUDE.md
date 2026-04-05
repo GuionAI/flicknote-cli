@@ -26,12 +26,14 @@ Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `make setup`).
 
-- **pre-commit** runs `cargo fmt` — auto-formats staged Rust files
+- **pre-commit** runs `cargo fmt --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt` then re-commit.
+- **pre-push** runs clippy, cargo deny, go vet, and golangci-lint. Requires `cargo install cargo-deny` and `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
 
 Manual usage:
 
 ```bash
 lefthook run pre-commit  # run pre-commit hooks
+lefthook run pre-push    # run pre-push hooks
 ```
 
 ## Key Dependencies

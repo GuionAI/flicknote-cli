@@ -58,5 +58,18 @@ jobs:
       - name: Lint TUI
         run: |
           cd flicknote-tui
-          go vet ./...
           go build -o /dev/null .
+
+      - name: Lint TUI with golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          working-directory: flicknote-tui
+          version: v2.10.1
+
+  osv-scan:
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@v2.3.5
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+      pull-requests: write
