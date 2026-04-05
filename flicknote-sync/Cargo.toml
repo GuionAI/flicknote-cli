@@ -1,6 +1,6 @@
 [package]
 name = "flicknote-sync"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Background sync daemon for FlickNote CLI"
 homepage = "https://github.com/guionai/flicknote-cli"
