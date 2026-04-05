@@ -1,6 +1,6 @@
 module github.com/guionai/flicknote-cli/flicknote-tui
 
-go 1.25.0
+go 1.26.1
 
 require (
 	charm.land/bubbles/v2 v2.0.0

@@ -42,29 +42,6 @@ needless_pass_by_value = "warn"
 redundant_closure_for_method_calls = "warn"
 use_self = "warn"
 
-# Config for 'dist'
-[workspace.metadata.dist]
-# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.31.0"
-# CI backends to support
-ci = "github"
-# The installers to generate for each app
-installers = ["homebrew"]
-# A GitHub repo to push Homebrew formulas to
-tap = "guionai/homebrew-tap"
-# Whether to install an updater program
-install-updater = false
-# Target platforms to build apps for (Rust target-triple syntax)
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-musl"]
-# Publish jobs to run in CI
-publish-jobs = ["homebrew"]
-# Which actions to run on pull requests
-pr-run-mode = "plan"
-
-[workspace.metadata.dist.dependencies.apt]
-libclang-dev = "*"
-musl-tools = "*"
-
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
