@@ -24,3 +24,6 @@ target/
 #.idea/
 .worktrees
 .claude/settings.local.json
+
+# Go binaries
+flicknote-tui/flicknote-tui

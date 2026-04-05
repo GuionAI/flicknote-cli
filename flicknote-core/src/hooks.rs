@@ -370,7 +370,7 @@ mod tests {
     fn on_get_config_dir_arg_passed() {
         let dir = temp_hooks_dir();
         let log_file = dir.path().join("get_args.log");
-        let script = format!("#!/bin/sh\necho \"$@\" > {log}\n", log = log_file.display());
+        let script = format!("#!/bin/sh\nexec > {log}\necho \"$@\"\n", log = log_file.display());
         write_hook(dir.path(), "on-get", &script);
 
         run_on_get(dir.path(), r#"{"id":"abc"}"#, "/my/config");
@@ -455,7 +455,10 @@ mod tests {
     fn on_archive_unarchive_command_arg() {
         let dir = temp_hooks_dir();
         let log_file = dir.path().join("unarchive.log");
-        let script = format!("#!/bin/sh\necho \"$@\" > {log}\n", log = log_file.display());
+        let script = format!(
+            "#!/bin/sh\nexec > {log}\necho \"$@\"\n",
+            log = log_file.display()
+        );
         write_hook(dir.path(), "on-archive", &script);
 
         let old = r#"{"id":"abc"}"#;
@@ -531,7 +534,7 @@ mod tests {
     fn on_add_config_dir_arg_passed() {
         let dir = temp_hooks_dir();
         let log_file = dir.path().join("add_args.log");
-        let script = format!("#!/bin/sh\necho \"$@\" > {log}\n", log = log_file.display());
+        let script = format!("#!/bin/sh\nexec > {log}\necho \"$@\"\n", log = log_file.display());
         write_hook(dir.path(), "on-add", &script);
 
         run_on_add(dir.path(), r#"{"id":"abc"}"#, "/my/config").unwrap();

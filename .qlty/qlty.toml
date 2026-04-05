@@ -15,18 +15,11 @@ default = true
 name = "clippy"
 mode = "block"
 
-# mode = "block" applies to `qlty check` runs (e.g. qlty check --all).
-# The pre-push hook uses --no-formatters, so rustfmt does not block during push.
-[[plugin]]
-name = "rustfmt"
-mode = "block"
-
 # Pinned to 2.10.1 — qlty default was not resolving a compatible version.
 [[plugin]]
 name = "golangci-lint"
 version = "2.10.1"
 mode = "block"
-target = { type = "parent_with", path = "go.mod" }
 
 [[plugin]]
 name = "trufflehog"

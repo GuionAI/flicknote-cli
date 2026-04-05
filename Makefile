@@ -1,4 +1,4 @@
-.PHONY: build test check fmt clippy install install-rust install-tui reinstall reinstall-rust clean release setup build-tui
+.PHONY: build test check fmt clippy install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
 
 build:
 	cargo build
@@ -15,10 +15,10 @@ test:
 check: fmt clippy test
 
 fmt:
-	cargo fmt --check
+	cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --check
 
 clippy:
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
 
 install: install-rust install-tui
 
@@ -45,3 +45,5 @@ clean:
 
 setup:
 	qlty githooks install
+
+install-hooks: setup

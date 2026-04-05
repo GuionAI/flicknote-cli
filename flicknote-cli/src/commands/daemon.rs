@@ -2,6 +2,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use std::fs;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 
 pub(crate) fn pid_file(config: &Config) -> PathBuf {
