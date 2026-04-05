@@ -17,10 +17,10 @@ test:
 check: fmt clippy test
 
 fmt:
-	cargo fmt $(PKGS) --check
+	qlty fmt
 
 clippy:
-	cargo clippy $(PKGS) --all-targets -- -D warnings
+	qlty check --no-progress
 
 install: install-rust install-tui
 

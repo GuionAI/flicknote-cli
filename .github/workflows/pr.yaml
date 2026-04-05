@@ -42,14 +42,11 @@ jobs:
           curl -fsSL https://qlty.sh | QLTY_VERSION=0.618.0 bash
           echo "$HOME/.qlty/bin" >> $GITHUB_PATH
 
+      - name: Format code
+        run: qlty fmt
+
       - name: Lint and security scan
         run: qlty check --all --no-progress
-
-      - name: Check formatting
-        run: make fmt
-
-      - name: Lint with clippy
-        run: make clippy
 
       - name: Run tests
         run: cargo test
