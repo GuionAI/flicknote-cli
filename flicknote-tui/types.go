@@ -7,7 +7,7 @@ package main
 type Note struct {
 	ID        string  `json:"id"`
 	UserID    string  `json:"user_id"`
-	Type      string  `json:"type"`      // "text", "voice", "link"
+	Type      string  `json:"type"` // "text", "voice", "link"
 	Status    string  `json:"status"`
 	Title     *string `json:"title"`
 	Content   *string `json:"content"`
@@ -24,7 +24,7 @@ type NoteDetail struct {
 	ID        string  `json:"id"`
 	Type      string  `json:"type"`
 	Title     *string `json:"title"`
-	Project   *string `json:"project"`   // resolved project name, not ID
+	Project   *string `json:"project"` // resolved project name, not ID
 	Summary   *string `json:"summary"`
 	Content   *string `json:"content"`
 	CreatedAt *string `json:"created_at"`
