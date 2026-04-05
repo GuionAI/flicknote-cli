@@ -61,7 +61,7 @@ jobs:
           go build -o /dev/null .
 
       - name: Lint TUI with golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           working-directory: flicknote-tui
           version: v2.10.1
