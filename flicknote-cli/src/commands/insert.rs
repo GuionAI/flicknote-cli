@@ -3,9 +3,7 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use flicknote_core::hooks;
-
-use super::util::{find_section, get_note, get_note_content, read_stdin_required, resolve_note_id};
+use super::util::{find_section, get_note_content, read_stdin_required, resolve_note_id};
 
 #[derive(Args)]
 #[command(group(clap::ArgGroup::new("position").required(true)))]
@@ -20,10 +18,8 @@ pub(crate) struct InsertArgs {
     after: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &InsertArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &InsertArgs) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id)?;
-    let now = chrono::Utc::now().to_rfc3339();
-
     let (section_name, insert_before) = match (&args.before, &args.after) {
         (Some(s), None) => (s.as_str(), true),
         (None, Some(s)) => (s.as_str(), false),
@@ -55,23 +51,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &InsertArgs) -> Result
     } else {
         format!("{before}\n\n{}\n\n{after}", insert_content.trim_end())
     };
-
-    let old_note = get_note(db, &full_id)?;
-    let mut new_note = old_note.clone();
-    new_note.content = Some(new_content.trim().to_string());
-    new_note.status = "ai_queued".to_string();
-    new_note.updated_at = Some(now.clone());
-
-    let old_json = serde_json::to_string(&old_note)?;
-    let new_json = serde_json::to_string(&new_note)?;
-    let config_dir = config.paths.config_dir.to_string_lossy();
-    hooks::run_on_modify(
-        &config.paths.hooks_dir,
-        &old_json,
-        &new_json,
-        "insert",
-        &config_dir,
-    )?;
 
     db.update_note_content(&full_id, new_content.trim(), true)?;
 

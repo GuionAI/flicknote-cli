@@ -2,7 +2,6 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::hooks;
 
 #[derive(Args)]
 pub(crate) struct DetailArgs {
@@ -22,7 +21,7 @@ pub(crate) struct DetailArgs {
     archived: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &DetailArgs) -> Result<(), CliError> {
+pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DetailArgs) -> Result<(), CliError> {
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {
             id: args.id.clone(),
@@ -91,10 +90,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &DetailArgs) -> Result
 
     let full_id = resolve(&args.id)?;
     let note = find(&full_id)?;
-
-    let note_json = serde_json::to_string(&note)?;
-    let config_dir = config.paths.config_dir.to_string_lossy();
-    hooks::run_on_get(&config.paths.hooks_dir, &note_json, &config_dir);
 
     let project_name = if let Some(ref pid) = note.project_id {
         db.find_project_name_by_id(pid)?

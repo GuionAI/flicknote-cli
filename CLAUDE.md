@@ -22,19 +22,16 @@ cargo fmt --check          # format check
 
 Or use the Makefile: `make build`, `make test`, `make check`, `make install`
 
-## Git Hooks (qlty)
+## Git Hooks (lefthook)
 
-This repo uses qlty for git hooks and unified linting. Install once with `qlty githooks install` (or `make setup`).
+This repo uses lefthook for git hooks. Install once with `lefthook install` (or `make setup`).
 
-- **pre-commit** runs `qlty fmt` — auto-formats staged Rust files
-- **pre-push** runs `qlty check` — clippy, golangci-lint, trufflehog, osv-scanner (uses `--skip-errored-plugins`, so a misconfigured plugin silently produces no output rather than blocking)
+- **pre-commit** runs `cargo fmt` — auto-formats staged Rust files
 
 Manual usage:
 
 ```bash
-qlty check          # check changed files
-qlty check --all    # check full repo
-qlty fmt            # auto-format
+lefthook run pre-commit  # run pre-commit hooks
 ```
 
 ## Key Dependencies
@@ -56,10 +53,10 @@ qlty fmt            # auto-format
 
 ## CI (GitHub Actions)
 
-This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon). qlty runs in CI directly.
+This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon).
 
-- **pr.yaml** — three parallel jobs: Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build), qlty scan
-- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy + qlty scan)
+- **pr.yaml** — Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build)
+- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy)
 - **release.yml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + tta-lab/homebrew-ttal
 
 Commit scope: `ci`

@@ -17,7 +17,6 @@ pub struct ConfigPaths {
     pub session_file: PathBuf,
     pub db_file: PathBuf,
     pub log_file: PathBuf,
-    pub hooks_dir: PathBuf,
 }
 
 impl Config {
@@ -42,9 +41,6 @@ impl Config {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700))?;
         }
-
-        let hooks_dir = config_dir.join("hooks");
-        fs::create_dir_all(&hooks_dir)?;
 
         let config_file = config_dir.join("config.json");
         let session_file = config_dir.join("session.json");
@@ -126,7 +122,6 @@ impl Config {
             session_file,
             db_file,
             log_file,
-            hooks_dir,
         };
 
         Ok(Self {

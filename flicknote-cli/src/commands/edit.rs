@@ -2,10 +2,9 @@ use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::hooks;
 use std::io::Write;
 
-use super::add::{build_hook_note, resolve_project};
+use super::add::resolve_project;
 use super::util::{resolve_note_id, resolve_project_arg, write_content};
 
 #[derive(Args)]
@@ -80,7 +79,7 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
 }
 
 /// Edit an existing note.
-fn edit_existing(db: &dyn NoteDb, config: &Config, id: &str) -> Result<(), CliError> {
+fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, id)?;
     let note = db.find_note(&full_id)?;
 
@@ -132,7 +131,7 @@ fn edit_existing(db: &dyn NoteDb, config: &Config, id: &str) -> Result<(), CliEr
     // Update content if it changed
     let old_content = note.content.as_deref().unwrap_or("");
     if new_body != old_content {
-        write_content(db, config, &full_id, &new_body, "replace")?;
+        write_content(db, &full_id, &new_body)?;
         println!("Updated content for note {}.", &full_id[..8]);
     }
 
@@ -142,7 +141,7 @@ fn edit_existing(db: &dyn NoteDb, config: &Config, id: &str) -> Result<(), CliEr
 /// Create a new note from editor.
 fn create_from_editor(
     db: &dyn NoteDb,
-    config: &Config,
+    _config: &Config,
     project_arg: &Option<String>,
 ) -> Result<(), CliError> {
     let edited = open_in_editor("")?;
@@ -163,21 +162,6 @@ fn create_from_editor(
     } else {
         None
     };
-
-    let config_dir = config.paths.config_dir.to_string_lossy();
-    let note_for_hook = build_hook_note(
-        &id,
-        db.user_id(),
-        "normal",
-        "ai_queued",
-        project_id.clone(),
-        title.clone(),
-        Some(stripped_content.clone()),
-        None,
-        &now,
-    );
-    let note_json = serde_json::to_string(&note_for_hook)?;
-    hooks::run_on_add(&config.paths.hooks_dir, &note_json, &config_dir)?;
 
     let title_ref = title.as_deref();
     db.insert_note(&InsertNoteReq {
