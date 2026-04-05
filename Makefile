@@ -44,6 +44,6 @@ clean:
 	cargo clean
 
 setup:
-	qlty githooks install
+	lefthook install
 
 install-hooks: setup

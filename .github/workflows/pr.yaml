@@ -40,19 +40,18 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Install qlty
-        run: |
-          curl -fsSL https://qlty.sh | QLTY_VERSION=0.618.0 bash
-          echo "$HOME/.qlty/bin" >> $GITHUB_PATH
-
       - name: Format code
         run: cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
 
       - name: Lint with clippy
         run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
 
-      - name: Lint and security scan
-        run: qlty check --all --no-progress
+      - name: Scan for secrets
+        uses: trufflehog-actions/trufflehog@v1
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          untracked: false
 
       - name: Run tests
         run: cargo test
