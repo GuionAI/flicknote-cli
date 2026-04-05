@@ -455,7 +455,10 @@ mod tests {
     fn on_archive_unarchive_command_arg() {
         let dir = temp_hooks_dir();
         let log_file = dir.path().join("unarchive.log");
-        let script = format!("#!/bin/sh\necho \"$@\" > {log}\n", log = log_file.display());
+        let script = format!(
+            "#!/bin/sh\necho \"$@\" > {log} 2>&1\n",
+            log = log_file.display()
+        );
         write_hook(dir.path(), "on-archive", &script);
 
         let old = r#"{"id":"abc"}"#;
