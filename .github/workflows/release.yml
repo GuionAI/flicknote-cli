@@ -324,43 +324,12 @@ jobs:
           done
           git push
 
-  publish-homebrew-tta-lab:
-    needs:
-      - plan
-      - host
-      - publish-homebrew-formula
-    runs-on: "ubuntu-22.04"
-    env:
-      GH_TOKEN: ${{ secrets.TTAL_TAP_TOKEN }}
-    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
-    steps:
-      - name: Push formula to tta-lab/homebrew-ttal
-        run: |
-          set -e
-          WORK_DIR=$(mktemp -d)
-          gh repo clone tta-lab/homebrew-ttal "${WORK_DIR}/ttal-tap" -- --depth=1
-          cd "${WORK_DIR}/ttal-tap"
-          mkdir -p Formula
-          GUION_DIR=$(mktemp -d)
-          gh repo clone guionai/homebrew-tap "${GUION_DIR}/guion-tap" -- --depth=1
-          cp "${GUION_DIR}/guion-tap/Formula/flicknote.rb" Formula/flicknote.rb
-          git config user.name "guionai-bot"
-          git config user.email "bot@guionai.com"
-          git add Formula/flicknote.rb
-          git diff --cached --quiet || git commit -m "feat(formula): update flicknote to ${GITHUB_REF_NAME}"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/tta-lab/homebrew-ttal.git"
-          git push
-
   announce:
     needs:
       - plan
       - host
       - publish-homebrew-formula
-      - publish-homebrew-tta-lab
-    # use "always() && ..." to allow us to wait for all publish jobs while
-    # still allowing individual publish jobs to skip themselves (for prereleases).
-    # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-homebrew-tta-lab.result == 'skipped' || needs.publish-homebrew-tta-lab.result == 'success') }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
