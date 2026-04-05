@@ -37,6 +37,21 @@ cargo build --release
 cargo install --path flicknote-cli
 ```
 
+## Install
+
+### Homebrew (macOS + Linux)
+
+```bash
+# Via ttal tap (recommended — if you use ttal, this tap is already added)
+brew install tta-lab/ttal/flicknote
+
+# Via guionai tap
+brew tap guionai/tap
+brew install flicknote
+```
+
+Installs both `flicknote` and `flicknote-sync`.
+
 ## Usage
 
 ```bash
@@ -88,7 +103,7 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 4 crates:
+Rust workspace with 5 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
