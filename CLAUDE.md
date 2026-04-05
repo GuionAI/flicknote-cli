@@ -55,8 +55,8 @@ lefthook run pre-commit  # run pre-commit hooks
 
 This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon).
 
-- **pr.yaml** — Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build), trufflehog scan
-- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy + trufflehog)
+- **pr.yaml** — Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build)
+- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy)
 - **release.yml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + tta-lab/homebrew-ttal
 
 Commit scope: `ci`
