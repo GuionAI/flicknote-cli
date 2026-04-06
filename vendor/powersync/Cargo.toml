@@ -31,7 +31,7 @@ event-listener = "5.4.1"
 futures-lite = "2.6.1"
 log = "0.4.28"
 pin-project-lite = "0.2.16"
-reqwest = { version = "0.12", features = ["stream", "rustls-tls"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"], optional = true }
 rusqlite = { version = "0.38.0", features = ["load_extension"] }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
