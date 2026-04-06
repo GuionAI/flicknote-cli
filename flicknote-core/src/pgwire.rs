@@ -103,7 +103,7 @@ impl NoteDb for PgWireBackend {
         self.exec_opt(
             "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
              project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
-             FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1",
+             FROM notes WHERE id = $1::text::uuid AND deleted_at IS NULL LIMIT 1",
             &[&id],
             CliError::NoteNotFound { id: id.to_string() },
             Note::from_pg_row,
@@ -114,7 +114,7 @@ impl NoteDb for PgWireBackend {
         self.exec_opt(
             "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
              project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
-             FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1",
+             FROM notes WHERE id = $1::text::uuid AND deleted_at IS NOT NULL LIMIT 1",
             &[&id],
             CliError::NoteNotFound { id: id.to_string() },
             Note::from_pg_row,
@@ -123,7 +123,7 @@ impl NoteDb for PgWireBackend {
 
     fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError> {
         let rows = self.exec_all(
-            "SELECT content FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1",
+            "SELECT content FROM notes WHERE id = $1::text::uuid AND deleted_at IS NULL LIMIT 1",
             &[&id],
             |r| Ok(r.get::<_, Option<String>>(0)),
         )?;
@@ -149,9 +149,9 @@ impl NoteDb for PgWireBackend {
         }
         if let Some(pid) = filter.project_id {
             params.push(Box::new(pid.to_string()));
-            sql.push_str(&format!(" AND project_id = ${}", params.len()));
+            sql.push_str(&format!(" AND project_id = ${}::text::uuid", params.len()));
         }
-        params.push(Box::new(filter.limit));
+        params.push(Box::new(i64::from(filter.limit)));
         sql.push_str(&format!(
             " ORDER BY created_at DESC LIMIT ${}",
             params.len()
@@ -204,9 +204,9 @@ impl NoteDb for PgWireBackend {
         }
         if let Some(ref pid) = filter.project_id {
             params.push(Box::new(pid.to_string()));
-            sql.push_str(&format!(" AND project_id = ${}", params.len()));
+            sql.push_str(&format!(" AND project_id = ${}::text::uuid", params.len()));
         }
-        params.push(Box::new(filter.limit));
+        params.push(Box::new(i64::from(filter.limit)));
         sql.push_str(&format!(
             " ORDER BY updated_at DESC LIMIT ${}",
             params.len()
@@ -217,12 +217,18 @@ impl NoteDb for PgWireBackend {
     }
 
     fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
+        let metadata_json: Option<serde_json::Value> = req
+            .metadata
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| CliError::Database(format!("invalid metadata JSON: {e}")))?;
+
         self.exec(
             "INSERT INTO notes \
              (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+             VALUES ($1::text::uuid, $2::text::uuid, $3, $4, $5, $6, $7, $8::text::uuid, ($9 || '')::timestamptz, ($10 || '')::timestamptz)",
             &[&req.id, &self.user_id, &req.note_type, &req.status, &req.title, &req.content,
-              &req.metadata, &req.project_id, &req.now, &req.now],
+              &metadata_json, &req.project_id, &req.now, &req.now],
         )?;
         Ok(())
     }
@@ -230,9 +236,9 @@ impl NoteDb for PgWireBackend {
     fn update_note_content(&self, id: &str, content: &str, requeue: bool) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let sql = if requeue {
-            "UPDATE notes SET content = $1, status = 'ai_queued', updated_at = $2 WHERE id = $3"
+            "UPDATE notes SET content = $1, status = 'ai_queued', updated_at = $2 WHERE id = $3::text::uuid"
         } else {
-            "UPDATE notes SET content = $1, updated_at = $2 WHERE id = $3"
+            "UPDATE notes SET content = $1, updated_at = $2 WHERE id = $3::text::uuid"
         };
         let affected = self.exec(sql, &[&content, &now, &id])?;
         if affected == 0 {
@@ -249,12 +255,12 @@ impl NoteDb for PgWireBackend {
     ) -> Result<(), CliError> {
         let affected = if let Some(ts) = deleted_at {
             self.exec(
-                "UPDATE notes SET deleted_at = $1, updated_at = $2 WHERE id = $3",
+                "UPDATE notes SET deleted_at = $1, updated_at = $2 WHERE id = $3::text::uuid",
                 &[&ts, &now, &id],
             )?
         } else {
             self.exec(
-                "UPDATE notes SET deleted_at = NULL, updated_at = $1 WHERE id = $2",
+                "UPDATE notes SET deleted_at = NULL, updated_at = $1 WHERE id = $2::text::uuid",
                 &[&now, &id],
             )?
         };
@@ -277,8 +283,8 @@ impl NoteDb for PgWireBackend {
 
     fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError> {
         let rows = self.exec_all(
-            "SELECT id FROM projects WHERE name = $1 AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
-            &[&name],
+            "SELECT id FROM projects WHERE user_id = $1::text::uuid AND name = $2 AND (is_archived IS NOT TRUE) LIMIT 1",
+            &[&self.user_id, &name],
             |r| Ok(r.get::<_, String>(0)),
         )?;
         Ok(rows.into_iter().next())
@@ -286,8 +292,8 @@ impl NoteDb for PgWireBackend {
 
     fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError> {
         let rows = self.exec_all(
-            "SELECT name FROM projects WHERE id = $1 LIMIT 1",
-            &[&project_id],
+            "SELECT name FROM projects WHERE user_id = $1::text::uuid AND id = $2::text::uuid LIMIT 1",
+            &[&self.user_id, &project_id],
             |r| Ok(r.get::<_, Option<String>>(0)),
         )?;
         Ok(rows.into_iter().next().unwrap_or(None))
@@ -295,20 +301,24 @@ impl NoteDb for PgWireBackend {
 
     fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
         let sql = if archived {
-            "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
-             FROM projects WHERE is_archived = 1 ORDER BY name"
+            "SELECT id::text AS id, user_id::text AS user_id, name, color, \
+             prompt_id::text AS prompt_id, keyterm_id::text AS keyterm_id, \
+             (CASE WHEN is_archived THEN 1 ELSE 0 END) AS is_archived, created_at::text AS created_at \
+             FROM projects WHERE user_id = $1::text::uuid AND is_archived IS TRUE ORDER BY name"
         } else {
-            "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
-             FROM projects WHERE (is_archived = 0 OR is_archived IS NULL) ORDER BY name"
+            "SELECT id::text AS id, user_id::text AS user_id, name, color, \
+             prompt_id::text AS prompt_id, keyterm_id::text AS keyterm_id, \
+             (CASE WHEN is_archived THEN 1 ELSE 0 END) AS is_archived, created_at::text AS created_at \
+             FROM projects WHERE user_id = $1::text::uuid AND is_archived IS NOT TRUE ORDER BY name"
         };
-        self.exec_all(sql, &[], Project::from_pg_row)
+        self.exec_all(sql, &[&self.user_id], Project::from_pg_row)
     }
 
     fn create_project(&self, name: &str) -> Result<String, CliError> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         self.exec(
-            "INSERT INTO projects (id, user_id, name, is_archived, created_at) VALUES ($1, $2, $3, 0, $4)",
+            "INSERT INTO projects (id, user_id, name, is_archived, created_at) VALUES ($1::text::uuid, $2::text::uuid, $3, FALSE, $4)",
             &[&id, &self.user_id, &name, &now],
         )?;
         Ok(id)
@@ -328,7 +338,7 @@ impl NoteDb for PgWireBackend {
 
         let affected = tx
             .execute(
-                "UPDATE notes SET project_id = $1, updated_at = $2 WHERE id = $3",
+                "UPDATE notes SET project_id = $1::text::uuid, updated_at = $2 WHERE id = $3::text::uuid",
                 &[&new_project_id, &now, &note_id],
             )
             .map_err(|e| CliError::Database(e.to_string()))?;
@@ -345,7 +355,7 @@ impl NoteDb for PgWireBackend {
 
         let count: i64 = tx
             .query_one(
-                "SELECT COUNT(*) FROM notes WHERE project_id = $1 AND deleted_at IS NULL",
+                "SELECT COUNT(*) FROM notes WHERE project_id = $1::text::uuid AND deleted_at IS NULL",
                 &[&old_pid],
             )
             .map_err(|e| CliError::Database(e.to_string()))?
@@ -354,12 +364,18 @@ impl NoteDb for PgWireBackend {
 
         if count == 0 {
             let old_name: Option<String> = tx
-                .query_one("SELECT name FROM projects WHERE id = $1", &[&old_pid])
+                .query_one(
+                    "SELECT name FROM projects WHERE id = $1::text::uuid",
+                    &[&old_pid],
+                )
                 .map_err(|e| CliError::Database(e.to_string()))?
                 .try_get(0)
                 .map_err(|e| CliError::Database(e.to_string()))?;
-            tx.execute("DELETE FROM projects WHERE id = $1", &[&old_pid])
-                .map_err(|e| CliError::Database(e.to_string()))?;
+            tx.execute(
+                "DELETE FROM projects WHERE id = $1::text::uuid",
+                &[&old_pid],
+            )
+            .map_err(|e| CliError::Database(e.to_string()))?;
             tx.commit().map_err(|e| CliError::Database(e.to_string()))?;
             Ok(old_name)
         } else {
@@ -370,9 +386,11 @@ impl NoteDb for PgWireBackend {
 
     fn find_project(&self, id: &str) -> Result<Project, CliError> {
         self.exec_opt(
-            "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
-             FROM projects WHERE id = $1 LIMIT 1",
-            &[&id],
+            "SELECT id::text AS id, user_id::text AS user_id, name, color, \
+             prompt_id::text AS prompt_id, keyterm_id::text AS keyterm_id, \
+             (CASE WHEN is_archived THEN 1 ELSE 0 END) AS is_archived, created_at::text AS created_at \
+             FROM projects WHERE user_id = $1::text::uuid AND id = $2::text::uuid LIMIT 1",
+            &[&self.user_id, &id],
             CliError::Other(format!("Project not found: {id}")),
             Project::from_pg_row,
         )
@@ -382,8 +400,8 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let rows = self.exec_all(
-            "SELECT id FROM projects WHERE id LIKE $1 LIMIT 2",
-            &[&pattern],
+            "SELECT id FROM projects WHERE user_id = $1::text::uuid AND id LIKE $2 LIMIT 2",
+            &[&self.user_id, &pattern],
             |r| Ok(r.get::<_, String>(0)),
         )?;
         match rows.len() {
@@ -436,7 +454,7 @@ impl NoteDb for PgWireBackend {
 
         params.push(Box::new(id.to_string()));
         let sql = format!(
-            "UPDATE projects SET {} WHERE id = ${}",
+            "UPDATE projects SET {} WHERE id = ${}::text::uuid",
             updates.join(", "),
             params.len()
         );
@@ -448,7 +466,7 @@ impl NoteDb for PgWireBackend {
     }
 
     fn delete_project(&self, id: &str) -> Result<(), CliError> {
-        let affected = self.exec("UPDATE projects SET is_archived = 1 WHERE id = $1", &[&id])?;
+        let affected = self.exec("UPDATE projects SET is_archived = TRUE WHERE user_id = $1::text::uuid AND id = $2::text::uuid", &[&self.user_id, &id])?;
         if affected == 0 {
             return Err(CliError::Other(format!("Project not found: {id}")));
         }
@@ -458,7 +476,7 @@ impl NoteDb for PgWireBackend {
     fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let affected = self.exec(
-            "UPDATE notes SET title = $1, updated_at = $2 WHERE id = $3",
+            "UPDATE notes SET title = $1, updated_at = $2 WHERE id = $3::text::uuid",
             &[&title, &now, &id],
         )?;
         if affected == 0 {
@@ -471,7 +489,7 @@ impl NoteDb for PgWireBackend {
         let now = chrono::Utc::now().to_rfc3339();
         let val: i64 = if flagged { 1 } else { 0 };
         let affected = self.exec(
-            "UPDATE notes SET is_flagged = $1, updated_at = $2 WHERE id = $3",
+            "UPDATE notes SET is_flagged = $1, updated_at = $2 WHERE id = $3::text::uuid",
             &[&val, &now, &id],
         )?;
         if affected == 0 {
@@ -495,7 +513,7 @@ impl NoteDb for PgWireBackend {
         }
         if let Some(pid) = filter.project_id {
             params.push(Box::new(pid.to_string()));
-            sql.push_str(&format!(" AND project_id = ${}", params.len()));
+            sql.push_str(&format!(" AND project_id = ${}::text::uuid", params.len()));
         }
 
         let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(AsRef::as_ref).collect();
@@ -517,7 +535,9 @@ impl NoteDb for PgWireBackend {
         if note_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders: Vec<String> = (1..=note_ids.len()).map(|i| format!("${}", i)).collect();
+        let placeholders: Vec<String> = (1..=note_ids.len())
+            .map(|i| format!("${}::text::uuid", i))
+            .collect();
         let sql = format!(
             "SELECT note_id, value FROM note_extractions WHERE type = 'topic' AND note_id IN ({})",
             placeholders.join(", ")
