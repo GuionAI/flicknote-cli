@@ -709,7 +709,10 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Projects::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        if affected == 0 {
+            return Err(CliError::Other(format!("Project not found: {id}")));
+        }
         Ok(())
     }
 
@@ -956,7 +959,10 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Prompts::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        if affected == 0 {
+            return Err(CliError::Other(format!("Prompt not found: {id}")));
+        }
         Ok(())
     }
 
