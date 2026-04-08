@@ -80,17 +80,6 @@ fn exec_all<T>(
     rows.iter().map(&mut f).collect()
 }
 
-/// Helper to execute a mutation (INSERT/UPDATE/DELETE).
-#[allow(clippy::needless_pass_by_value)]
-fn exec_mutation(
-    client: &mut postgres::Client,
-    sql: &str,
-    vals: sea_query_postgres::PostgresValues,
-) -> Result<u64, CliError> {
-    let params = vals.as_params();
-    Ok(client.execute(sql, &params)?)
-}
-
 // ─── PgWireBackend ────────────────────────────────────────────────────────────
 
 pub struct PgWireBackend {
@@ -382,7 +371,8 @@ impl NoteDb for PgWireBackend {
                 now_dt.into(),
             ]);
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        self.client.borrow_mut().execute(sql.as_str(), &params)?;
         Ok(())
     }
 
@@ -397,7 +387,8 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::NoteNotFound { id: id.to_string() });
         }
@@ -420,7 +411,8 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::NoteNotFound { id: id.to_string() });
         }
@@ -440,7 +432,8 @@ impl NoteDb for PgWireBackend {
             ))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other("no deleted notes to restore".into()));
         }
@@ -524,7 +517,8 @@ impl NoteDb for PgWireBackend {
             .values_panic([id.into(), name.into(), false.into(), now.into()])
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        self.client.borrow_mut().execute(sql.as_str(), &params)?;
         Ok(id.to_string())
     }
 
@@ -679,7 +673,8 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Projects::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other(format!("Project not found: {id}")));
         }
@@ -693,7 +688,8 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(Projects::Id).eq(parse_uuid(id)?))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other(format!("Project not found: {id}")));
         }
@@ -708,7 +704,8 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::NoteNotFound { id: id.to_string() });
         }
@@ -727,7 +724,8 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::NoteNotFound { id: id.to_string() });
         }
@@ -850,7 +848,8 @@ impl NoteDb for PgWireBackend {
             ])
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        self.client.borrow_mut().execute(sql.as_str(), &params)?;
         Ok(())
     }
 
@@ -925,7 +924,8 @@ impl NoteDb for PgWireBackend {
         }
         q.and_where(Expr::col(Prompts::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other(format!("Prompt not found: {id}")));
         }
@@ -938,7 +938,8 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(Prompts::Id).eq(parse_uuid(id)?))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other(format!("Prompt not found: {id}")));
         }
@@ -1000,7 +1001,8 @@ impl NoteDb for PgWireBackend {
             ])
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        self.client.borrow_mut().execute(sql.as_str(), &params)?;
         Ok(())
     }
 
@@ -1078,7 +1080,8 @@ impl NoteDb for PgWireBackend {
         q.value(Keyterms::UpdatedAt, chrono::Utc::now());
         q.and_where(Expr::col(Keyterms::Id).eq(parse_uuid(id)?));
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        self.client.borrow_mut().execute(sql.as_str(), &params)?;
         Ok(())
     }
 
@@ -1088,7 +1091,8 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(Keyterms::Id).eq(parse_uuid(id)?))
             .take()
             .build_postgres(PostgresQueryBuilder);
-        let affected = exec_mutation(&mut self.client.borrow_mut(), sql.as_str(), vals)?;
+        let params = vals.as_params();
+        let affected = self.client.borrow_mut().execute(sql.as_str(), &params)?;
         if affected == 0 {
             return Err(CliError::Other(format!("Keyterm not found: {id}")));
         }
