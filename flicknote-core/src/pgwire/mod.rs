@@ -1041,15 +1041,13 @@ impl NoteDb for PgWireBackend {
 
     fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Keyterms::Id,
-                Keyterms::UserId,
-                Keyterms::Name,
-                Keyterms::Description,
-                Keyterms::Content,
-                Keyterms::CreatedAt,
-                Keyterms::UpdatedAt,
-            ])
+            .expr_as(uuid_read(Keyterms::Id), Alias::new("id"))
+            .expr_as(uuid_read(Keyterms::UserId), Alias::new("user_id"))
+            .column(Keyterms::Name)
+            .column(Keyterms::Description)
+            .column(Keyterms::Content)
+            .expr_as(ts_read(Keyterms::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Keyterms::UpdatedAt), Alias::new("updated_at"))
             .from(Keyterms::Table)
             .and_where(Expr::col(Keyterms::Id).eq(parse_uuid(id)?))
             .limit(1)
@@ -1066,15 +1064,13 @@ impl NoteDb for PgWireBackend {
 
     fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Keyterms::Id,
-                Keyterms::UserId,
-                Keyterms::Name,
-                Keyterms::Description,
-                Keyterms::Content,
-                Keyterms::CreatedAt,
-                Keyterms::UpdatedAt,
-            ])
+            .expr_as(uuid_read(Keyterms::Id), Alias::new("id"))
+            .expr_as(uuid_read(Keyterms::UserId), Alias::new("user_id"))
+            .column(Keyterms::Name)
+            .column(Keyterms::Description)
+            .column(Keyterms::Content)
+            .expr_as(ts_read(Keyterms::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Keyterms::UpdatedAt), Alias::new("updated_at"))
             .from(Keyterms::Table)
             .order_by(Keyterms::Name, Order::Asc)
             .take()
