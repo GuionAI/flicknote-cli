@@ -47,6 +47,31 @@ where
     Expr::col(col).cast_as(Alias::new("text"))
 }
 
+/// Cast a uuid column to text so postgres(with-uuid-1) returns it as String.
+fn uuid_read<C>(col: C) -> Expr
+where
+    C: IntoColumnRef,
+{
+    Expr::col(col).cast_as(Alias::new("text"))
+}
+
+/// Cast a timestamptz column to text so postgres(with-chrono-0_4) returns it as String.
+/// Use ISO-8601-ish format compatible with existing sqlite values.
+fn ts_read<C>(col: C) -> Expr
+where
+    C: IntoColumnRef,
+{
+    Expr::col(col).cast_as(Alias::new("text"))
+}
+
+/// Cast a boolean column to bigint so it decodes as Option<i64> (matches sqlite INTEGER 0/1).
+fn bool_as_int<C>(col: C) -> Expr
+where
+    C: IntoColumnRef,
+{
+    Expr::cust_with_expr("($1)::int::bigint", Expr::col(col))
+}
+
 /// Helper to execute a query that expects zero or one result rows.
 #[allow(clippy::needless_pass_by_value)]
 fn exec_opt<T>(
