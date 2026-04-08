@@ -16,14 +16,25 @@ use sea_query::{
 use sea_query_postgres::PostgresBinder;
 use uuid::Uuid;
 
+mod convert;
+mod iden;
+mod row;
+
 use crate::backend::{InsertNoteReq, NoteDb, NoteFilter};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
-
-mod iden;
 use iden::{Keyterms, NoteExtractions, Notes, Projects, Prompts};
+use row::{KeytermPgRow, NotePgRow, ProjectPgRow, PromptPgRow};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Cast a uuid column to text for WHERE clause pattern matching.
+fn uuid_read<C>(col: C) -> Expr
+where
+    C: IntoColumnRef,
+{
+    Expr::col(col).cast_as(Alias::new("text"))
+}
 
 fn parse_uuid(s: &str) -> Result<Uuid, CliError> {
     Uuid::parse_str(s).map_err(|e| CliError::Database(format!("invalid UUID {s:?}: {e}")))
@@ -37,39 +48,6 @@ fn parse_iso_utc(s: &str) -> Result<DateTime<Utc>, CliError> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| CliError::Database(format!("invalid ISO timestamp {s:?}: {e}")))
-}
-
-/// Cast a jsonb column to text on read so the pgwire client can deserialize it as String.
-fn jsonb_read<C>(col: C) -> Expr
-where
-    C: IntoColumnRef,
-{
-    Expr::col(col).cast_as(Alias::new("text"))
-}
-
-/// Cast a uuid column to text so postgres(with-uuid-1) returns it as String.
-fn uuid_read<C>(col: C) -> Expr
-where
-    C: IntoColumnRef,
-{
-    Expr::col(col).cast_as(Alias::new("text"))
-}
-
-/// Cast a timestamptz column to text so postgres(with-chrono-0_4) returns it as String.
-/// Use ISO-8601-ish format compatible with existing sqlite values.
-fn ts_read<C>(col: C) -> Expr
-where
-    C: IntoColumnRef,
-{
-    Expr::col(col).cast_as(Alias::new("text"))
-}
-
-/// Cast a boolean column to bigint so it decodes as Option<i64> (matches sqlite INTEGER 0/1).
-fn bool_as_int<C>(col: C) -> Expr
-where
-    C: IntoColumnRef,
-{
-    Expr::cust_with_expr("($1)::int::bigint", Expr::col(col))
 }
 
 /// Helper to execute a query that expects zero or one result rows.
@@ -196,66 +174,68 @@ impl NoteDb for PgWireBackend {
 
     fn find_note(&self, id: &str) -> Result<Note, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Notes::Id), Alias::new("id"))
-            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Id)
+            .column(Notes::UserId)
             .column(Notes::Type)
             .column(Notes::Status)
             .column(Notes::Title)
             .column(Notes::Content)
             .column(Notes::Summary)
-            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
-            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
-            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .expr_as(jsonb_read(Notes::Source), Alias::new("source"))
-            .expr_as(jsonb_read(Notes::ExternalId), Alias::new("external_id"))
-            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
-            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .column(Notes::IsFlagged)
+            .column(Notes::ProjectId)
+            .column(Notes::Metadata)
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .column(Notes::CreatedAt)
+            .column(Notes::UpdatedAt)
+            .column(Notes::DeletedAt)
             .from(Notes::Table)
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .and_where(Expr::col(Notes::DeletedAt).is_null())
             .limit(1)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_opt(
+        let row = exec_opt(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
             CliError::NoteNotFound { id: id.to_string() },
-            Note::from_pg_row,
-        )
+            NotePgRow::from_pg_row,
+        )?;
+        Ok(row.into())
     }
 
     fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Notes::Id), Alias::new("id"))
-            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Id)
+            .column(Notes::UserId)
             .column(Notes::Type)
             .column(Notes::Status)
             .column(Notes::Title)
             .column(Notes::Content)
             .column(Notes::Summary)
-            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
-            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
-            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .expr_as(jsonb_read(Notes::Source), Alias::new("source"))
-            .expr_as(jsonb_read(Notes::ExternalId), Alias::new("external_id"))
-            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
-            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .column(Notes::IsFlagged)
+            .column(Notes::ProjectId)
+            .column(Notes::Metadata)
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .column(Notes::CreatedAt)
+            .column(Notes::UpdatedAt)
+            .column(Notes::DeletedAt)
             .from(Notes::Table)
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .and_where(Expr::col(Notes::DeletedAt).is_not_null())
             .limit(1)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_opt(
+        let row = exec_opt(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
             CliError::NoteNotFound { id: id.to_string() },
-            Note::from_pg_row,
-        )
+            NotePgRow::from_pg_row,
+        )?;
+        Ok(row.into())
     }
 
     fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError> {
@@ -278,21 +258,21 @@ impl NoteDb for PgWireBackend {
 
     fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let mut q = Query::select();
-        q.expr_as(uuid_read(Notes::Id), Alias::new("id"))
-            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+        q.column(Notes::Id)
+            .column(Notes::UserId)
             .column(Notes::Type)
             .column(Notes::Status)
             .column(Notes::Title)
             .column(Notes::Content)
             .column(Notes::Summary)
-            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
-            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
-            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .expr_as(jsonb_read(Notes::Source), Alias::new("source"))
-            .expr_as(jsonb_read(Notes::ExternalId), Alias::new("external_id"))
-            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
-            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .column(Notes::IsFlagged)
+            .column(Notes::ProjectId)
+            .column(Notes::Metadata)
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .column(Notes::CreatedAt)
+            .column(Notes::UpdatedAt)
+            .column(Notes::DeletedAt)
             .from(Notes::Table)
             .and_where(if filter.archived {
                 Expr::col(Notes::DeletedAt).is_not_null()
@@ -308,12 +288,13 @@ impl NoteDb for PgWireBackend {
         q.order_by(Notes::CreatedAt, Order::Desc)
             .limit(filter.limit as u64);
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_all(
+        let rows: Vec<NotePgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
-            Note::from_pg_row,
-        )
+            NotePgRow::from_pg_row,
+        )?;
+        Ok(rows.into_iter().map(Note::from).collect())
     }
 
     fn search_notes(
@@ -327,28 +308,27 @@ impl NoteDb for PgWireBackend {
             ));
         }
         let mut q = Query::select();
-        q.expr_as(uuid_read(Notes::Id), Alias::new("id"))
-            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+        q.column(Notes::Id)
+            .column(Notes::UserId)
             .column(Notes::Type)
             .column(Notes::Status)
             .column(Notes::Title)
             .column(Notes::Content)
             .column(Notes::Summary)
-            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
-            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
-            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .expr_as(jsonb_read(Notes::Source), Alias::new("source"))
-            .expr_as(jsonb_read(Notes::ExternalId), Alias::new("external_id"))
-            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
-            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .column(Notes::IsFlagged)
+            .column(Notes::ProjectId)
+            .column(Notes::Metadata)
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .column(Notes::CreatedAt)
+            .column(Notes::UpdatedAt)
+            .column(Notes::DeletedAt)
             .from(Notes::Table)
             .and_where(if filter.archived {
                 Expr::col(Notes::DeletedAt).is_not_null()
             } else {
                 Expr::col(Notes::DeletedAt).is_null()
             });
-        // Build OR condition per keyword using Condition::any()
         for kw in keywords {
             let pat = format!("%{kw}%");
             let cond = Condition::any()
@@ -363,12 +343,13 @@ impl NoteDb for PgWireBackend {
         q.order_by(Notes::UpdatedAt, Order::Desc)
             .limit(filter.limit as u64);
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
-        exec_all(
+        let rows: Vec<NotePgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
-            Note::from_pg_row,
-        )
+            NotePgRow::from_pg_row,
+        )?;
+        Ok(rows.into_iter().map(Note::from).collect())
     }
 
     fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
@@ -510,14 +491,14 @@ impl NoteDb for PgWireBackend {
 
     fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Projects::Id), Alias::new("id"))
-            .expr_as(uuid_read(Projects::UserId), Alias::new("user_id"))
+            .column(Projects::Id)
+            .column(Projects::UserId)
             .column(Projects::Name)
             .column(Projects::Color)
-            .expr_as(uuid_read(Projects::PromptId), Alias::new("prompt_id"))
-            .expr_as(uuid_read(Projects::KeytermId), Alias::new("keyterm_id"))
-            .expr_as(bool_as_int(Projects::IsArchived), Alias::new("is_archived"))
-            .expr_as(ts_read(Projects::CreatedAt), Alias::new("created_at"))
+            .column(Projects::PromptId)
+            .column(Projects::KeytermId)
+            .column(Projects::IsArchived)
+            .column(Projects::CreatedAt)
             .from(Projects::Table)
             .and_where(if archived {
                 Expr::col(Projects::IsArchived).is_not_null()
@@ -527,12 +508,13 @@ impl NoteDb for PgWireBackend {
             .order_by(Projects::Name, Order::Asc)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_all(
+        let rows: Vec<ProjectPgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
-            Project::from_pg_row,
-        )
+            ProjectPgRow::from_pg_row,
+        )?;
+        Ok(rows.into_iter().map(Project::from).collect())
     }
 
     fn create_project(&self, name: &str) -> Result<String, CliError> {
@@ -639,26 +621,27 @@ impl NoteDb for PgWireBackend {
 
     fn find_project(&self, id: &str) -> Result<Project, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Projects::Id), Alias::new("id"))
-            .expr_as(uuid_read(Projects::UserId), Alias::new("user_id"))
+            .column(Projects::Id)
+            .column(Projects::UserId)
             .column(Projects::Name)
             .column(Projects::Color)
-            .expr_as(uuid_read(Projects::PromptId), Alias::new("prompt_id"))
-            .expr_as(uuid_read(Projects::KeytermId), Alias::new("keyterm_id"))
-            .expr_as(bool_as_int(Projects::IsArchived), Alias::new("is_archived"))
-            .expr_as(ts_read(Projects::CreatedAt), Alias::new("created_at"))
+            .column(Projects::PromptId)
+            .column(Projects::KeytermId)
+            .column(Projects::IsArchived)
+            .column(Projects::CreatedAt)
             .from(Projects::Table)
             .and_where(Expr::col(Projects::Id).eq(parse_uuid(id)?))
             .limit(1)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_opt(
+        let row = exec_opt(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
             CliError::Other(format!("Project not found: {id}")),
-            Project::from_pg_row,
-        )
+            ProjectPgRow::from_pg_row,
+        )?;
+        Ok(row.into())
     }
 
     fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
@@ -900,44 +883,46 @@ impl NoteDb for PgWireBackend {
 
     fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Prompts::Id), Alias::new("id"))
-            .expr_as(uuid_read(Prompts::UserId), Alias::new("user_id"))
+            .column(Prompts::Id)
+            .column(Prompts::UserId)
             .column(Prompts::Title)
             .column(Prompts::Description)
             .column(Prompts::Prompt)
-            .expr_as(ts_read(Prompts::CreatedAt), Alias::new("created_at"))
+            .column(Prompts::CreatedAt)
             .from(Prompts::Table)
             .and_where(Expr::col(Prompts::Id).eq(parse_uuid(id)?))
             .limit(1)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_opt(
+        let row = exec_opt(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
             CliError::Other(format!("Prompt not found: {id}")),
-            Prompt::from_pg_row,
-        )
+            PromptPgRow::from_pg_row,
+        )?;
+        Ok(row.into())
     }
 
     fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Prompts::Id), Alias::new("id"))
-            .expr_as(uuid_read(Prompts::UserId), Alias::new("user_id"))
+            .column(Prompts::Id)
+            .column(Prompts::UserId)
             .column(Prompts::Title)
             .column(Prompts::Description)
             .column(Prompts::Prompt)
-            .expr_as(ts_read(Prompts::CreatedAt), Alias::new("created_at"))
+            .column(Prompts::CreatedAt)
             .from(Prompts::Table)
             .order_by(Prompts::CreatedAt, Order::Desc)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_all(
+        let rows: Vec<PromptPgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
-            Prompt::from_pg_row,
-        )
+            PromptPgRow::from_pg_row,
+        )?;
+        Ok(rows.into_iter().map(Prompt::from).collect())
     }
 
     fn update_prompt(
@@ -1048,46 +1033,48 @@ impl NoteDb for PgWireBackend {
 
     fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Keyterms::Id), Alias::new("id"))
-            .expr_as(uuid_read(Keyterms::UserId), Alias::new("user_id"))
+            .column(Keyterms::Id)
+            .column(Keyterms::UserId)
             .column(Keyterms::Name)
             .column(Keyterms::Description)
             .column(Keyterms::Content)
-            .expr_as(ts_read(Keyterms::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Keyterms::UpdatedAt), Alias::new("updated_at"))
+            .column(Keyterms::CreatedAt)
+            .column(Keyterms::UpdatedAt)
             .from(Keyterms::Table)
             .and_where(Expr::col(Keyterms::Id).eq(parse_uuid(id)?))
             .limit(1)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_opt(
+        let row = exec_opt(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
             CliError::Other(format!("Keyterm not found: {id}")),
-            Keyterm::from_pg_row,
-        )
+            KeytermPgRow::from_pg_row,
+        )?;
+        Ok(row.into())
     }
 
     fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
         let (sql, vals) = Query::select()
-            .expr_as(uuid_read(Keyterms::Id), Alias::new("id"))
-            .expr_as(uuid_read(Keyterms::UserId), Alias::new("user_id"))
+            .column(Keyterms::Id)
+            .column(Keyterms::UserId)
             .column(Keyterms::Name)
             .column(Keyterms::Description)
             .column(Keyterms::Content)
-            .expr_as(ts_read(Keyterms::CreatedAt), Alias::new("created_at"))
-            .expr_as(ts_read(Keyterms::UpdatedAt), Alias::new("updated_at"))
+            .column(Keyterms::CreatedAt)
+            .column(Keyterms::UpdatedAt)
             .from(Keyterms::Table)
             .order_by(Keyterms::Name, Order::Asc)
             .take()
             .build_postgres(PostgresQueryBuilder);
-        exec_all(
+        let rows: Vec<KeytermPgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
             vals,
-            Keyterm::from_pg_row,
-        )
+            KeytermPgRow::from_pg_row,
+        )?;
+        Ok(rows.into_iter().map(Keyterm::from).collect())
     }
 
     fn update_keyterm(
@@ -1199,5 +1186,139 @@ mod tests {
     fn test_parse_iso_utc_invalid() {
         let result = parse_iso_utc("not-a-timestamp");
         assert!(result.is_err());
+    }
+
+    // ─── SQL generation tests for SELECT columns ─────────────────────────────
+
+    #[test]
+    fn test_uuid_read_sql() {
+        // uuid_read is still used for WHERE clause casts (uuid → text for ILIKE pattern matching)
+        let (sql, _) = Query::select()
+            .expr(uuid_read(Notes::Id))
+            .from(Notes::Table)
+            .take()
+            .build_postgres(PostgresQueryBuilder);
+        assert!(
+            sql.contains("\"id\"") && (sql.contains("AS text") || sql.contains("::text")),
+            "uuid_read should cast id column to text: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_note_select_bare_columns() {
+        // Verify that bare column SELECTs include all expected columns
+        let (sql, _) = Query::select()
+            .column(Notes::Id)
+            .column(Notes::IsFlagged)
+            .column(Notes::Metadata)
+            .column(Notes::CreatedAt)
+            .from(Notes::Table)
+            .take()
+            .build_postgres(PostgresQueryBuilder);
+        // All columns should appear without aliases or casts
+        assert!(sql.contains("\"id\""), "should select id: {sql}");
+        assert!(
+            sql.contains("\"is_flagged\""),
+            "should select is_flagged: {sql}"
+        );
+        assert!(
+            sql.contains("\"metadata\""),
+            "should select metadata: {sql}"
+        );
+        assert!(
+            sql.contains("\"created_at\""),
+            "should select created_at: {sql}"
+        );
+        // No alias casts in the SELECT list
+        assert!(
+            !sql.contains(" AS ") || sql.contains("FROM"),
+            "no alias AS should appear in SELECT list: {sql}"
+        );
+    }
+
+    #[test]
+    fn test_note_pg_row_from() {
+        use chrono::TimeZone;
+        // Verify the row → domain conversion compiles and produces correct types
+        let pg_row = NotePgRow {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            user_id: Uuid::nil(),
+            r#type: "text".into(),
+            status: "active".into(),
+            title: Some("Test".into()),
+            content: None,
+            summary: None,
+            is_flagged: Some(true),
+            project_id: None,
+            metadata: Some(serde_json::json!({"key": "value"})),
+            source: None,
+            external_id: None,
+            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
+            updated_at: None,
+            deleted_at: None,
+        };
+        let note: Note = pg_row.into();
+        assert_eq!(note.id, "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(note.is_flagged, Some(1));
+        assert!(note.created_at.is_some());
+        assert!(note.metadata.is_some());
+    }
+
+    #[test]
+    fn test_project_pg_row_from() {
+        use chrono::TimeZone;
+        let pg_row = ProjectPgRow {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap(),
+            user_id: Uuid::nil(),
+            name: "My Project".into(),
+            color: Some("#ff0000".into()),
+            prompt_id: None,
+            keyterm_id: None,
+            is_archived: Some(false),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
+        };
+        let project: Project = pg_row.into();
+        assert_eq!(project.id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(project.name, "My Project");
+        assert_eq!(project.is_archived, Some(0));
+        assert!(project.created_at.is_some());
+    }
+
+    #[test]
+    fn test_prompt_pg_row_from() {
+        use chrono::TimeZone;
+        let pg_row = PromptPgRow {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap(),
+            user_id: Uuid::nil(),
+            title: "Summarize".into(),
+            description: Some("Give a brief summary".into()),
+            prompt: "Summarize this text: {{text}}".into(),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
+        };
+        let p: Prompt = pg_row.into();
+        assert_eq!(p.id, "550e8400-e29b-41d4-a716-446655440002");
+        assert_eq!(p.title, "Summarize");
+        assert!(p.description.is_some());
+        assert!(p.created_at.is_some());
+    }
+
+    #[test]
+    fn test_keyterm_pg_row_from() {
+        use chrono::TimeZone;
+        let pg_row = KeytermPgRow {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003").unwrap(),
+            user_id: Uuid::nil(),
+            name: "TODO".into(),
+            description: Some("Action items".into()),
+            content: Some("topics".into()),
+            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
+            updated_at: Utc.with_ymd_and_hms(2026, 4, 9, 10, 0, 0).single(),
+        };
+        let k: Keyterm = pg_row.into();
+        assert_eq!(k.id, "550e8400-e29b-41d4-a716-446655440003");
+        assert_eq!(k.name, "TODO");
+        assert!(k.description.is_some());
+        assert!(k.created_at.is_some());
+        assert!(k.updated_at.is_some());
     }
 }
