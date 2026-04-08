@@ -196,25 +196,21 @@ impl NoteDb for PgWireBackend {
 
     fn find_note(&self, id: &str) -> Result<Note, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Notes::Id,
-                Notes::UserId,
-                Notes::Type,
-                Notes::Status,
-                Notes::Title,
-                Notes::Content,
-                Notes::Summary,
-                Notes::IsFlagged,
-                Notes::ProjectId,
-            ])
+            .expr_as(uuid_read(Notes::Id), Alias::new("id"))
+            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Type)
+            .column(Notes::Status)
+            .column(Notes::Title)
+            .column(Notes::Content)
+            .column(Notes::Summary)
+            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
+            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
             .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .columns([
-                Notes::Source,
-                Notes::ExternalId,
-                Notes::CreatedAt,
-                Notes::UpdatedAt,
-                Notes::DeletedAt,
-            ])
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
+            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
             .from(Notes::Table)
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .and_where(Expr::col(Notes::DeletedAt).is_null())
@@ -232,25 +228,21 @@ impl NoteDb for PgWireBackend {
 
     fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Notes::Id,
-                Notes::UserId,
-                Notes::Type,
-                Notes::Status,
-                Notes::Title,
-                Notes::Content,
-                Notes::Summary,
-                Notes::IsFlagged,
-                Notes::ProjectId,
-            ])
+            .expr_as(uuid_read(Notes::Id), Alias::new("id"))
+            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Type)
+            .column(Notes::Status)
+            .column(Notes::Title)
+            .column(Notes::Content)
+            .column(Notes::Summary)
+            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
+            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
             .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-            .columns([
-                Notes::Source,
-                Notes::ExternalId,
-                Notes::CreatedAt,
-                Notes::UpdatedAt,
-                Notes::DeletedAt,
-            ])
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
+            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
             .from(Notes::Table)
             .and_where(Expr::col(Notes::Id).eq(parse_uuid(id)?))
             .and_where(Expr::col(Notes::DeletedAt).is_not_null())
@@ -286,31 +278,27 @@ impl NoteDb for PgWireBackend {
 
     fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let mut q = Query::select();
-        q.columns([
-            Notes::Id,
-            Notes::UserId,
-            Notes::Type,
-            Notes::Status,
-            Notes::Title,
-            Notes::Content,
-            Notes::Summary,
-            Notes::IsFlagged,
-            Notes::ProjectId,
-        ])
-        .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-        .columns([
-            Notes::Source,
-            Notes::ExternalId,
-            Notes::CreatedAt,
-            Notes::UpdatedAt,
-            Notes::DeletedAt,
-        ])
-        .from(Notes::Table)
-        .and_where(if filter.archived {
-            Expr::col(Notes::DeletedAt).is_not_null()
-        } else {
-            Expr::col(Notes::DeletedAt).is_null()
-        });
+        q.expr_as(uuid_read(Notes::Id), Alias::new("id"))
+            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Type)
+            .column(Notes::Status)
+            .column(Notes::Title)
+            .column(Notes::Content)
+            .column(Notes::Summary)
+            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
+            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
+            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
+            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .from(Notes::Table)
+            .and_where(if filter.archived {
+                Expr::col(Notes::DeletedAt).is_not_null()
+            } else {
+                Expr::col(Notes::DeletedAt).is_null()
+            });
         if let Some(t) = filter.note_type {
             q.and_where(Expr::col(Notes::Type).eq(t.to_string()));
         }
@@ -339,31 +327,27 @@ impl NoteDb for PgWireBackend {
             ));
         }
         let mut q = Query::select();
-        q.columns([
-            Notes::Id,
-            Notes::UserId,
-            Notes::Type,
-            Notes::Status,
-            Notes::Title,
-            Notes::Content,
-            Notes::Summary,
-            Notes::IsFlagged,
-            Notes::ProjectId,
-        ])
-        .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
-        .columns([
-            Notes::Source,
-            Notes::ExternalId,
-            Notes::CreatedAt,
-            Notes::UpdatedAt,
-            Notes::DeletedAt,
-        ])
-        .from(Notes::Table)
-        .and_where(if filter.archived {
-            Expr::col(Notes::DeletedAt).is_not_null()
-        } else {
-            Expr::col(Notes::DeletedAt).is_null()
-        });
+        q.expr_as(uuid_read(Notes::Id), Alias::new("id"))
+            .expr_as(uuid_read(Notes::UserId), Alias::new("user_id"))
+            .column(Notes::Type)
+            .column(Notes::Status)
+            .column(Notes::Title)
+            .column(Notes::Content)
+            .column(Notes::Summary)
+            .expr_as(bool_as_int(Notes::IsFlagged), Alias::new("is_flagged"))
+            .expr_as(uuid_read(Notes::ProjectId), Alias::new("project_id"))
+            .expr_as(jsonb_read(Notes::Metadata), Alias::new("metadata"))
+            .column(Notes::Source)
+            .column(Notes::ExternalId)
+            .expr_as(ts_read(Notes::CreatedAt), Alias::new("created_at"))
+            .expr_as(ts_read(Notes::UpdatedAt), Alias::new("updated_at"))
+            .expr_as(ts_read(Notes::DeletedAt), Alias::new("deleted_at"))
+            .from(Notes::Table)
+            .and_where(if filter.archived {
+                Expr::col(Notes::DeletedAt).is_not_null()
+            } else {
+                Expr::col(Notes::DeletedAt).is_null()
+            });
         // Build OR condition per keyword using Condition::any()
         for kw in keywords {
             let pat = format!("%{kw}%");
