@@ -33,10 +33,10 @@ impl NotePgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
             id: row
-                .try_get("id")
+                .try_get::<_, Uuid>("id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             user_id: row
-                .try_get("user_id")
+                .try_get::<_, Uuid>("user_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             r#type: row
                 .try_get("type")
@@ -54,28 +54,28 @@ impl NotePgRow {
                 .try_get("summary")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             is_flagged: row
-                .try_get("is_flagged")
+                .try_get::<_, Option<bool>>("is_flagged")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             project_id: row
-                .try_get("project_id")
+                .try_get::<_, Option<Uuid>>("project_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             metadata: row
-                .try_get("metadata")
+                .try_get::<_, Option<serde_json::Value>>("metadata")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             source: row
-                .try_get("source")
+                .try_get::<_, Option<serde_json::Value>>("source")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             external_id: row
-                .try_get("external_id")
+                .try_get::<_, Option<serde_json::Value>>("external_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             created_at: row
-                .try_get("created_at")
+                .try_get::<_, Option<DateTime<Utc>>>("created_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             updated_at: row
-                .try_get("updated_at")
+                .try_get::<_, Option<DateTime<Utc>>>("updated_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             deleted_at: row
-                .try_get("deleted_at")
+                .try_get::<_, Option<DateTime<Utc>>>("deleted_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
@@ -98,10 +98,10 @@ impl ProjectPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
             id: row
-                .try_get("id")
+                .try_get::<_, Uuid>("id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             user_id: row
-                .try_get("user_id")
+                .try_get::<_, Uuid>("user_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             name: row
                 .try_get("name")
@@ -110,16 +110,16 @@ impl ProjectPgRow {
                 .try_get("color")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             prompt_id: row
-                .try_get("prompt_id")
+                .try_get::<_, Option<Uuid>>("prompt_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             keyterm_id: row
-                .try_get("keyterm_id")
+                .try_get::<_, Option<Uuid>>("keyterm_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             is_archived: row
-                .try_get("is_archived")
+                .try_get::<_, Option<bool>>("is_archived")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             created_at: row
-                .try_get("created_at")
+                .try_get::<_, Option<DateTime<Utc>>>("created_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
@@ -140,10 +140,10 @@ impl PromptPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
             id: row
-                .try_get("id")
+                .try_get::<_, Uuid>("id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             user_id: row
-                .try_get("user_id")
+                .try_get::<_, Uuid>("user_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             title: row
                 .try_get("title")
@@ -155,7 +155,7 @@ impl PromptPgRow {
                 .try_get("prompt")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             created_at: row
-                .try_get("created_at")
+                .try_get::<_, Option<DateTime<Utc>>>("created_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
@@ -177,10 +177,10 @@ impl KeytermPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
             id: row
-                .try_get("id")
+                .try_get::<_, Uuid>("id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             user_id: row
-                .try_get("user_id")
+                .try_get::<_, Uuid>("user_id")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             name: row
                 .try_get("name")
@@ -192,10 +192,10 @@ impl KeytermPgRow {
                 .try_get("content")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             created_at: row
-                .try_get("created_at")
+                .try_get::<_, Option<DateTime<Utc>>>("created_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
             updated_at: row
-                .try_get("updated_at")
+                .try_get::<_, Option<DateTime<Utc>>>("updated_at")
                 .map_err(|e| CliError::Database(e.to_string()))?,
         })
     }
