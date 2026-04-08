@@ -1,3 +1,5 @@
+#![allow(clippy::print_stderr)] // debug-only diagnostics
+
 //! Postgres wire-native row types.
 //!
 //! These structs mirror the actual postgres column types, giving the compiler
@@ -29,6 +31,21 @@ use uuid::Uuid;
 
 use crate::error::CliError;
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Gate SQL + column metadata logging behind FN_DEBUG_SQL=1.
+fn debug_sql_enabled() -> bool {
+    std::env::var("FN_DEBUG_SQL").ok().as_deref() == Some("1")
+}
+
+/// Read a column from a postgres row, naming the column in the error message.
+macro_rules! try_get_col {
+    ($row:expr, $name:literal, $t:ty) => {
+        $row.try_get::<_, $t>($name)
+            .map_err(|e| CliError::Database(format!("decode(col={}): {e}", $name)))?
+    };
+}
+
 // ─── Note ────────────────────────────────────────────────────────────────────
 
 pub(super) struct NotePgRow {
@@ -51,52 +68,31 @@ pub(super) struct NotePgRow {
 
 impl NotePgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
+        if debug_sql_enabled() {
+            for (i, col) in row.columns().iter().enumerate() {
+                eprintln!(
+                    "[fn-sql] col[{i}] name={} type={:?}",
+                    col.name(),
+                    col.type_()
+                );
+            }
+        }
         Ok(Self {
-            id: row
-                .try_get::<_, Uuid>("id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            user_id: row
-                .try_get::<_, Uuid>("user_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            r#type: row
-                .try_get("type")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            status: row
-                .try_get("status")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            title: row
-                .try_get("title")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            content: row
-                .try_get("content")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            summary: row
-                .try_get("summary")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            is_flagged: row
-                .try_get::<_, Option<bool>>("is_flagged")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            project_id: row
-                .try_get::<_, Option<Uuid>>("project_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            metadata: row
-                .try_get::<_, Option<serde_json::Value>>("metadata")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            source: row
-                .try_get::<_, Option<serde_json::Value>>("source")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            external_id: row
-                .try_get::<_, Option<serde_json::Value>>("external_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            created_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("created_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            updated_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("updated_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            deleted_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("deleted_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
+            id: try_get_col!(row, "id", Uuid),
+            user_id: try_get_col!(row, "user_id", Uuid),
+            r#type: try_get_col!(row, "type", String),
+            status: try_get_col!(row, "status", String),
+            title: try_get_col!(row, "title", Option<String>),
+            content: try_get_col!(row, "content", Option<String>),
+            summary: try_get_col!(row, "summary", Option<String>),
+            is_flagged: try_get_col!(row, "is_flagged", Option<bool>),
+            project_id: try_get_col!(row, "project_id", Option<Uuid>),
+            metadata: try_get_col!(row, "metadata", Option<serde_json::Value>),
+            source: try_get_col!(row, "source", Option<serde_json::Value>),
+            external_id: try_get_col!(row, "external_id", Option<serde_json::Value>),
+            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
+            updated_at: try_get_col!(row, "updated_at", Option<DateTime<Utc>>),
+            deleted_at: try_get_col!(row, "deleted_at", Option<DateTime<Utc>>),
         })
     }
 }
@@ -117,30 +113,14 @@ pub(super) struct ProjectPgRow {
 impl ProjectPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: row
-                .try_get::<_, Uuid>("id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            user_id: row
-                .try_get::<_, Uuid>("user_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            name: row
-                .try_get("name")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            color: row
-                .try_get("color")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            prompt_id: row
-                .try_get::<_, Option<Uuid>>("prompt_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            keyterm_id: row
-                .try_get::<_, Option<Uuid>>("keyterm_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            is_archived: row
-                .try_get::<_, Option<bool>>("is_archived")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            created_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("created_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
+            id: try_get_col!(row, "id", Uuid),
+            user_id: try_get_col!(row, "user_id", Uuid),
+            name: try_get_col!(row, "name", String),
+            color: try_get_col!(row, "color", Option<String>),
+            prompt_id: try_get_col!(row, "prompt_id", Option<Uuid>),
+            keyterm_id: try_get_col!(row, "keyterm_id", Option<Uuid>),
+            is_archived: try_get_col!(row, "is_archived", Option<bool>),
+            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
         })
     }
 }
@@ -159,24 +139,12 @@ pub(super) struct PromptPgRow {
 impl PromptPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: row
-                .try_get::<_, Uuid>("id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            user_id: row
-                .try_get::<_, Uuid>("user_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            title: row
-                .try_get("title")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            description: row
-                .try_get("description")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            prompt: row
-                .try_get("prompt")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            created_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("created_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
+            id: try_get_col!(row, "id", Uuid),
+            user_id: try_get_col!(row, "user_id", Uuid),
+            title: try_get_col!(row, "title", String),
+            description: try_get_col!(row, "description", Option<String>),
+            prompt: try_get_col!(row, "prompt", String),
+            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
         })
     }
 }
@@ -196,27 +164,13 @@ pub(super) struct KeytermPgRow {
 impl KeytermPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: row
-                .try_get::<_, Uuid>("id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            user_id: row
-                .try_get::<_, Uuid>("user_id")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            name: row
-                .try_get("name")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            description: row
-                .try_get("description")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            content: row
-                .try_get("content")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            created_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("created_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
-            updated_at: row
-                .try_get::<_, Option<DateTime<Utc>>>("updated_at")
-                .map_err(|e| CliError::Database(e.to_string()))?,
+            id: try_get_col!(row, "id", Uuid),
+            user_id: try_get_col!(row, "user_id", Uuid),
+            name: try_get_col!(row, "name", String),
+            description: try_get_col!(row, "description", Option<String>),
+            content: try_get_col!(row, "content", Option<String>),
+            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
+            updated_at: try_get_col!(row, "updated_at", Option<DateTime<Utc>>),
         })
     }
 }

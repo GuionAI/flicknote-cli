@@ -1,4 +1,4 @@
-#![allow(clippy::dbg_macro)]
+#![allow(clippy::dbg_macro, clippy::print_stderr)] // debug-only diagnostics
 
 //! PgWire backend for Supabase Postgres.
 //! This backend assumes the connection is routed through pgwire-supabase-proxy
@@ -52,7 +52,11 @@ fn parse_iso_utc(s: &str) -> Result<DateTime<Utc>, CliError> {
         .map_err(|e| CliError::Database(format!("invalid ISO timestamp {s:?}: {e}")))
 }
 
-/// Format a postgres error with its code, detail, and hint fields for clearer debugging.
+/// Gate SQL + column metadata logging behind FN_DEBUG_SQL=1.
+fn debug_sql_enabled() -> bool {
+    std::env::var("FN_DEBUG_SQL").ok().as_deref() == Some("1")
+}
+
 /// Format a postgres error with its SQLSTATE code, detail, and hint.
 /// Falls back to walking the source-chain for Kind::FromSql / Kind::ToSql etc.
 fn pg_err(e: &postgres::Error) -> String {
@@ -84,7 +88,7 @@ fn pg_err(e: &postgres::Error) -> String {
     // Walk the source chain for Kind::FromSql, Kind::ToSql, etc.
     let mut parts = Vec::new();
     parts.push(e.to_string());
-    let mut current: Option<&dyn std::error::Error> = std::error::Error::source(&*e);
+    let mut current: Option<&dyn std::error::Error> = std::error::Error::source(e);
     while let Some(err) = current {
         parts.push(err.to_string());
         current = err.source();
@@ -387,6 +391,10 @@ impl NoteDb for PgWireBackend {
         q.order_by(Notes::UpdatedAt, Order::Desc)
             .limit(filter.limit as u64);
         let (sql, vals) = q.take().build_postgres(PostgresQueryBuilder);
+        if debug_sql_enabled() {
+            eprintln!("[fn-sql] search_notes: {sql}");
+            eprintln!("[fn-sql] vals: {vals:?}");
+        }
         let rows: Vec<NotePgRow> = exec_all(
             &mut self.client.borrow_mut(),
             sql.as_str(),
@@ -846,6 +854,10 @@ impl NoteDb for PgWireBackend {
             .and_where(Expr::col(NoteExtractions::NoteId).is_in(uuids))
             .take()
             .build_postgres(PostgresQueryBuilder);
+        if debug_sql_enabled() {
+            eprintln!("[fn-sql] list_note_topics: {sql}");
+            eprintln!("[fn-sql] vals: {vals:?}");
+        }
         let params = vals.as_params();
         let rows: Vec<(String, String)> = self
             .client
