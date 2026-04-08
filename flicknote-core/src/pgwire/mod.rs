@@ -893,14 +893,12 @@ impl NoteDb for PgWireBackend {
 
     fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Prompts::Id,
-                Prompts::UserId,
-                Prompts::Title,
-                Prompts::Description,
-                Prompts::Prompt,
-                Prompts::CreatedAt,
-            ])
+            .expr_as(uuid_read(Prompts::Id), Alias::new("id"))
+            .expr_as(uuid_read(Prompts::UserId), Alias::new("user_id"))
+            .column(Prompts::Title)
+            .column(Prompts::Description)
+            .column(Prompts::Prompt)
+            .expr_as(ts_read(Prompts::CreatedAt), Alias::new("created_at"))
             .from(Prompts::Table)
             .and_where(Expr::col(Prompts::Id).eq(parse_uuid(id)?))
             .limit(1)
@@ -917,14 +915,12 @@ impl NoteDb for PgWireBackend {
 
     fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
         let (sql, vals) = Query::select()
-            .columns([
-                Prompts::Id,
-                Prompts::UserId,
-                Prompts::Title,
-                Prompts::Description,
-                Prompts::Prompt,
-                Prompts::CreatedAt,
-            ])
+            .expr_as(uuid_read(Prompts::Id), Alias::new("id"))
+            .expr_as(uuid_read(Prompts::UserId), Alias::new("user_id"))
+            .column(Prompts::Title)
+            .column(Prompts::Description)
+            .column(Prompts::Prompt)
+            .expr_as(ts_read(Prompts::CreatedAt), Alias::new("created_at"))
             .from(Prompts::Table)
             .order_by(Prompts::CreatedAt, Order::Desc)
             .take()
