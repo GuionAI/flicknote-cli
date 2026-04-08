@@ -210,7 +210,10 @@ impl Drop for OwnedConnectionLease {
                 // Send update notifications for writes made on this connection while leased.
                 let _ = pool.take_update_notifications(connection);
             }
-            OwnedConnectionLease::Reader { connection, release } => {
+            OwnedConnectionLease::Reader {
+                connection,
+                release,
+            } => {
                 let connection = std::mem::replace(connection, MaybeUninit::uninit());
                 let connection = unsafe {
                     // safety: Only dropped here
