@@ -3,6 +3,26 @@
 //! These structs mirror the actual postgres column types, giving the compiler
 //! full type-checked visibility into every column.  No string aliases,
 //! no cast helpers, no forgotten mappings.
+//!
+//! ## Why explicit `try_get::<_, T>` type hints?
+//!
+//! `postgres::Row::try_get<I, T>(&self, idx: I) -> Result<T, _>` requires `T` to
+//! implement `FromSql`.  When called without a turbofish — `try_get("col_name")` —
+//! the compiler must infer `T` from context.  In a struct field assignment like:
+//!
+//! ```ignore
+//! id: row.try_get("id")?
+//! ```
+//!
+//! the assignment target (`Uuid`) *should* determine `T`, but the postgres crate's
+//! inference doesn't propagate it backwards through the method chain reliably.
+//! Without hints the compiler defaults `T` to `bool` (the first `FromSql` impl in
+//! scope), producing type mismatches on every non-bool column.  The explicit
+//! `::<_, Uuid>` annotation pins `T` before the call resolves, making
+//! deserialization deterministic regardless of the column's reported type OID.
+//!
+//! String/text columns (`String`, `Option<String>`) don't need hints because
+//! `FromSql<&str>` accepts any text-like type, so inference works implicitly.
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;

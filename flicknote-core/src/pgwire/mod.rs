@@ -1188,7 +1188,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ─── SQL generation tests for SELECT columns ─────────────────────────────
+    // ─── SQL generation tests ────────────────────────────────────────────────────
+    // Guard against accidental removal of uuid_read casts or regression to
+    // aliased SELECT expressions.  uuid_read is kept for WHERE-clause ILIKE
+    // patterns only; all SELECT columns use bare .column() with no cast helpers.
 
     #[test]
     fn test_uuid_read_sql() {
@@ -1236,10 +1239,17 @@ mod tests {
         );
     }
 
+    // ─── From round-trip tests ───────────────────────────────────────────────────
+    // These verify that NotePgRow → Note conversion produces the correct domain
+    // types: bool → 0/1 i64, Uuid → String, DateTime → rfc3339 String,
+    // serde_json::Value → String.  The pgwire driver must deserialize native
+    // types directly; see row.rs for why explicit try_get::<_, T> hints are
+    // required on all non-String columns.
+
     #[test]
     fn test_note_pg_row_from() {
         use chrono::TimeZone;
-        // Verify the row → domain conversion compiles and produces correct types
+        // Build a NotePgRow with known values and verify the domain conversion
         let pg_row = NotePgRow {
             id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
             user_id: Uuid::nil(),
