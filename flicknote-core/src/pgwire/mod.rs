@@ -1,5 +1,6 @@
+#![allow(clippy::dbg_macro)]
+
 //! PgWire backend for Supabase Postgres.
-//!
 //! This backend assumes the connection is routed through pgwire-supabase-proxy
 //! (or equivalent) which: (a) sets `request.jwt.claim.sub` GUC from the JWT,
 //! (b) `SET ROLE authenticated`, (c) all tables have RLS policies on `auth.uid()`.
@@ -7,6 +8,7 @@
 //! Therefore: no `user_id` WHERE clauses, no `user_id` INSERT columns.
 //! Tenant isolation is enforced by RLS, full stop.
 
+use postgres::error::ErrorPosition;
 use std::cell::RefCell;
 
 use chrono::{DateTime, Utc};
@@ -50,6 +52,46 @@ fn parse_iso_utc(s: &str) -> Result<DateTime<Utc>, CliError> {
         .map_err(|e| CliError::Database(format!("invalid ISO timestamp {s:?}: {e}")))
 }
 
+/// Format a postgres error with its code, detail, and hint fields for clearer debugging.
+/// Format a postgres error with its SQLSTATE code, detail, and hint.
+/// Falls back to walking the source-chain for Kind::FromSql / Kind::ToSql etc.
+fn pg_err(e: &postgres::Error) -> String {
+    if let Some(dbe) = e.as_db_error() {
+        let mut msg = dbe.code().code().to_string();
+        if let Some(detail) = dbe.detail() {
+            msg.push_str(" — ");
+            msg.push_str(detail);
+        }
+        if let Some(hint) = dbe.hint() {
+            msg.push_str(" | hint: ");
+            msg.push_str(hint);
+        }
+        if let Some(position) = dbe.position() {
+            msg.push_str(" | position: ");
+            match position {
+                ErrorPosition::Original(pos) => {
+                    msg.push_str("original ");
+                    msg.push_str(&pos.to_string());
+                }
+                ErrorPosition::Internal { position: pos, .. } => {
+                    msg.push_str("internal ");
+                    msg.push_str(&pos.to_string());
+                }
+            }
+        }
+        return msg;
+    }
+    // Walk the source chain for Kind::FromSql, Kind::ToSql, etc.
+    let mut parts = Vec::new();
+    parts.push(e.to_string());
+    let mut current: Option<&dyn std::error::Error> = std::error::Error::source(&*e);
+    while let Some(err) = current {
+        parts.push(err.to_string());
+        current = err.source();
+    }
+    parts.join("; caused by: ")
+}
+
 /// Helper to execute a query that expects zero or one result rows.
 #[allow(clippy::needless_pass_by_value)]
 fn exec_opt<T>(
@@ -62,7 +104,7 @@ fn exec_opt<T>(
     let params = vals.as_params();
     let rows = client
         .query(sql, &params)
-        .map_err(|e| CliError::Database(e.to_string()))?;
+        .map_err(|e| CliError::Database(pg_err(&e)))?;
     match rows.first() {
         Some(r) => f(r),
         None => Err(none_err),
@@ -80,7 +122,7 @@ fn exec_all<T>(
     let params = vals.as_params();
     let rows = client
         .query(sql, &params)
-        .map_err(|e| CliError::Database(e.to_string()))?;
+        .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
     rows.iter().map(&mut f).collect()
 }
 
@@ -94,7 +136,7 @@ fn exec_mutation(
     let params = vals.as_params();
     client
         .execute(sql, &params)
-        .map_err(|e| CliError::Database(e.to_string()))
+        .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))
 }
 
 // ─── PgWireBackend ────────────────────────────────────────────────────────────
@@ -173,6 +215,7 @@ impl NoteDb for PgWireBackend {
     }
 
     fn find_note(&self, id: &str) -> Result<Note, CliError> {
+        let _ = dbg!(&id);
         let (sql, vals) = Query::select()
             .column(Notes::Id)
             .column(Notes::UserId)
@@ -206,6 +249,7 @@ impl NoteDb for PgWireBackend {
     }
 
     fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
+        let _ = dbg!(&id);
         let (sql, vals) = Query::select()
             .column(Notes::Id)
             .column(Notes::UserId)
@@ -545,7 +589,7 @@ impl NoteDb for PgWireBackend {
         let mut c = self.client.borrow_mut();
         let mut tx = c
             .transaction()
-            .map_err(|e| CliError::Database(e.to_string()))?;
+            .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
 
         // UPDATE notes SET project_id = $1, updated_at = $2 WHERE id = $3
         let (sql, vals) = Query::update()
@@ -560,7 +604,7 @@ impl NoteDb for PgWireBackend {
         let params = vals.as_params();
         let affected = tx
             .execute(sql.as_str(), &params)
-            .map_err(|e| CliError::Database(e.to_string()))?;
+            .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
         if affected == 0 {
             drop(tx);
             return Err(CliError::NoteNotFound {
@@ -569,7 +613,8 @@ impl NoteDb for PgWireBackend {
         }
 
         let Some(old_pid) = old_project_id else {
-            tx.commit().map_err(|e| CliError::Database(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
             return Ok(None);
         };
 
@@ -584,7 +629,7 @@ impl NoteDb for PgWireBackend {
         let params = vals.as_params();
         let count: i64 = tx
             .query_one(sql.as_str(), &params)
-            .map_err(|e| CliError::Database(e.to_string()))?
+            .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?
             .get(0);
 
         if count == 0 {
@@ -598,7 +643,7 @@ impl NoteDb for PgWireBackend {
             let params = vals.as_params();
             let old_name: Option<String> = tx
                 .query_one(sql.as_str(), &params)
-                .map_err(|e| CliError::Database(e.to_string()))?
+                .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?
                 .get(0);
 
             // DELETE FROM projects WHERE id = $1
@@ -609,12 +654,14 @@ impl NoteDb for PgWireBackend {
                 .build_postgres(PostgresQueryBuilder);
             let params = vals.as_params();
             tx.execute(sql.as_str(), &params)
-                .map_err(|e| CliError::Database(e.to_string()))?;
+                .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
 
-            tx.commit().map_err(|e| CliError::Database(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
             Ok(old_name)
         } else {
-            tx.commit().map_err(|e| CliError::Database(e.to_string()))?;
+            tx.commit()
+                .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
             Ok(None)
         }
     }
@@ -773,7 +820,7 @@ impl NoteDb for PgWireBackend {
             .client
             .borrow_mut()
             .query(sql.as_str(), &params)
-            .map_err(|e| CliError::Database(e.to_string()))?;
+            .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?;
         let count: i64 = rows.first().map(|r| r.get::<_, i64>(0)).unwrap_or(0);
         count
             .try_into()
@@ -804,7 +851,7 @@ impl NoteDb for PgWireBackend {
             .client
             .borrow_mut()
             .query(sql.as_str(), &params)
-            .map_err(|e| CliError::Database(e.to_string()))?
+            .map_err(|e| CliError::Database(format!("exec: {}", pg_err(&e))))?
             .into_iter()
             .map(|r| {
                 let note_id: String = r
