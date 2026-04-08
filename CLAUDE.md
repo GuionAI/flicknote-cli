@@ -44,6 +44,8 @@ lefthook run pre-push    # run pre-push hooks
 - **tokio** — async runtime
 - **reqwest** — HTTP client (auth + PostgREST backend)
 - **serde/serde_json** — serialization
+- **postgres** — sync Postgres client for pgwire backend
+- **sea-query** — SQL query builder (1.0.0-rc.32 + sea-query-postgres 0.6.0-rc.3 for pgwire)
 
 ## Project Conventions
 

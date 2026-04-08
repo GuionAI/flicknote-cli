@@ -121,20 +121,16 @@ fn run() -> Result<(), CliError> {
         std::process::exit(status.code().unwrap_or(1));
     }
 
-    // Backend selection: FLICKNOTE_TOKEN → pgwire, else → SQLite
+    // Backend selection: DATABASE_URL set → pgwire, else → SQLite (powersync)
     #[cfg(feature = "storage-pgwire")]
-    if let Ok(token) = std::env::var("FLICKNOTE_TOKEN") {
-        let database_url = std::env::var("DATABASE_URL").map_err(|_| {
-            CliError::Other("pgwire mode (FLICKNOTE_TOKEN set) requires DATABASE_URL".into())
-        })?;
-        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url, &token)?;
+    if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url)?;
         return dispatch(&cli, &config, &backend);
     }
 
     #[cfg(not(feature = "powersync"))]
     return Err(CliError::Other(
-        "No storage backend available — set FLICKNOTE_TOKEN + DATABASE_URL for pgwire, \
-         or build with powersync feature for local storage"
+        "No storage backend available — set DATABASE_URL for pgwire, or build with powersync feature"
             .into(),
     ));
 
