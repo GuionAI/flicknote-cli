@@ -34,6 +34,10 @@ pub enum CliError {
     #[error("Database error: {0}")]
     Database(String),
 
+    #[cfg(feature = "storage-pgwire")]
+    #[error("Database error: {}", format_pg_err(.0))]
+    Pg(#[from] postgres::Error),
+
     #[error("HTTP error: {0}")]
     Http(String),
 
@@ -45,4 +49,11 @@ pub enum CliError {
 
     #[error("{0}")]
     Other(String),
+}
+
+#[cfg(feature = "storage-pgwire")]
+pub(crate) fn format_pg_err(e: &postgres::Error) -> String {
+    e.as_db_error()
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(|| e.to_string())
 }

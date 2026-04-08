@@ -1,5 +1,3 @@
-#![allow(clippy::print_stderr)] // debug-only diagnostics
-
 //! Postgres wire-native row types.
 //!
 //! These structs mirror the actual postgres column types, giving the compiler
@@ -31,21 +29,6 @@ use uuid::Uuid;
 
 use crate::error::CliError;
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/// Gate SQL + column metadata logging behind FN_DEBUG_SQL=1.
-fn debug_sql_enabled() -> bool {
-    std::env::var("FN_DEBUG_SQL").ok().as_deref() == Some("1")
-}
-
-/// Read a column from a postgres row, naming the column in the error message.
-macro_rules! try_get_col {
-    ($row:expr, $name:literal, $t:ty) => {
-        $row.try_get::<_, $t>($name)
-            .map_err(|e| CliError::Database(format!("decode(col={}): {e}", $name)))?
-    };
-}
-
 // ─── Note ────────────────────────────────────────────────────────────────────
 
 pub(super) struct NotePgRow {
@@ -68,31 +51,22 @@ pub(super) struct NotePgRow {
 
 impl NotePgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
-        if debug_sql_enabled() {
-            for (i, col) in row.columns().iter().enumerate() {
-                eprintln!(
-                    "[fn-sql] col[{i}] name={} type={:?}",
-                    col.name(),
-                    col.type_()
-                );
-            }
-        }
         Ok(Self {
-            id: try_get_col!(row, "id", Uuid),
-            user_id: try_get_col!(row, "user_id", Uuid),
-            r#type: try_get_col!(row, "type", String),
-            status: try_get_col!(row, "status", String),
-            title: try_get_col!(row, "title", Option<String>),
-            content: try_get_col!(row, "content", Option<String>),
-            summary: try_get_col!(row, "summary", Option<String>),
-            is_flagged: try_get_col!(row, "is_flagged", Option<bool>),
-            project_id: try_get_col!(row, "project_id", Option<Uuid>),
-            metadata: try_get_col!(row, "metadata", Option<serde_json::Value>),
-            source: try_get_col!(row, "source", Option<serde_json::Value>),
-            external_id: try_get_col!(row, "external_id", Option<serde_json::Value>),
-            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
-            updated_at: try_get_col!(row, "updated_at", Option<DateTime<Utc>>),
-            deleted_at: try_get_col!(row, "deleted_at", Option<DateTime<Utc>>),
+            id: row.try_get::<_, Uuid>("id")?,
+            user_id: row.try_get::<_, Uuid>("user_id")?,
+            r#type: row.try_get::<_, String>("type")?,
+            status: row.try_get::<_, String>("status")?,
+            title: row.try_get::<_, Option<String>>("title")?,
+            content: row.try_get::<_, Option<String>>("content")?,
+            summary: row.try_get::<_, Option<String>>("summary")?,
+            is_flagged: row.try_get::<_, Option<bool>>("is_flagged")?,
+            project_id: row.try_get::<_, Option<Uuid>>("project_id")?,
+            metadata: row.try_get::<_, Option<serde_json::Value>>("metadata")?,
+            source: row.try_get::<_, Option<serde_json::Value>>("source")?,
+            external_id: row.try_get::<_, Option<serde_json::Value>>("external_id")?,
+            created_at: row.try_get::<_, Option<DateTime<Utc>>>("created_at")?,
+            updated_at: row.try_get::<_, Option<DateTime<Utc>>>("updated_at")?,
+            deleted_at: row.try_get::<_, Option<DateTime<Utc>>>("deleted_at")?,
         })
     }
 }
@@ -113,14 +87,14 @@ pub(super) struct ProjectPgRow {
 impl ProjectPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: try_get_col!(row, "id", Uuid),
-            user_id: try_get_col!(row, "user_id", Uuid),
-            name: try_get_col!(row, "name", String),
-            color: try_get_col!(row, "color", Option<String>),
-            prompt_id: try_get_col!(row, "prompt_id", Option<Uuid>),
-            keyterm_id: try_get_col!(row, "keyterm_id", Option<Uuid>),
-            is_archived: try_get_col!(row, "is_archived", Option<bool>),
-            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
+            id: row.try_get::<_, Uuid>("id")?,
+            user_id: row.try_get::<_, Uuid>("user_id")?,
+            name: row.try_get::<_, String>("name")?,
+            color: row.try_get::<_, Option<String>>("color")?,
+            prompt_id: row.try_get::<_, Option<Uuid>>("prompt_id")?,
+            keyterm_id: row.try_get::<_, Option<Uuid>>("keyterm_id")?,
+            is_archived: row.try_get::<_, Option<bool>>("is_archived")?,
+            created_at: row.try_get::<_, Option<DateTime<Utc>>>("created_at")?,
         })
     }
 }
@@ -139,12 +113,12 @@ pub(super) struct PromptPgRow {
 impl PromptPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: try_get_col!(row, "id", Uuid),
-            user_id: try_get_col!(row, "user_id", Uuid),
-            title: try_get_col!(row, "title", String),
-            description: try_get_col!(row, "description", Option<String>),
-            prompt: try_get_col!(row, "prompt", String),
-            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
+            id: row.try_get::<_, Uuid>("id")?,
+            user_id: row.try_get::<_, Uuid>("user_id")?,
+            title: row.try_get::<_, String>("title")?,
+            description: row.try_get::<_, Option<String>>("description")?,
+            prompt: row.try_get::<_, String>("prompt")?,
+            created_at: row.try_get::<_, Option<DateTime<Utc>>>("created_at")?,
         })
     }
 }
@@ -164,13 +138,13 @@ pub(super) struct KeytermPgRow {
 impl KeytermPgRow {
     pub(super) fn from_pg_row(row: &postgres::Row) -> Result<Self, CliError> {
         Ok(Self {
-            id: try_get_col!(row, "id", Uuid),
-            user_id: try_get_col!(row, "user_id", Uuid),
-            name: try_get_col!(row, "name", String),
-            description: try_get_col!(row, "description", Option<String>),
-            content: try_get_col!(row, "content", Option<String>),
-            created_at: try_get_col!(row, "created_at", Option<DateTime<Utc>>),
-            updated_at: try_get_col!(row, "updated_at", Option<DateTime<Utc>>),
+            id: row.try_get::<_, Uuid>("id")?,
+            user_id: row.try_get::<_, Uuid>("user_id")?,
+            name: row.try_get::<_, String>("name")?,
+            description: row.try_get::<_, Option<String>>("description")?,
+            content: row.try_get::<_, Option<String>>("content")?,
+            created_at: row.try_get::<_, Option<DateTime<Utc>>>("created_at")?,
+            updated_at: row.try_get::<_, Option<DateTime<Utc>>>("updated_at")?,
         })
     }
 }
