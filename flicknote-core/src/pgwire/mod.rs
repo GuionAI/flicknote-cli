@@ -1,4 +1,4 @@
-#![allow(clippy::dbg_macro, clippy::print_stderr)] // debug-only diagnostics
+#![allow(clippy::print_stderr)] // FN_DEBUG_SQL diagnostics only
 
 //! PgWire backend for Supabase Postgres.
 //! This backend assumes the connection is routed through pgwire-supabase-proxy
@@ -12,6 +12,7 @@ use postgres::error::ErrorPosition;
 use std::cell::RefCell;
 
 use chrono::{DateTime, Utc};
+use sea_query::extension::postgres::PgExpr;
 use sea_query::{
     Alias, Condition, Expr, ExprTrait, IntoColumnRef, Order, PostgresQueryBuilder, Query,
 };
@@ -219,7 +220,6 @@ impl NoteDb for PgWireBackend {
     }
 
     fn find_note(&self, id: &str) -> Result<Note, CliError> {
-        let _ = dbg!(&id);
         let (sql, vals) = Query::select()
             .column(Notes::Id)
             .column(Notes::UserId)
@@ -253,7 +253,6 @@ impl NoteDb for PgWireBackend {
     }
 
     fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
-        let _ = dbg!(&id);
         let (sql, vals) = Query::select()
             .column(Notes::Id)
             .column(Notes::UserId)
@@ -380,9 +379,9 @@ impl NoteDb for PgWireBackend {
         for kw in keywords {
             let pat = format!("%{kw}%");
             let cond = Condition::any()
-                .add(Expr::cust_with_values("title ILIKE ?", [pat.clone()]))
-                .add(Expr::cust_with_values("content ILIKE ?", [pat.clone()]))
-                .add(Expr::cust_with_values("summary ILIKE ?", [pat]));
+                .add(Expr::col(Notes::Title).ilike(pat.clone()))
+                .add(Expr::col(Notes::Content).ilike(pat.clone()))
+                .add(Expr::col(Notes::Summary).ilike(pat));
             q.cond_where(cond);
         }
         if let Some(pid) = filter.project_id {
