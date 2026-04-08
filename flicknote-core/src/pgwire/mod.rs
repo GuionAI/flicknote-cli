@@ -510,16 +510,14 @@ impl NoteDb for PgWireBackend {
 
     fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
         let (sql, vals) = Query::select()
-            .exprs([
-                Expr::cust("id::text AS id"),
-                Expr::cust("user_id::text AS user_id"),
-                Expr::col(Projects::Name),
-                Expr::col(Projects::Color),
-                Expr::cust("prompt_id::text AS prompt_id"),
-                Expr::cust("keyterm_id::text AS keyterm_id"),
-                Expr::cust("(CASE WHEN is_archived THEN 1 ELSE 0 END) AS is_archived"),
-                Expr::cust("created_at::text AS created_at"),
-            ])
+            .expr_as(uuid_read(Projects::Id), Alias::new("id"))
+            .expr_as(uuid_read(Projects::UserId), Alias::new("user_id"))
+            .column(Projects::Name)
+            .column(Projects::Color)
+            .expr_as(uuid_read(Projects::PromptId), Alias::new("prompt_id"))
+            .expr_as(uuid_read(Projects::KeytermId), Alias::new("keyterm_id"))
+            .expr_as(bool_as_int(Projects::IsArchived), Alias::new("is_archived"))
+            .expr_as(ts_read(Projects::CreatedAt), Alias::new("created_at"))
             .from(Projects::Table)
             .and_where(if archived {
                 Expr::col(Projects::IsArchived).is_not_null()
@@ -641,16 +639,14 @@ impl NoteDb for PgWireBackend {
 
     fn find_project(&self, id: &str) -> Result<Project, CliError> {
         let (sql, vals) = Query::select()
-            .exprs([
-                Expr::cust("id::text AS id"),
-                Expr::cust("user_id::text AS user_id"),
-                Expr::col(Projects::Name),
-                Expr::col(Projects::Color),
-                Expr::cust("prompt_id::text AS prompt_id"),
-                Expr::cust("keyterm_id::text AS keyterm_id"),
-                Expr::cust("(CASE WHEN is_archived THEN 1 ELSE 0 END) AS is_archived"),
-                Expr::cust("created_at::text AS created_at"),
-            ])
+            .expr_as(uuid_read(Projects::Id), Alias::new("id"))
+            .expr_as(uuid_read(Projects::UserId), Alias::new("user_id"))
+            .column(Projects::Name)
+            .column(Projects::Color)
+            .expr_as(uuid_read(Projects::PromptId), Alias::new("prompt_id"))
+            .expr_as(uuid_read(Projects::KeytermId), Alias::new("keyterm_id"))
+            .expr_as(bool_as_int(Projects::IsArchived), Alias::new("is_archived"))
+            .expr_as(ts_read(Projects::CreatedAt), Alias::new("created_at"))
             .from(Projects::Table)
             .and_where(Expr::col(Projects::Id).eq(parse_uuid(id)?))
             .limit(1)
