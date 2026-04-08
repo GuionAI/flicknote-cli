@@ -148,7 +148,7 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let (sql, vals) = Query::select()
-            .column(Notes::Id)
+            .expr(uuid_read(Notes::Id))
             .from(Notes::Table)
             .and_where(
                 Expr::col(Notes::Id)
@@ -173,7 +173,7 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let (sql, vals) = Query::select()
-            .column(Notes::Id)
+            .expr(uuid_read(Notes::Id))
             .from(Notes::Table)
             .and_where(
                 Expr::col(Notes::Id)
@@ -475,7 +475,7 @@ impl NoteDb for PgWireBackend {
 
     fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError> {
         let (sql, vals) = Query::select()
-            .column(Projects::Id)
+            .expr(uuid_read(Projects::Id))
             .from(Projects::Table)
             .and_where(Expr::col(Projects::Name).eq(name))
             .and_where(Expr::col(Projects::IsArchived).is_not(true))
@@ -665,7 +665,7 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let (sql, vals) = Query::select()
-            .column(Projects::Id)
+            .expr(uuid_read(Projects::Id))
             .from(Projects::Table)
             .and_where(
                 Expr::col(Projects::Id)
@@ -809,7 +809,8 @@ impl NoteDb for PgWireBackend {
             .map(|s| parse_uuid(s))
             .collect::<Result<Vec<_>, _>>()?;
         let (sql, vals) = Query::select()
-            .columns([NoteExtractions::NoteId, NoteExtractions::Value])
+            .expr(uuid_read(NoteExtractions::NoteId))
+            .column(NoteExtractions::Value)
             .from(NoteExtractions::Table)
             .and_where(Expr::col(NoteExtractions::Type).eq("topic"))
             .and_where(Expr::col(NoteExtractions::NoteId).is_in(uuids))
@@ -823,7 +824,13 @@ impl NoteDb for PgWireBackend {
             .map_err(|e| CliError::Database(e.to_string()))?
             .into_iter()
             .map(|r| {
-                Ok::<(String, String), CliError>((r.get::<_, String>(0), r.get::<_, String>(1)))
+                let note_id: String = r
+                    .try_get(0)
+                    .map_err(|e| CliError::Database(format!("read note_id: {e}")))?;
+                let value: String = r
+                    .try_get(1)
+                    .map_err(|e| CliError::Database(format!("read value: {e}")))?;
+                Ok::<(String, String), CliError>((note_id, value))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut map: std::collections::HashMap<String, Vec<String>> =
@@ -838,7 +845,7 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let (sql, vals) = Query::select()
-            .column(Prompts::Id)
+            .expr(uuid_read(Prompts::Id))
             .from(Prompts::Table)
             .and_where(
                 Expr::col(Prompts::Id)
@@ -984,7 +991,7 @@ impl NoteDb for PgWireBackend {
         crate::backend::validate_id_prefix(prefix)?;
         let pattern = format!("{prefix}%");
         let (sql, vals) = Query::select()
-            .column(Keyterms::Id)
+            .expr(uuid_read(Keyterms::Id))
             .from(Keyterms::Table)
             .and_where(
                 Expr::col(Keyterms::Id)
