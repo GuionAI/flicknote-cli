@@ -8,7 +8,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.1.4"
+version = "0.1.5"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
