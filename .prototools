@@ -1,5 +1,0 @@
-moon = "2.0.4"
-dagger = "0.19.11"
-
-[plugins]
-dagger = "https://raw.githubusercontent.com/tta-lab/proto-plugins/main/dagger.toml"
