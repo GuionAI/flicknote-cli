@@ -42,7 +42,7 @@ cargo install --path flicknote-cli
 ### Homebrew (macOS + Linux)
 
 ```bash
-# Via ttal tap (recommended — if you use ttal, this tap is already added)
+# Via guionai tap (recommended)
 brew install guionai/flicknote-cli
 
 # Via guionai tap
