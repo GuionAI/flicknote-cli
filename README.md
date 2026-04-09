@@ -43,7 +43,7 @@ cargo install --path flicknote-cli
 
 ```bash
 # Via ttal tap (recommended — if you use ttal, this tap is already added)
-brew install tta-lab/ttal/flicknote
+brew install guionai/flicknote-cli
 
 # Via guionai tap
 brew tap guionai/tap
