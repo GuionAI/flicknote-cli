@@ -42,12 +42,7 @@ cargo install --path flicknote-cli
 ### Homebrew (macOS + Linux)
 
 ```bash
-# Via guionai tap (recommended)
 brew install guionai/flicknote-cli
-
-# Via guionai tap
-brew tap guionai/tap
-brew install flicknote
 ```
 
 Installs both `flicknote` and `flicknote-sync`.
