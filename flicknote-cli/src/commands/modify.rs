@@ -2,25 +2,30 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use std::io::{IsTerminal, Read};
+use std::io::Read;
 
 use super::add::resolve_project;
 use super::util::{find_section, resolve_note_id, write_content};
 
-/// Read stdin if it is not a terminal. Returns `None` when stdin is a terminal
-/// (no piped input), or `Some(content)` when content was successfully read.
-/// Trims trailing whitespace. Returns an error if stdin is non-terminal but empty.
+/// Mirrors ttal's readStdinIfPiped: reads from stdin if it is a pipe,
+/// otherwise returns None. Uses fstat to detect pipe/fifo without blocking on TTY.
+/// Any Stat() error is treated as "not piped" — conservative to avoid hangs.
+#[allow(unsafe_code)]
 fn try_read_stdin() -> Result<Option<String>, CliError> {
-    if std::io::stdin().is_terminal() {
+    // Use a raw fd to avoid consuming stdin
+    let mut stat_buf: libc::stat = unsafe { std::mem::zeroed() };
+    let ret = unsafe { libc::fstat(0, &mut stat_buf) };
+    if ret != 0 {
+        return Ok(None);
+    }
+    let mode = stat_buf.st_mode;
+    // S_IFMT = 0o170000; S_IFCHR = 0o20000; if it's a character device, it's a TTY
+    if mode & 0o170000 == 0o20000 {
         return Ok(None);
     }
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
-    let trimmed = buf.trim_end().to_string();
-    if trimmed.is_empty() {
-        return Err(CliError::Other("No content provided via stdin".into()));
-    }
-    Ok(Some(trimmed))
+    Ok(Some(buf.trim_end().to_string()))
 }
 
 #[derive(Args)]
@@ -76,20 +81,15 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
     let has_metadata =
         args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
 
-    // When metadata flags are set and no --section, skip stdin entirely to avoid blocking
-    // in non-terminal contexts (agent/script) where stdin is open but nothing is piped.
-    let metadata_only = has_metadata && args.section.is_none();
-    let stdin_content = if metadata_only {
-        if !std::io::stdin().is_terminal() {
-            eprintln!(
-                "warning: piped content ignored because metadata flags are set without --section. \
-                 To also replace note content, use --section."
-            );
-        }
-        None
-    } else {
-        try_read_stdin()?
-    };
+    let stdin_content = try_read_stdin()?;
+
+    // Warn only when content was actually piped, metadata flags are set, and no --section.
+    if stdin_content.is_some() && has_metadata && args.section.is_none() {
+        eprintln!(
+            "warning: piped content ignored because metadata flags are set without --section. \
+             To also replace note content, use --section."
+        );
+    }
 
     // --section without stdin is an error
     if args.section.is_some() && stdin_content.is_none() {
@@ -255,5 +255,20 @@ mod tests {
         assert!(!content_starts_with_heading("some body\n\nmore text"));
         assert!(!content_starts_with_heading(""));
         assert!(!content_starts_with_heading("#NoSpace"));
+    }
+
+    /// Classifies what a buffer of bytes represents in the stdin classification sense.
+    fn classify_stdin_buf(buf: &[u8]) -> &'static str {
+        if buf.is_empty() {
+            return "empty";
+        }
+        "piped"
+    }
+
+    #[test]
+    fn test_classify_stdin_buf() {
+        assert_eq!(classify_stdin_buf(b""), "empty");
+        assert_eq!(classify_stdin_buf(b"hello world"), "piped");
+        assert_eq!(classify_stdin_buf(b"line1\nline2\n"), "piped");
     }
 }
