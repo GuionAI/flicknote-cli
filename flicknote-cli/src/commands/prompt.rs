@@ -82,7 +82,7 @@ fn add(db: &dyn NoteDb, args: &AddPromptArgs) -> Result<(), CliError> {
         &args.prompt,
         &now,
     )?;
-    println!("Created prompt \"{}\" ({}).", args.title, &id[..8]);
+    println!("Created prompt \"{}\" ({}).", args.title, id);
     Ok(())
 }
 
@@ -142,13 +142,13 @@ fn modify(db: &dyn NoteDb, args: &ModifyPromptArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         args.prompt.as_deref(),
     )?;
-    println!("Updated prompt {}.", &full_id[..8]);
+    println!("Updated prompt {}.", full_id);
     Ok(())
 }
 
 fn delete(db: &dyn NoteDb, args: &DeletePromptArgs) -> Result<(), CliError> {
     let full_id = db.resolve_prompt_id(&args.id)?;
     db.delete_prompt(&full_id)?;
-    println!("Deleted prompt {}.", &full_id[..8]);
+    println!("Deleted prompt {}.", full_id);
     Ok(())
 }

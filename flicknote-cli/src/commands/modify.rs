@@ -128,7 +128,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &shifted);
                 write_content(db, &full_id, new_content.trim())?;
-                println!("Replaced section in note {}.\n", &full_id[..8]);
+                println!("Replaced section in note {}.\n", full_id);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             } else {
                 // stdin is body-only — reject if it starts with a heading (ATX or setext)
@@ -148,13 +148,13 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &new_section);
                 write_content(db, &full_id, new_content.trim())?;
-                println!("Replaced section body in note {}.\n", &full_id[..8]);
+                println!("Replaced section body in note {}.\n", full_id);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             }
         } else {
             // Replace all content
             write_content(db, &full_id, &new_body)?;
-            println!("Replaced content for note {}.\n", &full_id[..8]);
+            println!("Replaced content for note {}.\n", full_id);
             print!("{}", crate::markdown::render_tree(&new_body));
         }
     }
@@ -168,17 +168,12 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
         if old_project_id.as_deref() == Some(new_project_id.as_str()) {
             println!(
                 "Note {} is already in project \"{}\".",
-                &full_id[..8],
-                project_name
+                full_id, project_name
             );
         } else {
             let deleted_name =
                 db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
-            println!(
-                "Moved note {} to project \"{}\".",
-                &full_id[..8],
-                project_name
-            );
+            println!("Moved note {} to project \"{}\".", full_id, project_name);
             if let Some(name) = deleted_name {
                 println!("Deleted empty project \"{}\".", name);
             }
@@ -187,15 +182,15 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
 
     if let Some(ref new_title) = args.title {
         db.update_note_title(&full_id, new_title)?;
-        println!("Updated title for note {}.", &full_id[..8]);
+        println!("Updated title for note {}.", full_id);
     }
 
     if args.flagged {
         db.update_note_flagged(&full_id, true)?;
-        println!("Flagged note {}.", &full_id[..8]);
+        println!("Flagged note {}.", full_id);
     } else if args.unflagged {
         db.update_note_flagged(&full_id, false)?;
-        println!("Unflagged note {}.", &full_id[..8]);
+        println!("Unflagged note {}.", full_id);
     }
 
     Ok(())

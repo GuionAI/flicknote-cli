@@ -82,7 +82,7 @@ fn add(db: &dyn NoteDb, args: &AddKeytermArgs) -> Result<(), CliError> {
         args.content.as_deref(),
         &now,
     )?;
-    println!("Created keyterm \"{}\" ({}).", args.name, &id[..8]);
+    println!("Created keyterm \"{}\" ({}).", args.name, id);
     Ok(())
 }
 
@@ -153,13 +153,13 @@ fn modify(db: &dyn NoteDb, args: &ModifyKeytermArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         args.content.as_deref(),
     )?;
-    println!("Updated keyterm {}.", &full_id[..8]);
+    println!("Updated keyterm {}.", full_id);
     Ok(())
 }
 
 fn delete(db: &dyn NoteDb, args: &DeleteKeytermArgs) -> Result<(), CliError> {
     let full_id = db.resolve_keyterm_id(&args.id)?;
     db.delete_keyterm(&full_id)?;
-    println!("Deleted keyterm {}.", &full_id[..8]);
+    println!("Deleted keyterm {}.", full_id);
     Ok(())
 }

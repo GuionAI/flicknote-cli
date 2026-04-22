@@ -38,9 +38,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &RenameArgs) -> Resul
 
     println!(
         "Renamed '{}' → '{}' in note {}.\n",
-        bounds.heading.text,
-        args.name,
-        &full_id[..8]
+        bounds.heading.text, args.name, full_id
     );
     print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())

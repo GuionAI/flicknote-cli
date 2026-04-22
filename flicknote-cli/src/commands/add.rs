@@ -136,8 +136,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
     }
 
     match effective_project.as_deref() {
-        Some(name) => println!("Created note {} in project \"{name}\".", &id[..8]),
-        None => println!("Created note {}.", &id[..8]),
+        Some(name) => println!("Created note {} in project \"{name}\".", id),
+        None => println!("Created note {}.", id),
     }
     Ok(())
 }

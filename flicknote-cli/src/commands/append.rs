@@ -29,6 +29,6 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &AppendArgs) -> Resul
     // Update — no status change (do not re-queue for AI)
     db.update_note_content(&full_id, &combined, false)?;
 
-    println!("Appended to note {}.", &full_id[..8]);
+    println!("Appended to note {}.", full_id);
     Ok(())
 }

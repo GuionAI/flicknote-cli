@@ -113,7 +113,7 @@ fn add(db: &dyn NoteDb, args: &AddProjectArgs) -> Result<(), CliError> {
         db.update_project(&id, prompt_id_opt, keyterm_id_opt, color_opt)?;
     }
 
-    println!("Created project \"{}\" ({}).", args.name, &id[..8]);
+    println!("Created project \"{}\" ({}).", args.name, id);
     Ok(())
 }
 
@@ -248,13 +248,13 @@ fn modify(db: &dyn NoteDb, args: &ModifyProjectArgs) -> Result<(), CliError> {
     let keyterm_id = resolved_keyterm.as_ref().map(|opt| opt.as_deref());
 
     db.update_project(&full_id, prompt_id, keyterm_id, color)?;
-    println!("Updated project {}.", &full_id[..8]);
+    println!("Updated project {}.", full_id);
     Ok(())
 }
 
 fn delete(db: &dyn NoteDb, args: &DeleteProjectArgs) -> Result<(), CliError> {
     let full_id = db.resolve_project_id(&args.id)?;
     db.delete_project(&full_id)?;
-    println!("Deleted project {}.", &full_id[..8]);
+    println!("Deleted project {}.", full_id);
     Ok(())
 }
