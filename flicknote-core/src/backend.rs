@@ -89,8 +89,8 @@ pub trait NoteDb {
     // Project writes
     fn create_project(&self, name: &str) -> Result<String, CliError>;
 
-    /// Atomic: update note project + conditionally delete empty old project.
-    /// Returns old project name if the old project was deleted.
+    /// Move a note to a different project. Returns the deleted project name if the old
+    /// project is now empty. Returns `NoteNotFound` if no such note exists.
     fn move_note_to_project(
         &self,
         note_id: &str,
@@ -107,10 +107,13 @@ pub trait NoteDb {
         color: Option<Option<&str>>,
     ) -> Result<(), CliError>;
 
+    /// Delete (archive) a project by ID. Returns `ProjectNotFound` if no such project exists.
     fn delete_project(&self, id: &str) -> Result<(), CliError>;
 
     // Note metadata writes
+    /// Update a note's title. Returns `NoteNotFound` if no such note exists.
     fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError>;
+    /// Update a note's flagged status. Returns `NoteNotFound` if no such note exists.
     fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError>;
 
     // Note reads (extended)
@@ -1219,7 +1222,7 @@ mod tests {
         assert!(backend.find_note(&id).is_err());
     }
 
-    // ─── Bug 1: PowerSync view-UPDATE false NoteNotFound ───────────────────
+    // ─── Fix: PowerSync view-UPDATE zero affected rows ────────────────────
 
     #[test]
     fn test_move_note_to_project_ok() {
