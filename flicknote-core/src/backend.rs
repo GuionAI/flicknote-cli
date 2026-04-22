@@ -543,15 +543,22 @@ impl NoteDb for SqliteBackend {
     ) -> Result<Option<String>, CliError> {
         self.db.write(|conn| {
             let now = chrono::Utc::now().to_rfc3339();
-            let affected = conn.execute(
-                SQ_UPDATE_PROJECT,
-                params![new_project_id, now, self.user_id, note_id],
-            )?;
-            if affected == 0 {
+            // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
+            // return 0 even on successful updates. Use a pre-SELECT to verify
+            // the note exists first.
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
+                .query_row(params![self.user_id, note_id], |_| Ok(true))
+                .unwrap_or(false);
+            if !exists {
                 return Err(CliError::NoteNotFound {
                     id: note_id.to_string(),
                 });
             }
+            conn.execute(
+                SQ_UPDATE_PROJECT,
+                params![new_project_id, now, self.user_id, note_id],
+            )?;
 
             let Some(old_pid) = old_project_id else {
                 return Ok(None);
@@ -661,10 +668,16 @@ impl NoteDb for SqliteBackend {
 
     fn delete_project(&self, id: &str) -> Result<(), CliError> {
         self.db.write(|conn| {
-            let affected = conn.execute(SQ_ARCHIVE_PROJECT, params![self.user_id, id])?;
-            if affected == 0 {
+            // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
+            // return 0 even on successful updates. Use a pre-SELECT.
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM projects WHERE user_id = ? AND id = ? LIMIT 1")?
+                .query_row(params![self.user_id, id], |_| Ok(true))
+                .unwrap_or(false);
+            if !exists {
                 return Err(CliError::Other(format!("Project not found: {id}")));
             }
+            conn.execute(SQ_ARCHIVE_PROJECT, params![self.user_id, id])?;
             Ok(())
         })
     }
@@ -672,10 +685,14 @@ impl NoteDb for SqliteBackend {
     fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         self.db.write(|conn| {
-            let affected = conn.execute(SQ_UPDATE_TITLE, params![title, now, self.user_id, id])?;
-            if affected == 0 {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
+                .query_row(params![self.user_id, id], |_| Ok(true))
+                .unwrap_or(false);
+            if !exists {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
+            conn.execute(SQ_UPDATE_TITLE, params![title, now, self.user_id, id])?;
             Ok(())
         })
     }
@@ -684,10 +701,14 @@ impl NoteDb for SqliteBackend {
         let now = chrono::Utc::now().to_rfc3339();
         let val: i64 = if flagged { 1 } else { 0 };
         self.db.write(|conn| {
-            let affected = conn.execute(SQ_UPDATE_FLAGGED, params![val, now, self.user_id, id])?;
-            if affected == 0 {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
+                .query_row(params![self.user_id, id], |_| Ok(true))
+                .unwrap_or(false);
+            if !exists {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
+            conn.execute(SQ_UPDATE_FLAGGED, params![val, now, self.user_id, id])?;
             Ok(())
         })
     }
@@ -1192,5 +1213,146 @@ mod tests {
 
         // No longer findable via find_note (active-only)
         assert!(backend.find_note(&id).is_err());
+    }
+
+    // ─── Bug 1: PowerSync view-UPDATE false NoteNotFound ───────────────────
+
+    #[test]
+    fn test_move_note_to_project_ok() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().to_rfc3339();
+        let note_id = uuid::Uuid::new_v4().to_string();
+        let proj_a = backend.create_project("Proj-A").unwrap();
+        let proj_b = backend.create_project("Proj-B").unwrap();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &note_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Test note"),
+                content: Some("body"),
+                metadata: None,
+                project_id: Some(&proj_a),
+                now: &now,
+            })
+            .unwrap();
+
+        // Move to proj_b — should succeed (not return NoteNotFound)
+        let result = backend
+            .move_note_to_project(&note_id, &proj_b, Some(&proj_a))
+            .unwrap();
+        // This note was the only one in proj_a, so proj_a gets deleted
+        assert_eq!(result.as_deref(), Some("Proj-A"));
+
+        // Verify the note is now in proj_b
+        let note = backend.find_note(&note_id).unwrap();
+        assert_eq!(note.project_id.as_deref(), Some(proj_b.as_str()));
+    }
+
+    #[test]
+    fn test_move_note_to_project_missing_returns_err() {
+        let backend = make_backend();
+        let fake_id = uuid::Uuid::new_v4().to_string();
+        let proj_a = backend.create_project("Proj-A").unwrap();
+        let proj_b = backend.create_project("Proj-B").unwrap();
+
+        let err = backend
+            .move_note_to_project(&fake_id, &proj_b, Some(&proj_a))
+            .unwrap_err();
+        match err {
+            CliError::NoteNotFound { id } => assert_eq!(id, fake_id),
+            _ => panic!("expected NoteNotFound, got {:?}", err),
+        }
+    }
+
+    #[test]
+    fn test_update_note_title_ok() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().to_rfc3339();
+        let note_id = uuid::Uuid::new_v4().to_string();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &note_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Old title"),
+                content: Some("body"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .unwrap();
+
+        backend.update_note_title(&note_id, "New title").unwrap();
+        let note = backend.find_note(&note_id).unwrap();
+        assert_eq!(note.title, Some("New title".to_string()));
+    }
+
+    #[test]
+    fn test_update_note_flagged_ok() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().to_rfc3339();
+        let note_id = uuid::Uuid::new_v4().to_string();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &note_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Flag me"),
+                content: Some("body"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .unwrap();
+
+        backend.update_note_flagged(&note_id, true).unwrap();
+        let note = backend.find_note(&note_id).unwrap();
+        assert_eq!(note.is_flagged, Some(1));
+
+        backend.update_note_flagged(&note_id, false).unwrap();
+        let note = backend.find_note(&note_id).unwrap();
+        assert_eq!(note.is_flagged, Some(0));
+    }
+
+    #[test]
+    fn test_delete_project_archives() {
+        let backend = make_backend();
+        let proj_id = backend.create_project("ToDelete").unwrap();
+
+        // Verify project exists
+        let proj = backend.find_project(&proj_id).unwrap();
+        assert_eq!(proj.name, "ToDelete");
+
+        backend.delete_project(&proj_id).unwrap();
+
+        // After archive, project should not appear in active list
+        let active = backend.list_projects(false).unwrap();
+        assert!(
+            !active.iter().any(|p| p.id == proj_id),
+            "deleted project should not appear in active list"
+        );
+
+        // Archived list should contain it
+        let archived = backend.list_projects(true).unwrap();
+        assert!(
+            archived.iter().any(|p| p.id == proj_id),
+            "deleted project should appear in archived list"
+        );
+    }
+
+    #[test]
+    fn test_delete_project_missing_returns_err() {
+        let backend = make_backend();
+        let fake_id = uuid::Uuid::new_v4().to_string();
+
+        let err = backend.delete_project(&fake_id).unwrap_err();
+        match err {
+            CliError::Other(msg) => assert!(msg.contains("not found"), "got: {msg}"),
+            _ => panic!("expected Other error, got {:?}", err),
+        }
     }
 }
