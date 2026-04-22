@@ -133,10 +133,9 @@ fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
             serde_json::to_string_pretty(&projects).map_err(CliError::Json)?
         );
     } else if args.include_archived {
-        println!("{:<10} {:<30} {:<10} Created", "ID", "Name", "Status");
-        println!("{}", "-".repeat(62));
+        println!("{:<36} {:<30} {:<10} Created", "ID", "Name", "Status");
+        println!("{}", "-".repeat(88));
         for p in &projects {
-            let id = &p.id[..8.min(p.id.len())];
             let date = p
                 .created_at
                 .as_deref()
@@ -147,19 +146,18 @@ fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
             } else {
                 "active"
             };
-            println!("{:<10} {:<30} {:<10} {}", id, p.name, status, date);
+            println!("{:<36} {:<30} {:<10} {}", p.id, p.name, status, date);
         }
     } else {
-        println!("{:<10} {:<30} Created", "ID", "Name");
-        println!("{}", "-".repeat(50));
+        println!("{:<36} {:<30} Created", "ID", "Name");
+        println!("{}", "-".repeat(76));
         for p in &projects {
-            let id = &p.id[..8.min(p.id.len())];
             let date = p
                 .created_at
                 .as_deref()
                 .and_then(|d| d.get(..10))
                 .unwrap_or("-");
-            println!("{:<10} {:<30} {}", id, p.name, date);
+            println!("{:<36} {:<30} {}", p.id, p.name, date);
         }
     }
 

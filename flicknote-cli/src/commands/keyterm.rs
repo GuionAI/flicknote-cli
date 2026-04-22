@@ -92,17 +92,16 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
         println!("No keyterms found.");
         return Ok(());
     }
-    println!("{:<10} {:<30} Name", "ID", "Updated");
-    println!("{}", "-".repeat(60));
+    println!("{:<36} {:<30} Name", "ID", "Updated");
+    println!("{}", "-".repeat(76));
     for k in &keyterms {
-        let id = &k.id[..8.min(k.id.len())];
         let date = k
             .updated_at
             .as_deref()
             .or(k.created_at.as_deref())
             .and_then(|d| d.get(..10))
             .unwrap_or("-");
-        println!("{:<10} {:<30} {}", id, date, k.name);
+        println!("{:<36} {:<30} {}", k.id, date, k.name);
     }
     Ok(())
 }

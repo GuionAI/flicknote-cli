@@ -92,16 +92,15 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
         println!("No prompts found.");
         return Ok(());
     }
-    println!("{:<10} {:<30} Title", "ID", "Created");
-    println!("{}", "-".repeat(60));
+    println!("{:<36} {:<30} Title", "ID", "Created");
+    println!("{}", "-".repeat(76));
     for p in &prompts {
-        let id = &p.id[..8.min(p.id.len())];
         let date = p
             .created_at
             .as_deref()
             .and_then(|d| d.get(..10))
             .unwrap_or("-");
-        println!("{:<10} {:<30} {}", id, date, p.title);
+        println!("{:<36} {:<30} {}", p.id, date, p.title);
     }
     Ok(())
 }

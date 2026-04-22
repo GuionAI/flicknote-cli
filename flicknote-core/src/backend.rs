@@ -546,10 +546,11 @@ impl NoteDb for SqliteBackend {
             // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
             // return 0 even on successful updates. Use a pre-SELECT to verify
             // the note exists first.
-            let exists: bool = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
-                .query_row(params![self.user_id, note_id], |_| Ok(true))
-                .unwrap_or(false);
+            let exists = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
+                .query(params![self.user_id, note_id])?
+                .next()?
+                .is_some();
             if !exists {
                 return Err(CliError::NoteNotFound {
                     id: note_id.to_string(),
@@ -670,10 +671,11 @@ impl NoteDb for SqliteBackend {
         self.db.write(|conn| {
             // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
             // return 0 even on successful updates. Use a pre-SELECT.
-            let exists: bool = conn
+            let exists = conn
                 .prepare("SELECT 1 FROM projects WHERE user_id = ? AND id = ? LIMIT 1")?
-                .query_row(params![self.user_id, id], |_| Ok(true))
-                .unwrap_or(false);
+                .query(params![self.user_id, id])?
+                .next()?
+                .is_some();
             if !exists {
                 return Err(CliError::Other(format!("Project not found: {id}")));
             }
@@ -685,10 +687,11 @@ impl NoteDb for SqliteBackend {
     fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         self.db.write(|conn| {
-            let exists: bool = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
-                .query_row(params![self.user_id, id], |_| Ok(true))
-                .unwrap_or(false);
+            let exists = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
+                .query(params![self.user_id, id])?
+                .next()?
+                .is_some();
             if !exists {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
@@ -701,10 +704,11 @@ impl NoteDb for SqliteBackend {
         let now = chrono::Utc::now().to_rfc3339();
         let val: i64 = if flagged { 1 } else { 0 };
         self.db.write(|conn| {
-            let exists: bool = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? LIMIT 1")?
-                .query_row(params![self.user_id, id], |_| Ok(true))
-                .unwrap_or(false);
+            let exists = conn
+                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
+                .query(params![self.user_id, id])?
+                .next()?
+                .is_some();
             if !exists {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
@@ -1264,6 +1268,43 @@ mod tests {
             CliError::NoteNotFound { id } => assert_eq!(id, fake_id),
             _ => panic!("expected NoteNotFound, got {:?}", err),
         }
+    }
+
+    #[test]
+    fn test_move_note_to_project_same_project_noop() {
+        let backend = make_backend();
+        let now = chrono::Utc::now().to_rfc3339();
+        let note_id = uuid::Uuid::new_v4().to_string();
+        let proj_x = backend.create_project("Proj-X").unwrap();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &note_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Same-project note"),
+                content: Some("body"),
+                metadata: None,
+                project_id: Some(&proj_x),
+                now: &now,
+            })
+            .unwrap();
+
+        // Same source and target — should be idempotent, return Ok(None),
+        // not delete the project (it still holds the note).
+        let result = backend
+            .move_note_to_project(&note_id, &proj_x, Some(&proj_x))
+            .unwrap();
+        assert_eq!(result, None, "same-project move should not delete project");
+
+        // Verify project still exists and note is still in it
+        let note = backend.find_note(&note_id).unwrap();
+        assert_eq!(note.project_id.as_deref(), Some(proj_x.as_str()));
+        let active = backend.list_projects(false).unwrap();
+        assert!(
+            active.iter().any(|p| p.id == proj_x),
+            "project should still exist"
+        );
     }
 
     #[test]
