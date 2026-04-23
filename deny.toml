@@ -46,6 +46,4 @@ ignore = []
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = [
-    "https://github.com/powersync-ja/powersync-native",
-]
+allow-git = []
