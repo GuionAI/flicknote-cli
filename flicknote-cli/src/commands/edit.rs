@@ -118,7 +118,7 @@ fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliE
     match (new_title.as_deref(), old_title) {
         (Some(t), old) if Some(t) != old => {
             db.update_note_title(&full_id, t)?;
-            println!("Updated title for note {}.", &full_id[..8]);
+            println!("Updated title for note {}.", full_id);
         }
         (None, Some(_)) => {
             return Err(CliError::Other(
@@ -132,7 +132,7 @@ fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliE
     let old_content = note.content.as_deref().unwrap_or("");
     if new_body != old_content {
         write_content(db, &full_id, &new_body)?;
-        println!("Updated content for note {}.", &full_id[..8]);
+        println!("Updated content for note {}.", full_id);
     }
 
     Ok(())
@@ -176,8 +176,8 @@ fn create_from_editor(
     })?;
 
     match effective_project.as_deref() {
-        Some(name) => println!("Created note {} in project \"{name}\".", &id[..8]),
-        None => println!("Created note {}.", &id[..8]),
+        Some(name) => println!("Created note {} in project \"{name}\".", id),
+        None => println!("Created note {}.", id),
     }
     Ok(())
 }

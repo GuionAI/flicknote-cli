@@ -82,7 +82,7 @@ fn add(db: &dyn NoteDb, args: &AddKeytermArgs) -> Result<(), CliError> {
         args.content.as_deref(),
         &now,
     )?;
-    println!("Created keyterm \"{}\" ({}).", args.name, &id[..8]);
+    println!("Created keyterm \"{}\" ({}).", args.name, id);
     Ok(())
 }
 
@@ -92,17 +92,16 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
         println!("No keyterms found.");
         return Ok(());
     }
-    println!("{:<10} {:<30} Name", "ID", "Updated");
-    println!("{}", "-".repeat(60));
+    println!("{:<36} {:<30} Name", "ID", "Updated");
+    println!("{}", "-".repeat(76));
     for k in &keyterms {
-        let id = &k.id[..8.min(k.id.len())];
         let date = k
             .updated_at
             .as_deref()
             .or(k.created_at.as_deref())
             .and_then(|d| d.get(..10))
             .unwrap_or("-");
-        println!("{:<10} {:<30} {}", id, date, k.name);
+        println!("{:<36} {:<30} {}", k.id, date, k.name);
     }
     Ok(())
 }
@@ -153,13 +152,13 @@ fn modify(db: &dyn NoteDb, args: &ModifyKeytermArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         args.content.as_deref(),
     )?;
-    println!("Updated keyterm {}.", &full_id[..8]);
+    println!("Updated keyterm {}.", full_id);
     Ok(())
 }
 
 fn delete(db: &dyn NoteDb, args: &DeleteKeytermArgs) -> Result<(), CliError> {
     let full_id = db.resolve_keyterm_id(&args.id)?;
     db.delete_keyterm(&full_id)?;
-    println!("Deleted keyterm {}.", &full_id[..8]);
+    println!("Deleted keyterm {}.", full_id);
     Ok(())
 }

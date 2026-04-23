@@ -64,7 +64,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
     for (id, title, file) in &imported {
         let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("?");
         let display_title = title.as_deref().unwrap_or("(untitled)");
-        println!("Imported {} → {} — {}", filename, &id[..8], display_title);
+        println!("Imported {} → {} — {}", filename, id, display_title);
     }
     match effective_project.as_deref() {
         Some(name) => {

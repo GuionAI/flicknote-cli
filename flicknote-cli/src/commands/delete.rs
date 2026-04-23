@@ -39,15 +39,14 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DeleteArgs) -> Resul
 
         println!(
             "Removed section '{}' from note {}.\n",
-            bounds.heading.text,
-            &full_id[..8]
+            bounds.heading.text, full_id
         );
         print!("{}", crate::markdown::render_tree(new_content.trim()));
     } else {
         // Soft-delete (archive) the note
         let now = chrono::Utc::now().to_rfc3339();
         db.set_note_deleted_at(&full_id, Some(&now), &now)?;
-        println!("Deleted note {}.", &full_id[..8]);
+        println!("Deleted note {}.", full_id);
     }
 
     Ok(())

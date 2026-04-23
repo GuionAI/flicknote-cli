@@ -82,7 +82,7 @@ fn add(db: &dyn NoteDb, args: &AddPromptArgs) -> Result<(), CliError> {
         &args.prompt,
         &now,
     )?;
-    println!("Created prompt \"{}\" ({}).", args.title, &id[..8]);
+    println!("Created prompt \"{}\" ({}).", args.title, id);
     Ok(())
 }
 
@@ -92,16 +92,15 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
         println!("No prompts found.");
         return Ok(());
     }
-    println!("{:<10} {:<30} Title", "ID", "Created");
-    println!("{}", "-".repeat(60));
+    println!("{:<36} {:<30} Title", "ID", "Created");
+    println!("{}", "-".repeat(76));
     for p in &prompts {
-        let id = &p.id[..8.min(p.id.len())];
         let date = p
             .created_at
             .as_deref()
             .and_then(|d| d.get(..10))
             .unwrap_or("-");
-        println!("{:<10} {:<30} {}", id, date, p.title);
+        println!("{:<36} {:<30} {}", p.id, date, p.title);
     }
     Ok(())
 }
@@ -142,13 +141,13 @@ fn modify(db: &dyn NoteDb, args: &ModifyPromptArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         args.prompt.as_deref(),
     )?;
-    println!("Updated prompt {}.", &full_id[..8]);
+    println!("Updated prompt {}.", full_id);
     Ok(())
 }
 
 fn delete(db: &dyn NoteDb, args: &DeletePromptArgs) -> Result<(), CliError> {
     let full_id = db.resolve_prompt_id(&args.id)?;
     db.delete_prompt(&full_id)?;
-    println!("Deleted prompt {}.", &full_id[..8]);
+    println!("Deleted prompt {}.", full_id);
     Ok(())
 }

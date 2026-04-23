@@ -7,20 +7,27 @@ use std::io::{IsTerminal, Read};
 use super::add::resolve_project;
 use super::util::{find_section, resolve_note_id, write_content};
 
-/// Read stdin if it is not a terminal. Returns `None` when stdin is a terminal
-/// (no piped input), or `Some(content)` when content was successfully read.
-/// Trims trailing whitespace. Returns an error if stdin is non-terminal but empty.
+/// Read piped stdin content, returning `None` when stdin is a terminal or empty.
+/// Empty stdin is treated the same as no stdin — matches ttal's readStdinIfPiped
+/// pattern so non-TTY contexts (agents, CI) don't spuriously report piped data.
 fn try_read_stdin() -> Result<Option<String>, CliError> {
     if std::io::stdin().is_terminal() {
         return Ok(None);
     }
     let mut buf = String::new();
     std::io::stdin().read_to_string(&mut buf)?;
-    let trimmed = buf.trim_end().to_string();
+    Ok(classify_stdin_buf(&buf))
+}
+
+/// Classify a freshly-read stdin buffer. Pure helper, testable without a TTY.
+fn classify_stdin_buf(buf: &str) -> Option<String> {
+    let trimmed = buf.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed = trimmed.trim_end_matches(' ');
     if trimmed.is_empty() {
-        return Err(CliError::Other("No content provided via stdin".into()));
+        None
+    } else {
+        Some(trimmed.to_string())
     }
-    Ok(Some(trimmed))
 }
 
 #[derive(Args)]
@@ -76,19 +83,15 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
     let has_metadata =
         args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
 
-    // When metadata flags are set and no --section, skip stdin entirely to avoid blocking
-    // in non-terminal contexts (agent/script) where stdin is open but nothing is piped.
-    let metadata_only = has_metadata && args.section.is_none();
-    let stdin_content = if metadata_only {
-        if !std::io::stdin().is_terminal() {
-            eprintln!(
-                "warning: piped content ignored because metadata flags are set without --section. \
-                 To also replace note content, use --section."
-            );
-        }
+    let piped = try_read_stdin()?;
+    let stdin_content = if has_metadata && args.section.is_none() && piped.is_some() {
+        eprintln!(
+            "warning: piped content ignored because metadata flags are set without --section. \
+             To also replace note content, use --section."
+        );
         None
     } else {
-        try_read_stdin()?
+        piped
     };
 
     // --section without stdin is an error
@@ -128,7 +131,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &shifted);
                 write_content(db, &full_id, new_content.trim())?;
-                println!("Replaced section in note {}.\n", &full_id[..8]);
+                println!("Replaced section in note {}.\n", full_id);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             } else {
                 // stdin is body-only — reject if it starts with a heading (ATX or setext)
@@ -148,13 +151,13 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
                 let new_content =
                     crate::markdown::replace_entire_section(&content, start, end, &new_section);
                 write_content(db, &full_id, new_content.trim())?;
-                println!("Replaced section body in note {}.\n", &full_id[..8]);
+                println!("Replaced section body in note {}.\n", full_id);
                 print!("{}", crate::markdown::render_tree(new_content.trim()));
             }
         } else {
             // Replace all content
             write_content(db, &full_id, &new_body)?;
-            println!("Replaced content for note {}.\n", &full_id[..8]);
+            println!("Replaced content for note {}.\n", full_id);
             print!("{}", crate::markdown::render_tree(&new_body));
         }
     }
@@ -168,17 +171,12 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
         if old_project_id.as_deref() == Some(new_project_id.as_str()) {
             println!(
                 "Note {} is already in project \"{}\".",
-                &full_id[..8],
-                project_name
+                full_id, project_name
             );
         } else {
             let deleted_name =
                 db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
-            println!(
-                "Moved note {} to project \"{}\".",
-                &full_id[..8],
-                project_name
-            );
+            println!("Moved note {} to project \"{}\".", full_id, project_name);
             if let Some(name) = deleted_name {
                 println!("Deleted empty project \"{}\".", name);
             }
@@ -187,15 +185,15 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
 
     if let Some(ref new_title) = args.title {
         db.update_note_title(&full_id, new_title)?;
-        println!("Updated title for note {}.", &full_id[..8]);
+        println!("Updated title for note {}.", full_id);
     }
 
     if args.flagged {
         db.update_note_flagged(&full_id, true)?;
-        println!("Flagged note {}.", &full_id[..8]);
+        println!("Flagged note {}.", full_id);
     } else if args.unflagged {
         db.update_note_flagged(&full_id, false)?;
-        println!("Unflagged note {}.", &full_id[..8]);
+        println!("Unflagged note {}.", full_id);
     }
 
     Ok(())
@@ -255,5 +253,19 @@ mod tests {
         assert!(!content_starts_with_heading("some body\n\nmore text"));
         assert!(!content_starts_with_heading(""));
         assert!(!content_starts_with_heading("#NoSpace"));
+    }
+
+    #[test]
+    fn test_classify_stdin_buf() {
+        // Empty and whitespace-only → None
+        assert_eq!(classify_stdin_buf(""), None);
+        assert_eq!(classify_stdin_buf("  \n  "), None);
+        // Non-empty → content with trailing ASCII whitespace stripped
+        assert_eq!(classify_stdin_buf("x"), Some("x".to_string()));
+        assert_eq!(classify_stdin_buf(" foo "), Some(" foo".to_string()));
+        assert_eq!(
+            classify_stdin_buf("foo\nbar\n"),
+            Some("foo\nbar".to_string())
+        );
     }
 }

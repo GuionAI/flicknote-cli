@@ -70,6 +70,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
         return Err(e);
     }
 
-    println!("Created note {} with file {}", &id[..8], filename);
+    println!("Created note {} with file {}", id, filename);
     Ok(())
 }

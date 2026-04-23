@@ -19,6 +19,6 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &RestoreArgs) -> Resu
     new_note.updated_at = Some(now.clone());
 
     db.set_note_deleted_at(&full_id, None, &now)?;
-    println!("Restored note {}.", &full_id[..8]);
+    println!("Restored note {}.", full_id);
     Ok(())
 }

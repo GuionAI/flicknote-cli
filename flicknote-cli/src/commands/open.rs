@@ -19,6 +19,6 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Result<(
     let full_id = db.resolve_note_id(&args.id)?;
     let url = format!("{}/notes/{}", web_url.trim_end_matches('/'), full_id);
     open::that(&url).map_err(CliError::Io)?;
-    println!("Opened {} — {}", full_id.get(..8).unwrap_or(&full_id), url);
+    println!("Opened {} — {}", full_id, url);
     Ok(())
 }
