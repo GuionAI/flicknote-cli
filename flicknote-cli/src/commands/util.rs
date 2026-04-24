@@ -204,3 +204,24 @@ mod tests {
         assert!(result.is_err(), "name string should be rejected");
     }
 }
+
+/// Read optional stdin content. Returns `Ok(None)` when stdin is a terminal or empty.
+pub(crate) fn try_read_stdin() -> Result<Option<String>, CliError> {
+    if std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(classify_stdin_buf(&buf))
+}
+
+/// Classify a freshly-read stdin buffer. Pure helper, testable without a TTY.
+pub(crate) fn classify_stdin_buf(buf: &str) -> Option<String> {
+    let trimmed = buf.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed = trimmed.trim_end_matches(' ');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
