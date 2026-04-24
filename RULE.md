@@ -51,32 +51,66 @@ flicknote detail abc12345 --tree
 flicknote detail abc12345 --section 3K
 ```
 
-## Modify / Append
+## Replace (overwrite)
 
-> **Warning:** `flicknote modify <id>` without `--section` **replaces the entire note content** with stdin. Always use `--section <id>` to edit just one section.
-
-```bash
-echo "new content" | flicknote modify <id>                                  # ⚠️ replaces ENTIRE note
-echo "new content" | flicknote modify <id> --section <section-id>          # body only, heading preserved
-echo "## New Heading\ncontent" | flicknote modify <id> --section <section-id> --with-heading  # replaces heading too
-# Without --with-heading: stdin must NOT start with # (errors if it does)
-# With --with-heading: stdin MUST start with # (errors if it doesn't)
-echo "more content" | flicknote append <id>
-flicknote modify <id> --project <name>       # move to project
-flicknote modify <id> --title "New Title"    # rename
-flicknote modify <id> --flagged              # flag/unflag
-```
-
-For multiline content with special characters, use heredoc:
+> `flicknote replace <id>` overwrites the whole note or a whole section including its heading. Prefer `modify` for precision edits.
 
 ```bash
-cat <<'EOF' | flicknote modify <id>
-# Updated Note
-Content with **markdown** and $variables
-EOF
+echo "new note content" | flicknote replace <id>                       # replace entire note body
+echo "## New Heading
+new body" | flicknote replace <id> --section <s> # replace whole section incl. heading
+flicknote replace <id> --project <name>                                # metadata works here too
 ```
+
+`--section` requires stdin to start with an ATX or setext heading. The heading level is capped at the original section's level so outlines don't skew.
+
+## Modify (edit-mode + metadata)
+
+> `flicknote modify <id>` does precision string-replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata.
+
+```bash
+# Edit mode: exact-string replacement (fails on zero or multiple matches)
+cat <<'EDIT' | flicknote modify <id>
+===BEFORE===
+old text (exactly as in the note, whitespace-sensitive)
+===AFTER===
+new text
+EDIT
+
+# Scope to a section
+cat <<'EDIT' | flicknote modify <id> --section <section-id>
+===BEFORE===
+old text inside that section
+===AFTER===
+new text
+EDIT
+
+# Metadata only
+flicknote modify <id> --project <name>
+flicknote modify <id> --title "New Title"
+flicknote modify <id> --flagged   # or --unflagged
+```
+
+Rules:
+- **Exact match, whitespace-sensitive.** No fuzzy fallbacks.
+- **Unique-match required.** If `BEFORE` matches 0 or >1 times, you get a clear error. Add surrounding context to disambiguate.
+- **Single block per call.** Multiple `===BEFORE===`/`===AFTER===` pairs in one stdin → error. Run modify multiple times for multiple edits.
+- **Append** is a different command: `echo "more" | flicknote append <id>`.
 
 Mutating commands (`modify`, `delete`, `rename`, `insert`) print the updated `--tree` after making changes.
+
+### Migration from legacy `modify`
+
+| Old                                                           | New                                                 |
+|---------------------------------------------------------------|-----------------------------------------------------|
+| `cat x.md | flicknote modify <id>`                            | `cat x.md | flicknote replace <id>`                 |
+| `echo body | flicknote modify <id> --section <s>`             | `echo "## Heading
+body" | flicknote replace <id> --section <s>`   |
+| `cat "## X
+..." | flicknote modify <id> --section <s> --with-heading` | `echo "## X
+..." | flicknote replace <id> --section <s>`   (heading always in stdin; --with-heading removed) |
+
+`--with-heading` is removed. For `replace --section`, the heading is always required in stdin.
 
 ## Section Operations
 
