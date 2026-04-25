@@ -34,25 +34,17 @@ license-files = []
 crate = "flicknote-sync"
 expression = "MIT"
 license-files = []
-[[licenses.clarify]]
-crate = "powersync_test_utils"
-expression = "MIT"
-license-files = []
 
 [bans]
 multiple-versions = "warn"
-skip = [
-    # powersync_test_utils is a dev-only crate from the fork workspace.
-    # No license field in synthesized manifest; not reachable in release builds.
-    { crate = "powersync_test_utils", ignore = ["unlicensed"], reason = "dev-only test helper, not in release builds" },
-]
 wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-git = ["https://github.com/GuionAI/powersync-native"]
 
 [advisories]
 # All previous ignores were stale — crates no longer in the dep graph after upgrades.
 # Re-add with justification if any appear again.
 ignore = []
-
-[sources]
-unknown-registry = "deny"
-unknown-git = "deny"
