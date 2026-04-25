@@ -77,7 +77,9 @@ enum Commands {
     Rename(commands::rename::RenameArgs),
     /// Insert content before or after a section
     Insert(commands::insert::InsertArgs),
-    /// Modify note content (via stdin) and/or metadata
+    /// Overwrite note content (whole note or section) — for precision edits use modify
+    Replace(commands::replace::ReplaceArgs),
+    /// Modify note via ===BEFORE===/===AFTER=== blocks and/or update metadata
     Modify(commands::modify::ModifyArgs),
     /// Open a note in the browser
     Open(commands::open::OpenArgs),
@@ -167,6 +169,7 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError>
         Commands::Keyterm(args) => commands::keyterm::run(db, args),
         Commands::Rename(args) => commands::rename::run(db, config, args),
         Commands::Insert(args) => commands::insert::run(db, config, args),
+        Commands::Replace(args) => commands::replace::run(db, config, args),
         Commands::Modify(args) => commands::modify::run(db, config, args),
         Commands::Open(args) => commands::open::run(db, config, args),
         Commands::Import(args) => commands::import::run(db, config, args),

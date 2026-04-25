@@ -100,62 +100,91 @@ flicknote detail abc12345 --section 3K
 
 ## Editing Notes
 
-All content-writing commands read from **stdin only** — pipe content in or use heredoc.
+Content-writing commands read from **stdin only** — pipe content in or use heredoc.
 
-> **Warning:** `flicknote modify <id>` without `--section` **replaces the entire note content** with stdin. To edit only a section, always use `--section <id>`.
+### Replace (overwrite)
+
+> `flicknote replace <id>` overwrites the whole note or a whole section including its heading. Prefer `modify` for precision edits.
 
 ```bash
-# Replace entire note content (stdin required)
-echo "Completely new content" | flicknote modify abc12345  # ⚠️ replaces ENTIRE note
-cat updated.md | flicknote modify abc12345
+# Replace entire note content
+echo "new content" | flicknote replace abc12345
 
-# Replace a section by ID (stdin = body only, heading is preserved)
-# stdin must NOT start with # — errors if it does (use --with-heading instead)
-echo "updated body content" | flicknote modify abc12345 --section 3K
+# Replace a section (stdin MUST start with a heading — heading level is capped at original)
+echo "## New Heading
+new body" | flicknote replace abc12345 --section 3K
+```
 
-# Replace a section including new heading (stdin MUST start with #)
-echo "## New Name\nupdated content" | flicknote modify abc12345 --section 3K --with-heading
+`--section` requires stdin to start with an ATX or setext heading.
 
+### Modify (edit-mode + metadata)
+
+> `flicknote modify <id>` does precision string-replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata.
+
+```bash
+# Edit mode: exact-string replacement (fails on zero or multiple matches)
+cat <<'EDIT' | flicknote modify abc12345
+===BEFORE===
+old text (exactly as in the note, whitespace-sensitive)
+===AFTER===
+new text
+EDIT
+
+# Scope to a section (scope = full section including heading)
+cat <<'EDIT' | flicknote modify abc12345 --section 3K
+===BEFORE===
+old text inside that section
+===AFTER===
+new text
+EDIT
+
+# Metadata only
+flicknote modify abc12345 --project newproject
+flicknote modify abc12345 --title "New Title"
+flicknote modify abc12345 --flagged
+```
+
+**Rules:**
+- **Exact match, whitespace-sensitive.** No fuzzy fallbacks.
+- **Unique-match required.** If `BEFORE` matches 0 or >1 times, you get a clear error. Add surrounding context to disambiguate.
+- **Single block per call.** Multiple `===BEFORE===`/`===AFTER===` pairs in one stdin → error. Run modify multiple times.
+- **Append** is a different command: `echo "more" | flicknote append <id>`
+
+### Other content operations
+
+```bash
 # Append to an existing note (stdin required, adds with \n\n separator)
 echo "more content" | flicknote append abc12345
 
-# Remove a section by ID (use delete --section)
+# Remove a section by ID
 flicknote delete abc12345 --section 3K
 
 # Rename a section heading (preserves heading level and body)
 flicknote rename abc12345 --section 3K "Final"
 
-# Insert content before or after a section by ID (stdin required)
-echo "## Preface\nContext for this doc" | flicknote insert abc12345 --before 3K
-echo "## Analysis\nDeeper dive here" | flicknote insert abc12345 --after aZ
+# Insert content before or after a section by ID
+echo "## Preface" | flicknote insert abc12345 --before 3K
+echo "## Analysis" | flicknote insert abc12345 --after aZ
 ```
 
-Mutating commands print the updated `--tree` after making changes, so you can see new IDs without a separate call.
+Mutating commands print the updated `--tree` after making changes.
 
-**Warning: Don't pipe the default `flicknote content` output through sed/awk.** The section IDs (`[Xk]` annotations) will be included in the output and corrupt diffs. Use `--raw` to get pure markdown without annotations, then pipe safely:
+### Warning
 
-```bash
-flicknote content abc12345 --raw | sed 's/foo/bar/g'
-```
+**Don't pipe `flicknote content` output through sed/awk.** The section IDs (`[Xk]` annotations) will corrupt diffs. Use `--raw` to get pure markdown without annotations.
 
-For content modifications, prefer:
-- Use `flicknote modify` with a heredoc for the new content
-- Use `flicknote insert --before/--after` to add sections
-- Use `flicknote delete --section` to remove sections
+### Migration from legacy `modify`
 
-## Modifying Note Metadata
+| Old                                                           | New                                                 |
+|---------------------------------------------------------------|-----------------------------------------------------|
+| `cat x.md \| flicknote modify <id>`                            | `cat x.md \| flicknote replace <id>`                 |
+| `echo body \| flicknote modify <id> --section <s>`             | `echo "## Heading
+body" \| flicknote replace <id> --section <s>`   |
+| `cat "## X
+..." \| flicknote modify <id> --section <s> --with-heading` | `echo "## X
+..." \| flicknote replace <id> --section <s>`   (heading always in stdin; --with-heading removed) |
 
-```bash
-flicknote modify abc12345 --project newproject   # move note to a different project
-flicknote modify abc12345 --title "New Title"    # rename the note
-flicknote modify abc12345 --flagged              # flag the note
-flicknote modify abc12345 --unflagged            # unflag the note
-
-# Combine content replacement with metadata in one call
-cat updated.md | flicknote modify abc12345 --project newproject --flagged
-```
-
-Projects are created automatically if they don't exist. An empty project is deleted automatically after the last note is moved out.
+`--with-heading` is removed.
 
 ## Opening Notes in Browser
 

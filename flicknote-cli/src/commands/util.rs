@@ -3,6 +3,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
 
+use crate::commands::add::resolve_project;
 use crate::markdown::Document;
 
 /// Byte-range boundaries of a matched section in a markdown document.
@@ -162,6 +163,62 @@ pub(crate) fn read_stdin_required() -> Result<String, CliError> {
     Ok(trimmed)
 }
 
+/// Read optional stdin content. Returns `Ok(None)` when stdin is a terminal or empty.
+pub(crate) fn try_read_stdin() -> Result<Option<String>, CliError> {
+    if std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf)?;
+    Ok(classify_stdin_buf(&buf))
+}
+
+/// Classify a freshly-read stdin buffer. Pure helper, testable without a TTY.
+pub(crate) fn classify_stdin_buf(buf: &str) -> Option<String> {
+    let trimmed = buf.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed = trimmed.trim_end_matches(' ');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Check whether content starts with a markdown heading (ATX or setext).
+pub(crate) fn content_starts_with_heading(content: &str) -> bool {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+    Parser::new_ext(content, Options::empty())
+        .next()
+        .is_some_and(|e| matches!(e, Event::Start(Tag::Heading { .. })))
+}
+
+/// Apply project move. Prints confirmation. Returns name of deleted project if any.
+pub(crate) fn apply_project_move(
+    db: &dyn NoteDb,
+    full_id: &str,
+    project_name: &str,
+) -> Result<Option<String>, CliError> {
+    let old_note = db.find_note(full_id)?;
+    let old_project_id = old_note.project_id.clone();
+    let new_project_id = resolve_project(db, project_name)?;
+
+    if old_project_id.as_deref() == Some(new_project_id.as_str()) {
+        println!(
+            "Note {} is already in project \"{}\".",
+            full_id, project_name
+        );
+        return Ok(None);
+    }
+
+    let deleted_name =
+        db.move_note_to_project(full_id, &new_project_id, old_project_id.as_deref())?;
+    println!("Moved note {} to project \"{}\".", full_id, project_name);
+    if let Some(ref name) = deleted_name {
+        println!("Deleted empty project \"{}\".", name);
+    }
+    Ok(deleted_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -202,5 +259,30 @@ mod tests {
         let doc = parse_markdown(md);
         let result = find_section(&doc, "Alpha", "test-id");
         assert!(result.is_err(), "name string should be rejected");
+    }
+
+    // ── content_starts_with_heading ───────────────────────────────────────────
+
+    #[test]
+    fn test_content_starts_with_heading_atx() {
+        assert!(content_starts_with_heading("# Heading"));
+        assert!(content_starts_with_heading("## Heading"));
+        assert!(content_starts_with_heading("### Heading"));
+        assert!(content_starts_with_heading("\n## Heading after blank"));
+    }
+
+    #[test]
+    fn test_content_starts_with_heading_setext() {
+        assert!(content_starts_with_heading("My Section\n=========="));
+        assert!(content_starts_with_heading("My Section\n----------"));
+        assert!(content_starts_with_heading("\nMy Section\n=========="));
+    }
+
+    #[test]
+    fn test_content_starts_with_heading_false() {
+        assert!(!content_starts_with_heading("plain text"));
+        assert!(!content_starts_with_heading("some body\n\nmore text"));
+        assert!(!content_starts_with_heading(""));
+        assert!(!content_starts_with_heading("#NoSpace"));
     }
 }

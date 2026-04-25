@@ -69,8 +69,20 @@ flicknote get <note-id>
 flicknote get <note-id> --tree
 
 # Edit note content
-echo "updated content" | flicknote replace <note-id>
-echo "updated content" | flicknote replace <note-id> --section <section-id>
+# Precision edit (exact-string replace)
+cat <<'EDIT' | flicknote modify <note-id>
+===BEFORE===
+typo here
+===AFTER===
+fixed here
+EDIT
+
+# Overwrite (full replacement)
+echo "new content" | flicknote replace <note-id>
+echo "## Heading
+body" | flicknote replace <note-id> --section <section-id>
+
+# Append
 echo "more content" | flicknote append <note-id>
 
 # Archive

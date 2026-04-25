@@ -6,10 +6,15 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 5 crates:
 
-- **flicknote-cli** — CLI binary (`flicknote`): add, find, list, count, detail, content, modify, append, delete, restore, rename, insert, upload, project, prompt, keyterm, login, logout, sync, import, api, tui
+- **flicknote-cli** — CLI binary (`flicknote`): add, find, list, count, detail, content, replace, modify, append, delete, restore, rename, insert, upload, project, prompt, keyterm, login, logout, sync, import, api, tui
 - **flicknote-core** — Shared library (db, config, schema, types, session, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)
+
+### modify vs replace
+
+- `flicknote modify <id>` — edit-mode: exact-string replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata
+- `flicknote replace <id>` — overwrite: replaces entire note or section (including heading), plus metadata
 
 ## Build & Test
 
@@ -70,6 +75,8 @@ Commit scope: `ci`
 The `skills/` directory contains command reference docs for AI agents:
 
 - `skills/flicknote.md` — FlickNote CLI command reference
+
+Agent quick reference (SSOT) is deployed via `ttal sync` to `~/.claude/rules/flicknote-cli.md`.
 
 ## Commit Style
 
