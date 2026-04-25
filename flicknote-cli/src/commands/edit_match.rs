@@ -260,7 +260,7 @@ fn snippet_from_line(source: &str, line_num: usize) -> String {
                 l.to_string()
             }
         })
-        .unwrap_or_default()
+        .unwrap_or_else(|| format!("(offset {})", line_num))
 }
 
 /// Build a "closest region" hint for not-found errors.

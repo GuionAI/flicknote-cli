@@ -1,5 +1,7 @@
-use super::add::resolve_project;
-use super::util::{find_section, get_note_content, resolve_note_id, try_read_stdin, write_content};
+use super::util::{
+    apply_project_move, find_section, get_note_content, resolve_note_id, try_read_stdin,
+    write_content,
+};
 use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
@@ -91,23 +93,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
 
     // Step 2: metadata updates — unchanged from original.
     if let Some(ref project_name) = args.project {
-        let old_note = db.find_note(&full_id)?;
-        let old_project_id = old_note.project_id.clone();
-        let new_project_id = resolve_project(db, project_name)?;
-
-        if old_project_id.as_deref() == Some(new_project_id.as_str()) {
-            println!(
-                "Note {} is already in project \"{}\".",
-                full_id, project_name
-            );
-        } else {
-            let deleted_name =
-                db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
-            println!("Moved note {} to project \"{}\".", full_id, project_name);
-            if let Some(name) = deleted_name {
-                println!("Deleted empty project \"{}\".", name);
-            }
-        }
+        apply_project_move(db, &full_id, project_name)?;
     }
 
     if let Some(ref new_title) = args.title {

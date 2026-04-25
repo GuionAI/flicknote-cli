@@ -4,34 +4,11 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use std::io::{IsTerminal, Read};
 
-use super::add::resolve_project;
-use super::util::{find_section, get_note_content, resolve_note_id, write_content};
-
-/// Check whether content starts with a markdown heading (ATX or setext).
-pub(crate) fn content_starts_with_heading(content: &str) -> bool {
-    use pulldown_cmark::{Event, Options, Parser, Tag};
-    Parser::new_ext(content, Options::empty())
-        .next()
-        .is_some_and(|e| matches!(e, Event::Start(Tag::Heading { .. })))
-}
-
-/// Read optional stdin content. Returns `None` if stdin is a terminal or empty.
-fn try_read_stdin() -> Result<Option<String>, CliError> {
-    if std::io::stdin().is_terminal() {
-        return Ok(None);
-    }
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf)?;
-    let trimmed = buf.trim_end_matches(|c: char| c.is_ascii_whitespace());
-    let trimmed = trimmed.trim_end_matches(' ');
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed.to_string()))
-    }
-}
+use super::util::{
+    apply_project_move, content_starts_with_heading, find_section, get_note_content,
+    resolve_note_id, try_read_stdin, write_content,
+};
 
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
@@ -113,23 +90,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Resu
 
     // Step 2: metadata updates.
     if let Some(ref project_name) = args.project {
-        let old_note = db.find_note(&full_id)?;
-        let old_project_id = old_note.project_id.clone();
-        let new_project_id = resolve_project(db, project_name)?;
-
-        if old_project_id.as_deref() == Some(new_project_id.as_str()) {
-            println!(
-                "Note {} is already in project \"{}\".",
-                full_id, project_name
-            );
-        } else {
-            let deleted_name =
-                db.move_note_to_project(&full_id, &new_project_id, old_project_id.as_deref())?;
-            println!("Moved note {} to project \"{}\".", full_id, project_name);
-            if let Some(name) = deleted_name {
-                println!("Deleted empty project \"{}\".", name);
-            }
-        }
+        apply_project_move(db, &full_id, project_name)?;
     }
 
     if let Some(ref new_title) = args.title {
@@ -152,40 +113,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Resu
 mod tests {
     use super::*;
 
-    // ── content_starts_with_heading ───────────────────────────────────────────
-
-    #[test]
-    fn test_content_starts_with_heading_atx() {
-        assert!(content_starts_with_heading("# Heading"));
-        assert!(content_starts_with_heading("## Heading"));
-        assert!(content_starts_with_heading("### Heading"));
-        assert!(content_starts_with_heading("\n## Heading after blank"));
-    }
-
-    #[test]
-    fn test_content_starts_with_heading_setext() {
-        assert!(content_starts_with_heading("My Section\n=========="));
-        assert!(content_starts_with_heading("My Section\n----------"));
-        assert!(content_starts_with_heading("\nMy Section\n=========="));
-    }
-
-    #[test]
-    fn test_content_starts_with_heading_false() {
-        assert!(!content_starts_with_heading("plain text"));
-        assert!(!content_starts_with_heading("some body\n\nmore text"));
-        assert!(!content_starts_with_heading(""));
-        assert!(!content_starts_with_heading("#NoSpace"));
-    }
-
-    // ── replace_entire_section integration ────────────────────────────────────
-
-    #[test]
-    fn test_replace_section_requires_heading() {
-        // body-only stdin with --section → error containing "heading".
-        let _content = "## Old Title\n\nold body.";
-        let new_body = "new body without heading";
-        assert!(!content_starts_with_heading(new_body));
-    }
+    // ── heading validation is tested in util::tests ─────────────────────────────
 
     #[test]
     fn test_replace_section_setext_atx() {
