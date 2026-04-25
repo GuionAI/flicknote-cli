@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+echo "==> Running pre-commit checks..."
+
+echo "==> Checking formatting..."
+cargo fmt --check
+
+echo "==> pre-commit checks passed"

@@ -34,8 +34,18 @@ license-files = []
 crate = "flicknote-sync"
 expression = "MIT"
 license-files = []
+[[licenses.clarify]]
+crate = "powersync_test_utils"
+expression = "MIT"
+license-files = []
+
 [bans]
 multiple-versions = "warn"
+skip = [
+    # powersync_test_utils is a dev-only crate from the fork workspace.
+    # No license field in synthesized manifest; not reachable in release builds.
+    { crate = "powersync_test_utils", ignore = ["unlicensed"], reason = "dev-only test helper, not in release builds" },
+]
 wildcards = "allow"
 
 [advisories]
@@ -46,4 +56,3 @@ ignore = []
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
-allow-git = []

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -e
+
+echo "==> Running pre-push checks..."
+
+echo "==> Running clippy..."
+cargo clippy --all-targets --all-features -- -D warnings
+
+echo "==> Running cargo-deny..."
+cargo deny check
+
+echo "==> pre-push checks passed"

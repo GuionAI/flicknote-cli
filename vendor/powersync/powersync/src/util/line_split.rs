@@ -113,6 +113,19 @@ mod test {
     }
 
     #[test]
+    fn splits_crlf_lines() {
+        let bytes = Bytes::copy_from_slice(b"hello\r\nworld\r\n");
+        let mut lines = LineSplitter::from(stream::once(Ok(bytes)).boxed());
+
+        let next = future::block_on(async { lines.try_next().await }).unwrap();
+        assert_eq!(next.unwrap(), "hello");
+        let next = future::block_on(async { lines.try_next().await }).unwrap();
+        assert_eq!(next.unwrap(), "world");
+        let next = future::block_on(async { lines.try_next().await }).unwrap();
+        assert!(next.is_none());
+    }
+
+    #[test]
     fn splits_lines_separate_events() {
         let mut lines = LineSplitter::from(
             stream::iter(vec![
