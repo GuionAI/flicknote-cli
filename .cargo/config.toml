@@ -1,0 +1,5 @@
+[build]
+# Use sccache to cache rustc invocations across worktrees and builds.
+# Install with `brew install sccache` (see README "Build performance").
+# CI installs sccache via mozilla-actions/sccache-action.
+rustc-wrapper = "sccache"

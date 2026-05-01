@@ -37,6 +37,26 @@ cargo build --release
 cargo install --path flicknote-cli
 ```
 
+### Build performance (optional)
+
+Fresh git worktrees rebuild from scratch by default. Speed this up with [sccache](https://github.com/mozilla/sccache), which caches rustc invocations across worktrees and across projects on the same machine:
+
+```bash
+brew install sccache
+```
+
+The repo's `.cargo/config.toml` already wires sccache as `RUSTC_WRAPPER`. Verify after a build:
+
+```bash
+cargo build
+sccache --show-stats
+```
+
+Notes:
+- Cache lives at `~/.cache/sccache` by default (override with `SCCACHE_DIR`).
+- sccache and incremental compilation are complementary — sccache handles dependency builds (which cargo never incremental-compiles anyway), incremental handles local workspace crates. Leave `CARGO_INCREMENTAL` alone.
+- If cache hit rate is poor across worktrees, it's likely proc-macros baking in absolute paths; add `--remap-path-prefix` flags as a follow-up if it bites.
+
 ## Install
 
 ### Homebrew (macOS + Linux)
