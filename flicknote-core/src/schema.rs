@@ -55,6 +55,22 @@ pub fn app_schema() -> Schema {
                         type_name: "TEXT".into(),
                     }],
                 },
+                Index {
+                    name: "notes_deleted_at_idx".into(),
+                    columns: vec![IndexedColumn {
+                        name: "deleted_at".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
+                Index {
+                    name: "notes_updated_at_idx".into(),
+                    columns: vec![IndexedColumn {
+                        name: "updated_at".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
             ];
         },
     ));
@@ -115,7 +131,26 @@ pub fn app_schema() -> Schema {
             Column::text("type"),
             Column::text("value"),
         ],
-        |_| {},
+        |t| {
+            t.indexes = vec![
+                Index {
+                    name: "note_extractions_note_id_idx".into(),
+                    columns: vec![IndexedColumn {
+                        name: "note_id".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
+                Index {
+                    name: "note_extractions_type_idx".into(),
+                    columns: vec![IndexedColumn {
+                        name: "type".into(),
+                        ascending: true,
+                        type_name: "TEXT".into(),
+                    }],
+                },
+            ];
+        },
     ));
 
     schema.tables.push(Table::create(
