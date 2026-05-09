@@ -26,9 +26,17 @@ make test
 # Lint + format check
 make check
 
+# Refresh sqlx offline metadata after SQL macro changes
+make sqlx-prepare
+
 # Install to ~/.cargo/bin
 make install
 ```
+
+CI sets `SQLX_OFFLINE=true`. After adding or changing `sqlx::query!`,
+`query_as!`, or `query_scalar!` macros, run `make sqlx-prepare` and commit
+the generated sqlx metadata. Runtime-built `sqlx::query` calls are checked at
+build time for Rust types, but sqlx does not emit offline metadata for them.
 
 Or directly with cargo:
 

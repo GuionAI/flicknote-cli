@@ -1,5 +1,6 @@
+use async_trait::async_trait;
 #[cfg(feature = "powersync")]
-use rusqlite::{params, types::ToSql};
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 #[cfg(feature = "powersync")]
 use crate::db::Database;
@@ -42,32 +43,38 @@ pub(crate) fn validate_id_prefix(prefix: &str) -> Result<(), CliError> {
 
 // ─── NoteDb trait ────────────────────────────────────────────────────────────
 
+#[async_trait(?Send)]
 pub trait NoteDb {
     fn user_id(&self) -> &str;
 
     // Note resolution
-    fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError>;
-    fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError>;
+    async fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError>;
+    async fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError>;
 
     // Note reads
-    fn find_note(&self, id: &str) -> Result<Note, CliError>;
-    fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
-    fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
-    fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError>;
-    fn search_notes(
+    async fn find_note(&self, id: &str) -> Result<Note, CliError>;
+    async fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
+    async fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
+    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError>;
+    async fn search_notes(
         &self,
         keywords: &[String],
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<Note>, CliError>;
 
     // Note writes
-    fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError>;
+    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError>;
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
-    fn update_note_content(&self, id: &str, content: &str, requeue: bool) -> Result<(), CliError>;
+    async fn update_note_content(
+        &self,
+        id: &str,
+        content: &str,
+        requeue: bool,
+    ) -> Result<(), CliError>;
     /// Set deleted_at to the given timestamp, or NULL when `deleted_at` is None.
     /// `now` is used for the `updated_at` column and must match the timestamp
     /// used in the hook payload so subscribers see consistent values.
-    fn set_note_deleted_at(
+    async fn set_note_deleted_at(
         &self,
         id: &str,
         deleted_at: Option<&str>,
@@ -77,21 +84,21 @@ pub trait NoteDb {
     /// Restore the most recently deleted note (sets deleted_at = NULL).
     /// Returns `Ok(())` for both "note restored" and "nothing to undo" — callers
     /// cannot distinguish the two cases.
-    fn undo_last_delete(&self) -> Result<(), CliError>;
+    async fn undo_last_delete(&self) -> Result<(), CliError>;
 
     // Project reads
-    fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError>;
-    fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError>;
-    fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError>;
-    fn find_project(&self, id: &str) -> Result<Project, CliError>;
-    fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError>;
+    async fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError>;
+    async fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError>;
+    async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError>;
+    async fn find_project(&self, id: &str) -> Result<Project, CliError>;
+    async fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError>;
 
     // Project writes
-    fn create_project(&self, name: &str) -> Result<String, CliError>;
+    async fn create_project(&self, name: &str) -> Result<String, CliError>;
 
     /// Move a note to a different project. Returns the deleted project name if the old
     /// project is now empty. Returns `NoteNotFound` if no such note exists.
-    fn move_note_to_project(
+    async fn move_note_to_project(
         &self,
         note_id: &str,
         new_project_id: &str,
@@ -99,7 +106,7 @@ pub trait NoteDb {
     ) -> Result<Option<String>, CliError>;
 
     /// Update project metadata. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
-    fn update_project(
+    async fn update_project(
         &self,
         id: &str,
         prompt_id: Option<Option<&str>>,
@@ -108,24 +115,24 @@ pub trait NoteDb {
     ) -> Result<(), CliError>;
 
     /// Delete (archive) a project by ID. Returns `ProjectNotFound` if no such project exists.
-    fn delete_project(&self, id: &str) -> Result<(), CliError>;
+    async fn delete_project(&self, id: &str) -> Result<(), CliError>;
 
     // Note metadata writes
     /// Update a note's title. Returns `NoteNotFound` if no such note exists.
-    fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError>;
+    async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError>;
     /// Update a note's flagged status. Returns `NoteNotFound` if no such note exists.
-    fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError>;
+    async fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError>;
 
     // Note reads (extended)
-    fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError>;
-    fn list_note_topics(
+    async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError>;
+    async fn list_note_topics(
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError>;
 
     // Prompt operations
-    fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError>;
-    fn insert_prompt(
+    async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError>;
+    async fn insert_prompt(
         &self,
         id: &str,
         title: &str,
@@ -133,20 +140,20 @@ pub trait NoteDb {
         prompt: &str,
         now: &str,
     ) -> Result<(), CliError>;
-    fn find_prompt(&self, id: &str) -> Result<Prompt, CliError>;
-    fn list_prompts(&self) -> Result<Vec<Prompt>, CliError>;
-    fn update_prompt(
+    async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError>;
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError>;
+    async fn update_prompt(
         &self,
         id: &str,
         title: Option<&str>,
         description: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<(), CliError>;
-    fn delete_prompt(&self, id: &str) -> Result<(), CliError>;
+    async fn delete_prompt(&self, id: &str) -> Result<(), CliError>;
 
     // Keyterm operations
-    fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError>;
-    fn insert_keyterm(
+    async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError>;
+    async fn insert_keyterm(
         &self,
         id: &str,
         name: &str,
@@ -154,16 +161,16 @@ pub trait NoteDb {
         content: Option<&str>,
         now: &str,
     ) -> Result<(), CliError>;
-    fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError>;
-    fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError>;
-    fn update_keyterm(
+    async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError>;
+    async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError>;
+    async fn update_keyterm(
         &self,
         id: &str,
         name: Option<&str>,
         description: Option<&str>,
         content: Option<&str>,
     ) -> Result<(), CliError>;
-    fn delete_keyterm(&self, id: &str) -> Result<(), CliError>;
+    async fn delete_keyterm(&self, id: &str) -> Result<(), CliError>;
 }
 
 // ─── SqliteBackend ───────────────────────────────────────────────────────────
@@ -282,108 +289,133 @@ const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, 
 const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
 
 #[cfg(feature = "powersync")]
+const NOTE_COLUMNS: &str = "id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at";
+#[cfg(feature = "powersync")]
+async fn resolve_sqlite_id(
+    pool: &SqlitePool,
+    sql: &str,
+    user_id: &str,
+    prefix: &str,
+    ambiguous: &str,
+    missing: impl FnOnce() -> CliError,
+) -> Result<String, CliError> {
+    let rows = sqlx::query_scalar::<_, String>(sql)
+        .bind(user_id)
+        .bind(format!("{prefix}%"))
+        .fetch_all(pool)
+        .await?;
+
+    match rows.as_slice() {
+        [_, _, ..] => Err(CliError::Other(format!(
+            "Ambiguous {ambiguous} prefix: {prefix}"
+        ))),
+        [id] => Ok(id.clone()),
+        [] => Err(missing()),
+    }
+}
+
+#[cfg(feature = "powersync")]
+async fn sqlite_exists(
+    pool: &SqlitePool,
+    sql: &str,
+    user_id: &str,
+    id: &str,
+) -> Result<bool, CliError> {
+    let exists = sqlx::query_scalar::<_, i64>(sql)
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(exists.is_some())
+}
+
+#[cfg(feature = "powersync")]
+#[async_trait(?Send)]
 impl NoteDb for SqliteBackend {
     fn user_id(&self) -> &str {
         &self.user_id
     }
 
-    fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError> {
+    async fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError> {
         validate_id_prefix(prefix)?;
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_RESOLVE)?;
-            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
-            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-            let second = rows.next()?.is_some();
-            match (first, second) {
-                (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
-                (Some(id), false) => Ok(id),
-                (None, _) => Err(CliError::NoteNotFound {
-                    id: prefix.to_string(),
-                }),
-            }
-        })
+        resolve_sqlite_id(
+            &self.db.pool,
+            SQ_RESOLVE,
+            &self.user_id,
+            prefix,
+            "ID",
+            || CliError::NoteNotFound {
+                id: prefix.to_string(),
+            },
+        )
+        .await
     }
 
-    fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError> {
+    async fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError> {
         validate_id_prefix(prefix)?;
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_RESOLVE_ARCHIVED)?;
-            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
-            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-            let second = rows.next()?.is_some();
-            match (first, second) {
-                (Some(_), true) => Err(CliError::Other(format!("Ambiguous ID prefix: {prefix}"))),
-                (Some(id), false) => Ok(id),
-                (None, _) => Err(CliError::NoteNotFound {
-                    id: prefix.to_string(),
-                }),
-            }
-        })
+        resolve_sqlite_id(
+            &self.db.pool,
+            SQ_RESOLVE_ARCHIVED,
+            &self.user_id,
+            prefix,
+            "ID",
+            || CliError::NoteNotFound {
+                id: prefix.to_string(),
+            },
+        )
+        .await
     }
 
-    fn find_note(&self, id: &str) -> Result<Note, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(Note::from_row(row)?),
-                None => Err(CliError::NoteNotFound { id: id.to_string() }),
-            }
-        })
+    async fn find_note(&self, id: &str) -> Result<Note, CliError> {
+        sqlx::query_as::<_, Note>(SQ_FIND)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
     }
 
-    fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_ARCHIVED)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(Note::from_row(row)?),
-                None => Err(CliError::NoteNotFound { id: id.to_string() }),
-            }
-        })
+    async fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
+        sqlx::query_as::<_, Note>(SQ_FIND_ARCHIVED)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
     }
 
-    fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_CONTENT)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(row.get::<_, Option<String>>(0)?),
-                None => Err(CliError::NoteNotFound { id: id.to_string() }),
-            }
-        })
+    async fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError> {
+        sqlx::query_scalar::<_, Option<String>>(SQ_FIND_CONTENT)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
     }
 
-    fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
-        self.db.read(|conn| {
-            let archive_cond = if filter.archived {
-                "deleted_at IS NOT NULL"
-            } else {
-                "deleted_at IS NULL"
-            };
-            let mut sql = format!("SELECT * FROM notes WHERE user_id = ? AND {archive_cond}");
-            let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
-
-            if let Some(t) = filter.note_type {
-                sql.push_str(" AND type = ?");
-                params_vec.push(Box::new(t.to_string()));
-            }
-            if let Some(pid) = filter.project_id {
-                sql.push_str(" AND project_id = ?");
-                params_vec.push(Box::new(pid.to_string()));
-            }
-            sql.push_str(" ORDER BY created_at DESC LIMIT ?");
-            params_vec.push(Box::new(filter.limit));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let param_refs: Vec<&dyn ToSql> =
-                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
+        let archive_cond = if filter.archived {
+            "deleted_at IS NOT NULL"
+        } else {
+            "deleted_at IS NULL"
+        };
+        let mut qb = QueryBuilder::<Sqlite>::new(format!(
+            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id = "
+        ));
+        qb.push_bind(&self.user_id).push(" AND ").push(archive_cond);
+        if let Some(t) = filter.note_type {
+            qb.push(" AND type = ").push_bind(t);
+        }
+        if let Some(pid) = filter.project_id {
+            qb.push(" AND project_id = ").push_bind(pid);
+        }
+        qb.push(" ORDER BY created_at DESC LIMIT ")
+            .push_bind(i64::from(filter.limit));
+        Ok(qb.build_query_as::<Note>().fetch_all(&self.db.pool).await?)
     }
 
-    fn search_notes(
+    async fn search_notes(
         &self,
         keywords: &[String],
         filter: &NoteFilter<'_>,
@@ -404,398 +436,418 @@ impl NoteDb for SqliteBackend {
             .collect();
         let keywords_clause = keyword_blocks.join(" OR ");
         let mut sql = format!(
-            "SELECT * FROM notes WHERE user_id = ? AND {archive_cond} AND ({keywords_clause})"
+            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id = ? AND {archive_cond} AND ({keywords_clause})"
         );
         if filter.project_id.is_some() {
             sql.push_str(" AND project_id = ?");
         }
         sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
-        self.db.read(|conn| {
-            let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
-            for kw in keywords {
-                let pattern = format!("%{kw}%");
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern.clone()));
-                params_vec.push(Box::new(pattern));
-            }
-            if let Some(pid) = filter.project_id {
-                params_vec.push(Box::new(pid.to_string()));
-            }
-            params_vec.push(Box::new(filter.limit));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let param_refs: Vec<&dyn ToSql> =
-                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), Note::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| CliError::Other(format!("Failed to read note rows: {e}")))
-        })
+        let mut query = sqlx::query_as::<_, Note>(&sql).bind(&self.user_id);
+        for kw in keywords {
+            let pattern = format!("%{kw}%");
+            query = query
+                .bind(pattern.clone())
+                .bind(pattern.clone())
+                .bind(pattern);
+        }
+        if let Some(pid) = filter.project_id {
+            query = query.bind(pid);
+        }
+        Ok(query
+            .bind(i64::from(filter.limit))
+            .fetch_all(&self.db.pool)
+            .await?)
     }
 
-    fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            conn.execute(
-                SQ_INSERT,
-                params![
-                    req.id,
-                    self.user_id,
-                    req.note_type,
-                    req.status,
-                    req.title,
-                    req.content,
-                    req.metadata,
-                    req.project_id,
-                    req.now,
-                    req.now
-                ],
-            )?;
-            Ok(())
-        })
+    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
+        sqlx::query(SQ_INSERT)
+            .bind(req.id)
+            .bind(&self.user_id)
+            .bind(req.note_type)
+            .bind(req.status)
+            .bind(req.title)
+            .bind(req.content)
+            .bind(req.metadata)
+            .bind(req.project_id)
+            .bind(req.now)
+            .bind(req.now)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn update_note_content(&self, id: &str, content: &str, requeue: bool) -> Result<(), CliError> {
+    async fn update_note_content(
+        &self,
+        id: &str,
+        content: &str,
+        requeue: bool,
+    ) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.db.write(|conn| {
-            if requeue {
-                conn.execute(
-                    SQ_UPDATE_CONTENT_REQUEUE,
-                    params![content, now, self.user_id, id],
-                )?;
-            } else {
-                conn.execute(SQ_UPDATE_CONTENT, params![content, now, self.user_id, id])?;
-            }
-            Ok(())
-        })
+        let sql = if requeue {
+            SQ_UPDATE_CONTENT_REQUEUE
+        } else {
+            SQ_UPDATE_CONTENT
+        };
+        sqlx::query(sql)
+            .bind(content)
+            .bind(now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn set_note_deleted_at(
+    async fn set_note_deleted_at(
         &self,
         id: &str,
         deleted_at: Option<&str>,
         now: &str,
     ) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            if let Some(ts) = deleted_at {
-                conn.execute(SQ_SET_DELETED_AT, params![ts, now, self.user_id, id])?;
-            } else {
-                conn.execute(SQ_SET_DELETED_AT_NULL, params![now, self.user_id, id])?;
-            }
-            Ok(())
-        })
+        if let Some(ts) = deleted_at {
+            sqlx::query(SQ_SET_DELETED_AT)
+                .bind(ts)
+                .bind(now)
+                .bind(&self.user_id)
+                .bind(id)
+                .execute(&self.db.pool)
+                .await?;
+        } else {
+            sqlx::query(SQ_SET_DELETED_AT_NULL)
+                .bind(now)
+                .bind(&self.user_id)
+                .bind(id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
     }
 
-    fn undo_last_delete(&self) -> Result<(), CliError> {
+    async fn undo_last_delete(&self) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.db.write(|conn| {
-            conn.execute(SQ_UNDO_DELETE, params![&now, &self.user_id])?;
-            Ok(())
-        })
+        sqlx::query(SQ_UNDO_DELETE)
+            .bind(now)
+            .bind(&self.user_id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_PROJECT)?;
-            let mut rows = stmt.query(params![self.user_id, name])?;
-            match rows.next()? {
-                Some(row) => Ok(Some(row.get::<_, String>(0)?)),
-                None => Ok(None),
-            }
-        })
+    async fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError> {
+        Ok(sqlx::query_scalar::<_, String>(SQ_FIND_PROJECT)
+            .bind(&self.user_id)
+            .bind(name)
+            .fetch_optional(&self.db.pool)
+            .await?)
     }
 
-    fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_PROJECT_NAME)?;
-            let mut rows = stmt.query(params![self.user_id, project_id])?;
-            match rows.next()? {
-                Some(row) => Ok(Some(row.get::<_, String>(0)?)),
-                None => Ok(None),
-            }
-        })
+    async fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError> {
+        Ok(sqlx::query_scalar::<_, String>(SQ_FIND_PROJECT_NAME)
+            .bind(&self.user_id)
+            .bind(project_id)
+            .fetch_optional(&self.db.pool)
+            .await?)
     }
 
-    fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
+    async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
         let sql = if archived {
             SQ_LIST_PROJECTS_ARCHIVED
         } else {
             SQ_LIST_PROJECTS_ACTIVE
         };
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(sql)?;
-            let rows = stmt.query_map(params![self.user_id], Project::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+        Ok(sqlx::query_as::<_, Project>(sql)
+            .bind(&self.user_id)
+            .fetch_all(&self.db.pool)
+            .await?)
     }
 
-    fn create_project(&self, name: &str) -> Result<String, CliError> {
+    async fn create_project(&self, name: &str) -> Result<String, CliError> {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        self.db.write(|conn| {
-            conn.execute(SQ_CREATE_PROJECT, params![id, self.user_id, name, now])?;
-            Ok(())
-        })?;
+        sqlx::query(SQ_CREATE_PROJECT)
+            .bind(&id)
+            .bind(&self.user_id)
+            .bind(name)
+            .bind(now)
+            .execute(&self.db.pool)
+            .await?;
         Ok(id)
     }
 
-    fn move_note_to_project(
+    async fn move_note_to_project(
         &self,
         note_id: &str,
         new_project_id: &str,
         old_project_id: Option<&str>,
     ) -> Result<Option<String>, CliError> {
-        self.db.write(|conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
-            // return 0 even on successful updates. Use a pre-SELECT to verify
-            // the note exists first.
-            let exists = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
-                .query(params![self.user_id, note_id])?
-                .next()?
-                .is_some();
-            if !exists {
-                return Err(CliError::NoteNotFound {
-                    id: note_id.to_string(),
-                });
-            }
-            conn.execute(
-                SQ_UPDATE_PROJECT,
-                params![new_project_id, now, self.user_id, note_id],
-            )?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut tx = self.db.pool.begin().await?;
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+        )
+        .bind(&self.user_id)
+        .bind(note_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .is_some();
+        if !exists {
+            return Err(CliError::NoteNotFound {
+                id: note_id.to_string(),
+            });
+        }
 
-            let Some(old_pid) = old_project_id else {
-                return Ok(None);
-            };
+        sqlx::query(SQ_UPDATE_PROJECT)
+            .bind(new_project_id)
+            .bind(now)
+            .bind(&self.user_id)
+            .bind(note_id)
+            .execute(&mut *tx)
+            .await?;
 
-            let count: i64 = conn
-                .prepare(SQ_COUNT_PROJECT_NOTES)?
-                .query_row(params![self.user_id, old_pid], |r| r.get(0))?;
+        let Some(old_pid) = old_project_id else {
+            tx.commit().await?;
+            return Ok(None);
+        };
 
-            if count == 0 {
-                let old_name: Option<String> = match conn
-                    .prepare(SQ_FIND_PROJECT_NAME)?
-                    .query_row(params![self.user_id, old_pid], |r| r.get::<_, String>(0))
-                {
-                    Ok(name) => Some(name),
-                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
-                    Err(e) => return Err(CliError::from(e)),
-                };
-                conn.execute(SQ_DELETE_PROJECT, params![self.user_id, old_pid])?;
-                Ok(old_name)
-            } else {
-                Ok(None)
-            }
-        })
+        let count = sqlx::query_scalar::<_, i64>(SQ_COUNT_PROJECT_NOTES)
+            .bind(&self.user_id)
+            .bind(old_pid)
+            .fetch_one(&mut *tx)
+            .await?;
+
+        if count != 0 {
+            tx.commit().await?;
+            return Ok(None);
+        }
+
+        let old_name = sqlx::query_scalar::<_, String>(SQ_FIND_PROJECT_NAME)
+            .bind(&self.user_id)
+            .bind(old_pid)
+            .fetch_optional(&mut *tx)
+            .await?;
+        sqlx::query(SQ_DELETE_PROJECT)
+            .bind(&self.user_id)
+            .bind(old_pid)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(old_name)
     }
 
-    fn find_project(&self, id: &str) -> Result<Project, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_PROJECT_BY_ID)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(Project::from_row(row)?),
-                None => Err(CliError::Other(format!("Project not found: {id}"))),
-            }
-        })
+    async fn find_project(&self, id: &str) -> Result<Project, CliError> {
+        sqlx::query_as::<_, Project>(SQ_FIND_PROJECT_BY_ID)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::Other(format!("Project not found: {id}")))
     }
 
-    fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
+    async fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
         validate_id_prefix(prefix)?;
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_RESOLVE_PROJECT)?;
-            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
-            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-            let second = rows.next()?.is_some();
-            match (first, second) {
-                (Some(_), true) => Err(CliError::Other(format!(
-                    "Ambiguous project ID prefix: {prefix}"
-                ))),
-                (Some(id), false) => Ok(id),
-                (None, _) => Err(CliError::Other(format!("Project not found: {prefix}"))),
-            }
-        })
+        resolve_sqlite_id(
+            &self.db.pool,
+            SQ_RESOLVE_PROJECT,
+            &self.user_id,
+            prefix,
+            "project ID",
+            || CliError::Other(format!("Project not found: {prefix}")),
+        )
+        .await
     }
 
-    fn update_project(
+    async fn update_project(
         &self,
         id: &str,
         prompt_id: Option<Option<&str>>,
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError> {
-        // All UPDATEs run inside a single write closure; PowerSync wraps each
-        // write call in an implicit transaction, so this is atomic (#4).
-        self.db.write(|conn| {
-            if let Some(val) = prompt_id {
-                if let Some(v) = val {
-                    conn.execute(
-                        "UPDATE projects SET prompt_id = ? WHERE user_id = ? AND id = ?",
-                        params![v, self.user_id, id],
-                    )?;
-                } else {
-                    conn.execute(
-                        "UPDATE projects SET prompt_id = NULL WHERE user_id = ? AND id = ?",
-                        params![self.user_id, id],
-                    )?;
-                }
+        let mut tx = self.db.pool.begin().await?;
+        if let Some(val) = prompt_id {
+            if let Some(v) = val {
+                sqlx::query("UPDATE projects SET prompt_id = ? WHERE user_id = ? AND id = ?")
+                    .bind(v)
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("UPDATE projects SET prompt_id = NULL WHERE user_id = ? AND id = ?")
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
             }
-            if let Some(val) = keyterm_id {
-                if let Some(v) = val {
-                    conn.execute(
-                        "UPDATE projects SET keyterm_id = ? WHERE user_id = ? AND id = ?",
-                        params![v, self.user_id, id],
-                    )?;
-                } else {
-                    conn.execute(
-                        "UPDATE projects SET keyterm_id = NULL WHERE user_id = ? AND id = ?",
-                        params![self.user_id, id],
-                    )?;
-                }
+        }
+        if let Some(val) = keyterm_id {
+            if let Some(v) = val {
+                sqlx::query("UPDATE projects SET keyterm_id = ? WHERE user_id = ? AND id = ?")
+                    .bind(v)
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("UPDATE projects SET keyterm_id = NULL WHERE user_id = ? AND id = ?")
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
             }
-            if let Some(val) = color {
-                if let Some(v) = val {
-                    conn.execute(
-                        "UPDATE projects SET color = ? WHERE user_id = ? AND id = ?",
-                        params![v, self.user_id, id],
-                    )?;
-                } else {
-                    conn.execute(
-                        "UPDATE projects SET color = NULL WHERE user_id = ? AND id = ?",
-                        params![self.user_id, id],
-                    )?;
-                }
+        }
+        if let Some(val) = color {
+            if let Some(v) = val {
+                sqlx::query("UPDATE projects SET color = ? WHERE user_id = ? AND id = ?")
+                    .bind(v)
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                sqlx::query("UPDATE projects SET color = NULL WHERE user_id = ? AND id = ?")
+                    .bind(&self.user_id)
+                    .bind(id)
+                    .execute(&mut *tx)
+                    .await?;
             }
-            Ok(())
-        })
+        }
+        tx.commit().await?;
+        Ok(())
     }
 
-    fn delete_project(&self, id: &str) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            // SQLite INSTEAD OF triggers on PowerSync views cause `execute` to
-            // return 0 even on successful updates. Use a pre-SELECT.
-            let exists = conn
-                .prepare("SELECT 1 FROM projects WHERE user_id = ? AND id = ? LIMIT 1")?
-                .query(params![self.user_id, id])?
-                .next()?
-                .is_some();
-            if !exists {
-                return Err(CliError::Other(format!("Project not found: {id}")));
-            }
-            conn.execute(SQ_ARCHIVE_PROJECT, params![self.user_id, id])?;
-            Ok(())
-        })
+    async fn delete_project(&self, id: &str) -> Result<(), CliError> {
+        if !sqlite_exists(
+            &self.db.pool,
+            "SELECT 1 FROM projects WHERE user_id = ? AND id = ? LIMIT 1",
+            &self.user_id,
+            id,
+        )
+        .await?
+        {
+            return Err(CliError::Other(format!("Project not found: {id}")));
+        }
+        sqlx::query(SQ_ARCHIVE_PROJECT)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
+    async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.db.write(|conn| {
-            let exists = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
-                .query(params![self.user_id, id])?
-                .next()?
-                .is_some();
-            if !exists {
-                return Err(CliError::NoteNotFound { id: id.to_string() });
-            }
-            conn.execute(SQ_UPDATE_TITLE, params![title, now, self.user_id, id])?;
-            Ok(())
-        })
+        if !sqlite_exists(
+            &self.db.pool,
+            "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+            &self.user_id,
+            id,
+        )
+        .await?
+        {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        sqlx::query(SQ_UPDATE_TITLE)
+            .bind(title)
+            .bind(now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError> {
+    async fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let val: i64 = if flagged { 1 } else { 0 };
-        self.db.write(|conn| {
-            let exists = conn
-                .prepare("SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1")?
-                .query(params![self.user_id, id])?
-                .next()?
-                .is_some();
-            if !exists {
-                return Err(CliError::NoteNotFound { id: id.to_string() });
-            }
-            conn.execute(SQ_UPDATE_FLAGGED, params![val, now, self.user_id, id])?;
-            Ok(())
-        })
+        if !sqlite_exists(
+            &self.db.pool,
+            "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+            &self.user_id,
+            id,
+        )
+        .await?
+        {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        sqlx::query(SQ_UPDATE_FLAGGED)
+            .bind(val)
+            .bind(now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
+    async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
         let base_sql = if filter.archived {
             SQ_COUNT_NOTES_ARCHIVED
         } else {
             SQ_COUNT_NOTES
         };
-        let mut sql = base_sql.to_string();
-        let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
+        let mut qb = QueryBuilder::<Sqlite>::new(base_sql);
+        qb.push_bind(&self.user_id);
 
         if let Some(t) = filter.note_type {
-            sql.push_str(" AND type = ?");
-            params_vec.push(Box::new(t.to_string()));
+            qb.push(" AND type = ").push_bind(t);
         }
         if let Some(pid) = filter.project_id {
-            sql.push_str(" AND project_id = ?");
-            params_vec.push(Box::new(pid.to_string()));
+            qb.push(" AND project_id = ").push_bind(pid);
         }
 
-        self.db.read(|conn| {
-            let param_refs: Vec<&dyn ToSql> =
-                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
-            let count: i64 = conn.query_row(&sql, param_refs.as_slice(), |r| r.get(0))?;
-            count
-                .try_into()
-                .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
-        })
+        let count = qb
+            .build_query_scalar::<i64>()
+            .fetch_one(&self.db.pool)
+            .await?;
+        count
+            .try_into()
+            .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
     }
 
-    fn list_note_topics(
+    async fn list_note_topics(
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
         if note_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let placeholders = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-        let sql = format!("{SQ_LIST_TOPICS}({placeholders})");
-        self.db.read(|conn| {
-            let mut params_vec: Vec<Box<dyn ToSql>> = vec![Box::new(self.user_id.clone())];
-            for id in note_ids {
-                params_vec.push(Box::new(id.to_string()));
-            }
-            let param_refs: Vec<&dyn ToSql> =
-                params_vec.iter().map(std::convert::AsRef::as_ref).collect();
-            let mut stmt = conn.prepare(&sql)?;
-            let mut map: std::collections::HashMap<String, Vec<String>> =
-                std::collections::HashMap::new();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                let (note_id, value) = row?;
-                map.entry(note_id).or_default().push(value);
-            }
-            Ok(map)
-        })
+        let mut qb = QueryBuilder::<Sqlite>::new(SQ_LIST_TOPICS);
+        qb.push_bind(&self.user_id);
+        qb.push("(");
+        let mut separated = qb.separated(", ");
+        for id in note_ids {
+            separated.push_bind(*id);
+        }
+        separated.push_unseparated(")");
+
+        let rows = qb
+            .build_query_as::<(String, String)>()
+            .fetch_all(&self.db.pool)
+            .await?;
+        let mut map: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for (note_id, value) in rows {
+            map.entry(note_id).or_default().push(value);
+        }
+        Ok(map)
     }
 
-    fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
+    async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
         validate_id_prefix(prefix)?;
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_RESOLVE_PROMPT)?;
-            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
-            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-            let second = rows.next()?.is_some();
-            match (first, second) {
-                (Some(_), true) => Err(CliError::Other(format!(
-                    "Ambiguous prompt ID prefix: {prefix}"
-                ))),
-                (Some(id), false) => Ok(id),
-                (None, _) => Err(CliError::Other(format!("Prompt not found: {prefix}"))),
-            }
-        })
+        resolve_sqlite_id(
+            &self.db.pool,
+            SQ_RESOLVE_PROMPT,
+            &self.user_id,
+            prefix,
+            "prompt ID",
+            || CliError::Other(format!("Prompt not found: {prefix}")),
+        )
+        .await
     }
 
-    fn insert_prompt(
+    async fn insert_prompt(
         &self,
         id: &str,
         title: &str,
@@ -803,89 +855,91 @@ impl NoteDb for SqliteBackend {
         prompt: &str,
         now: &str,
     ) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            conn.execute(
-                SQ_INSERT_PROMPT,
-                params![id, self.user_id, title, description, prompt, now],
-            )?;
-            Ok(())
-        })
+        sqlx::query(SQ_INSERT_PROMPT)
+            .bind(id)
+            .bind(&self.user_id)
+            .bind(title)
+            .bind(description)
+            .bind(prompt)
+            .bind(now)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_PROMPT)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(Prompt::from_row(row)?),
-                None => Err(CliError::Other(format!("Prompt not found: {id}"))),
-            }
-        })
+    async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
+        sqlx::query_as::<_, Prompt>(SQ_FIND_PROMPT)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::Other(format!("Prompt not found: {id}")))
     }
 
-    fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_LIST_PROMPTS)?;
-            let rows = stmt.query_map(params![self.user_id], Prompt::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+    async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
+        Ok(sqlx::query_as::<_, Prompt>(SQ_LIST_PROMPTS)
+            .bind(&self.user_id)
+            .fetch_all(&self.db.pool)
+            .await?)
     }
 
-    fn update_prompt(
+    async fn update_prompt(
         &self,
         id: &str,
         title: Option<&str>,
         description: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            if let Some(v) = title {
-                conn.execute(
-                    "UPDATE prompts SET title = ? WHERE user_id = ? AND id = ?",
-                    params![v, self.user_id, id],
-                )?;
-            }
-            if let Some(v) = description {
-                conn.execute(
-                    "UPDATE prompts SET description = ? WHERE user_id = ? AND id = ?",
-                    params![v, self.user_id, id],
-                )?;
-            }
-            if let Some(v) = prompt {
-                conn.execute(
-                    "UPDATE prompts SET prompt = ? WHERE user_id = ? AND id = ?",
-                    params![v, self.user_id, id],
-                )?;
-            }
-            Ok(())
-        })
+        if let Some(v) = title {
+            sqlx::query("UPDATE prompts SET title = ? WHERE user_id = ? AND id = ?")
+                .bind(v)
+                .bind(&self.user_id)
+                .bind(id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        if let Some(v) = description {
+            sqlx::query("UPDATE prompts SET description = ? WHERE user_id = ? AND id = ?")
+                .bind(v)
+                .bind(&self.user_id)
+                .bind(id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        if let Some(v) = prompt {
+            sqlx::query("UPDATE prompts SET prompt = ? WHERE user_id = ? AND id = ?")
+                .bind(v)
+                .bind(&self.user_id)
+                .bind(id)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
     }
 
-    fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            conn.execute(SQ_DELETE_PROMPT, params![self.user_id, id])?;
-            Ok(())
-        })
+    async fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
+        sqlx::query(SQ_DELETE_PROMPT)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
+    async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
         validate_id_prefix(prefix)?;
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_RESOLVE_KEYTERM)?;
-            let mut rows = stmt.query(params![self.user_id, format!("{prefix}%")])?;
-            let first = rows.next()?.map(|r| r.get::<_, String>(0)).transpose()?;
-            let second = rows.next()?.is_some();
-            match (first, second) {
-                (Some(_), true) => Err(CliError::Other(format!(
-                    "Ambiguous keyterm ID prefix: {prefix}"
-                ))),
-                (Some(id), false) => Ok(id),
-                (None, _) => Err(CliError::Other(format!("Keyterm not found: {prefix}"))),
-            }
-        })
+        resolve_sqlite_id(
+            &self.db.pool,
+            SQ_RESOLVE_KEYTERM,
+            &self.user_id,
+            prefix,
+            "keyterm ID",
+            || CliError::Other(format!("Keyterm not found: {prefix}")),
+        )
+        .await
     }
 
-    fn insert_keyterm(
+    async fn insert_keyterm(
         &self,
         id: &str,
         name: &str,
@@ -893,35 +947,36 @@ impl NoteDb for SqliteBackend {
         content: Option<&str>,
         now: &str,
     ) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            conn.execute(
-                SQ_INSERT_KEYTERM,
-                params![id, self.user_id, name, description, content, now, now],
-            )?;
-            Ok(())
-        })
+        sqlx::query(SQ_INSERT_KEYTERM)
+            .bind(id)
+            .bind(&self.user_id)
+            .bind(name)
+            .bind(description)
+            .bind(content)
+            .bind(now)
+            .bind(now)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 
-    fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_FIND_KEYTERM)?;
-            let mut rows = stmt.query(params![self.user_id, id])?;
-            match rows.next()? {
-                Some(row) => Ok(Keyterm::from_row(row)?),
-                None => Err(CliError::Other(format!("Keyterm not found: {id}"))),
-            }
-        })
+    async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
+        sqlx::query_as::<_, Keyterm>(SQ_FIND_KEYTERM)
+            .bind(&self.user_id)
+            .bind(id)
+            .fetch_optional(&self.db.pool)
+            .await?
+            .ok_or_else(|| CliError::Other(format!("Keyterm not found: {id}")))
     }
 
-    fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-        self.db.read(|conn| {
-            let mut stmt = conn.prepare(SQ_LIST_KEYTERMS)?;
-            let rows = stmt.query_map(params![self.user_id], Keyterm::from_row)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(CliError::from)
-        })
+    async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
+        Ok(sqlx::query_as::<_, Keyterm>(SQ_LIST_KEYTERMS)
+            .bind(&self.user_id)
+            .fetch_all(&self.db.pool)
+            .await?)
     }
 
-    fn update_keyterm(
+    async fn update_keyterm(
         &self,
         id: &str,
         name: Option<&str>,
@@ -929,25 +984,49 @@ impl NoteDb for SqliteBackend {
         content: Option<&str>,
     ) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.db.write(|conn| {
-            if let Some(v) = name {
-                conn.execute("UPDATE keyterms SET name = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
-            }
-            if let Some(v) = description {
-                conn.execute("UPDATE keyterms SET description = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
-            }
-            if let Some(v) = content {
-                conn.execute("UPDATE keyterms SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?", params![v, now, self.user_id, id])?;
-            }
-            Ok(())
-        })
+        if let Some(v) = name {
+            sqlx::query(
+                "UPDATE keyterms SET name = ?, updated_at = ? WHERE user_id = ? AND id = ?",
+            )
+            .bind(v)
+            .bind(&now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        }
+        if let Some(v) = description {
+            sqlx::query(
+                "UPDATE keyterms SET description = ?, updated_at = ? WHERE user_id = ? AND id = ?",
+            )
+            .bind(v)
+            .bind(&now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        }
+        if let Some(v) = content {
+            sqlx::query(
+                "UPDATE keyterms SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?",
+            )
+            .bind(v)
+            .bind(&now)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        }
+        Ok(())
     }
 
-    fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
-        self.db.write(|conn| {
-            conn.execute(SQ_DELETE_KEYTERM, params![self.user_id, id])?;
-            Ok(())
-        })
+    async fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
+        sqlx::query(SQ_DELETE_KEYTERM)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 }
 
@@ -958,7 +1037,7 @@ impl NoteDb for SqliteBackend {
 mod tests {
     use super::*;
 
-    fn make_backend() -> SqliteBackend {
+    async fn make_backend() -> SqliteBackend {
         use crate::config::{Config, ConfigPaths};
         use tempfile::tempdir;
 
@@ -979,7 +1058,7 @@ mod tests {
             },
         };
 
-        let db = Database::open_local(&config).unwrap();
+        let db = Database::open_local(&config).await.unwrap();
         let user_id = "test-user-id".to_string();
 
         // Keep dir alive by leaking it — acceptable in tests
@@ -988,9 +1067,9 @@ mod tests {
         SqliteBackend { db, user_id }
     }
 
-    #[test]
-    fn test_sqlite_backend_insert_and_find() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_sqlite_backend_insert_and_find() {
+        let backend = make_backend().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -1005,31 +1084,32 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
         // Find by full id
-        let note = backend.find_note(&id).unwrap();
+        let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.id, id);
         assert_eq!(note.title, Some("Hello world".to_string()));
 
         // Find by prefix
         let prefix = &id[..8];
-        let resolved = backend.resolve_note_id(prefix).unwrap();
+        let resolved = backend.resolve_note_id(prefix).await.unwrap();
         assert_eq!(resolved, id);
 
         // Find content
-        let content = backend.find_note_content(&id).unwrap();
+        let content = backend.find_note_content(&id).await.unwrap();
         assert_eq!(content, Some("# Hello world\n\nContent here.".to_string()));
     }
 
-    #[test]
-    fn test_sqlite_backend_list_filter() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_sqlite_backend_list_filter() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
 
         // Create two projects
-        let proj_a = backend.create_project("Project A").unwrap();
-        let proj_b = backend.create_project("Project B").unwrap();
+        let proj_a = backend.create_project("Project A").await.unwrap();
+        let proj_b = backend.create_project("Project B").await.unwrap();
 
         // Insert notes in different projects
         let id_a = uuid::Uuid::new_v4().to_string();
@@ -1044,6 +1124,7 @@ mod tests {
                 project_id: Some(&proj_a),
                 now: &now,
             })
+            .await
             .unwrap();
 
         let id_b = uuid::Uuid::new_v4().to_string();
@@ -1058,6 +1139,7 @@ mod tests {
                 project_id: Some(&proj_b),
                 now: &now,
             })
+            .await
             .unwrap();
 
         // List by project A
@@ -1068,14 +1150,15 @@ mod tests {
                 archived: false,
                 limit: 20,
             })
+            .await
             .unwrap();
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].id, id_a);
     }
 
-    #[test]
-    fn test_sqlite_backend_search_notes() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_sqlite_backend_search_notes() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
 
         let id = uuid::Uuid::new_v4().to_string();
@@ -1090,6 +1173,7 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
         let results = backend
@@ -1102,26 +1186,29 @@ mod tests {
                     limit: 20,
                 },
             )
+            .await
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, id);
 
         // Empty keywords should return Err
-        let err = backend.search_notes(
-            &[],
-            &NoteFilter {
-                project_id: None,
-                note_type: None,
-                archived: false,
-                limit: 20,
-            },
-        );
+        let err = backend
+            .search_notes(
+                &[],
+                &NoteFilter {
+                    project_id: None,
+                    note_type: None,
+                    archived: false,
+                    limit: 20,
+                },
+            )
+            .await;
         assert!(err.is_err());
     }
 
-    #[test]
-    fn test_sqlite_backend_archive() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_sqlite_backend_archive() {
+        let backend = make_backend().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -1136,6 +1223,7 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
         // Verify it appears in active list
@@ -1146,11 +1234,15 @@ mod tests {
                 archived: false,
                 limit: 20,
             })
+            .await
             .unwrap();
         assert!(active.iter().any(|n| n.id == id));
 
         // Archive it
-        backend.set_note_deleted_at(&id, Some(&now), &now).unwrap();
+        backend
+            .set_note_deleted_at(&id, Some(&now), &now)
+            .await
+            .unwrap();
 
         // Should be gone from active
         let active_after = backend
@@ -1160,6 +1252,7 @@ mod tests {
                 archived: false,
                 limit: 20,
             })
+            .await
             .unwrap();
         assert!(!active_after.iter().any(|n| n.id == id));
 
@@ -1171,11 +1264,12 @@ mod tests {
                 archived: true,
                 limit: 20,
             })
+            .await
             .unwrap();
         assert!(archived.iter().any(|n| n.id == id));
 
         // Unarchive
-        backend.set_note_deleted_at(&id, None, &now).unwrap();
+        backend.set_note_deleted_at(&id, None, &now).await.unwrap();
         let active_restored = backend
             .list_notes(&NoteFilter {
                 project_id: None,
@@ -1183,13 +1277,14 @@ mod tests {
                 archived: false,
                 limit: 20,
             })
+            .await
             .unwrap();
         assert!(active_restored.iter().any(|n| n.id == id));
     }
 
-    #[test]
-    fn test_find_archived_note() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_find_archived_note() {
+        let backend = make_backend().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -1204,33 +1299,37 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
         // Not findable via find_archived_note before archiving
-        assert!(backend.find_archived_note(&id).is_err());
+        assert!(backend.find_archived_note(&id).await.is_err());
 
         // Archive it
-        backend.set_note_deleted_at(&id, Some(&now), &now).unwrap();
+        backend
+            .set_note_deleted_at(&id, Some(&now), &now)
+            .await
+            .unwrap();
 
         // Now findable via find_archived_note
-        let note = backend.find_archived_note(&id).unwrap();
+        let note = backend.find_archived_note(&id).await.unwrap();
         assert_eq!(note.id, id);
         assert_eq!(note.title, Some("Archived note".to_string()));
         assert!(note.deleted_at.is_some());
 
         // No longer findable via find_note (active-only)
-        assert!(backend.find_note(&id).is_err());
+        assert!(backend.find_note(&id).await.is_err());
     }
 
     // ─── Fix: PowerSync view-UPDATE zero affected rows ────────────────────
 
-    #[test]
-    fn test_move_note_to_project_ok() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_move_note_to_project_ok() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
         let note_id = uuid::Uuid::new_v4().to_string();
-        let proj_a = backend.create_project("Proj-A").unwrap();
-        let proj_b = backend.create_project("Proj-B").unwrap();
+        let proj_a = backend.create_project("Proj-A").await.unwrap();
+        let proj_b = backend.create_project("Proj-B").await.unwrap();
 
         backend
             .insert_note(&InsertNoteReq {
@@ -1243,29 +1342,32 @@ mod tests {
                 project_id: Some(&proj_a),
                 now: &now,
             })
+            .await
             .unwrap();
 
         // Move to proj_b — should succeed (not return NoteNotFound)
         let result = backend
             .move_note_to_project(&note_id, &proj_b, Some(&proj_a))
+            .await
             .unwrap();
         // This note was the only one in proj_a, so proj_a gets deleted
         assert_eq!(result.as_deref(), Some("Proj-A"));
 
         // Verify the note is now in proj_b
-        let note = backend.find_note(&note_id).unwrap();
+        let note = backend.find_note(&note_id).await.unwrap();
         assert_eq!(note.project_id.as_deref(), Some(proj_b.as_str()));
     }
 
-    #[test]
-    fn test_move_note_to_project_missing_returns_err() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_move_note_to_project_missing_returns_err() {
+        let backend = make_backend().await;
         let fake_id = uuid::Uuid::new_v4().to_string();
-        let proj_a = backend.create_project("Proj-A").unwrap();
-        let proj_b = backend.create_project("Proj-B").unwrap();
+        let proj_a = backend.create_project("Proj-A").await.unwrap();
+        let proj_b = backend.create_project("Proj-B").await.unwrap();
 
         let err = backend
             .move_note_to_project(&fake_id, &proj_b, Some(&proj_a))
+            .await
             .unwrap_err();
         match err {
             CliError::NoteNotFound { id } => assert_eq!(id, fake_id),
@@ -1273,12 +1375,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_move_note_to_project_same_project_noop() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_move_note_to_project_same_project_noop() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
         let note_id = uuid::Uuid::new_v4().to_string();
-        let proj_x = backend.create_project("Proj-X").unwrap();
+        let proj_x = backend.create_project("Proj-X").await.unwrap();
 
         backend
             .insert_note(&InsertNoteReq {
@@ -1291,28 +1393,30 @@ mod tests {
                 project_id: Some(&proj_x),
                 now: &now,
             })
+            .await
             .unwrap();
 
         // Same source and target — should be idempotent, return Ok(None),
         // not delete the project (it still holds the note).
         let result = backend
             .move_note_to_project(&note_id, &proj_x, Some(&proj_x))
+            .await
             .unwrap();
         assert_eq!(result, None, "same-project move should not delete project");
 
         // Verify project still exists and note is still in it
-        let note = backend.find_note(&note_id).unwrap();
+        let note = backend.find_note(&note_id).await.unwrap();
         assert_eq!(note.project_id.as_deref(), Some(proj_x.as_str()));
-        let active = backend.list_projects(false).unwrap();
+        let active = backend.list_projects(false).await.unwrap();
         assert!(
             active.iter().any(|p| p.id == proj_x),
             "project should still exist"
         );
     }
 
-    #[test]
-    fn test_update_note_title_ok() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_update_note_title_ok() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
         let note_id = uuid::Uuid::new_v4().to_string();
 
@@ -1327,16 +1431,20 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
-        backend.update_note_title(&note_id, "New title").unwrap();
-        let note = backend.find_note(&note_id).unwrap();
+        backend
+            .update_note_title(&note_id, "New title")
+            .await
+            .unwrap();
+        let note = backend.find_note(&note_id).await.unwrap();
         assert_eq!(note.title, Some("New title".to_string()));
     }
 
-    #[test]
-    fn test_update_note_flagged_ok() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_update_note_flagged_ok() {
+        let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
         let note_id = uuid::Uuid::new_v4().to_string();
 
@@ -1351,49 +1459,50 @@ mod tests {
                 project_id: None,
                 now: &now,
             })
+            .await
             .unwrap();
 
-        backend.update_note_flagged(&note_id, true).unwrap();
-        let note = backend.find_note(&note_id).unwrap();
+        backend.update_note_flagged(&note_id, true).await.unwrap();
+        let note = backend.find_note(&note_id).await.unwrap();
         assert_eq!(note.is_flagged, Some(1));
 
-        backend.update_note_flagged(&note_id, false).unwrap();
-        let note = backend.find_note(&note_id).unwrap();
+        backend.update_note_flagged(&note_id, false).await.unwrap();
+        let note = backend.find_note(&note_id).await.unwrap();
         assert_eq!(note.is_flagged, Some(0));
     }
 
-    #[test]
-    fn test_delete_project_archives() {
-        let backend = make_backend();
-        let proj_id = backend.create_project("ToDelete").unwrap();
+    #[tokio::test]
+    async fn test_delete_project_archives() {
+        let backend = make_backend().await;
+        let proj_id = backend.create_project("ToDelete").await.unwrap();
 
         // Verify project exists
-        let proj = backend.find_project(&proj_id).unwrap();
+        let proj = backend.find_project(&proj_id).await.unwrap();
         assert_eq!(proj.name, "ToDelete");
 
-        backend.delete_project(&proj_id).unwrap();
+        backend.delete_project(&proj_id).await.unwrap();
 
         // After archive, project should not appear in active list
-        let active = backend.list_projects(false).unwrap();
+        let active = backend.list_projects(false).await.unwrap();
         assert!(
             !active.iter().any(|p| p.id == proj_id),
             "deleted project should not appear in active list"
         );
 
         // Archived list should contain it
-        let archived = backend.list_projects(true).unwrap();
+        let archived = backend.list_projects(true).await.unwrap();
         assert!(
             archived.iter().any(|p| p.id == proj_id),
             "deleted project should appear in archived list"
         );
     }
 
-    #[test]
-    fn test_delete_project_missing_returns_err() {
-        let backend = make_backend();
+    #[tokio::test]
+    async fn test_delete_project_missing_returns_err() {
+        let backend = make_backend().await;
         let fake_id = uuid::Uuid::new_v4().to_string();
 
-        let err = backend.delete_project(&fake_id).unwrap_err();
+        let err = backend.delete_project(&fake_id).await.unwrap_err();
         match err {
             CliError::Other(msg) => assert!(msg.contains("not found"), "got: {msg}"),
             _ => panic!("expected Other error, got {:?}", err),

@@ -21,32 +21,29 @@ pub(crate) struct DetailArgs {
     archived: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DetailArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &DetailArgs,
+) -> Result<(), CliError> {
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(CliError::NoteNotFound {
             id: args.id.clone(),
         });
     }
 
-    let resolve = |id: &str| {
-        if args.archived {
-            db.resolve_archived_note_id(id)
-        } else {
-            db.resolve_note_id(id)
-        }
-    };
-    let find = |id: &str| {
-        if args.archived {
-            db.find_archived_note(id)
-        } else {
-            db.find_note(id)
-        }
-    };
-
     // Tree view or section extraction — both need parsed markdown
     if args.tree || args.section.is_some() {
-        let full_id = resolve(&args.id)?;
-        let note = find(&full_id)?;
+        let full_id = if args.archived {
+            db.resolve_archived_note_id(&args.id).await?
+        } else {
+            db.resolve_note_id(&args.id).await?
+        };
+        let note = if args.archived {
+            db.find_archived_note(&full_id).await?
+        } else {
+            db.find_note(&full_id).await?
+        };
         let content = note.content.as_deref().unwrap_or("");
 
         if args.tree {
@@ -88,11 +85,19 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DetailArgs) -> Resul
         return Ok(());
     }
 
-    let full_id = resolve(&args.id)?;
-    let note = find(&full_id)?;
+    let full_id = if args.archived {
+        db.resolve_archived_note_id(&args.id).await?
+    } else {
+        db.resolve_note_id(&args.id).await?
+    };
+    let note = if args.archived {
+        db.find_archived_note(&full_id).await?
+    } else {
+        db.find_note(&full_id).await?
+    };
 
     let project_name = if let Some(ref pid) = note.project_id {
-        db.find_project_name_by_id(pid)?
+        db.find_project_name_by_id(pid).await?
     } else {
         None
     };

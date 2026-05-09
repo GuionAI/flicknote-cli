@@ -26,17 +26,12 @@ pub enum CliError {
     #[error("PowerSync error: {0}")]
     PowerSync(#[from] powersync::error::PowerSyncError),
 
-    #[cfg(feature = "powersync")]
     #[error("Database error: {0}")]
-    Sqlite(#[from] rusqlite::Error),
+    Sqlx(#[from] sqlx::Error),
 
     #[cfg(feature = "storage-pgwire")]
     #[error("Database error: {0}")]
     Database(String),
-
-    #[cfg(feature = "storage-pgwire")]
-    #[error("Database error: {}", format_pg_err(.0))]
-    Pg(#[from] postgres::Error),
 
     #[error("HTTP error: {0}")]
     Http(String),
@@ -49,11 +44,4 @@ pub enum CliError {
 
     #[error("{0}")]
     Other(String),
-}
-
-#[cfg(feature = "storage-pgwire")]
-pub(crate) fn format_pg_err(e: &postgres::Error) -> String {
-    e.as_db_error()
-        .map(std::string::ToString::to_string)
-        .unwrap_or_else(|| e.to_string())
 }

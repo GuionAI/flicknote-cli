@@ -19,7 +19,7 @@ pub(crate) struct AddArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<(), CliError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -70,7 +70,7 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
 
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name)?)
+        Some(resolve_project(db, name).await?)
     } else {
         None
     };
@@ -94,16 +94,19 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
         })
         .to_string();
 
-        if let Err(e) = db.insert_note(&InsertNoteReq {
-            id: &id,
-            note_type,
-            status: "source_queued",
-            title: None,
-            content: None,
-            metadata: Some(&metadata),
-            project_id: project_id.as_deref(),
-            now: &now,
-        }) {
+        if let Err(e) = db
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type,
+                status: "source_queued",
+                title: None,
+                content: None,
+                metadata: Some(&metadata),
+                project_id: project_id.as_deref(),
+                now: &now,
+            })
+            .await
+        {
             #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
             let _ = cleanup_uploaded_file(config, &id);
             return Err(e);
@@ -119,7 +122,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             metadata: Some(&metadata),
             project_id: project_id.as_deref(),
             now: &now,
-        })?;
+        })
+        .await?;
     } else {
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let title_ref = title.as_deref();
@@ -132,7 +136,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
             metadata: None,
             project_id: project_id.as_deref(),
             now: &now,
-        })?;
+        })
+        .await?;
     }
 
     match effective_project.as_deref() {
@@ -143,8 +148,8 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Result<()
 }
 
 /// Resolve project by name. Returns an error with a hint if the project doesn't exist.
-pub(crate) fn resolve_project(db: &dyn NoteDb, name: &str) -> Result<String, CliError> {
-    match db.find_project_by_name(name)? {
+pub(crate) async fn resolve_project(db: &dyn NoteDb, name: &str) -> Result<String, CliError> {
+    match db.find_project_by_name(name).await? {
         Some(id) => Ok(id),
         None => Err(CliError::ProjectNotFound {
             name: name.to_string(),

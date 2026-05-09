@@ -14,12 +14,16 @@ pub(crate) struct DeleteArgs {
     section: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DeleteArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &DeleteArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
 
     if let Some(ref section_id) = args.section {
         // Section deletion — remove the section from content
-        let content = get_note_content(db, &full_id)?;
+        let content = get_note_content(db, &full_id).await?;
         let doc = crate::markdown::parse_markdown(&content);
         let bounds = find_section(&doc, section_id, &args.id)?;
 
@@ -35,7 +39,8 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DeleteArgs) -> Resul
             }
         );
 
-        db.update_note_content(&full_id, new_content.trim(), true)?;
+        db.update_note_content(&full_id, new_content.trim(), true)
+            .await?;
 
         println!(
             "Removed section '{}' from note {}.\n",
@@ -45,7 +50,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &DeleteArgs) -> Resul
     } else {
         // Soft-delete (archive) the note
         let now = chrono::Utc::now().to_rfc3339();
-        db.set_note_deleted_at(&full_id, Some(&now), &now)?;
+        db.set_note_deleted_at(&full_id, Some(&now), &now).await?;
         println!("Deleted note {}.", full_id);
     }
 

@@ -16,9 +16,13 @@ pub(crate) struct RenameArgs {
     name: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &RenameArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
-    let content = get_note_content(db, &full_id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &RenameArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
+    let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, &args.section, &args.id)?;
 
@@ -34,7 +38,8 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &RenameArgs) -> Resul
     let after = &content[heading_line_end..];
     let new_content = format!("{before}{new_heading_line}{after}");
 
-    db.update_note_content(&full_id, new_content.trim(), true)?;
+    db.update_note_content(&full_id, new_content.trim(), true)
+        .await?;
 
     println!(
         "Renamed '{}' → '{}' in note {}.\n",

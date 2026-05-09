@@ -62,17 +62,17 @@ struct DeletePromptArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, args: &PromptArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, args: &PromptArgs) -> Result<(), CliError> {
     match &args.command {
-        PromptCommands::Add(a) => add(db, a),
-        PromptCommands::List => list(db),
-        PromptCommands::Detail(a) => detail(db, a),
-        PromptCommands::Modify(a) => modify(db, a),
-        PromptCommands::Delete(a) => delete(db, a),
+        PromptCommands::Add(a) => add(db, a).await,
+        PromptCommands::List => list(db).await,
+        PromptCommands::Detail(a) => detail(db, a).await,
+        PromptCommands::Modify(a) => modify(db, a).await,
+        PromptCommands::Delete(a) => delete(db, a).await,
     }
 }
 
-fn add(db: &dyn NoteDb, args: &AddPromptArgs) -> Result<(), CliError> {
+async fn add(db: &dyn NoteDb, args: &AddPromptArgs) -> Result<(), CliError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     db.insert_prompt(
@@ -81,13 +81,14 @@ fn add(db: &dyn NoteDb, args: &AddPromptArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         &args.prompt,
         &now,
-    )?;
+    )
+    .await?;
     println!("Created prompt \"{}\" ({}).", args.title, id);
     Ok(())
 }
 
-fn list(db: &dyn NoteDb) -> Result<(), CliError> {
-    let prompts = db.list_prompts()?;
+async fn list(db: &dyn NoteDb) -> Result<(), CliError> {
+    let prompts = db.list_prompts().await?;
     if prompts.is_empty() {
         println!("No prompts found.");
         return Ok(());
@@ -105,9 +106,9 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
     Ok(())
 }
 
-fn detail(db: &dyn NoteDb, args: &DetailPromptArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_prompt_id(&args.id)?;
-    let prompt = db.find_prompt(&full_id)?;
+async fn detail(db: &dyn NoteDb, args: &DetailPromptArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_prompt_id(&args.id).await?;
+    let prompt = db.find_prompt(&full_id).await?;
 
     println!("ID:          {}", prompt.id);
     println!("Title:       {}", prompt.title);
@@ -126,8 +127,8 @@ fn detail(db: &dyn NoteDb, args: &DetailPromptArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn modify(db: &dyn NoteDb, args: &ModifyPromptArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_prompt_id(&args.id)?;
+async fn modify(db: &dyn NoteDb, args: &ModifyPromptArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_prompt_id(&args.id).await?;
 
     if args.title.is_none() && args.prompt.is_none() && args.description.is_none() {
         return Err(CliError::Other(
@@ -140,14 +141,15 @@ fn modify(db: &dyn NoteDb, args: &ModifyPromptArgs) -> Result<(), CliError> {
         args.title.as_deref(),
         args.description.as_deref(),
         args.prompt.as_deref(),
-    )?;
+    )
+    .await?;
     println!("Updated prompt {}.", full_id);
     Ok(())
 }
 
-fn delete(db: &dyn NoteDb, args: &DeletePromptArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_prompt_id(&args.id)?;
-    db.delete_prompt(&full_id)?;
+async fn delete(db: &dyn NoteDb, args: &DeletePromptArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_prompt_id(&args.id).await?;
+    db.delete_prompt(&full_id).await?;
     println!("Deleted prompt {}.", full_id);
     Ok(())
 }

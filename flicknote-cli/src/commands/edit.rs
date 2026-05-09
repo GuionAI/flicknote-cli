@@ -79,9 +79,9 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
 }
 
 /// Edit an existing note.
-fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, id)?;
-    let note = db.find_note(&full_id)?;
+async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, id).await?;
+    let note = db.find_note(&full_id).await?;
 
     let content = note.content.as_deref().unwrap_or("");
 
@@ -117,7 +117,7 @@ fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliE
     let old_title = note.title.as_deref();
     match (new_title.as_deref(), old_title) {
         (Some(t), old) if Some(t) != old => {
-            db.update_note_title(&full_id, t)?;
+            db.update_note_title(&full_id, t).await?;
             println!("Updated title for note {}.", full_id);
         }
         (None, Some(_)) => {
@@ -131,7 +131,7 @@ fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliE
     // Update content if it changed
     let old_content = note.content.as_deref().unwrap_or("");
     if new_body != old_content {
-        write_content(db, &full_id, &new_body)?;
+        write_content(db, &full_id, &new_body).await?;
         println!("Updated content for note {}.", full_id);
     }
 
@@ -139,7 +139,7 @@ fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliE
 }
 
 /// Create a new note from editor.
-fn create_from_editor(
+async fn create_from_editor(
     db: &dyn NoteDb,
     _config: &Config,
     project_arg: &Option<String>,
@@ -158,7 +158,7 @@ fn create_from_editor(
 
     let effective_project = resolve_project_arg(project_arg);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name)?)
+        Some(resolve_project(db, name).await?)
     } else {
         None
     };
@@ -173,7 +173,8 @@ fn create_from_editor(
         metadata: None,
         project_id: project_id.as_deref(),
         now: &now,
-    })?;
+    })
+    .await?;
 
     match effective_project.as_deref() {
         Some(name) => println!("Created note {} in project \"{name}\".", id),
@@ -182,15 +183,15 @@ fn create_from_editor(
     Ok(())
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &EditArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &EditArgs) -> Result<(), CliError> {
     if args.id.is_some() && args.project.is_some() {
         return Err(CliError::Other(
             "--project is only valid when creating a new note (omit the ID)".into(),
         ));
     }
     match &args.id {
-        Some(id) => edit_existing(db, config, id),
-        None => create_from_editor(db, config, &args.project),
+        Some(id) => edit_existing(db, config, id).await,
+        None => create_from_editor(db, config, &args.project).await,
     }
 }
 
