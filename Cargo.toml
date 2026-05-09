@@ -14,7 +14,7 @@ version = "0.1.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time"] }
-powersync = { git = "https://github.com/GuionAI/powersync-native", rev = "41dcdfb12f03ca0ce5caa61660f6b1d923568eaf", features = ["tokio", "reqwest"] }
+powersync = { git = "https://github.com/GuionAI/powersync-native", tag = "v0.0.5-guion.1", features = ["tokio", "reqwest"] }
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["load_extension", "bundled"] }
 async-trait = "0.1"
