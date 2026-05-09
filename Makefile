@@ -21,7 +21,7 @@ clippy:
 	cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
 
 sqlx-prepare:
-	cargo sqlx prepare --workspace -- --all-features --all-targets
+	./scripts/sqlx-prepare.sh
 
 install: install-rust install-tui
 

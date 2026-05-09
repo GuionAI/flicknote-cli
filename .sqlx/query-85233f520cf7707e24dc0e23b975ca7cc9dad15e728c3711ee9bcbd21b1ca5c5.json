@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE prompts SET\n                title = CASE WHEN $2::bool THEN $3::text ELSE title END,\n                description = CASE WHEN $4::bool THEN $5::text ELSE description END,\n                prompt = CASE WHEN $6::bool THEN $7::text ELSE prompt END\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "85233f520cf7707e24dc0e23b975ca7cc9dad15e728c3711ee9bcbd21b1ca5c5"
+}

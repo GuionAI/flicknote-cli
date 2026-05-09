@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE prompts SET\n                title = CASE WHEN ? THEN ? ELSE title END,\n                description = CASE WHEN ? THEN ? ELSE description END,\n                prompt = CASE WHEN ? THEN ? ELSE prompt END\n            WHERE user_id = ? AND id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "62f4c6245f098a68fe9f2de912f3ab9ef42a5e85b403f8f821dc80e5c084c369"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE projects SET\n                prompt_id = CASE WHEN ? THEN ? ELSE prompt_id END,\n                keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END,\n                color = CASE WHEN ? THEN ? ELSE color END\n            WHERE user_id = ? AND id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "7a52e93de063c6638b3f9be0143c437e407f4d4f64d8e6c8db66984f1edec359"
+}

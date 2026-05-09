@@ -35,8 +35,12 @@ make install
 
 CI sets `SQLX_OFFLINE=true`. After adding or changing `sqlx::query!`,
 `query_as!`, or `query_scalar!` macros, run `make sqlx-prepare` and commit
-the generated sqlx metadata. Runtime-built `sqlx::query` calls are checked at
-build time for Rust types, but sqlx does not emit offline metadata for them.
+the generated `.sqlx` metadata. The prepare script checks SQLite against a
+local fixture DB and pgwire against a disposable `postgres:16-alpine` container,
+then merges both metadata sets.
+
+Runtime-built `sqlx::query` calls are checked at build time for Rust types, but
+sqlx does not emit offline metadata for them.
 
 Or directly with cargo:
 

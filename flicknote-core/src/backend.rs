@@ -201,31 +201,6 @@ const SQ_FIND_ARCHIVED: &str = "SELECT id, user_id, type, status, title, content
 #[cfg(feature = "powersync")]
 const SQ_FIND_CONTENT: &str =
     "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
-#[cfg(feature = "powersync")]
-const SQ_LIST_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
-     FROM notes \
-     WHERE user_id = ? \
-       AND (deleted_at IS NOT NULL) = ? \
-       AND (? IS NULL OR type = ?) \
-       AND (? IS NULL OR project_id = ?) \
-     ORDER BY created_at DESC LIMIT ?";
-#[cfg(feature = "powersync")]
-const SQ_SEARCH_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
-     FROM notes \
-     WHERE user_id = ? \
-       AND (deleted_at IS NOT NULL) = ? \
-       AND (? IS NULL OR type = ?) \
-       AND (? IS NULL OR project_id = ?) \
-       AND EXISTS ( \
-         SELECT 1 FROM json_each(?) AS kw \
-         WHERE title LIKE '%' || kw.value || '%' \
-            OR content LIKE '%' || kw.value || '%' \
-            OR summary LIKE '%' || kw.value || '%' \
-       ) \
-     ORDER BY updated_at DESC LIMIT ?";
-#[cfg(feature = "powersync")]
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -275,12 +250,6 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_COUNT_NOTES: &str = "SELECT COUNT(*) FROM notes \
-     WHERE user_id = ? \
-       AND (deleted_at IS NOT NULL) = ? \
-       AND (? IS NULL OR type = ?) \
-       AND (? IS NULL OR project_id = ?)";
-#[cfg(feature = "powersync")]
 const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions \
      WHERE user_id = ? AND type = 'topic' AND note_id IN (SELECT value FROM json_each(?))";
 
@@ -290,13 +259,6 @@ const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id,
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id LIKE ? LIMIT 2";
 #[cfg(feature = "powersync")]
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
-#[cfg(feature = "powersync")]
-const SQ_UPDATE_PROJECT_METADATA: &str = "UPDATE projects SET \
-     prompt_id = CASE WHEN ? THEN ? ELSE prompt_id END, \
-     keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END, \
-     color = CASE WHEN ? THEN ? ELSE color END \
-     WHERE user_id = ? AND id = ?";
-
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id LIKE ? LIMIT 2";
 #[cfg(feature = "powersync")]
@@ -308,13 +270,6 @@ const SQ_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, c
 #[cfg(feature = "powersync")]
 const SQ_DELETE_PROMPT: &str = "DELETE FROM prompts WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_UPDATE_PROMPT: &str = "UPDATE prompts SET \
-     title = CASE WHEN ? THEN ? ELSE title END, \
-     description = CASE WHEN ? THEN ? ELSE description END, \
-     prompt = CASE WHEN ? THEN ? ELSE prompt END \
-     WHERE user_id = ? AND id = ?";
-
-#[cfg(feature = "powersync")]
 const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id LIKE ? LIMIT 2";
 #[cfg(feature = "powersync")]
 const SQ_INSERT_KEYTERM: &str = "INSERT INTO keyterms (id, user_id, name, description, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)";
@@ -324,14 +279,6 @@ const SQ_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, c
 const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? ORDER BY name";
 #[cfg(feature = "powersync")]
 const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
-#[cfg(feature = "powersync")]
-const SQ_UPDATE_KEYTERM: &str = "UPDATE keyterms SET \
-     name = CASE WHEN ? THEN ? ELSE name END, \
-     description = CASE WHEN ? THEN ? ELSE description END, \
-     content = CASE WHEN ? THEN ? ELSE content END, \
-     updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END \
-     WHERE user_id = ? AND id = ?";
-
 #[cfg(feature = "powersync")]
 async fn resolve_sqlite_id(
     pool: &SqlitePool,
@@ -436,16 +383,44 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
-        Ok(sqlx::query_as::<_, Note>(SQ_LIST_NOTES)
-            .bind(&self.user_id)
-            .bind(filter.archived)
-            .bind(filter.note_type)
-            .bind(filter.note_type)
-            .bind(filter.project_id)
-            .bind(filter.project_id)
-            .bind(i64::from(filter.limit))
-            .fetch_all(&self.db.pool)
-            .await?)
+        let limit = i64::from(filter.limit);
+        Ok(sqlx::query_as!(
+            Note,
+            r#"
+            SELECT
+                id as "id!",
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
+                title,
+                content,
+                summary,
+                is_flagged,
+                project_id,
+                metadata,
+                source,
+                external_id,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM notes
+            WHERE user_id = ?
+              AND (deleted_at IS NOT NULL) = ?
+              AND (? IS NULL OR type = ?)
+              AND (? IS NULL OR project_id = ?)
+            ORDER BY created_at DESC
+            LIMIT ?
+            "#,
+            self.user_id,
+            filter.archived,
+            filter.note_type,
+            filter.note_type,
+            filter.project_id,
+            filter.project_id,
+            limit,
+        )
+        .fetch_all(&self.db.pool)
+        .await?)
     }
 
     async fn search_notes(
@@ -458,18 +433,52 @@ impl NoteDb for SqliteBackend {
                 "search_notes requires at least one keyword".into(),
             ));
         }
+        let limit = i64::from(filter.limit);
         let keywords_json = serde_json::to_string(keywords)?;
-        Ok(sqlx::query_as::<_, Note>(SQ_SEARCH_NOTES)
-            .bind(&self.user_id)
-            .bind(filter.archived)
-            .bind(filter.note_type)
-            .bind(filter.note_type)
-            .bind(filter.project_id)
-            .bind(filter.project_id)
-            .bind(keywords_json)
-            .bind(i64::from(filter.limit))
-            .fetch_all(&self.db.pool)
-            .await?)
+        Ok(sqlx::query_as!(
+            Note,
+            r#"
+            SELECT
+                id as "id!",
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
+                title,
+                content,
+                summary,
+                is_flagged,
+                project_id,
+                metadata,
+                source,
+                external_id,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM notes
+            WHERE user_id = ?
+              AND (deleted_at IS NOT NULL) = ?
+              AND (? IS NULL OR type = ?)
+              AND (? IS NULL OR project_id = ?)
+              AND EXISTS (
+                SELECT 1 FROM json_each(?) AS kw
+                WHERE title LIKE '%' || kw.value || '%'
+                   OR content LIKE '%' || kw.value || '%'
+                   OR summary LIKE '%' || kw.value || '%'
+              )
+            ORDER BY updated_at DESC
+            LIMIT ?
+            "#,
+            self.user_id,
+            filter.archived,
+            filter.note_type,
+            filter.note_type,
+            filter.project_id,
+            filter.project_id,
+            keywords_json,
+            limit,
+        )
+        .fetch_all(&self.db.pool)
+        .await?)
     }
 
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
@@ -679,17 +688,28 @@ impl NoteDb for SqliteBackend {
             return Ok(());
         }
 
-        sqlx::query(SQ_UPDATE_PROJECT_METADATA)
-            .bind(update_prompt)
-            .bind(prompt_id.flatten())
-            .bind(update_keyterm)
-            .bind(keyterm_id.flatten())
-            .bind(update_color)
-            .bind(color.flatten())
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
+        let prompt_value = prompt_id.flatten();
+        let keyterm_value = keyterm_id.flatten();
+        let color_value = color.flatten();
+        sqlx::query!(
+            r#"
+            UPDATE projects SET
+                prompt_id = CASE WHEN ? THEN ? ELSE prompt_id END,
+                keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END,
+                color = CASE WHEN ? THEN ? ELSE color END
+            WHERE user_id = ? AND id = ?
+            "#,
+            update_prompt,
+            prompt_value,
+            update_keyterm,
+            keyterm_value,
+            update_color,
+            color_value,
+            self.user_id,
+            id,
+        )
+        .execute(&self.db.pool)
+        .await?;
         Ok(())
     }
 
@@ -758,15 +778,24 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
-        let count = sqlx::query_scalar::<_, i64>(SQ_COUNT_NOTES)
-            .bind(&self.user_id)
-            .bind(filter.archived)
-            .bind(filter.note_type)
-            .bind(filter.note_type)
-            .bind(filter.project_id)
-            .bind(filter.project_id)
-            .fetch_one(&self.db.pool)
-            .await?;
+        let count = sqlx::query_scalar!(
+            r#"
+            SELECT COUNT(*) as "count!: i64"
+            FROM notes
+            WHERE user_id = ?
+              AND (deleted_at IS NOT NULL) = ?
+              AND (? IS NULL OR type = ?)
+              AND (? IS NULL OR project_id = ?)
+            "#,
+            self.user_id,
+            filter.archived,
+            filter.note_type,
+            filter.note_type,
+            filter.project_id,
+            filter.project_id,
+        )
+        .fetch_one(&self.db.pool)
+        .await?;
         count
             .try_into()
             .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
@@ -856,17 +885,25 @@ impl NoteDb for SqliteBackend {
             return Ok(());
         }
 
-        sqlx::query(SQ_UPDATE_PROMPT)
-            .bind(update_title)
-            .bind(title)
-            .bind(update_description)
-            .bind(description)
-            .bind(update_prompt)
-            .bind(prompt)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
+        sqlx::query!(
+            r#"
+            UPDATE prompts SET
+                title = CASE WHEN ? THEN ? ELSE title END,
+                description = CASE WHEN ? THEN ? ELSE description END,
+                prompt = CASE WHEN ? THEN ? ELSE prompt END
+            WHERE user_id = ? AND id = ?
+            "#,
+            update_title,
+            title,
+            update_description,
+            description,
+            update_prompt,
+            prompt,
+            self.user_id,
+            id,
+        )
+        .execute(&self.db.pool)
+        .await?;
         Ok(())
     }
 
@@ -944,21 +981,30 @@ impl NoteDb for SqliteBackend {
             return Ok(());
         }
 
-        sqlx::query(SQ_UPDATE_KEYTERM)
-            .bind(update_name)
-            .bind(name)
-            .bind(update_description)
-            .bind(description)
-            .bind(update_content)
-            .bind(content)
-            .bind(update_name)
-            .bind(update_description)
-            .bind(update_content)
-            .bind(now)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
+        sqlx::query!(
+            r#"
+            UPDATE keyterms SET
+                name = CASE WHEN ? THEN ? ELSE name END,
+                description = CASE WHEN ? THEN ? ELSE description END,
+                content = CASE WHEN ? THEN ? ELSE content END,
+                updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END
+            WHERE user_id = ? AND id = ?
+            "#,
+            update_name,
+            name,
+            update_description,
+            description,
+            update_content,
+            content,
+            update_name,
+            update_description,
+            update_content,
+            now,
+            self.user_id,
+            id,
+        )
+        .execute(&self.db.pool)
+        .await?;
         Ok(())
     }
 
