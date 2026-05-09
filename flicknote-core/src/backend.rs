@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 #[cfg(feature = "powersync")]
-use sqlx::{QueryBuilder, Sqlite, SqlitePool};
+use sqlx::SqlitePool;
 
 #[cfg(feature = "powersync")]
 use crate::db::Database;
@@ -202,14 +202,37 @@ const SQ_FIND_ARCHIVED: &str = "SELECT id, user_id, type, status, title, content
 const SQ_FIND_CONTENT: &str =
     "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
+const SQ_LIST_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes \
+     WHERE user_id = ? \
+       AND (deleted_at IS NOT NULL) = ? \
+       AND (? IS NULL OR type = ?) \
+       AND (? IS NULL OR project_id = ?) \
+     ORDER BY created_at DESC LIMIT ?";
+#[cfg(feature = "powersync")]
+const SQ_SEARCH_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes \
+     WHERE user_id = ? \
+       AND (deleted_at IS NOT NULL) = ? \
+       AND (? IS NULL OR type = ?) \
+       AND (? IS NULL OR project_id = ?) \
+       AND EXISTS ( \
+         SELECT 1 FROM json_each(?) AS kw \
+         WHERE title LIKE '%' || kw.value || '%' \
+            OR content LIKE '%' || kw.value || '%' \
+            OR summary LIKE '%' || kw.value || '%' \
+       ) \
+     ORDER BY updated_at DESC LIMIT ?";
+#[cfg(feature = "powersync")]
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 #[cfg(feature = "powersync")]
-const SQ_UPDATE_CONTENT: &str =
-    "UPDATE notes SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?";
-#[cfg(feature = "powersync")]
-const SQ_UPDATE_CONTENT_REQUEUE: &str = "UPDATE notes SET content = ?, status = 'ai_queued', updated_at = ? WHERE user_id = ? AND id = ?";
+const SQ_UPDATE_CONTENT: &str = "UPDATE notes \
+     SET content = ?, status = CASE WHEN ? THEN 'ai_queued' ELSE status END, updated_at = ? \
+     WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
 const SQ_SET_DELETED_AT: &str =
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
@@ -252,12 +275,14 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_COUNT_NOTES: &str = "SELECT COUNT(*) FROM notes WHERE user_id = ? AND deleted_at IS NULL";
+const SQ_COUNT_NOTES: &str = "SELECT COUNT(*) FROM notes \
+     WHERE user_id = ? \
+       AND (deleted_at IS NOT NULL) = ? \
+       AND (? IS NULL OR type = ?) \
+       AND (? IS NULL OR project_id = ?)";
 #[cfg(feature = "powersync")]
-const SQ_COUNT_NOTES_ARCHIVED: &str =
-    "SELECT COUNT(*) FROM notes WHERE user_id = ? AND deleted_at IS NOT NULL";
-#[cfg(feature = "powersync")]
-const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions WHERE user_id = ? AND type = 'topic' AND note_id IN ";
+const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions \
+     WHERE user_id = ? AND type = 'topic' AND note_id IN (SELECT value FROM json_each(?))";
 
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
@@ -265,6 +290,12 @@ const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id,
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id LIKE ? LIMIT 2";
 #[cfg(feature = "powersync")]
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
+const SQ_UPDATE_PROJECT_METADATA: &str = "UPDATE projects SET \
+     prompt_id = CASE WHEN ? THEN ? ELSE prompt_id END, \
+     keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END, \
+     color = CASE WHEN ? THEN ? ELSE color END \
+     WHERE user_id = ? AND id = ?";
 
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id LIKE ? LIMIT 2";
@@ -276,6 +307,12 @@ const SQ_FIND_PROMPT: &str = "SELECT id, user_id, title, description, prompt, cr
 const SQ_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE user_id = ? ORDER BY created_at DESC";
 #[cfg(feature = "powersync")]
 const SQ_DELETE_PROMPT: &str = "DELETE FROM prompts WHERE user_id = ? AND id = ?";
+#[cfg(feature = "powersync")]
+const SQ_UPDATE_PROMPT: &str = "UPDATE prompts SET \
+     title = CASE WHEN ? THEN ? ELSE title END, \
+     description = CASE WHEN ? THEN ? ELSE description END, \
+     prompt = CASE WHEN ? THEN ? ELSE prompt END \
+     WHERE user_id = ? AND id = ?";
 
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id LIKE ? LIMIT 2";
@@ -287,10 +324,14 @@ const SQ_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, c
 const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? ORDER BY name";
 #[cfg(feature = "powersync")]
 const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
-
 #[cfg(feature = "powersync")]
-const NOTE_COLUMNS: &str = "id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at";
+const SQ_UPDATE_KEYTERM: &str = "UPDATE keyterms SET \
+     name = CASE WHEN ? THEN ? ELSE name END, \
+     description = CASE WHEN ? THEN ? ELSE description END, \
+     content = CASE WHEN ? THEN ? ELSE content END, \
+     updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END \
+     WHERE user_id = ? AND id = ?";
+
 #[cfg(feature = "powersync")]
 async fn resolve_sqlite_id(
     pool: &SqlitePool,
@@ -395,24 +436,16 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
-        let archive_cond = if filter.archived {
-            "deleted_at IS NOT NULL"
-        } else {
-            "deleted_at IS NULL"
-        };
-        let mut qb = QueryBuilder::<Sqlite>::new(format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id = "
-        ));
-        qb.push_bind(&self.user_id).push(" AND ").push(archive_cond);
-        if let Some(t) = filter.note_type {
-            qb.push(" AND type = ").push_bind(t);
-        }
-        if let Some(pid) = filter.project_id {
-            qb.push(" AND project_id = ").push_bind(pid);
-        }
-        qb.push(" ORDER BY created_at DESC LIMIT ")
-            .push_bind(i64::from(filter.limit));
-        Ok(qb.build_query_as::<Note>().fetch_all(&self.db.pool).await?)
+        Ok(sqlx::query_as::<_, Note>(SQ_LIST_NOTES)
+            .bind(&self.user_id)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(filter.note_type)
+            .bind(filter.project_id)
+            .bind(filter.project_id)
+            .bind(i64::from(filter.limit))
+            .fetch_all(&self.db.pool)
+            .await?)
     }
 
     async fn search_notes(
@@ -425,36 +458,15 @@ impl NoteDb for SqliteBackend {
                 "search_notes requires at least one keyword".into(),
             ));
         }
-        let archive_cond = if filter.archived {
-            "deleted_at IS NOT NULL"
-        } else {
-            "deleted_at IS NULL"
-        };
-        let keyword_blocks: Vec<String> = keywords
-            .iter()
-            .map(|_| "(title LIKE ? OR content LIKE ? OR summary LIKE ?)".to_string())
-            .collect();
-        let keywords_clause = keyword_blocks.join(" OR ");
-        let mut sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id = ? AND {archive_cond} AND ({keywords_clause})"
-        );
-        if filter.project_id.is_some() {
-            sql.push_str(" AND project_id = ?");
-        }
-        sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
-
-        let mut query = sqlx::query_as::<_, Note>(&sql).bind(&self.user_id);
-        for kw in keywords {
-            let pattern = format!("%{kw}%");
-            query = query
-                .bind(pattern.clone())
-                .bind(pattern.clone())
-                .bind(pattern);
-        }
-        if let Some(pid) = filter.project_id {
-            query = query.bind(pid);
-        }
-        Ok(query
+        let keywords_json = serde_json::to_string(keywords)?;
+        Ok(sqlx::query_as::<_, Note>(SQ_SEARCH_NOTES)
+            .bind(&self.user_id)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(filter.note_type)
+            .bind(filter.project_id)
+            .bind(filter.project_id)
+            .bind(keywords_json)
             .bind(i64::from(filter.limit))
             .fetch_all(&self.db.pool)
             .await?)
@@ -484,13 +496,9 @@ impl NoteDb for SqliteBackend {
         requeue: bool,
     ) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        let sql = if requeue {
-            SQ_UPDATE_CONTENT_REQUEUE
-        } else {
-            SQ_UPDATE_CONTENT
-        };
-        sqlx::query(sql)
+        sqlx::query(SQ_UPDATE_CONTENT)
             .bind(content)
+            .bind(requeue)
             .bind(now)
             .bind(&self.user_id)
             .bind(id)
@@ -664,56 +672,24 @@ impl NoteDb for SqliteBackend {
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError> {
-        let mut tx = self.db.pool.begin().await?;
-        if let Some(val) = prompt_id {
-            if let Some(v) = val {
-                sqlx::query("UPDATE projects SET prompt_id = ? WHERE user_id = ? AND id = ?")
-                    .bind(v)
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            } else {
-                sqlx::query("UPDATE projects SET prompt_id = NULL WHERE user_id = ? AND id = ?")
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
+        let update_prompt = prompt_id.is_some();
+        let update_keyterm = keyterm_id.is_some();
+        let update_color = color.is_some();
+        if !(update_prompt || update_keyterm || update_color) {
+            return Ok(());
         }
-        if let Some(val) = keyterm_id {
-            if let Some(v) = val {
-                sqlx::query("UPDATE projects SET keyterm_id = ? WHERE user_id = ? AND id = ?")
-                    .bind(v)
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            } else {
-                sqlx::query("UPDATE projects SET keyterm_id = NULL WHERE user_id = ? AND id = ?")
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-        }
-        if let Some(val) = color {
-            if let Some(v) = val {
-                sqlx::query("UPDATE projects SET color = ? WHERE user_id = ? AND id = ?")
-                    .bind(v)
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            } else {
-                sqlx::query("UPDATE projects SET color = NULL WHERE user_id = ? AND id = ?")
-                    .bind(&self.user_id)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-            }
-        }
-        tx.commit().await?;
+
+        sqlx::query(SQ_UPDATE_PROJECT_METADATA)
+            .bind(update_prompt)
+            .bind(prompt_id.flatten())
+            .bind(update_keyterm)
+            .bind(keyterm_id.flatten())
+            .bind(update_color)
+            .bind(color.flatten())
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
         Ok(())
     }
 
@@ -782,23 +758,13 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
-        let base_sql = if filter.archived {
-            SQ_COUNT_NOTES_ARCHIVED
-        } else {
-            SQ_COUNT_NOTES
-        };
-        let mut qb = QueryBuilder::<Sqlite>::new(base_sql);
-        qb.push_bind(&self.user_id);
-
-        if let Some(t) = filter.note_type {
-            qb.push(" AND type = ").push_bind(t);
-        }
-        if let Some(pid) = filter.project_id {
-            qb.push(" AND project_id = ").push_bind(pid);
-        }
-
-        let count = qb
-            .build_query_scalar::<i64>()
+        let count = sqlx::query_scalar::<_, i64>(SQ_COUNT_NOTES)
+            .bind(&self.user_id)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(filter.note_type)
+            .bind(filter.project_id)
+            .bind(filter.project_id)
             .fetch_one(&self.db.pool)
             .await?;
         count
@@ -813,17 +779,10 @@ impl NoteDb for SqliteBackend {
         if note_ids.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
-        let mut qb = QueryBuilder::<Sqlite>::new(SQ_LIST_TOPICS);
-        qb.push_bind(&self.user_id);
-        qb.push("(");
-        let mut separated = qb.separated(", ");
-        for id in note_ids {
-            separated.push_bind(*id);
-        }
-        separated.push_unseparated(")");
-
-        let rows = qb
-            .build_query_as::<(String, String)>()
+        let note_ids_json = serde_json::to_string(note_ids)?;
+        let rows = sqlx::query_as::<_, (String, String)>(SQ_LIST_TOPICS)
+            .bind(&self.user_id)
+            .bind(note_ids_json)
             .fetch_all(&self.db.pool)
             .await?;
         let mut map: std::collections::HashMap<String, Vec<String>> =
@@ -890,30 +849,24 @@ impl NoteDb for SqliteBackend {
         description: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<(), CliError> {
-        if let Some(v) = title {
-            sqlx::query("UPDATE prompts SET title = ? WHERE user_id = ? AND id = ?")
-                .bind(v)
-                .bind(&self.user_id)
-                .bind(id)
-                .execute(&self.db.pool)
-                .await?;
+        let update_title = title.is_some();
+        let update_description = description.is_some();
+        let update_prompt = prompt.is_some();
+        if !(update_title || update_description || update_prompt) {
+            return Ok(());
         }
-        if let Some(v) = description {
-            sqlx::query("UPDATE prompts SET description = ? WHERE user_id = ? AND id = ?")
-                .bind(v)
-                .bind(&self.user_id)
-                .bind(id)
-                .execute(&self.db.pool)
-                .await?;
-        }
-        if let Some(v) = prompt {
-            sqlx::query("UPDATE prompts SET prompt = ? WHERE user_id = ? AND id = ?")
-                .bind(v)
-                .bind(&self.user_id)
-                .bind(id)
-                .execute(&self.db.pool)
-                .await?;
-        }
+
+        sqlx::query(SQ_UPDATE_PROMPT)
+            .bind(update_title)
+            .bind(title)
+            .bind(update_description)
+            .bind(description)
+            .bind(update_prompt)
+            .bind(prompt)
+            .bind(&self.user_id)
+            .bind(id)
+            .execute(&self.db.pool)
+            .await?;
         Ok(())
     }
 
@@ -984,39 +937,28 @@ impl NoteDb for SqliteBackend {
         content: Option<&str>,
     ) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        if let Some(v) = name {
-            sqlx::query(
-                "UPDATE keyterms SET name = ?, updated_at = ? WHERE user_id = ? AND id = ?",
-            )
-            .bind(v)
-            .bind(&now)
+        let update_name = name.is_some();
+        let update_description = description.is_some();
+        let update_content = content.is_some();
+        if !(update_name || update_description || update_content) {
+            return Ok(());
+        }
+
+        sqlx::query(SQ_UPDATE_KEYTERM)
+            .bind(update_name)
+            .bind(name)
+            .bind(update_description)
+            .bind(description)
+            .bind(update_content)
+            .bind(content)
+            .bind(update_name)
+            .bind(update_description)
+            .bind(update_content)
+            .bind(now)
             .bind(&self.user_id)
             .bind(id)
             .execute(&self.db.pool)
             .await?;
-        }
-        if let Some(v) = description {
-            sqlx::query(
-                "UPDATE keyterms SET description = ?, updated_at = ? WHERE user_id = ? AND id = ?",
-            )
-            .bind(v)
-            .bind(&now)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
-        }
-        if let Some(v) = content {
-            sqlx::query(
-                "UPDATE keyterms SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?",
-            )
-            .bind(v)
-            .bind(&now)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
-        }
         Ok(())
     }
 
@@ -1204,6 +1146,58 @@ mod tests {
             )
             .await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_backend_search_respects_type_filter() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let normal_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &normal_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Shared searchable title"),
+                content: Some("normal body"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+
+        let link_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &link_id,
+                note_type: "link",
+                status: "ai_queued",
+                title: Some("Shared searchable title"),
+                content: Some("link body"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+
+        let results = backend
+            .search_notes(
+                &["Shared".to_string()],
+                &NoteFilter {
+                    project_id: None,
+                    note_type: Some("link"),
+                    archived: false,
+                    limit: 20,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, link_id);
     }
 
     #[tokio::test]

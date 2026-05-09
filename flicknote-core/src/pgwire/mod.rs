@@ -6,19 +6,72 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::backend::{InsertNoteReq, NoteDb, NoteFilter};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
-const NOTE_COLUMNS: &str = "id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at";
-const PROJECT_COLUMNS: &str =
-    "id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at";
-const PROMPT_COLUMNS: &str = "id, user_id, title, description, prompt, created_at";
-const KEYTERM_COLUMNS: &str = "id, user_id, name, description, content, created_at, updated_at";
+const PG_FIND_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
+const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1";
+const PG_LIST_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes \
+     WHERE (deleted_at IS NOT NULL) = $1 \
+       AND ($2::text IS NULL OR type = $2) \
+       AND ($3::uuid IS NULL OR project_id = $3) \
+     ORDER BY created_at DESC LIMIT $4";
+const PG_SEARCH_NOTES: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     FROM notes \
+     WHERE (deleted_at IS NOT NULL) = $1 \
+       AND ($2::text IS NULL OR type = $2) \
+       AND ($3::uuid IS NULL OR project_id = $3) \
+       AND EXISTS ( \
+         SELECT 1 FROM unnest($4::text[]) AS kw(term) \
+         WHERE title ILIKE '%' || kw.term || '%' \
+            OR content ILIKE '%' || kw.term || '%' \
+            OR summary ILIKE '%' || kw.term || '%' \
+       ) \
+     ORDER BY updated_at DESC LIMIT $5";
+const PG_COUNT_NOTES: &str = "SELECT COUNT(*) FROM notes \
+     WHERE (deleted_at IS NOT NULL) = $1 \
+       AND ($2::text IS NULL OR type = $2) \
+       AND ($3::uuid IS NULL OR project_id = $3)";
+const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+     FROM projects WHERE id = $1 LIMIT 1";
+const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+     FROM projects WHERE COALESCE(is_archived, false) = false ORDER BY name";
+const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+     FROM projects WHERE COALESCE(is_archived, false) = true ORDER BY name";
+const PG_UPDATE_PROJECT_METADATA: &str = "UPDATE projects SET \
+     prompt_id = CASE WHEN $2::bool THEN $3::uuid ELSE prompt_id END, \
+     keyterm_id = CASE WHEN $4::bool THEN $5::uuid ELSE keyterm_id END, \
+     color = CASE WHEN $6::bool THEN $7::text ELSE color END \
+     WHERE id = $1";
+const PG_FIND_PROMPT: &str =
+    "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE id = $1 LIMIT 1";
+const PG_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts ORDER BY created_at DESC";
+const PG_UPDATE_PROMPT: &str = "UPDATE prompts SET \
+     title = CASE WHEN $2::bool THEN $3::text ELSE title END, \
+     description = CASE WHEN $4::bool THEN $5::text ELSE description END, \
+     prompt = CASE WHEN $6::bool THEN $7::text ELSE prompt END \
+     WHERE id = $1";
+const PG_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
+     FROM keyterms WHERE id = $1 LIMIT 1";
+const PG_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
+     FROM keyterms ORDER BY name";
+const PG_UPDATE_KEYTERM: &str = "UPDATE keyterms SET \
+     name = CASE WHEN $2::bool THEN $3::text ELSE name END, \
+     description = CASE WHEN $4::bool THEN $5::text ELSE description END, \
+     content = CASE WHEN $6::bool THEN $7::text ELSE content END, \
+     updated_at = CASE WHEN ($2::bool OR $4::bool OR $6::bool) THEN $8::timestamptz ELSE updated_at END \
+     WHERE id = $1";
 
 #[derive(sqlx::FromRow)]
 struct NotePgRow {
@@ -220,10 +273,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn find_note(&self, id: &str) -> Result<Note, CliError> {
-        let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1"
-        );
-        sqlx::query_as::<_, NotePgRow>(&sql)
+        sqlx::query_as::<_, NotePgRow>(PG_FIND_NOTE)
             .bind(parse_uuid(id)?)
             .fetch_optional(&self.pool)
             .await?
@@ -232,10 +282,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn find_archived_note(&self, id: &str) -> Result<Note, CliError> {
-        let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1"
-        );
-        sqlx::query_as::<_, NotePgRow>(&sql)
+        sqlx::query_as::<_, NotePgRow>(PG_FIND_ARCHIVED_NOTE)
             .bind(parse_uuid(id)?)
             .fetch_optional(&self.pool)
             .await?
@@ -254,23 +301,11 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
-        let mut qb =
-            QueryBuilder::<Postgres>::new(format!("SELECT {NOTE_COLUMNS} FROM notes WHERE "));
-        if filter.archived {
-            qb.push("deleted_at IS NOT NULL");
-        } else {
-            qb.push("deleted_at IS NULL");
-        }
-        if let Some(t) = filter.note_type {
-            qb.push(" AND type = ").push_bind(t);
-        }
-        if let Some(pid) = filter.project_id {
-            qb.push(" AND project_id = ").push_bind(parse_uuid(pid)?);
-        }
-        qb.push(" ORDER BY created_at DESC LIMIT ")
-            .push_bind(i64::from(filter.limit));
-        let rows = qb
-            .build_query_as::<NotePgRow>()
+        let rows = sqlx::query_as::<_, NotePgRow>(PG_LIST_NOTES)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(parse_uuid_opt(filter.project_id)?)
+            .bind(i64::from(filter.limit))
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(Note::from).collect())
@@ -286,30 +321,12 @@ impl NoteDb for PgWireBackend {
                 "search_notes requires at least one keyword".into(),
             ));
         }
-        let mut qb =
-            QueryBuilder::<Postgres>::new(format!("SELECT {NOTE_COLUMNS} FROM notes WHERE "));
-        if filter.archived {
-            qb.push("deleted_at IS NOT NULL");
-        } else {
-            qb.push("deleted_at IS NULL");
-        }
-        for kw in keywords {
-            let pattern = format!("%{kw}%");
-            qb.push(" AND (title ILIKE ")
-                .push_bind(pattern.clone())
-                .push(" OR content ILIKE ")
-                .push_bind(pattern.clone())
-                .push(" OR summary ILIKE ")
-                .push_bind(pattern)
-                .push(")");
-        }
-        if let Some(pid) = filter.project_id {
-            qb.push(" AND project_id = ").push_bind(parse_uuid(pid)?);
-        }
-        qb.push(" ORDER BY updated_at DESC LIMIT ")
-            .push_bind(i64::from(filter.limit));
-        let rows = qb
-            .build_query_as::<NotePgRow>()
+        let rows = sqlx::query_as::<_, NotePgRow>(PG_SEARCH_NOTES)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(parse_uuid_opt(filter.project_id)?)
+            .bind(keywords)
+            .bind(i64::from(filter.limit))
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(Note::from).collect())
@@ -417,11 +434,12 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
-        let op = if archived { "true" } else { "false" };
-        let sql = format!(
-            "SELECT {PROJECT_COLUMNS} FROM projects WHERE COALESCE(is_archived, false) = {op} ORDER BY name"
-        );
-        let rows = sqlx::query_as::<_, ProjectPgRow>(&sql)
+        let sql = if archived {
+            PG_LIST_PROJECTS_ARCHIVED
+        } else {
+            PG_LIST_PROJECTS_ACTIVE
+        };
+        let rows = sqlx::query_as::<_, ProjectPgRow>(sql)
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(Project::from).collect())
@@ -488,8 +506,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn find_project(&self, id: &str) -> Result<Project, CliError> {
-        let sql = format!("SELECT {PROJECT_COLUMNS} FROM projects WHERE id = $1 LIMIT 1");
-        sqlx::query_as::<_, ProjectPgRow>(&sql)
+        sqlx::query_as::<_, ProjectPgRow>(PG_FIND_PROJECT)
             .bind(parse_uuid(id)?)
             .fetch_optional(&self.pool)
             .await?
@@ -516,30 +533,25 @@ impl NoteDb for PgWireBackend {
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError> {
-        let mut qb = QueryBuilder::<Postgres>::new("UPDATE projects SET ");
-        let mut has_values = false;
-        {
-            let mut separated = qb.separated(", ");
-            if let Some(v) = prompt_id {
-                separated.push("prompt_id = ").push_bind(parse_uuid_opt(v)?);
-                has_values = true;
-            }
-            if let Some(v) = keyterm_id {
-                separated
-                    .push("keyterm_id = ")
-                    .push_bind(parse_uuid_opt(v)?);
-                has_values = true;
-            }
-            if let Some(v) = color {
-                separated.push("color = ").push_bind(v);
-                has_values = true;
-            }
-        }
-        if !has_values {
+        let update_prompt = prompt_id.is_some();
+        let update_keyterm = keyterm_id.is_some();
+        let update_color = color.is_some();
+        if !(update_prompt || update_keyterm || update_color) {
             return Ok(());
         }
-        qb.push(" WHERE id = ").push_bind(parse_uuid(id)?);
-        let result = qb.build().execute(&self.pool).await?;
+
+        let prompt_value = prompt_id.map(parse_uuid_opt).transpose()?.flatten();
+        let keyterm_value = keyterm_id.map(parse_uuid_opt).transpose()?.flatten();
+        let result = sqlx::query(PG_UPDATE_PROJECT_METADATA)
+            .bind(parse_uuid(id)?)
+            .bind(update_prompt)
+            .bind(prompt_value)
+            .bind(update_keyterm)
+            .bind(keyterm_value)
+            .bind(update_color)
+            .bind(color.flatten())
+            .execute(&self.pool)
+            .await?;
         if result.rows_affected() == 0 {
             return Err(CliError::Other(format!("Project not found: {id}")));
         }
@@ -584,19 +596,12 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError> {
-        let mut qb = QueryBuilder::<Postgres>::new("SELECT COUNT(*) FROM notes WHERE ");
-        if filter.archived {
-            qb.push("deleted_at IS NOT NULL");
-        } else {
-            qb.push("deleted_at IS NULL");
-        }
-        if let Some(t) = filter.note_type {
-            qb.push(" AND type = ").push_bind(t);
-        }
-        if let Some(pid) = filter.project_id {
-            qb.push(" AND project_id = ").push_bind(parse_uuid(pid)?);
-        }
-        let count = qb.build_query_scalar::<i64>().fetch_one(&self.pool).await?;
+        let count = sqlx::query_scalar::<_, i64>(PG_COUNT_NOTES)
+            .bind(filter.archived)
+            .bind(filter.note_type)
+            .bind(parse_uuid_opt(filter.project_id)?)
+            .fetch_one(&self.pool)
+            .await?;
         count
             .try_into()
             .map_err(|_| CliError::Other(format!("unexpected negative count: {count}")))
@@ -662,8 +667,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
-        let sql = format!("SELECT {PROMPT_COLUMNS} FROM prompts WHERE id = $1 LIMIT 1");
-        sqlx::query_as::<_, PromptPgRow>(&sql)
+        sqlx::query_as::<_, PromptPgRow>(PG_FIND_PROMPT)
             .bind(parse_uuid(id)?)
             .fetch_optional(&self.pool)
             .await?
@@ -672,8 +676,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
-        let sql = format!("SELECT {PROMPT_COLUMNS} FROM prompts ORDER BY created_at DESC");
-        let rows = sqlx::query_as::<_, PromptPgRow>(&sql)
+        let rows = sqlx::query_as::<_, PromptPgRow>(PG_LIST_PROMPTS)
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(Prompt::from).collect())
@@ -686,28 +689,23 @@ impl NoteDb for PgWireBackend {
         description: Option<&str>,
         prompt: Option<&str>,
     ) -> Result<(), CliError> {
-        let mut qb = QueryBuilder::<Postgres>::new("UPDATE prompts SET ");
-        let mut has_values = false;
-        {
-            let mut separated = qb.separated(", ");
-            if let Some(v) = title {
-                separated.push("title = ").push_bind(v);
-                has_values = true;
-            }
-            if let Some(v) = description {
-                separated.push("description = ").push_bind(v);
-                has_values = true;
-            }
-            if let Some(v) = prompt {
-                separated.push("prompt = ").push_bind(v);
-                has_values = true;
-            }
-        }
-        if !has_values {
+        let update_title = title.is_some();
+        let update_description = description.is_some();
+        let update_prompt = prompt.is_some();
+        if !(update_title || update_description || update_prompt) {
             return Ok(());
         }
-        qb.push(" WHERE id = ").push_bind(parse_uuid(id)?);
-        let result = qb.build().execute(&self.pool).await?;
+
+        let result = sqlx::query(PG_UPDATE_PROMPT)
+            .bind(parse_uuid(id)?)
+            .bind(update_title)
+            .bind(title)
+            .bind(update_description)
+            .bind(description)
+            .bind(update_prompt)
+            .bind(prompt)
+            .execute(&self.pool)
+            .await?;
         if result.rows_affected() == 0 {
             return Err(CliError::Other(format!("Prompt not found: {id}")));
         }
@@ -762,8 +760,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
-        let sql = format!("SELECT {KEYTERM_COLUMNS} FROM keyterms WHERE id = $1 LIMIT 1");
-        sqlx::query_as::<_, KeytermPgRow>(&sql)
+        sqlx::query_as::<_, KeytermPgRow>(PG_FIND_KEYTERM)
             .bind(parse_uuid(id)?)
             .fetch_optional(&self.pool)
             .await?
@@ -772,8 +769,7 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-        let sql = format!("SELECT {KEYTERM_COLUMNS} FROM keyterms ORDER BY name");
-        let rows = sqlx::query_as::<_, KeytermPgRow>(&sql)
+        let rows = sqlx::query_as::<_, KeytermPgRow>(PG_LIST_KEYTERMS)
             .fetch_all(&self.pool)
             .await?;
         Ok(rows.into_iter().map(Keyterm::from).collect())
@@ -786,31 +782,24 @@ impl NoteDb for PgWireBackend {
         description: Option<&str>,
         content: Option<&str>,
     ) -> Result<(), CliError> {
-        let mut qb = QueryBuilder::<Postgres>::new("UPDATE keyterms SET ");
-        let mut has_values = false;
-        {
-            let mut separated = qb.separated(", ");
-            if let Some(v) = name {
-                separated.push("name = ").push_bind(v);
-                has_values = true;
-            }
-            if let Some(v) = description {
-                separated.push("description = ").push_bind(v);
-                has_values = true;
-            }
-            if let Some(v) = content {
-                separated.push("content = ").push_bind(v);
-                has_values = true;
-            }
-            if has_values {
-                separated.push("updated_at = ").push_bind(Utc::now());
-            }
-        }
-        if !has_values {
+        let update_name = name.is_some();
+        let update_description = description.is_some();
+        let update_content = content.is_some();
+        if !(update_name || update_description || update_content) {
             return Ok(());
         }
-        qb.push(" WHERE id = ").push_bind(parse_uuid(id)?);
-        let result = qb.build().execute(&self.pool).await?;
+
+        let result = sqlx::query(PG_UPDATE_KEYTERM)
+            .bind(parse_uuid(id)?)
+            .bind(update_name)
+            .bind(name)
+            .bind(update_description)
+            .bind(description)
+            .bind(update_content)
+            .bind(content)
+            .bind(Utc::now())
+            .execute(&self.pool)
+            .await?;
         if result.rows_affected() == 0 {
             return Err(CliError::Other(format!("Keyterm not found: {id}")));
         }
