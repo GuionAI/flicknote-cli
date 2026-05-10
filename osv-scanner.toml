@@ -1,0 +1,9 @@
+# RUSTSEC-2023-0071 is reported for rsa 0.9.10 in Cargo.lock.
+#
+# rsa is pulled in only through sqlx's optional MySQL support
+# (sqlx -> sqlx-macros-core -> sqlx-mysql -> rsa). FlickNote enables SQLite
+# and Postgres only, and does not enable or use sqlx-mysql. Reassess this
+# ignore before adding MySQL support or a direct runtime rsa dependency.
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "rsa is present only via inactive sqlx-mysql optional metadata in Cargo.lock; FlickNote enables SQLite/Postgres only and does not use MySQL authentication paths."
