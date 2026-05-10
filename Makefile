@@ -1,4 +1,4 @@
-.PHONY: build test check fmt clippy install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
+.PHONY: build test check fmt clippy sqlx-prepare install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
 
 build:
 	cargo build
@@ -19,6 +19,9 @@ fmt:
 
 clippy:
 	cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+
+sqlx-prepare:
+	./scripts/sqlx-prepare.sh
 
 install: install-rust install-tui
 

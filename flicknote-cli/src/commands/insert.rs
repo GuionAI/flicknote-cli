@@ -18,8 +18,12 @@ pub(crate) struct InsertArgs {
     after: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &InsertArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &InsertArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
     let (section_name, insert_before) = match (&args.before, &args.after) {
         (Some(s), None) => (s.as_str(), true),
         (None, Some(s)) => (s.as_str(), false),
@@ -30,7 +34,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &InsertArgs) -> Resul
         }
     };
 
-    let content = get_note_content(db, &full_id)?;
+    let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, section_name, &args.id)?;
 
@@ -52,7 +56,8 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &InsertArgs) -> Resul
         format!("{before}\n\n{}\n\n{after}", insert_content.trim_end())
     };
 
-    db.update_note_content(&full_id, new_content.trim(), true)?;
+    db.update_note_content(&full_id, new_content.trim(), true)
+        .await?;
 
     let position = if insert_before { "before" } else { "after" };
     println!(

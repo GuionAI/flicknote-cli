@@ -19,7 +19,11 @@ pub(crate) struct UploadArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    config: &Config,
+    args: &UploadArgs,
+) -> Result<(), CliError> {
     if !args.file.exists() {
         return Err(CliError::Other(format!(
             "File not found: {}",
@@ -48,23 +52,26 @@ pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &UploadArgs) -> Result
     .to_string();
 
     let project_id = if let Some(ref name) = resolve_project_arg(&args.project) {
-        Some(resolve_project(db, name)?)
+        Some(resolve_project(db, name).await?)
     } else {
         None
     };
 
     let note_type = note_type_for_extension(&filename);
 
-    if let Err(e) = db.insert_note(&InsertNoteReq {
-        id: &id,
-        note_type,
-        status: "source_queued",
-        title: None,
-        content: None,
-        metadata: Some(&metadata),
-        project_id: project_id.as_deref(),
-        now: &now,
-    }) {
+    if let Err(e) = db
+        .insert_note(&InsertNoteReq {
+            id: &id,
+            note_type,
+            status: "source_queued",
+            title: None,
+            content: None,
+            metadata: Some(&metadata),
+            project_id: project_id.as_deref(),
+            now: &now,
+        })
+        .await
+    {
         #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
         let _ = cleanup_uploaded_file(config, &id);
         return Err(e);

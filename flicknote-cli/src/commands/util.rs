@@ -51,31 +51,32 @@ pub(crate) fn find_section<'a>(
     })
 }
 
-pub(crate) fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<String, CliError> {
-    db.resolve_note_id(prefix)
+pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<String, CliError> {
+    db.resolve_note_id(prefix).await
 }
 
 /// Fetch note content from DB, returning `None` for NULL/missing content.
-pub(crate) fn get_note_content_optional(
+pub(crate) async fn get_note_content_optional(
     db: &dyn NoteDb,
     full_id: &str,
 ) -> Result<Option<String>, CliError> {
-    db.find_note_content(full_id)
+    db.find_note_content(full_id).await
 }
 
 /// Fetch note content from DB. Shared by get --tree, get -s, and replace.
-pub(crate) fn get_note_content(db: &dyn NoteDb, full_id: &str) -> Result<String, CliError> {
-    db.find_note_content(full_id)?
+pub(crate) async fn get_note_content(db: &dyn NoteDb, full_id: &str) -> Result<String, CliError> {
+    db.find_note_content(full_id)
+        .await?
         .ok_or_else(|| CliError::Other("Note has no content".into()))
 }
 
 /// Write updated content to the database.
-pub(crate) fn write_content(
+pub(crate) async fn write_content(
     db: &dyn NoteDb,
     full_id: &str,
     new_content: &str,
 ) -> Result<(), CliError> {
-    db.update_note_content(full_id, new_content, true)
+    db.update_note_content(full_id, new_content, true).await
 }
 
 /// Print notes as a formatted table to stdout.
@@ -193,14 +194,14 @@ pub(crate) fn content_starts_with_heading(content: &str) -> bool {
 }
 
 /// Apply project move. Prints confirmation. Returns name of deleted project if any.
-pub(crate) fn apply_project_move(
+pub(crate) async fn apply_project_move(
     db: &dyn NoteDb,
     full_id: &str,
     project_name: &str,
 ) -> Result<Option<String>, CliError> {
-    let old_note = db.find_note(full_id)?;
+    let old_note = db.find_note(full_id).await?;
     let old_project_id = old_note.project_id.clone();
-    let new_project_id = resolve_project(db, project_name)?;
+    let new_project_id = resolve_project(db, project_name).await?;
 
     if old_project_id.as_deref() == Some(new_project_id.as_str()) {
         println!(
@@ -210,8 +211,9 @@ pub(crate) fn apply_project_move(
         return Ok(None);
     }
 
-    let deleted_name =
-        db.move_note_to_project(full_id, &new_project_id, old_project_id.as_deref())?;
+    let deleted_name = db
+        .move_note_to_project(full_id, &new_project_id, old_project_id.as_deref())
+        .await?;
     println!("Moved note {} to project \"{}\".", full_id, project_name);
     if let Some(ref name) = deleted_name {
         println!("Deleted empty project \"{}\".", name);

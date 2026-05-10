@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE keyterms SET\n                name = CASE WHEN ? THEN ? ELSE name END,\n                description = CASE WHEN ? THEN ? ELSE description END,\n                content = CASE WHEN ? THEN ? ELSE content END,\n                updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END\n            WHERE user_id = ? AND id = ?\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "90bc742216766bda020d7264c7a3edfe6b1dd9bea60442252753c4b566553701"
+}

@@ -9,14 +9,14 @@ pub(crate) struct OpenArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Result<(), CliError> {
     let web_url = config.web_url.as_deref().ok_or_else(|| {
         CliError::Other(
             "webUrl not configured. Set it in ~/.config/flicknote/config.json or FLICKNOTE_WEB_URL."
                 .into(),
         )
     })?;
-    let full_id = db.resolve_note_id(&args.id)?;
+    let full_id = db.resolve_note_id(&args.id).await?;
     let url = format!("{}/notes/{}", web_url.trim_end_matches('/'), full_id);
     open::that(&url).map_err(CliError::Io)?;
     println!("Opened {} — {}", full_id, url);

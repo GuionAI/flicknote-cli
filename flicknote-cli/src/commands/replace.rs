@@ -31,8 +31,12 @@ pub(crate) struct ReplaceArgs {
     unflagged: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &ReplaceArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
     let has_metadata =
         args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
 
@@ -55,7 +59,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Resu
     // Step 1: overwrite content (if stdin provided).
     if let Some(new_body) = piped {
         if let Some(ref section_id) = args.section {
-            let content = get_note_content(db, &full_id)?;
+            let content = get_note_content(db, &full_id).await?;
             let doc = crate::markdown::parse_markdown(&content);
             let bounds = find_section(&doc, section_id, &full_id)?;
 
@@ -77,12 +81,12 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Resu
                 bounds.end,
                 &shifted,
             );
-            write_content(db, &full_id, new_content.trim())?;
+            write_content(db, &full_id, new_content.trim()).await?;
             println!("Replaced section in note {}.\n", full_id);
             print!("{}", crate::markdown::render_tree(new_content.trim()));
         } else {
             // Replace entire note content.
-            write_content(db, &full_id, &new_body)?;
+            write_content(db, &full_id, &new_body).await?;
             println!("Replaced content for note {}.\n", full_id);
             print!("{}", crate::markdown::render_tree(&new_body));
         }
@@ -90,19 +94,19 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ReplaceArgs) -> Resu
 
     // Step 2: metadata updates.
     if let Some(ref project_name) = args.project {
-        apply_project_move(db, &full_id, project_name)?;
+        apply_project_move(db, &full_id, project_name).await?;
     }
 
     if let Some(ref new_title) = args.title {
-        db.update_note_title(&full_id, new_title)?;
+        db.update_note_title(&full_id, new_title).await?;
         println!("Updated title for note {}.", full_id);
     }
 
     if args.flagged {
-        db.update_note_flagged(&full_id, true)?;
+        db.update_note_flagged(&full_id, true).await?;
         println!("Flagged note {}.", full_id);
     } else if args.unflagged {
-        db.update_note_flagged(&full_id, false)?;
+        db.update_note_flagged(&full_id, false).await?;
         println!("Unflagged note {}.", full_id);
     }
 

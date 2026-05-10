@@ -85,14 +85,15 @@ enum Commands {
     Open(commands::open::OpenArgs),
 }
 
-fn main() {
-    if let Err(e) = run() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    if let Err(e) = run().await {
         eprintln!("Error: {e:#}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), CliError> {
+async fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
     let config = Config::load()?;
 
@@ -126,8 +127,8 @@ fn run() -> Result<(), CliError> {
     // Backend selection: DATABASE_URL set → pgwire, else → SQLite (powersync)
     #[cfg(feature = "storage-pgwire")]
     if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url)?;
-        return dispatch(&cli, &config, &backend);
+        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url).await?;
+        return dispatch(&cli, &config, &backend).await;
     }
 
     #[cfg(not(feature = "powersync"))]
@@ -138,14 +139,14 @@ fn run() -> Result<(), CliError> {
 
     #[cfg(feature = "powersync")]
     {
-        let db = Database::open_local(&config)?;
+        let db = Database::open_local(&config).await?;
         let user_id = flicknote_core::session::get_user_id(&config)?;
         let backend = SqliteBackend { db, user_id };
-        dispatch(&cli, &config, &backend)
+        dispatch(&cli, &config, &backend).await
     }
 }
 
-fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError> {
+async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()
@@ -154,26 +155,26 @@ fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError>
     };
 
     match command {
-        Commands::Add(args) => commands::add::run(db, config, args),
-        Commands::Append(args) => commands::append::run(db, config, args),
-        Commands::Delete(args) => commands::delete::run(db, config, args),
-        Commands::Edit(args) => commands::edit::run(db, config, args),
-        Commands::Restore(args) => commands::restore::run(db, config, args),
-        Commands::List(args) => commands::list::run(db, args),
-        Commands::Count(args) => commands::count::run(db, args),
-        Commands::Find(args) => commands::find::run(db, args),
-        Commands::Detail(args) => commands::detail::run(db, config, args),
-        Commands::Content(args) => commands::content::run(db, args),
-        Commands::Project(args) => commands::project::run(db, args),
-        Commands::Prompt(args) => commands::prompt::run(db, args),
-        Commands::Keyterm(args) => commands::keyterm::run(db, args),
-        Commands::Rename(args) => commands::rename::run(db, config, args),
-        Commands::Insert(args) => commands::insert::run(db, config, args),
-        Commands::Replace(args) => commands::replace::run(db, config, args),
-        Commands::Modify(args) => commands::modify::run(db, config, args),
-        Commands::Open(args) => commands::open::run(db, config, args),
-        Commands::Import(args) => commands::import::run(db, config, args),
-        Commands::Upload(args) => commands::upload::run(db, config, args),
+        Commands::Add(args) => commands::add::run(db, config, args).await,
+        Commands::Append(args) => commands::append::run(db, config, args).await,
+        Commands::Delete(args) => commands::delete::run(db, config, args).await,
+        Commands::Edit(args) => commands::edit::run(db, config, args).await,
+        Commands::Restore(args) => commands::restore::run(db, config, args).await,
+        Commands::List(args) => commands::list::run(db, args).await,
+        Commands::Count(args) => commands::count::run(db, args).await,
+        Commands::Find(args) => commands::find::run(db, args).await,
+        Commands::Detail(args) => commands::detail::run(db, config, args).await,
+        Commands::Content(args) => commands::content::run(db, args).await,
+        Commands::Project(args) => commands::project::run(db, args).await,
+        Commands::Prompt(args) => commands::prompt::run(db, args).await,
+        Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
+        Commands::Rename(args) => commands::rename::run(db, config, args).await,
+        Commands::Insert(args) => commands::insert::run(db, config, args).await,
+        Commands::Replace(args) => commands::replace::run(db, config, args).await,
+        Commands::Modify(args) => commands::modify::run(db, config, args).await,
+        Commands::Open(args) => commands::open::run(db, config, args).await,
+        Commands::Import(args) => commands::import::run(db, config, args).await,
+        Commands::Upload(args) => commands::upload::run(db, config, args).await,
         Commands::Api(args) => commands::api::run(config, args),
         // Login/Logout/Sync are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),

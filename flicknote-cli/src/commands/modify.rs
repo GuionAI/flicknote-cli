@@ -28,8 +28,12 @@ pub(crate) struct ModifyArgs {
     unflagged: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &ModifyArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
     let has_metadata =
         args.project.is_some() || args.title.is_some() || args.flagged || args.unflagged;
 
@@ -63,7 +67,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
     // Step 1: edit-mode content change (if stdin).
     if let Some(input) = piped {
         let (before, after) = super::edit_match::parse_edit_input(&input)?;
-        let full_content = get_note_content(db, &full_id)?;
+        let full_content = get_note_content(db, &full_id).await?;
 
         let (scope_start, scope_end) = match &args.section {
             Some(sid) => {
@@ -86,26 +90,26 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ModifyArgs) -> Resul
         };
         let new_content = super::edit_match::splice(&full_content, &abs, &after);
 
-        write_content(db, &full_id, new_content.trim())?;
+        write_content(db, &full_id, new_content.trim()).await?;
         println!("edit applied to note {} (1 replacement)\n", full_id);
         print!("{}", crate::markdown::render_tree(new_content.trim()));
     }
 
     // Step 2: metadata updates — unchanged from original.
     if let Some(ref project_name) = args.project {
-        apply_project_move(db, &full_id, project_name)?;
+        apply_project_move(db, &full_id, project_name).await?;
     }
 
     if let Some(ref new_title) = args.title {
-        db.update_note_title(&full_id, new_title)?;
+        db.update_note_title(&full_id, new_title).await?;
         println!("Updated title for note {}.", full_id);
     }
 
     if args.flagged {
-        db.update_note_flagged(&full_id, true)?;
+        db.update_note_flagged(&full_id, true).await?;
         println!("Flagged note {}.", full_id);
     } else if args.unflagged {
-        db.update_note_flagged(&full_id, false)?;
+        db.update_note_flagged(&full_id, false).await?;
         println!("Unflagged note {}.", full_id);
     }
 

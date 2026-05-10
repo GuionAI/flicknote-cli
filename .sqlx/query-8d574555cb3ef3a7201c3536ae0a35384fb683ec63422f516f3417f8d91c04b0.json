@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COUNT(*) as \"count!\"\n            FROM notes\n            WHERE (deleted_at IS NOT NULL) = $1\n              AND ($2::text IS NULL OR type = $2)\n              AND ($3::uuid IS NULL OR project_id = $3)\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8d574555cb3ef3a7201c3536ae0a35384fb683ec63422f516f3417f8d91c04b0"
+}

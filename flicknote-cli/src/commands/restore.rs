@@ -9,16 +9,20 @@ pub(crate) struct RestoreArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &RestoreArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &RestoreArgs,
+) -> Result<(), CliError> {
     let now = chrono::Utc::now().to_rfc3339();
-    let full_id = db.resolve_archived_note_id(&args.id)?;
+    let full_id = db.resolve_archived_note_id(&args.id).await?;
 
-    let old_note = db.find_archived_note(&full_id)?;
+    let old_note = db.find_archived_note(&full_id).await?;
     let mut new_note = old_note.clone();
     new_note.deleted_at = None;
     new_note.updated_at = Some(now.clone());
 
-    db.set_note_deleted_at(&full_id, None, &now)?;
+    db.set_note_deleted_at(&full_id, None, &now).await?;
     println!("Restored note {}.", full_id);
     Ok(())
 }

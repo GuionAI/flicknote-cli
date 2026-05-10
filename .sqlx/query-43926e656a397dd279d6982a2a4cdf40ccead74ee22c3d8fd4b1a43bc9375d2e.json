@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE keyterms SET\n                name = CASE WHEN $2::bool THEN $3::text ELSE name END,\n                description = CASE WHEN $4::bool THEN $5::text ELSE description END,\n                content = CASE WHEN $6::bool THEN $7::text ELSE content END,\n                updated_at = CASE WHEN ($2::bool OR $4::bool OR $6::bool) THEN $8::timestamptz ELSE updated_at END\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Bool",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "43926e656a397dd279d6982a2a4cdf40ccead74ee22c3d8fd4b1a43bc9375d2e"
+}

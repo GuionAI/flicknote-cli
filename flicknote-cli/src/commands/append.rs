@@ -11,11 +11,15 @@ pub(crate) struct AppendArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &AppendArgs) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id)?;
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &AppendArgs,
+) -> Result<(), CliError> {
+    let full_id = resolve_note_id(db, &args.id).await?;
 
     // Get existing content
-    let existing = get_note_content_optional(db, &full_id)?;
+    let existing = get_note_content_optional(db, &full_id).await?;
 
     // Get new content from stdin
     let new_content = read_stdin_required()?;
@@ -27,7 +31,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &AppendArgs) -> Resul
     };
 
     // Update — no status change (do not re-queue for AI)
-    db.update_note_content(&full_id, &combined, false)?;
+    db.update_note_content(&full_id, &combined, false).await?;
 
     println!("Appended to note {}.", full_id);
     Ok(())

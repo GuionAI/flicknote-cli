@@ -3,10 +3,22 @@ pre-commit:
   commands:
     cargo-fmt:
       run: cargo fmt --check -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
+    sqlx-metadata:
+      run: |
+        if git diff --cached -U0 -- ':(glob)**/*.rs' | grep -Eq '^\+.*sqlx::(query!|query_as!|query_scalar!)'; then
+          if ! git diff --cached --name-only --diff-filter=ACMR -- '.sqlx/*.json' | grep -q .; then
+            echo "sqlx macro changes detected without staged .sqlx metadata."
+            echo "Run: make sqlx-prepare"
+            echo "Then stage the generated .sqlx/*.json files."
+            exit 1
+          fi
+        fi
 
 pre-push:
   parallel: true
   commands:
+    cargo-sqlx-offline-check:
+      run: SQLX_OFFLINE=true cargo check --all-targets --all-features
     cargo-clippy:
       run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
     cargo-deny:

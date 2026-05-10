@@ -17,7 +17,11 @@ pub(crate) struct ImportArgs {
     project: Option<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    _config: &Config,
+    args: &ImportArgs,
+) -> Result<(), CliError> {
     // Collect .md files
     let files = collect_md_files(&args.path)?;
     if files.is_empty() {
@@ -28,7 +32,7 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
     // Resolve project if specified
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name)?)
+        Some(resolve_project(db, name).await?)
     } else {
         None
     };
@@ -56,7 +60,8 @@ pub(crate) fn run(db: &dyn NoteDb, _config: &Config, args: &ImportArgs) -> Resul
             metadata: None,
             project_id: project_id.as_deref(),
             now: &created_at,
-        })?;
+        })
+        .await?;
 
         imported.push((id, title, file.clone()));
     }

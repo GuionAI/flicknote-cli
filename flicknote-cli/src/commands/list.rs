@@ -23,7 +23,7 @@ pub(crate) struct ListArgs {
     json: bool,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
     let effective_project = resolve_project_arg(&args.project);
 
     if args.project.is_none()
@@ -33,7 +33,7 @@ pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
     }
 
     let project_id: Option<String> = if let Some(ref name) = effective_project {
-        match db.find_project_by_name(name)? {
+        match db.find_project_by_name(name).await? {
             Some(id) => Some(id),
             None => {
                 eprintln!("Warning: no project found with name \"{name}\".");
@@ -44,12 +44,14 @@ pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
         None
     };
 
-    let notes = db.list_notes(&NoteFilter {
-        project_id: project_id.as_deref(),
-        note_type: args.r#type.as_deref(),
-        archived: args.archived,
-        limit: args.limit,
-    })?;
+    let notes = db
+        .list_notes(&NoteFilter {
+            project_id: project_id.as_deref(),
+            note_type: args.r#type.as_deref(),
+            archived: args.archived,
+            limit: args.limit,
+        })
+        .await?;
 
     if args.json {
         println!(
@@ -59,16 +61,19 @@ pub(crate) fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
     } else {
         // Fetch topics for all notes
         let note_id_refs: Vec<&str> = notes.iter().map(|n| n.id.as_str()).collect();
-        let topics_map = db.list_note_topics(&note_id_refs)?;
+        let topics_map = db.list_note_topics(&note_id_refs).await?;
 
         // Fetch project names for all notes
         let mut project_names: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for note in &notes {
-            if let Some(ref pid) = note.project_id
-                && !project_names.contains_key(pid)
-                && let Some(name) = db.find_project_name_by_id(pid)?
-            {
+            let Some(ref pid) = note.project_id else {
+                continue;
+            };
+            if project_names.contains_key(pid) {
+                continue;
+            }
+            if let Some(name) = db.find_project_name_by_id(pid).await? {
                 project_names.insert(pid.clone(), name);
             }
         }

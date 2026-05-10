@@ -19,11 +19,11 @@ pub(crate) struct CountArgs {
     keywords: Vec<String>,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, args: &CountArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, args: &CountArgs) -> Result<(), CliError> {
     let effective_project = resolve_project_arg(&args.project);
 
     let project_id: Option<String> = if let Some(ref name) = effective_project {
-        match db.find_project_by_name(name)? {
+        match db.find_project_by_name(name).await? {
             Some(id) => Some(id),
             None => {
                 eprintln!("Warning: no project found with name \"{name}\".");
@@ -43,10 +43,10 @@ pub(crate) fn run(db: &dyn NoteDb, args: &CountArgs) -> Result<(), CliError> {
     };
 
     let count = if args.keywords.is_empty() {
-        db.count_notes(&filter)?
+        db.count_notes(&filter).await?
     } else {
         // Use search_notes and count results
-        let notes = db.search_notes(&args.keywords, &filter)?;
+        let notes = db.search_notes(&args.keywords, &filter).await?;
         notes.len() as u64
     };
 

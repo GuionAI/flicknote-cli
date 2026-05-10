@@ -62,17 +62,17 @@ struct DeleteKeytermArgs {
     id: String,
 }
 
-pub(crate) fn run(db: &dyn NoteDb, args: &KeytermArgs) -> Result<(), CliError> {
+pub(crate) async fn run(db: &dyn NoteDb, args: &KeytermArgs) -> Result<(), CliError> {
     match &args.command {
-        KeytermCommands::Add(a) => add(db, a),
-        KeytermCommands::List => list(db),
-        KeytermCommands::Detail(a) => detail(db, a),
-        KeytermCommands::Modify(a) => modify(db, a),
-        KeytermCommands::Delete(a) => delete(db, a),
+        KeytermCommands::Add(a) => add(db, a).await,
+        KeytermCommands::List => list(db).await,
+        KeytermCommands::Detail(a) => detail(db, a).await,
+        KeytermCommands::Modify(a) => modify(db, a).await,
+        KeytermCommands::Delete(a) => delete(db, a).await,
     }
 }
 
-fn add(db: &dyn NoteDb, args: &AddKeytermArgs) -> Result<(), CliError> {
+async fn add(db: &dyn NoteDb, args: &AddKeytermArgs) -> Result<(), CliError> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
     db.insert_keyterm(
@@ -81,13 +81,14 @@ fn add(db: &dyn NoteDb, args: &AddKeytermArgs) -> Result<(), CliError> {
         args.description.as_deref(),
         args.content.as_deref(),
         &now,
-    )?;
+    )
+    .await?;
     println!("Created keyterm \"{}\" ({}).", args.name, id);
     Ok(())
 }
 
-fn list(db: &dyn NoteDb) -> Result<(), CliError> {
-    let keyterms = db.list_keyterms()?;
+async fn list(db: &dyn NoteDb) -> Result<(), CliError> {
+    let keyterms = db.list_keyterms().await?;
     if keyterms.is_empty() {
         println!("No keyterms found.");
         return Ok(());
@@ -106,9 +107,9 @@ fn list(db: &dyn NoteDb) -> Result<(), CliError> {
     Ok(())
 }
 
-fn detail(db: &dyn NoteDb, args: &DetailKeytermArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_keyterm_id(&args.id)?;
-    let keyterm = db.find_keyterm(&full_id)?;
+async fn detail(db: &dyn NoteDb, args: &DetailKeytermArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_keyterm_id(&args.id).await?;
+    let keyterm = db.find_keyterm(&full_id).await?;
 
     println!("ID:          {}", keyterm.id);
     println!("Name:        {}", keyterm.name);
@@ -137,8 +138,8 @@ fn detail(db: &dyn NoteDb, args: &DetailKeytermArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn modify(db: &dyn NoteDb, args: &ModifyKeytermArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_keyterm_id(&args.id)?;
+async fn modify(db: &dyn NoteDb, args: &ModifyKeytermArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_keyterm_id(&args.id).await?;
 
     if args.name.is_none() && args.content.is_none() && args.description.is_none() {
         return Err(CliError::Other(
@@ -151,14 +152,15 @@ fn modify(db: &dyn NoteDb, args: &ModifyKeytermArgs) -> Result<(), CliError> {
         args.name.as_deref(),
         args.description.as_deref(),
         args.content.as_deref(),
-    )?;
+    )
+    .await?;
     println!("Updated keyterm {}.", full_id);
     Ok(())
 }
 
-fn delete(db: &dyn NoteDb, args: &DeleteKeytermArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_keyterm_id(&args.id)?;
-    db.delete_keyterm(&full_id)?;
+async fn delete(db: &dyn NoteDb, args: &DeleteKeytermArgs) -> Result<(), CliError> {
+    let full_id = db.resolve_keyterm_id(&args.id).await?;
+    db.delete_keyterm(&full_id).await?;
     println!("Deleted keyterm {}.", full_id);
     Ok(())
 }
