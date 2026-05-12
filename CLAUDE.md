@@ -4,12 +4,12 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 ## Architecture
 
-Rust workspace with 5 crates:
+Rust workspace with 4 crates:
 
-- **flicknote-cli** — CLI binary (`flicknote`): add, find, list, count, detail, content, replace, modify, append, delete, restore, rename, insert, upload, project, prompt, keyterm, login, logout, sync, import, api, tui
+- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): add, find, list, count, detail, content, replace, modify, append, delete, restore, rename, insert, upload, project, prompt, keyterm, login, logout, sync, import, api, tui
 - **flicknote-core** — Shared library (db, config, schema, types, session, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Background sync daemon (PowerSync ↔ Supabase)
+- **flicknote-sync** — Background sync daemon library (PowerSync ↔ Supabase)
 
 ### modify vs replace
 
@@ -66,7 +66,7 @@ This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon).
 
 - **pr.yaml** — Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build)
 - **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy)
-- **release.yml** — cargo-dist on version tags → GitHub Releases → guionai/homebrew-tap + guionai/homebrew-flicknote
+- **release.yml** — cargo-dist on version tags → GitHub Releases → GuionAI/homebrew-tap
 
 Commit scope: `ci`
 

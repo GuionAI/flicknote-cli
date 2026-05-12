@@ -748,8 +748,10 @@ dependencies = [
  "chrono",
  "clap",
  "dirs",
+ "env_logger",
  "flicknote-auth",
  "flicknote-core",
+ "flicknote-sync",
  "futures-util",
  "libc",
  "mime_guess",
@@ -788,7 +790,6 @@ name = "flicknote-sync"
 version = "0.1.7"
 dependencies = [
  "async-trait",
- "env_logger",
  "flicknote-auth",
  "flicknote-core",
  "futures-lite",

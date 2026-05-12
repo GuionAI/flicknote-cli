@@ -55,10 +55,20 @@ cargo install --path flicknote-cli
 ### Homebrew (macOS + Linux)
 
 ```bash
-brew install guionai/flicknote-cli
+brew install GuionAI/tap/flicknote
 ```
 
 Installs both `flicknote` and `flicknote-sync`.
+
+## Release
+
+```bash
+cargo install cargo-release --locked
+make release-plan VERSION=0.1.8
+make cut-release VERSION=0.1.8
+```
+
+`cargo-release` updates the shared workspace version, commits it, creates the `vX.Y.Z` tag, and pushes the tag that triggers cargo-dist.
 
 ## Usage
 
@@ -127,10 +137,10 @@ Rust workspace with 4 crates + 1 Go binary:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `flicknote-cli` | binary | CLI commands |
+| `flicknote-cli` | binary | CLI commands and installable sync daemon binary |
 | `flicknote-core` | library | Database, config, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
-| `flicknote-sync` | binary | Background sync daemon |
+| `flicknote-sync` | library | Background sync daemon implementation |
 | `flicknote-tui` | binary (Go) | Terminal UI (`flicknote tui`) |
 
 ## License

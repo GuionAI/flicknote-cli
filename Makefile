@@ -1,4 +1,4 @@
-.PHONY: build test check fmt clippy sqlx-prepare install install-rust install-tui reinstall reinstall-rust clean release setup install-hooks build-tui
+.PHONY: build test check fmt clippy sqlx-prepare install install-rust install-tui reinstall reinstall-rust clean release release-plan cut-release setup install-hooks build-tui
 
 build:
 	cargo build
@@ -8,6 +8,14 @@ build-tui:
 
 release:
 	cargo build --release
+
+release-plan:
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make release-plan VERSION=0.1.8"; exit 1)
+	cargo release $(VERSION)
+
+cut-release:
+	@test -n "$(VERSION)" || (echo "VERSION is required, e.g. make cut-release VERSION=0.1.8"; exit 1)
+	cargo release $(VERSION) --execute
 
 test:
 	cargo test
@@ -27,7 +35,6 @@ install: install-rust install-tui
 
 install-rust:
 	cargo install --path flicknote-cli
-	cargo install --path flicknote-sync
 
 install-tui:
 	cd flicknote-tui && go install .
@@ -41,7 +48,6 @@ reinstall: reinstall-rust install-tui
 
 reinstall-rust:
 	cargo install --path flicknote-cli --force
-	cargo install --path flicknote-sync --force
 
 clean:
 	cargo clean
