@@ -100,7 +100,7 @@ async fn run() -> Result<(), CliError> {
     // Commands that don't need a database connection or session
     if let Some(ref cmd) = cli.command {
         match cmd {
-            Commands::Login(args) => return commands::login::run(&config, args),
+            Commands::Login(args) => return commands::login::run(&config, args).await,
             Commands::Logout => return commands::logout::run(&config),
             Commands::Sync(args) => return commands::sync::run(&config, args),
             _ => {}
@@ -175,7 +175,7 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
         Commands::Open(args) => commands::open::run(db, config, args).await,
         Commands::Import(args) => commands::import::run(db, config, args).await,
         Commands::Upload(args) => commands::upload::run(db, config, args).await,
-        Commands::Api(args) => commands::api::run(config, args),
+        Commands::Api(args) => commands::api::run(config, args).await,
         // Login/Logout/Sync are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),
     }

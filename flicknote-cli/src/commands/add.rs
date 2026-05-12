@@ -6,7 +6,7 @@ use std::io::{IsTerminal, Read};
 
 use super::upload_util::{
     cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, mime_from_extension,
-    note_type_for_extension, upload_file_blocking,
+    note_type_for_extension, upload_file,
 };
 use super::util::resolve_project_arg;
 
@@ -83,7 +83,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
             .ok_or_else(|| CliError::Other("Invalid filename".into()))?
             .to_string();
 
-        upload_file_blocking(config, &id, &file_path)?;
+        upload_file(config, &id, &file_path).await?;
 
         let note_type = note_type_for_extension(&filename);
         let metadata = serde_json::json!({
@@ -108,7 +108,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
             .await
         {
             #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
-            let _ = cleanup_uploaded_file(config, &id);
+            let _ = cleanup_uploaded_file(config, &id).await;
             return Err(e);
         }
     } else if is_url {
