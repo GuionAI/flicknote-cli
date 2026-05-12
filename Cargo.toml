@@ -10,6 +10,12 @@ resolver = "3"
 [workspace.package]
 version = "0.1.7"
 
+[workspace.metadata.release]
+shared-version = true
+tag-name = "v{{version}}"
+publish = false
+pre-release-commit-message = "chore: release {{version}}"
+
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

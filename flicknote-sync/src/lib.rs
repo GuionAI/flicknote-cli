@@ -470,10 +470,7 @@ async fn shutdown_daemon(
     log::info!("Sync daemon stopped");
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    env_logger::init();
-
+pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
     config.validate()?;
 

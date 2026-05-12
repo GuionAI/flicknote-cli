@@ -11,6 +11,13 @@ license = "MIT"
 name = "flicknote"
 path = "src/main.rs"
 
+[[bin]]
+name = "flicknote-sync"
+path = "src/bin/flicknote-sync.rs"
+
+[package.metadata.dist]
+formula = "flicknote"
+
 [features]
 default = ["powersync", "storage-pgwire"]
 powersync = ["flicknote-core/powersync"]
@@ -19,6 +26,7 @@ storage-pgwire = ["flicknote-core/storage-pgwire"]
 [dependencies]
 flicknote-core = { path = "../flicknote-core", default-features = false }
 flicknote-auth = { path = "../flicknote-auth" }
+flicknote-sync = { path = "../flicknote-sync" }
 clap = { version = "4", features = ["derive"] }
 uuid = { workspace = true }
 chrono = "0.4"
@@ -35,6 +43,7 @@ pulldown-cmark = { version = "0.13.1", default-features = false }
 sha2 = "0.10"
 open = "5"
 tempfile = "3"
+env_logger = "0.11"
 
 [dev-dependencies]
 
