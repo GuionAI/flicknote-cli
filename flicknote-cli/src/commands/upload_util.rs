@@ -4,35 +4,25 @@ use std::path::Path;
 
 use crate::api_client::ApiClient;
 
-pub(crate) fn upload_file_blocking(
+pub(crate) async fn upload_file(
     config: &Config,
     note_id: &str,
     file_path: &Path,
 ) -> Result<(), CliError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let client = ApiClient::new(config).await?;
-        let filename = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| CliError::Other("Invalid filename".into()))?;
-        println!("Uploading {}...", filename);
-        client.upload_file(note_id, file_path).await?;
-        Ok::<(), CliError>(())
-    })
+    let client = ApiClient::new(config).await?;
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| CliError::Other("Invalid filename".into()))?;
+    println!("Uploading {}...", filename);
+    client.upload_file(note_id, file_path).await?;
+    Ok(())
 }
 
-pub(crate) fn cleanup_uploaded_file(config: &Config, note_id: &str) -> Result<(), CliError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let client = ApiClient::new(config).await?;
-        client.delete_attachment(note_id).await?;
-        Ok::<(), CliError>(())
-    })
+pub(crate) async fn cleanup_uploaded_file(config: &Config, note_id: &str) -> Result<(), CliError> {
+    let client = ApiClient::new(config).await?;
+    client.delete_attachment(note_id).await?;
+    Ok(())
 }
 
 pub(crate) fn mime_from_extension(filename: &str) -> &'static str {

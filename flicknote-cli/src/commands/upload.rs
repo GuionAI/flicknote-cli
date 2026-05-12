@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::commands::add::resolve_project;
 use crate::commands::upload_util::{
-    cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file_blocking,
+    cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file,
 };
 use crate::commands::util::resolve_project_arg;
 
@@ -40,7 +40,7 @@ pub(crate) async fn run(
 
     let id = uuid::Uuid::new_v4().to_string();
 
-    upload_file_blocking(config, &id, &args.file)?;
+    upload_file(config, &id, &args.file).await?;
 
     let now = chrono::Utc::now().to_rfc3339();
     let metadata = serde_json::json!({
@@ -73,7 +73,7 @@ pub(crate) async fn run(
         .await
     {
         #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
-        let _ = cleanup_uploaded_file(config, &id);
+        let _ = cleanup_uploaded_file(config, &id).await;
         return Err(e);
     }
 

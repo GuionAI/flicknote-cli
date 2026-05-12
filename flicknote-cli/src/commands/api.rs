@@ -44,14 +44,7 @@ pub(crate) struct DeleteArgs {
     pub note_id: String,
 }
 
-pub(crate) fn run(config: &Config, args: &ApiArgs) -> Result<(), CliError> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
-    rt.block_on(run_async(config, args))
-}
-
-async fn run_async(config: &Config, args: &ApiArgs) -> Result<(), CliError> {
+pub(crate) async fn run(config: &Config, args: &ApiArgs) -> Result<(), CliError> {
     let client = ApiClient::new(config).await?;
 
     match &args.command {
