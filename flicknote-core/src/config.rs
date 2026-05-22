@@ -176,13 +176,13 @@ fn builtin_defaults(env: &str) -> (&'static str, &'static str, &'static str, &'s
             "https://auth.flicknote.app",
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFocGNqYW1maGJpb3BqZG5laW5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA0NTc1NDIsImV4cCI6MjA2NjAzMzU0Mn0.g6B2UohS8Zw_mrsDljAB7n6feUTvpmMVvvsf7VMRXA4",
             "https://sync.flicknote.app",
-            "https://api.flicknote.app/api/v1",
+            "https://gw.flicknote.app/api/v1",
         ),
         _ => (
             "https://dev-auth.flicknote.app",
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1NTM1NTg4LCJleHAiOjE5MjMyMTU1ODh9.7ErMPvghlVm6mew-IKjSShP1Lf6wTCbNgs9ufuh3yqo",
             "https://dev-sync.flicknote.app",
-            "https://dev-api.flicknote.app/api/v1",
+            "https://dev-gw.flicknote.app/api/v1",
         ),
     }
 }
@@ -230,7 +230,7 @@ mod tests {
         let (url, key, ps, api) = builtin_defaults("dev");
         assert_eq!(url, "https://dev-auth.flicknote.app");
         assert_eq!(ps, "https://dev-sync.flicknote.app");
-        assert_eq!(api, "https://dev-api.flicknote.app/api/v1");
+        assert_eq!(api, "https://dev-gw.flicknote.app/api/v1");
         assert!(!key.is_empty());
     }
 
@@ -239,7 +239,7 @@ mod tests {
         let (url, key, ps, api) = builtin_defaults("prod");
         assert_eq!(url, "https://auth.flicknote.app");
         assert_eq!(ps, "https://sync.flicknote.app");
-        assert_eq!(api, "https://api.flicknote.app/api/v1");
+        assert_eq!(api, "https://gw.flicknote.app/api/v1");
         assert!(!key.is_empty());
     }
 
