@@ -56,9 +56,29 @@ pub(crate) fn mime_from_extension(filename: &str) -> &'static str {
 pub(crate) fn note_type_for_extension(filename: &str) -> &'static str {
     let ext = extension_of(filename);
     match ext.as_str() {
+        "ogg" | "mp3" | "wav" | "m4a" => "voice",
         "png" => "scan",
         _ => "file",
     }
+}
+
+pub(crate) fn metadata_for_upload(filename: &str) -> String {
+    if note_type_for_extension(filename) == "voice" {
+        return serde_json::json!({
+            "voice": {
+                "duration": 0
+            }
+        })
+        .to_string();
+    }
+
+    serde_json::json!({
+        "file": {
+            "name": filename,
+            "type": mime_from_extension(filename)
+        }
+    })
+    .to_string()
 }
 
 const UPLOADABLE_EXTENSIONS: &[&str] = &[
@@ -180,11 +200,40 @@ mod tests {
     }
 
     #[test]
+    fn test_note_type_voice_for_audio() {
+        assert_eq!(note_type_for_extension("song.mp3"), "voice");
+        assert_eq!(note_type_for_extension("clip.wav"), "voice");
+        assert_eq!(note_type_for_extension("voice.m4a"), "voice");
+        assert_eq!(note_type_for_extension("track.ogg"), "voice");
+    }
+
+    #[test]
     fn test_note_type_file_for_others() {
         assert_eq!(note_type_for_extension("doc.pdf"), "file");
         assert_eq!(note_type_for_extension("slides.pptx"), "file");
-        assert_eq!(note_type_for_extension("song.mp3"), "file");
         assert_eq!(note_type_for_extension("photo.jpg"), "file");
+    }
+
+    #[test]
+    fn test_upload_metadata_voice_for_audio() {
+        assert_eq!(
+            metadata_for_upload("clip.wav"),
+            serde_json::json!({ "voice": { "duration": 0 } }).to_string()
+        );
+    }
+
+    #[test]
+    fn test_upload_metadata_file_for_documents() {
+        assert_eq!(
+            metadata_for_upload("doc.pdf"),
+            serde_json::json!({
+                "file": {
+                    "name": "doc.pdf",
+                    "type": "application/pdf"
+                }
+            })
+            .to_string()
+        );
     }
 
     #[test]

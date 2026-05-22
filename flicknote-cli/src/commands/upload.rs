@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use crate::commands::add::resolve_project;
 use crate::commands::upload_util::{
-    cleanup_uploaded_file, mime_from_extension, note_type_for_extension, upload_file,
+    cleanup_uploaded_file, metadata_for_upload, note_type_for_extension, upload_file,
 };
 use crate::commands::util::resolve_project_arg;
 
@@ -43,13 +43,7 @@ pub(crate) async fn run(
     upload_file(config, &id, &args.file).await?;
 
     let now = chrono::Utc::now().to_rfc3339();
-    let metadata = serde_json::json!({
-        "file": {
-            "name": filename,
-            "type": mime_from_extension(&filename)
-        }
-    })
-    .to_string();
+    let metadata = metadata_for_upload(&filename);
 
     let project_id = if let Some(ref name) = resolve_project_arg(&args.project) {
         Some(resolve_project(db, name).await?)

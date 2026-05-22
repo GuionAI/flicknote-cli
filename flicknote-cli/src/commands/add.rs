@@ -5,7 +5,7 @@ use flicknote_core::error::CliError;
 use std::io::{IsTerminal, Read};
 
 use super::upload_util::{
-    cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, mime_from_extension,
+    cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, metadata_for_upload,
     note_type_for_extension, upload_file,
 };
 use super::util::resolve_project_arg;
@@ -86,13 +86,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
         upload_file(config, &id, &file_path).await?;
 
         let note_type = note_type_for_extension(&filename);
-        let metadata = serde_json::json!({
-            "file": {
-                "name": filename,
-                "type": mime_from_extension(&filename)
-            }
-        })
-        .to_string();
+        let metadata = metadata_for_upload(&filename);
 
         if let Err(e) = db
             .insert_note(&InsertNoteReq {
