@@ -10,6 +10,15 @@ pub(crate) struct ApiClient {
     access_token: String,
 }
 
+fn attachment_endpoint(base_url: &str, path: &str) -> String {
+    let versioned_base = base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/api/v1")
+        .trim_end_matches('/');
+    let path = path.trim_matches('/');
+    format!("{versioned_base}/api/v1/attachments/{path}")
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct UploadUrlResponse {
@@ -66,7 +75,7 @@ impl ApiClient {
         // Get presigned upload URL
         let resp = self
             .http
-            .post(format!("{}/api/v1/attachments/upload-url", self.base_url))
+            .post(attachment_endpoint(&self.base_url, "upload-url"))
             .bearer_auth(&self.access_token)
             .json(&serde_json::json!({ "noteId": note_id, "filename": filename }))
             .send()
@@ -112,7 +121,7 @@ impl ApiClient {
     ) -> Result<u64, CliError> {
         let resp = self
             .http
-            .post(format!("{}/api/v1/attachments/download-url", self.base_url))
+            .post(attachment_endpoint(&self.base_url, "download-url"))
             .bearer_auth(&self.access_token)
             .json(&serde_json::json!({ "noteId": note_id }))
             .send()
@@ -162,7 +171,7 @@ impl ApiClient {
     ) -> Result<DeleteResponse, CliError> {
         let resp = self
             .http
-            .delete(format!("{}/api/v1/attachments/{}", self.base_url, note_id))
+            .delete(attachment_endpoint(&self.base_url, note_id))
             .bearer_auth(&self.access_token)
             .send()
             .await
@@ -176,5 +185,30 @@ impl ApiClient {
         resp.json::<DeleteResponse>()
             .await
             .map_err(|e| CliError::Other(format!("Failed to parse delete response: {e}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_endpoint_accepts_api_root_or_versioned_base() {
+        assert_eq!(
+            attachment_endpoint("https://api.example.com", "upload-url"),
+            "https://api.example.com/api/v1/attachments/upload-url"
+        );
+        assert_eq!(
+            attachment_endpoint("https://api.example.com/api/v1", "upload-url"),
+            "https://api.example.com/api/v1/attachments/upload-url"
+        );
+    }
+
+    #[test]
+    fn attachment_endpoint_trims_slashes() {
+        assert_eq!(
+            attachment_endpoint("https://api.example.com/api/v1/", "/note-id/"),
+            "https://api.example.com/api/v1/attachments/note-id"
+        );
     }
 }
