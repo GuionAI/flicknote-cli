@@ -105,6 +105,10 @@ pub(crate) async fn run(
             let new_display = super::edit_match::splice(&display_content, &m, &after);
             // Parse the result back
             let doc = crate::frontmatter::parse_editable_doc(&new_display);
+            // Validate: full-note write requires a non-empty H1 title
+            crate::frontmatter::validate_title_required(&doc).map_err(|e| {
+                CliError::Other(e.message)
+            })?;
             // Update title
             if let Some(ref new_title) = doc.title {
                 db.update_note_title(&full_id, new_title).await?;

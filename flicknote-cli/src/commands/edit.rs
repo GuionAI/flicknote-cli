@@ -106,6 +106,10 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
     }
     // Parse the editable document
     let doc = crate::frontmatter::parse_editable_doc(&edited);
+    // Validate: full-note write requires a non-empty H1 title
+    crate::frontmatter::validate_title_required(&doc).map_err(|e| {
+        CliError::Other(e.message)
+    })?;
     // Update title
     if let Some(ref new_title) = doc.title {
         let old_title = note.title.as_deref();
@@ -149,6 +153,10 @@ async fn create_from_editor(
     let now = chrono::Utc::now().to_rfc3339();
     // Parse editable document
     let doc = crate::frontmatter::parse_editable_doc(&edited);
+    // Validate: new notes require a non-empty H1 title
+    crate::frontmatter::validate_title_required(&doc).map_err(|e| {
+        CliError::Other(e.message)
+    })?;
     let effective_project = resolve_project_arg(project_arg);
     let project_id = if let Some(ref name) = effective_project {
         Some(resolve_project(db, name).await?)

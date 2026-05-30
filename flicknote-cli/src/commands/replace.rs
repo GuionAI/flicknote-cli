@@ -74,7 +74,11 @@ pub(crate) async fn run(
         } else {
             // Whole-note replace: parse editable document format
             let doc = crate::frontmatter::parse_editable_doc(&new_body);
-            // Update title from H1 if present (preserve existing if no H1)
+            // Validate: full-note write requires a non-empty H1 title
+            crate::frontmatter::validate_title_required(&doc).map_err(|e| {
+                CliError::Other(e.message)
+            })?;
+            // Update title from H1
             if let Some(ref new_title) = doc.title {
                 db.update_note_title(&full_id, new_title).await?;
             }
