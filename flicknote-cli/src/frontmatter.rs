@@ -643,4 +643,46 @@ mod tests {
         assert!(!fm.contains("topics:"));
         assert!(!fm.contains("entities:"));
     }
+    #[test]
+    fn test_parse_editable_doc_no_frontmatter_clears_extractions() {
+        // No frontmatter at all → both topics and entities are empty
+        let input = "# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert!(doc.topics.is_empty(), "topics should be empty when no frontmatter");
+        assert!(doc.entities.is_empty(), "entities should be empty when no frontmatter");
+        assert!(doc.unmanaged_frontmatter.is_none());
+    }
+    #[test]
+    fn test_parse_editable_doc_topics_empty_list_clears() {
+        // topics: [] in frontmatter → topics is empty vec
+        let input = "---\ntopics: []\nentities:\n  - Tokio\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert!(doc.topics.is_empty(), "topics: [] should result in empty vec");
+        assert_eq!(doc.entities, vec!["Tokio".to_string()]);
+    }
+    #[test]
+    fn test_parse_editable_doc_entities_empty_list_clears() {
+        // entities: [] in frontmatter → entities is empty vec
+        let input = "---\ntopics:\n  - rust\nentities: []\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert_eq!(doc.topics, vec!["rust".to_string()]);
+        assert!(doc.entities.is_empty(), "entities: [] should result in empty vec");
+    }
+    #[test]
+    fn test_parse_editable_doc_absent_key_clears_that_type() {
+        // Only topics present, entities absent → entities is empty
+        let input = "---\ntopics:\n  - rust\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert_eq!(doc.topics, vec!["rust".to_string()]);
+        assert!(doc.entities.is_empty(), "absent entities key should result in empty vec");
+    }
+    #[test]
+    fn test_parse_editable_doc_both_keys_absent_clears_both() {
+        // Neither topics nor entities in frontmatter → both empty
+        let input = "---\ncustom: only\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert!(doc.topics.is_empty(), "absent topics should be empty");
+        assert!(doc.entities.is_empty(), "absent entities should be empty");
+        assert!(doc.unmanaged_frontmatter.is_some());
+    }
 }
