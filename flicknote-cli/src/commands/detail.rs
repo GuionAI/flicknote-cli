@@ -2,7 +2,6 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-
 #[derive(Args)]
 pub(crate) struct DetailArgs {
     /// Note ID (full UUID or short prefix)
@@ -20,7 +19,6 @@ pub(crate) struct DetailArgs {
     #[arg(long)]
     archived: bool,
 }
-
 pub(crate) async fn run(
     db: &dyn NoteDb,
     _config: &Config,
@@ -31,7 +29,6 @@ pub(crate) async fn run(
             id: args.id.clone(),
         });
     }
-
     // Tree view or section extraction — both need parsed markdown
     if args.tree || args.section.is_some() {
         let full_id = if args.archived {
@@ -45,28 +42,21 @@ pub(crate) async fn run(
             db.find_note(&full_id).await?
         };
         let content = note.content.as_deref().unwrap_or("");
-
         if args.tree {
-            let display_content = if let Some(ref t) = note.title {
-                format!("# {t}\n\n{content}")
-            } else {
-                content.to_string()
-            };
+            // Build display content for tree view (with frontmatter)
+            let display_content = build_full_display(db, &note).await?;
             let doc = crate::markdown::parse_markdown(&display_content);
             let tree = doc.build_tree();
-
             if tree.is_empty() {
                 println!("(no headings found)");
                 return Ok(());
             }
-
             for (i, node) in tree.iter().enumerate() {
                 let is_last = i == tree.len() - 1;
                 print!("{}", node.render_box_tree("", is_last));
             }
             return Ok(());
         }
-
         // --section: operates on raw stored content
         if note.content.is_none() {
             return Err(CliError::Other(
@@ -84,7 +74,6 @@ pub(crate) async fn run(
         println!("{}", section_content);
         return Ok(());
     }
-
     let full_id = if args.archived {
         db.resolve_archived_note_id(&args.id).await?
     } else {
@@ -95,13 +84,11 @@ pub(crate) async fn run(
     } else {
         db.find_note(&full_id).await?
     };
-
     let project_name = if let Some(ref pid) = note.project_id {
         db.find_project_name_by_id(pid).await?
     } else {
         None
     };
-
     if args.json {
         let json_output = serde_json::json!({
             "id": note.id,
@@ -138,14 +125,9 @@ pub(crate) async fn run(
         }
         println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
         println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
-        if let Some(ref content) = note.content {
+        if let Some(ref _content) = note.content {
             println!("\nContent:");
-            // Synthesize H1 from title for display, then render with IDs
-            let display_content = if let Some(ref t) = note.title {
-                format!("# {t}\n\n{content}")
-            } else {
-                content.clone()
-            };
+            let display_content = build_full_display(db, &note).await?;
             println!(
                 "{}",
                 crate::markdown::render_content_with_ids(&display_content)
@@ -155,6 +137,38 @@ pub(crate) async fn run(
             println!("Link:       {url}");
         }
     }
-
     Ok(())
+}
+/// Build the full display content for a note with frontmatter, H1 title, and body.
+async fn build_full_display(
+    db: &dyn NoteDb,
+    note: &flicknote_core::types::Note,
+) -> Result<String, CliError> {
+    let content = note.content.as_deref().unwrap_or("");
+    // Fetch extractions
+    let extractions = db
+        .list_note_extractions(&[&note.id], &["topic", "entity"])
+        .await?;
+    let note_extractions = extractions.get(&note.id);
+    let mut topics: Vec<String> = Vec::new();
+    let mut entities: Vec<String> = Vec::new();
+    if let Some(pairs) = note_extractions {
+        for (ext_type, value) in pairs {
+            match ext_type.as_str() {
+                "topic" => topics.push(value.clone()),
+                "entity" => entities.push(value.clone()),
+                _ => {}
+            }
+        }
+    }
+    // Check for stored frontmatter in content
+    let (stored_frontmatter, body_without_fm) =
+        crate::frontmatter::split_frontmatter(content);
+    Ok(crate::frontmatter::build_editable_content(
+        note.title.as_deref(),
+        body_without_fm,
+        &topics,
+        &entities,
+        stored_frontmatter,
+    ))
 }

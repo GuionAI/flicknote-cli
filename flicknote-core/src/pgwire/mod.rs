@@ -652,7 +652,21 @@ impl NoteDb for PgWireBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        if note_ids.is_empty() {
+        let extractions = self
+            .list_note_extractions(note_ids, &["topic"])
+            .await?;
+        let mut map = std::collections::HashMap::new();
+        for (note_id, pairs) in extractions {
+            map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
+        }
+        Ok(map)
+    }
+    async fn list_note_extractions(
+        &self,
+        note_ids: &[&str],
+        extraction_types: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError> {
+        if note_ids.is_empty() || extraction_types.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
         let ids = note_ids
@@ -660,18 +674,46 @@ impl NoteDb for PgWireBackend {
             .map(|id| parse_uuid(id))
             .collect::<Result<Vec<_>, _>>()?;
         let rows = sqlx::query(
-            "SELECT note_id::text, value FROM note_extractions WHERE type = 'topic' AND note_id = ANY($1)",
+            "SELECT note_id::text, type, value FROM note_extractions WHERE type = ANY($1) AND note_id = ANY($2) ORDER BY type, value",
         )
-        .bind(ids)
+        .bind(extraction_types)
+        .bind(&ids)
         .fetch_all(&self.pool)
         .await?;
         let mut map = std::collections::HashMap::new();
         for row in rows {
             let note_id: String = row.try_get(0)?;
-            let value: String = row.try_get(1)?;
-            map.entry(note_id).or_insert_with(Vec::new).push(value);
+            let ext_type: String = row.try_get(1)?;
+            let value: String = row.try_get(2)?;
+            map.entry(note_id).or_default().push((ext_type, value));
         }
         Ok(map)
+    }
+    async fn set_note_extractions(
+        &self,
+        note_id: &str,
+        extraction_type: &str,
+        values: &[String],
+    ) -> Result<(), CliError> {
+        let note_uuid = parse_uuid(note_id)?;
+        // Delete all existing rows for this note + type
+        sqlx::query("DELETE FROM note_extractions WHERE note_id = $1 AND type = $2")
+            .bind(note_uuid)
+            .bind(extraction_type)
+            .execute(&self.pool)
+            .await?;
+        // Insert new values
+        for value in values {
+            sqlx::query(
+                "INSERT INTO note_extractions (note_id, user_id, type, value) VALUES ($1, (SELECT user_id FROM notes WHERE id = $1), $2, $3)",
+            )
+            .bind(note_uuid)
+            .bind(extraction_type)
+            .bind(value)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
     }
 
     async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {

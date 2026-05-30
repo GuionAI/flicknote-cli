@@ -140,7 +140,6 @@ EDIT
 
 # Metadata only
 flicknote modify abc12345 --project newproject
-flicknote modify abc12345 --title "New Title"
 flicknote modify abc12345 --flagged
 ```
 
