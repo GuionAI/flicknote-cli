@@ -105,12 +105,9 @@ pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
 fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<String>, Vec<String>) {
     // Split_frontmatter includes the closing --- in its returned slice.
     // Strip it so yaml_serde receives a clean YAML body.
-    let fm_body = fm_body.trim();
-    let fm_body = fm_body.strip_suffix("---").unwrap_or(fm_body);
-    let fm_body = fm_body.trim();
+    let fm_body = frontmatter_body(fm_body);
     let Ok(mut value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) else {
-        // Invalid YAML or empty: preserve original text as-is
-        return (Some(fm_body.to_string()), Vec::new(), Vec::new());
+        return extract_managed_from_invalid_frontmatter(fm_body);
     };
     let topics = take_yaml_list(&mut value, "topics");
     let entities = take_yaml_list(&mut value, "entities");
@@ -129,6 +126,71 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
     } else {
         (Some(remaining), topics, entities)
     }
+}
+
+fn extract_managed_from_invalid_frontmatter(
+    fm_body: &str,
+) -> (Option<String>, Vec<String>, Vec<String>) {
+    let mut topics = Vec::new();
+    let mut entities = Vec::new();
+    let mut remaining = Vec::new();
+    let lines: Vec<_> = fm_body.lines().collect();
+    let mut index = 0;
+
+    while index < lines.len() {
+        let Some(key) = managed_key_line(lines[index]) else {
+            remaining.push(lines[index]);
+            index += 1;
+            continue;
+        };
+        let start = index;
+        index += 1;
+        while index < lines.len() && !is_top_level_mapping_key(lines[index]) {
+            index += 1;
+        }
+
+        let block = lines[start..index].join("\n");
+        let Ok(mut value) = yaml_serde::from_str::<yaml_serde::Value>(&block) else {
+            remaining.extend_from_slice(&lines[start..index]);
+            continue;
+        };
+        let values = take_yaml_list(&mut value, key);
+        match key {
+            "topics" => topics = values,
+            "entities" => entities = values,
+            _ => unreachable!("managed_key_line returned an unknown key"),
+        }
+    }
+
+    let remaining = remaining.join("\n").trim().to_string();
+    if remaining.is_empty() {
+        (None, topics, entities)
+    } else {
+        (Some(remaining), topics, entities)
+    }
+}
+
+fn managed_key_line(line: &str) -> Option<&'static str> {
+    if line.starts_with("topics:") {
+        Some("topics")
+    } else if line.starts_with("entities:") {
+        Some("entities")
+    } else {
+        None
+    }
+}
+
+fn is_top_level_mapping_key(line: &str) -> bool {
+    let Some(first) = line.chars().next() else {
+        return false;
+    };
+    if first.is_whitespace() || first == '-' {
+        return false;
+    }
+    let Some((key, _)) = line.split_once(':') else {
+        return false;
+    };
+    !key.trim().is_empty()
 }
 
 /// Remove and return the list value for `key` from a YAML mapping.
@@ -189,10 +251,7 @@ pub(crate) fn render_frontmatter(
         );
     }
     if let Some(fm) = user_frontmatter {
-        let fm_body = fm.trim();
-        let fm_body = fm_body.strip_prefix("---").unwrap_or(fm_body);
-        let fm_body = fm_body.strip_suffix("---").unwrap_or(fm_body);
-        let fm_body = fm_body.trim();
+        let fm_body = frontmatter_body(fm);
         if let Ok(mut user_value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) {
             // Strip managed keys from user mapping (managed lists already in `combined`)
             if let Some(user_mapping) = user_value.as_mapping_mut() {
@@ -208,14 +267,31 @@ pub(crate) fn render_frontmatter(
                 }
             }
         } else {
-            // Invalid user YAML cannot be safely merged with managed keys.
-            // Preserve the raw block rather than dropping user-owned text.
-            return Some(normalize_frontmatter_block(fm));
+            return render_invalid_user_frontmatter(&combined, fm);
         }
     }
     let inner = yaml_serde::to_string(&combined).unwrap_or_default();
     let inner = inner.trim();
     Some(format!("---\n{}\n---", inner))
+}
+
+fn render_invalid_user_frontmatter(
+    combined: &yaml_serde::Mapping,
+    user_frontmatter: &str,
+) -> Option<String> {
+    if combined.is_empty() {
+        return Some(normalize_frontmatter_block(user_frontmatter));
+    }
+
+    let managed = yaml_serde::to_string(combined).unwrap_or_default();
+    let managed = managed.trim();
+    let user_body = frontmatter_body(user_frontmatter);
+    let body = if user_body.is_empty() {
+        managed.to_string()
+    } else {
+        format!("{managed}\n{user_body}")
+    };
+    Some(format!("---\n{}\n---", body.trim()))
 }
 
 fn normalize_frontmatter_block(fm: &str) -> String {
@@ -225,6 +301,13 @@ fn normalize_frontmatter_block(fm: &str) -> String {
     } else {
         format!("---\n{}\n---", fm)
     }
+}
+
+fn frontmatter_body(fm: &str) -> &str {
+    let fm = fm.trim();
+    let fm = fm.strip_prefix("---").unwrap_or(fm);
+    let fm = fm.strip_suffix("---").unwrap_or(fm);
+    fm.trim()
 }
 /// Parse a full editable Markdown document into its components.
 ///
@@ -738,13 +821,31 @@ mod tests {
     }
 
     #[test]
-    fn test_render_frontmatter_invalid_user_frontmatter_preserves_raw_text() {
+    fn test_render_frontmatter_invalid_user_frontmatter_keeps_managed_values_visible() {
         let fm = render_frontmatter(
             &["rust".to_string()],
             &["PowerSync".to_string()],
             Some("---\ncustom: [unterminated\n---"),
-        );
+        )
+        .expect("frontmatter should render");
 
-        assert_eq!(fm, Some("---\ncustom: [unterminated\n---".to_string()));
+        assert!(fm.contains("topics:"));
+        assert!(fm.contains("- rust"));
+        assert!(fm.contains("entities:"));
+        assert!(fm.contains("- PowerSync"));
+        assert!(fm.contains("custom: [unterminated"));
+    }
+
+    #[test]
+    fn test_parse_editable_doc_invalid_frontmatter_keeps_managed_values() {
+        let input = "---\ntopics:\n- rust\nentities:\n- PowerSync\ncustom: [unterminated\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+
+        assert_eq!(doc.topics, vec!["rust".to_string()]);
+        assert_eq!(doc.entities, vec!["PowerSync".to_string()]);
+        assert_eq!(
+            doc.unmanaged_frontmatter,
+            Some("---\ncustom: [unterminated\n---".to_string())
+        );
     }
 }
