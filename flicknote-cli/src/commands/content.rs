@@ -24,8 +24,7 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
         CliError::Other("This note has no text content (link or file note)".into())
     })?;
     // --section: operates on note body without frontmatter
-    if args.section.is_some() {
-        let section_id = args.section.as_ref().unwrap();
+    if let Some(ref section_id) = args.section {
         // Build display content for section extraction
         let display_content = if let Some(ref t) = note.title {
             format!("# {t}\n\n{content}")

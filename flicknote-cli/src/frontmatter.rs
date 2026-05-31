@@ -150,7 +150,6 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
     let managed_keys = ["topics:", "entities:"];
     let lines: Vec<&str> = fm_body.lines().collect();
     let mut remaining_lines: Vec<&str> = Vec::new();
-    let mut skip_until_type_change = false;
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
@@ -173,7 +172,6 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
                     break;
                 }
             }
-            skip_until_type_change = false;
             continue;
         }
         remaining_lines.push(line);
@@ -202,7 +200,7 @@ pub(crate) fn render_frontmatter(
     user_frontmatter: Option<&str>,
 ) -> Option<String> {
     let has_managed = !topics.is_empty() || !entities.is_empty();
-    let has_user = user_frontmatter.map_or(false, |fm| {
+    let has_user = user_frontmatter.is_some_and(|fm| {
         let body = fm.trim();
         !body.is_empty() && body != "---"
     });
