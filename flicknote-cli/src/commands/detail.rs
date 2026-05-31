@@ -162,8 +162,7 @@ async fn build_full_display(
         }
     }
     // Check for stored frontmatter in content
-    let (stored_frontmatter, body_without_fm) =
-        crate::frontmatter::split_frontmatter(content);
+    let (stored_frontmatter, body_without_fm) = crate::frontmatter::split_frontmatter(content);
     Ok(crate::frontmatter::build_editable_content(
         note.title.as_deref(),
         body_without_fm,

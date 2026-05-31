@@ -1,10 +1,10 @@
+use super::add::resolve_project;
+use super::util::{resolve_note_id, resolve_project_arg, write_content};
 use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use std::io::Write;
-use super::add::resolve_project;
-use super::util::{resolve_note_id, resolve_project_arg, write_content};
 #[derive(Args)]
 pub(crate) struct EditArgs {
     /// Note ID (full UUID or prefix). Omit to create a new note.
@@ -107,9 +107,7 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
     // Parse the editable document
     let doc = crate::frontmatter::parse_editable_doc(&edited);
     // Validate: full-note write requires a non-empty H1 title
-    crate::frontmatter::validate_title_required(&doc).map_err(|e| {
-        CliError::Other(e.message)
-    })?;
+    crate::frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
     // Update title
     if let Some(ref new_title) = doc.title {
         let old_title = note.title.as_deref();
@@ -119,8 +117,10 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
         }
     }
     // Update extractions
-    db.set_note_extractions(&full_id, "topic", &doc.topics).await?;
-    db.set_note_extractions(&full_id, "entity", &doc.entities).await?;
+    db.set_note_extractions(&full_id, "topic", &doc.topics)
+        .await?;
+    db.set_note_extractions(&full_id, "entity", &doc.entities)
+        .await?;
     // Store body
     let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
         if doc.body.is_empty() {
@@ -154,9 +154,7 @@ async fn create_from_editor(
     // Parse editable document
     let doc = crate::frontmatter::parse_editable_doc(&edited);
     // Validate: new notes require a non-empty H1 title
-    crate::frontmatter::validate_title_required(&doc).map_err(|e| {
-        CliError::Other(e.message)
-    })?;
+    crate::frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
     let effective_project = resolve_project_arg(project_arg);
     let project_id = if let Some(ref name) = effective_project {
         Some(resolve_project(db, name).await?)
@@ -173,7 +171,9 @@ async fn create_from_editor(
     } else {
         doc.body.clone()
     };
-    let content_ref = if stored_content.is_empty() {
+    let content_ref = if stored_content.is_empty() && doc.unmanaged_frontmatter.is_none() {
+        Some("")
+    } else if stored_content.is_empty() {
         None
     } else {
         Some(stored_content.as_str())
@@ -194,7 +194,8 @@ async fn create_from_editor(
         db.set_note_extractions(&id, "topic", &doc.topics).await?;
     }
     if !doc.entities.is_empty() {
-        db.set_note_extractions(&id, "entity", &doc.entities).await?;
+        db.set_note_extractions(&id, "entity", &doc.entities)
+            .await?;
     }
     match effective_project.as_deref() {
         Some(name) => println!("Created note {} in project \"{name}\".", id),

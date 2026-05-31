@@ -106,16 +106,17 @@ pub(crate) async fn run(
             // Parse the result back
             let doc = crate::frontmatter::parse_editable_doc(&new_display);
             // Validate: full-note write requires a non-empty H1 title
-            crate::frontmatter::validate_title_required(&doc).map_err(|e| {
-                CliError::Other(e.message)
-            })?;
+            crate::frontmatter::validate_title_required(&doc)
+                .map_err(|e| CliError::Other(e.message))?;
             // Update title
             if let Some(ref new_title) = doc.title {
                 db.update_note_title(&full_id, new_title).await?;
             }
             // Update extractions
-            db.set_note_extractions(&full_id, "topic", &doc.topics).await?;
-            db.set_note_extractions(&full_id, "entity", &doc.entities).await?;
+            db.set_note_extractions(&full_id, "topic", &doc.topics)
+                .await?;
+            db.set_note_extractions(&full_id, "entity", &doc.entities)
+                .await?;
             // Store body
             let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
                 if doc.body.is_empty() {

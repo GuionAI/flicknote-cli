@@ -310,7 +310,7 @@ pub(crate) fn build_editable_content(
         parts.push(format!("# {t}"));
     }
     // Body (with blank line separator after H1)
-    let body = body.trim();
+    let body = body.trim_end();
     if !body.is_empty() {
         if title.is_some() {
             parts.push(String::new()); // blank line after H1
@@ -335,7 +335,7 @@ mod tests {
         let input = "---\ntopics:\n  - rust\n---\n# Title\n\nBody.\n";
         let (fm, rest) = split_frontmatter(input);
         assert!(fm.is_some());
-        assert_eq!(fm.unwrap(), "---\ntopics:\n  - rust\n---\n");
+        assert_eq!(fm.unwrap(), "---\ntopics:\n  - rust\n---");
         assert_eq!(rest, "# Title\n\nBody.\n");
     }
     #[test]
@@ -416,7 +416,8 @@ mod tests {
     #[test]
     fn test_parse_editable_doc_stale_managed_keys() {
         // Stored content has stale managed keys; DB extraction rows are source of truth
-        let input = "---\ntopics:\n  - old-topic\nentities:\n  - old-entity\n---\n# Title\n\nBody.\n";
+        let input =
+            "---\ntopics:\n  - old-topic\nentities:\n  - old-entity\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
         // Managed keys are extracted and not in unmanaged
         assert_eq!(doc.topics, vec!["old-topic".to_string()]);
@@ -484,13 +485,7 @@ mod tests {
     }
     #[test]
     fn test_build_editable_content_no_extractions() {
-        let content = build_editable_content(
-            Some("Title"),
-            "Body.",
-            &[],
-            &[],
-            None,
-        );
+        let content = build_editable_content(Some("Title"), "Body.", &[], &[], None);
         assert!(!content.starts_with("---"));
         assert!(content.starts_with("# Title"));
     }
@@ -499,13 +494,8 @@ mod tests {
         // Note with stored custom frontmatter + DB extractions merges into one block
         let stored_fm = "---\ncustom: keep\n---\n\nbody content";
         let (fm_opt, _) = split_frontmatter(stored_fm);
-        let content = build_editable_content(
-            Some("Title"),
-            stored_fm,
-            &["rust".to_string()],
-            &[],
-            fm_opt,
-        );
+        let content =
+            build_editable_content(Some("Title"), stored_fm, &["rust".to_string()], &[], fm_opt);
         assert!(content.starts_with("---\n"));
         assert!(content.contains("topics:"));
         assert!(content.contains("custom: keep"));
@@ -513,13 +503,7 @@ mod tests {
     }
     #[test]
     fn test_build_editable_content_no_title() {
-        let content = build_editable_content(
-            None,
-            "Just body.",
-            &["rust".to_string()],
-            &[],
-            None,
-        );
+        let content = build_editable_content(None, "Just body.", &["rust".to_string()], &[], None);
         assert!(content.starts_with("---\n"));
         assert!(!content.contains("#"));
         assert!(content.contains("Just body."));
@@ -631,7 +615,8 @@ mod tests {
     #[test]
     fn test_parse_editable_doc_managed_keys_not_duplicated() {
         // When both topics and entities are managed, they don't leak into unmanaged
-        let input = "---\ntopics:\n  - rust\nentities:\n  - Tokio\ncustom: kept\n---\n# Title\n\nBody.\n";
+        let input =
+            "---\ntopics:\n  - rust\nentities:\n  - Tokio\ncustom: kept\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
         // Managed keys extracted
         assert_eq!(doc.topics, vec!["rust".to_string()]);
@@ -648,8 +633,14 @@ mod tests {
         // No frontmatter at all → both topics and entities are empty
         let input = "# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
-        assert!(doc.topics.is_empty(), "topics should be empty when no frontmatter");
-        assert!(doc.entities.is_empty(), "entities should be empty when no frontmatter");
+        assert!(
+            doc.topics.is_empty(),
+            "topics should be empty when no frontmatter"
+        );
+        assert!(
+            doc.entities.is_empty(),
+            "entities should be empty when no frontmatter"
+        );
         assert!(doc.unmanaged_frontmatter.is_none());
     }
     #[test]
@@ -657,7 +648,10 @@ mod tests {
         // topics: [] in frontmatter → topics is empty vec
         let input = "---\ntopics: []\nentities:\n  - Tokio\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
-        assert!(doc.topics.is_empty(), "topics: [] should result in empty vec");
+        assert!(
+            doc.topics.is_empty(),
+            "topics: [] should result in empty vec"
+        );
         assert_eq!(doc.entities, vec!["Tokio".to_string()]);
     }
     #[test]
@@ -666,7 +660,10 @@ mod tests {
         let input = "---\ntopics:\n  - rust\nentities: []\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
         assert_eq!(doc.topics, vec!["rust".to_string()]);
-        assert!(doc.entities.is_empty(), "entities: [] should result in empty vec");
+        assert!(
+            doc.entities.is_empty(),
+            "entities: [] should result in empty vec"
+        );
     }
     #[test]
     fn test_parse_editable_doc_absent_key_clears_that_type() {
@@ -674,7 +671,10 @@ mod tests {
         let input = "---\ntopics:\n  - rust\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
         assert_eq!(doc.topics, vec!["rust".to_string()]);
-        assert!(doc.entities.is_empty(), "absent entities key should result in empty vec");
+        assert!(
+            doc.entities.is_empty(),
+            "absent entities key should result in empty vec"
+        );
     }
     #[test]
     fn test_parse_editable_doc_both_keys_absent_clears_both() {

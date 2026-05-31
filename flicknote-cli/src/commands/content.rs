@@ -59,8 +59,7 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
         }
     }
     // Check for stored frontmatter in content
-    let (stored_frontmatter, body_without_fm) =
-        crate::frontmatter::split_frontmatter(content);
+    let (stored_frontmatter, body_without_fm) = crate::frontmatter::split_frontmatter(content);
     let output = crate::frontmatter::build_editable_content(
         note.title.as_deref(),
         body_without_fm,

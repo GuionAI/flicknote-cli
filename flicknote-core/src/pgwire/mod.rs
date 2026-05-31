@@ -652,10 +652,8 @@ impl NoteDb for PgWireBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self
-            .list_note_extractions(note_ids, &["topic"])
-            .await?;
-        let mut map = std::collections::HashMap::new();
+        let extractions = self.list_note_extractions(note_ids, &["topic"]).await?;
+        let mut map = std::collections::HashMap::<String, Vec<String>>::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
         }
@@ -680,7 +678,7 @@ impl NoteDb for PgWireBackend {
         .bind(&ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut map = std::collections::HashMap::new();
+        let mut map = std::collections::HashMap::<String, Vec<(String, String)>>::new();
         for row in rows {
             let note_id: String = row.try_get(0)?;
             let ext_type: String = row.try_get(1)?;

@@ -267,8 +267,6 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions \
-     WHERE user_id = ? AND type = 'topic' AND note_id IN (SELECT value FROM json_each(?))";
 #[cfg(feature = "powersync")]
 const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extractions \
      WHERE user_id = ? AND type IN (SELECT value FROM json_each(?)) \
@@ -833,9 +831,7 @@ impl NoteDb for SqliteBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self
-            .list_note_extractions(note_ids, &["topic"])
-            .await?;
+        let extractions = self.list_note_extractions(note_ids, &["topic"]).await?;
         let mut map = std::collections::HashMap::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
