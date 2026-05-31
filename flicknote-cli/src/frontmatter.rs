@@ -75,7 +75,7 @@ pub(crate) fn validate_title_required(doc: &EditableDoc) -> Result<(), MissingTi
 /// Returns `(frontmatter_body, rest_of_doc)` when document starts with `---`
 /// at byte 0 and is closed by a subsequent `---` delimiter on its own line.
 /// Returns `(None, original)` if no valid frontmatter block is found.
-fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     let trimmed = content;
     if !trimmed.starts_with("---\n") && trimmed != "---" {
         return (None, content);

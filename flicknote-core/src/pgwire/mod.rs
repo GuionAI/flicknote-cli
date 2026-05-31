@@ -667,7 +667,7 @@ impl NoteDb for PgWireBackend {
         extraction_types: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError> {
         if note_ids.is_empty() || extraction_types.is_empty() {
-            return Ok(std::collections::HashMap::new());
+            return Ok(std::collections::HashMap::<String, Vec<(String, String)>>::new());
         }
         let ids = note_ids
             .iter()
