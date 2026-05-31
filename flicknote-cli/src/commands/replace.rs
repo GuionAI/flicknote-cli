@@ -72,33 +72,10 @@ pub(crate) async fn run(
             println!("Replaced section in note {}.\n", full_id);
             print!("{}", crate::markdown::render_tree(new_content.trim()));
         } else {
-            // Whole-note replace: parse editable document format
-            let doc = crate::frontmatter::parse_editable_doc(&new_body);
-            // Validate: full-note write requires a non-empty H1 title
-            crate::frontmatter::validate_title_required(&doc)
-                .map_err(|e| CliError::Other(e.message))?;
-            // Update title from H1
-            if let Some(ref new_title) = doc.title {
-                db.update_note_title(&full_id, new_title).await?;
-            }
-            // Update extractions
-            db.set_note_extractions(&full_id, "topic", &doc.topics)
-                .await?;
-            db.set_note_extractions(&full_id, "entity", &doc.entities)
-                .await?;
-            // Store body content: either body alone, or with unmanaged frontmatter
-            let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
-                if doc.body.is_empty() {
-                    fm.clone()
-                } else {
-                    format!("{}\n\n{}", fm, doc.body)
-                }
-            } else {
-                doc.body.clone()
-            };
-            write_content(db, &full_id, &stored_content).await?;
+            let result =
+                crate::editable_document::save_editable_note(db, &full_id, &new_body).await?;
             println!("Replaced content for note {}.\n", full_id);
-            print!("{}", crate::markdown::render_tree(&stored_content));
+            print!("{}", crate::markdown::render_tree(&result.stored_content));
         }
     }
     // Step 2: metadata updates.

@@ -72,64 +72,15 @@ pub(crate) async fn run(
             println!("edit applied to note {} (1 replacement)\n", full_id);
             print!("{}", crate::markdown::render_tree(new_content.trim()));
         } else {
-            // Whole-note edit: build editable document, apply edit, parse result
-            let full_content = get_note_content(db, &full_id).await?;
-            // Build the editable document as seen by the user
-            let extractions = db
-                .list_note_extractions(&[&full_id], &["topic", "entity"])
-                .await?;
-            let note_extractions = extractions.get(&full_id);
-            let mut topics: Vec<String> = Vec::new();
-            let mut entities: Vec<String> = Vec::new();
-            if let Some(pairs) = note_extractions {
-                for (ext_type, value) in pairs {
-                    match ext_type.as_str() {
-                        "topic" => topics.push(value.clone()),
-                        "entity" => entities.push(value.clone()),
-                        _ => {}
-                    }
-                }
-            }
-            let (stored_frontmatter, body_without_fm) =
-                crate::frontmatter::split_frontmatter(&full_content);
-            let note = db.find_note(&full_id).await?;
-            let display_content = crate::frontmatter::build_editable_content(
-                note.title.as_deref(),
-                body_without_fm,
-                &topics,
-                &entities,
-                stored_frontmatter,
-            );
+            let display_content =
+                crate::editable_document::load_editable_note(db, &full_id).await?;
             // Apply edit-mode replacement against the display content
             let m = super::edit_match::find_unique(&display_content, &before)?;
             let new_display = super::edit_match::splice(&display_content, &m, &after);
-            // Parse the result back
-            let doc = crate::frontmatter::parse_editable_doc(&new_display);
-            // Validate: full-note write requires a non-empty H1 title
-            crate::frontmatter::validate_title_required(&doc)
-                .map_err(|e| CliError::Other(e.message))?;
-            // Update title
-            if let Some(ref new_title) = doc.title {
-                db.update_note_title(&full_id, new_title).await?;
-            }
-            // Update extractions
-            db.set_note_extractions(&full_id, "topic", &doc.topics)
-                .await?;
-            db.set_note_extractions(&full_id, "entity", &doc.entities)
-                .await?;
-            // Store body
-            let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
-                if doc.body.is_empty() {
-                    fm.clone()
-                } else {
-                    format!("{}\n\n{}", fm, doc.body)
-                }
-            } else {
-                doc.body.clone()
-            };
-            write_content(db, &full_id, &stored_content).await?;
+            let result =
+                crate::editable_document::save_editable_note(db, &full_id, &new_display).await?;
             println!("edit applied to note {} (1 replacement)\n", full_id);
-            print!("{}", crate::markdown::render_tree(&stored_content));
+            print!("{}", crate::markdown::render_tree(&result.stored_content));
         }
     }
     // Step 2: metadata updates.

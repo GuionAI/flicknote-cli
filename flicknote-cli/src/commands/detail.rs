@@ -43,8 +43,7 @@ pub(crate) async fn run(
         };
         let content = note.content.as_deref().unwrap_or("");
         if args.tree {
-            // Build display content for tree view (with frontmatter)
-            let display_content = build_full_display(db, &note).await?;
+            let display_content = crate::editable_document::render_editable_note(db, &note).await?;
             let doc = crate::markdown::parse_markdown(&display_content);
             let tree = doc.build_tree();
             if tree.is_empty() {
@@ -127,7 +126,7 @@ pub(crate) async fn run(
         println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
         if let Some(ref _content) = note.content {
             println!("\nContent:");
-            let display_content = build_full_display(db, &note).await?;
+            let display_content = crate::editable_document::render_editable_note(db, &note).await?;
             println!(
                 "{}",
                 crate::markdown::render_content_with_ids(&display_content)
@@ -138,36 +137,4 @@ pub(crate) async fn run(
         }
     }
     Ok(())
-}
-/// Build the full display content for a note with frontmatter, H1 title, and body.
-async fn build_full_display(
-    db: &dyn NoteDb,
-    note: &flicknote_core::types::Note,
-) -> Result<String, CliError> {
-    let content = note.content.as_deref().unwrap_or("");
-    // Fetch extractions
-    let extractions = db
-        .list_note_extractions(&[&note.id], &["topic", "entity"])
-        .await?;
-    let note_extractions = extractions.get(&note.id);
-    let mut topics: Vec<String> = Vec::new();
-    let mut entities: Vec<String> = Vec::new();
-    if let Some(pairs) = note_extractions {
-        for (ext_type, value) in pairs {
-            match ext_type.as_str() {
-                "topic" => topics.push(value.clone()),
-                "entity" => entities.push(value.clone()),
-                _ => {}
-            }
-        }
-    }
-    // Check for stored frontmatter in content
-    let (stored_frontmatter, body_without_fm) = crate::frontmatter::split_frontmatter(content);
-    Ok(crate::frontmatter::build_editable_content(
-        note.title.as_deref(),
-        body_without_fm,
-        &topics,
-        &entities,
-        stored_frontmatter,
-    ))
 }

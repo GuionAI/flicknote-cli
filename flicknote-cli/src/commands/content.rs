@@ -20,11 +20,11 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
     }
     let full_id = db.resolve_note_id(&args.id).await?;
     let note = db.find_note(&full_id).await?;
-    let content = note.content.as_deref().ok_or_else(|| {
-        CliError::Other("This note has no text content (link or file note)".into())
-    })?;
     // --section: operates on note body without frontmatter
     if let Some(ref section_id) = args.section {
+        let content = note.content.as_deref().ok_or_else(|| {
+            CliError::Other("This note has no text content (link or file note)".into())
+        })?;
         // Build display content for section extraction
         let display_content = if let Some(ref t) = note.title {
             format!("# {t}\n\n{content}")
@@ -41,31 +41,12 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
         }
         return Ok(());
     }
-    // Full-note display: fetch extractions and build editable document
-    let extractions = db
-        .list_note_extractions(&[&full_id], &["topic", "entity"])
-        .await?;
-    let note_extractions = extractions.get(&full_id);
-    let mut topics: Vec<String> = Vec::new();
-    let mut entities: Vec<String> = Vec::new();
-    if let Some(pairs) = note_extractions {
-        for (ext_type, value) in pairs {
-            match ext_type.as_str() {
-                "topic" => topics.push(value.clone()),
-                "entity" => entities.push(value.clone()),
-                _ => {}
-            }
-        }
+    if note.content.is_none() {
+        return Err(CliError::Other(
+            "This note has no text content (link or file note)".into(),
+        ));
     }
-    // Check for stored frontmatter in content
-    let (stored_frontmatter, body_without_fm) = crate::frontmatter::split_frontmatter(content);
-    let output = crate::frontmatter::build_editable_content(
-        note.title.as_deref(),
-        body_without_fm,
-        &topics,
-        &entities,
-        stored_frontmatter,
-    );
+    let output = crate::editable_document::render_editable_note(db, &note).await?;
     if args.raw {
         print!("{output}");
     } else {

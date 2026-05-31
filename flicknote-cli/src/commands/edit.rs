@@ -1,5 +1,5 @@
 use super::add::resolve_project;
-use super::util::{resolve_note_id, resolve_project_arg, write_content};
+use super::util::{resolve_note_id, resolve_project_arg};
 use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
@@ -68,32 +68,7 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
 /// Edit an existing note.
 async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, id).await?;
-    let note = db.find_note(&full_id).await?;
-    let content = note.content.as_deref().unwrap_or("");
-    // Build editable document with frontmatter
-    let extractions = db
-        .list_note_extractions(&[&full_id], &["topic", "entity"])
-        .await?;
-    let note_extractions = extractions.get(&full_id);
-    let mut topics: Vec<String> = Vec::new();
-    let mut entities: Vec<String> = Vec::new();
-    if let Some(pairs) = note_extractions {
-        for (ext_type, value) in pairs {
-            match ext_type.as_str() {
-                "topic" => topics.push(value.clone()),
-                "entity" => entities.push(value.clone()),
-                _ => {}
-            }
-        }
-    }
-    let (stored_frontmatter, body_without_fm) = crate::frontmatter::split_frontmatter(content);
-    let display_content = crate::frontmatter::build_editable_content(
-        note.title.as_deref(),
-        body_without_fm,
-        &topics,
-        &entities,
-        stored_frontmatter,
-    );
+    let display_content = crate::editable_document::load_editable_note(db, &full_id).await?;
     let edited = open_in_editor(&display_content)?;
     if edited == display_content.trim_end() {
         println!("No changes.");
@@ -104,36 +79,11 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
             "Edited content is empty — aborting. Use `flicknote delete` to remove a note.".into(),
         ));
     }
-    // Parse the editable document
-    let doc = crate::frontmatter::parse_editable_doc(&edited);
-    // Validate: full-note write requires a non-empty H1 title
-    crate::frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
-    // Update title
-    if let Some(ref new_title) = doc.title {
-        let old_title = note.title.as_deref();
-        if Some(new_title.as_str()) != old_title {
-            db.update_note_title(&full_id, new_title).await?;
-            println!("Updated title for note {}.", full_id);
-        }
+    let result = crate::editable_document::save_editable_note(db, &full_id, &edited).await?;
+    if result.title_changed {
+        println!("Updated title for note {}.", full_id);
     }
-    // Update extractions
-    db.set_note_extractions(&full_id, "topic", &doc.topics)
-        .await?;
-    db.set_note_extractions(&full_id, "entity", &doc.entities)
-        .await?;
-    // Store body
-    let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
-        if doc.body.is_empty() {
-            fm.clone()
-        } else {
-            format!("{}\n\n{}", fm, doc.body)
-        }
-    } else {
-        doc.body.clone()
-    };
-    let old_content = note.content.as_deref().unwrap_or("");
-    if stored_content != old_content {
-        write_content(db, &full_id, &stored_content).await?;
+    if result.content_changed {
         println!("Updated content for note {}.", full_id);
     }
     Ok(())
@@ -151,38 +101,23 @@ async fn create_from_editor(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    // Parse editable document
-    let doc = crate::frontmatter::parse_editable_doc(&edited);
-    // Validate: new notes require a non-empty H1 title
-    crate::frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
+    let parsed = crate::editable_document::parse_editable_note(&edited)?;
     let effective_project = resolve_project_arg(project_arg);
     let project_id = if let Some(ref name) = effective_project {
         Some(resolve_project(db, name).await?)
     } else {
         None
     };
-    let title_ref = doc.title.as_deref();
-    let stored_content = if let Some(ref fm) = doc.unmanaged_frontmatter {
-        if doc.body.is_empty() {
-            fm.clone()
-        } else {
-            format!("{}\n\n{}", fm, doc.body)
-        }
-    } else {
-        doc.body.clone()
-    };
-    let content_ref = if stored_content.is_empty() && doc.unmanaged_frontmatter.is_none() {
+    let content_ref = if parsed.stored_content.is_empty() {
         Some("")
-    } else if stored_content.is_empty() {
-        None
     } else {
-        Some(stored_content.as_str())
+        Some(parsed.stored_content.as_str())
     };
     db.insert_note(&InsertNoteReq {
         id: &id,
         note_type: "normal",
         status: "ai_queued",
-        title: title_ref,
+        title: Some(parsed.title.as_str()),
         content: content_ref,
         metadata: None,
         project_id: project_id.as_deref(),
@@ -190,11 +125,12 @@ async fn create_from_editor(
     })
     .await?;
     // Insert extraction rows
-    if !doc.topics.is_empty() {
-        db.set_note_extractions(&id, "topic", &doc.topics).await?;
+    if !parsed.topics.is_empty() {
+        db.set_note_extractions(&id, "topic", &parsed.topics)
+            .await?;
     }
-    if !doc.entities.is_empty() {
-        db.set_note_extractions(&id, "entity", &doc.entities)
+    if !parsed.entities.is_empty() {
+        db.set_note_extractions(&id, "entity", &parsed.entities)
             .await?;
     }
     match effective_project.as_deref() {
