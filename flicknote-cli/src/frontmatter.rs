@@ -114,7 +114,10 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
     };
     let topics = take_yaml_list(&mut value, "topics");
     let entities = take_yaml_list(&mut value, "entities");
-    let remaining = if value.is_mapping() {
+    let remaining = if let Some(mapping) = value.as_mapping() {
+        if mapping.is_empty() {
+            return (None, topics, entities);
+        }
         yaml_serde::to_string(&value).unwrap_or_default()
     } else {
         // Scalar value: re-serialize the original body
@@ -193,8 +196,8 @@ pub(crate) fn render_frontmatter(
         if let Ok(mut user_value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) {
             // Strip managed keys from user mapping (managed lists already in `combined`)
             if let Some(user_mapping) = user_value.as_mapping_mut() {
-                user_mapping.remove(&yaml_serde::Value::String("topics".into()));
-                user_mapping.remove(&yaml_serde::Value::String("entities".into()));
+                user_mapping.remove(yaml_serde::Value::String("topics".into()));
+                user_mapping.remove(yaml_serde::Value::String("entities".into()));
             }
             // Merge remaining user keys into the combined mapping
             if let Some(user_map) = user_value.as_mapping() {
@@ -204,11 +207,22 @@ pub(crate) fn render_frontmatter(
                     }
                 }
             }
+        } else if !has_managed {
+            return Some(normalize_frontmatter_block(fm));
         }
     }
     let inner = yaml_serde::to_string(&combined).unwrap_or_default();
     let inner = inner.trim();
     Some(format!("---\n{}\n---", inner))
+}
+
+fn normalize_frontmatter_block(fm: &str) -> String {
+    let fm = fm.trim();
+    if fm.starts_with("---") && fm.ends_with("---") {
+        fm.to_string()
+    } else {
+        format!("---\n{}\n---", fm)
+    }
 }
 /// Parse a full editable Markdown document into its components.
 ///
@@ -646,5 +660,78 @@ mod tests {
         assert!(doc.topics.is_empty(), "absent topics should be empty");
         assert!(doc.entities.is_empty(), "absent entities should be empty");
         assert!(doc.unmanaged_frontmatter.is_some());
+    }
+
+    #[test]
+    fn test_extract_managed_from_frontmatter_inline_topics() {
+        let fm_body = "topics: [rust, async]\ncustom: keep\n";
+        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+
+        assert_eq!(topics, vec!["rust".to_string(), "async".to_string()]);
+        assert!(entities.is_empty());
+        let remaining = remaining.expect("custom frontmatter should remain");
+        assert!(remaining.contains("custom: keep"));
+        assert!(!remaining.contains("topics:"));
+    }
+
+    #[test]
+    fn test_extract_managed_from_frontmatter_quoted_strings() {
+        let fm_body = "topics: [\"rust lang\", 'async runtime']\nentities:\n  - \"PowerSync\"\n";
+        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+
+        assert_eq!(
+            topics,
+            vec!["rust lang".to_string(), "async runtime".to_string()]
+        );
+        assert_eq!(entities, vec!["PowerSync".to_string()]);
+        assert!(remaining.is_none());
+    }
+
+    #[test]
+    fn test_parse_editable_doc_nested_custom_yaml_round_trips() {
+        let input = "---\ntopics: [rust, async]\nmetadata:\n  status: draft\n  tags:\n    - local-first\nnested:\n  child:\n    enabled: true\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+
+        assert_eq!(doc.topics, vec!["rust".to_string(), "async".to_string()]);
+        assert!(doc.entities.is_empty());
+        let fm = doc
+            .unmanaged_frontmatter
+            .expect("nested custom YAML should remain");
+        assert!(fm.contains("metadata:"));
+        assert!(fm.contains("status: draft"));
+        assert!(fm.contains("local-first"));
+        assert!(fm.contains("nested:"));
+        assert!(fm.contains("enabled: true"));
+        assert!(!fm.contains("topics:"));
+    }
+
+    #[test]
+    fn test_parse_editable_doc_managed_only_frontmatter_leaves_no_unmanaged_frontmatter() {
+        let input = "---\ntopics: [rust, async]\nentities:\n  - PowerSync\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+
+        assert_eq!(doc.topics, vec!["rust".to_string(), "async".to_string()]);
+        assert_eq!(doc.entities, vec!["PowerSync".to_string()]);
+        assert!(doc.unmanaged_frontmatter.is_none());
+    }
+
+    #[test]
+    fn test_parse_editable_doc_invalid_yaml_frontmatter_is_preserved() {
+        let input = "---\ncustom: [unterminated\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+
+        assert!(doc.topics.is_empty());
+        assert!(doc.entities.is_empty());
+        assert_eq!(
+            doc.unmanaged_frontmatter,
+            Some("---\ncustom: [unterminated\n---".to_string())
+        );
+    }
+
+    #[test]
+    fn test_render_frontmatter_invalid_user_frontmatter_is_preserved_without_managed_values() {
+        let fm = render_frontmatter(&[], &[], Some("---\ncustom: [unterminated\n---"));
+
+        assert_eq!(fm, Some("---\ncustom: [unterminated\n---".to_string()));
     }
 }
