@@ -272,7 +272,9 @@ pub(crate) fn parse_editable_doc(content: &str) -> EditableDoc {
             .unwrap_or(fm)
             .strip_suffix("---")
             .unwrap_or(fm);
-        extract_managed_from_frontmatter(fm_body)
+        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let wrapped = remaining.map(|body| format!("---\n{}\n---", body));
+        (wrapped, topics, entities)
     } else {
         (None, Vec::new(), Vec::new())
     };
@@ -397,6 +399,27 @@ mod tests {
         assert!(doc.topics.is_empty());
         assert!(doc.entities.is_empty());
         assert!(doc.unmanaged_frontmatter.is_none());
+    }
+    #[test]
+    fn test_parse_editable_doc_unmanaged_includes_delimiters() {
+        // unmanaged_frontmatter must include --- delimiters so write paths
+        // store a valid frontmatter block that round-trips on next read.
+        let input = "---\ncustom: keep me\npriority: high\n---\n# Title\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+        assert!(
+            doc.unmanaged_frontmatter.is_some(),
+            "should have unmanaged frontmatter"
+        );
+        let fm = doc.unmanaged_frontmatter.unwrap();
+        assert!(
+            fm.starts_with("---"),
+            "unmanaged frontmatter must start with --- delimiter, got: {fm:?}"
+        );
+        assert!(
+            fm.ends_with("---"),
+            "unmanaged frontmatter must end with --- delimiter, got: {fm:?}"
+        );
+        assert!(fm.contains("custom: keep me"), "must contain custom keys");
     }
     #[test]
     fn test_parse_editable_doc_stored_custom_keys_only() {
