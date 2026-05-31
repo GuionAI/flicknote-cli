@@ -207,7 +207,9 @@ pub(crate) fn render_frontmatter(
                     }
                 }
             }
-        } else if !has_managed {
+        } else {
+            // Invalid user YAML cannot be safely merged with managed keys.
+            // Preserve the raw block rather than dropping user-owned text.
             return Some(normalize_frontmatter_block(fm));
         }
     }
@@ -731,6 +733,17 @@ mod tests {
     #[test]
     fn test_render_frontmatter_invalid_user_frontmatter_is_preserved_without_managed_values() {
         let fm = render_frontmatter(&[], &[], Some("---\ncustom: [unterminated\n---"));
+
+        assert_eq!(fm, Some("---\ncustom: [unterminated\n---".to_string()));
+    }
+
+    #[test]
+    fn test_render_frontmatter_invalid_user_frontmatter_preserves_raw_text() {
+        let fm = render_frontmatter(
+            &["rust".to_string()],
+            &["PowerSync".to_string()],
+            Some("---\ncustom: [unterminated\n---"),
+        );
 
         assert_eq!(fm, Some("---\ncustom: [unterminated\n---".to_string()));
     }
