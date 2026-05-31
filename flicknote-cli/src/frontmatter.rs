@@ -96,99 +96,55 @@ pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
         (None, content)
     }
 }
-/// Parse managed list values from a YAML frontmatter body.
+/// Extract managed keys from a YAML body, returning the body with those keys removed.
 ///
-/// This is a minimal parser that handles the simple YAML list shape:
-/// ```yaml
-/// key:
-///   - value1
-///   - value2
-/// ```
-/// Also supports inline empty lists: `key: []`
-fn parse_frontmatter_list(fm_body: &str, key: &str) -> Option<Vec<String>> {
-    let fm_lines: Vec<&str> = fm_body.lines().collect();
-    // Find the key line
-    let key_idx = fm_lines.iter().position(|line| {
-        let trimmed = line.trim();
-        trimmed == format!("{key}:") || trimmed == format!("{key}: []")
-    })?;
-    // Check for inline empty list
-    if fm_lines[key_idx].trim() == format!("{key}: []") {
-        return Some(Vec::new());
-    }
-    // Collect list items
-    let mut values = Vec::new();
-    for line in &fm_lines[key_idx + 1..] {
-        let trimmed = line.trim();
-        if let Some(stripped) = trimmed.strip_prefix("- ") {
-            values.push(stripped.to_string());
-        } else if trimmed.starts_with("-") {
-            // No space after dash — not a valid list item
-            break;
-        } else {
-            // Not a list item — end of this list
-            break;
-        }
-    }
-    if values.is_empty() && fm_lines[key_idx].trim() == format!("{key}:") {
-        // empty list with no items
-        return Some(Vec::new());
-    }
-    if values.is_empty() {
-        return None;
-    }
-    Some(values)
-}
-/// Extract managed keys from a frontmatter body, returning the body with those keys removed.
-///
-/// Returns `(remaining_frontmatter, topics, entities)`.
-/// If after removing managed keys the frontmatter is empty, returns None for remaining.
+/// Uses `yaml_serde` for proper YAML parsing so that all valid YAML keys
+/// (including nested structures, quoted strings, and inline lists) round-trip
+/// correctly. Returns `(remaining_yaml, topics, entities)`.
+/// If after removing managed keys the mapping is empty, returns None for remaining.
 fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<String>, Vec<String>) {
-    let topics = parse_frontmatter_list(fm_body, "topics").unwrap_or_default();
-    let entities = parse_frontmatter_list(fm_body, "entities").unwrap_or_default();
-    // Remove managed keys from the frontmatter body
-    let managed_keys = ["topics:", "entities:"];
-    let lines: Vec<&str> = fm_body.lines().collect();
-    let mut remaining_lines: Vec<&str> = Vec::new();
-    let mut i = 0;
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim();
-        // Check if this is a managed key
-        let is_managed = managed_keys
-            .iter()
-            .any(|k| trimmed == *k || trimmed.starts_with(&format!("{k} []")));
-        if is_managed {
-            // Skip this line and all subsequent indented list items
-            i += 1;
-            while i < lines.len() {
-                let next_trimmed = lines[i].trim();
-                if next_trimmed.starts_with("- ") || next_trimmed == "-" {
-                    i += 1;
-                } else if next_trimmed.starts_with('-') {
-                    // No space — might be invalid, stop skipping
-                    break;
-                } else {
-                    break;
-                }
-            }
-            continue;
-        }
-        remaining_lines.push(line);
-        i += 1;
-    }
-    // If the remaining frontmatter only has `---` delimiters, treat as empty
-    let remaining: Vec<&str> = remaining_lines
-        .iter()
-        .filter(|l| !l.trim().is_empty() && l.trim() != "---")
-        .copied()
-        .collect();
+    // Split_frontmatter includes the closing --- in its returned slice.
+    // Strip it so yaml_serde receives a clean YAML body.
+    let fm_body = fm_body.trim();
+    let fm_body = fm_body.strip_suffix("---").unwrap_or(fm_body);
+    let fm_body = fm_body.trim();
+    let Ok(mut value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) else {
+        // Invalid YAML or empty: preserve original text as-is
+        return (Some(fm_body.to_string()), Vec::new(), Vec::new());
+    };
+    let topics = take_yaml_list(&mut value, "topics");
+    let entities = take_yaml_list(&mut value, "entities");
+    let remaining = if value.is_mapping() {
+        yaml_serde::to_string(&value).unwrap_or_default()
+    } else {
+        // Scalar value: re-serialize the original body
+        fm_body.to_string()
+    };
+    let remaining = remaining.trim().to_string();
     if remaining.is_empty() {
         (None, topics, entities)
     } else {
-        (Some(remaining_lines.join("\n")), topics, entities)
+        (Some(remaining), topics, entities)
     }
 }
+
+/// Remove and return the list value for `key` from a YAML mapping.
+/// Returns an empty Vec if the key is missing or not a sequence.
+fn take_yaml_list(value: &mut yaml_serde::Value, key: &str) -> Vec<String> {
+    let mapping = match value.as_mapping_mut() {
+        Some(m) => m,
+        None => return Vec::new(),
+    };
+    let k = yaml_serde::Value::String(key.to_string());
+    match mapping.remove(&k) {
+        Some(yaml_serde::Value::Sequence(seq)) => seq
+            .into_iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Render a YAML frontmatter block from managed extractions and optional user frontmatter.
 ///
 /// Merges managed `topics`/`entities` into the user frontmatter (or creates frontmatter
@@ -207,55 +163,52 @@ pub(crate) fn render_frontmatter(
     if !has_managed && !has_user {
         return None;
     }
-    let mut lines: Vec<String> = vec!["---".to_string()];
-    // Add managed keys first
+    // Build a combined YAML mapping: managed lists + user keys
+    let mut combined = yaml_serde::Mapping::new();
     if !topics.is_empty() {
-        lines.push("topics:".to_string());
-        for t in topics {
-            lines.push(format!("  - {t}"));
-        }
-    } else if has_managed {
-        // Render empty managed lists explicitly
+        let seq: yaml_serde::Sequence = topics
+            .iter()
+            .map(|t| yaml_serde::Value::String(t.clone()))
+            .collect();
+        combined.insert(
+            yaml_serde::Value::String("topics".into()),
+            yaml_serde::Value::Sequence(seq),
+        );
     }
     if !entities.is_empty() {
-        lines.push("entities:".to_string());
-        for e in entities {
-            lines.push(format!("  - {e}"));
-        }
-    } else if has_managed {
-        // Render empty managed lists explicitly
+        let seq: yaml_serde::Sequence = entities
+            .iter()
+            .map(|e| yaml_serde::Value::String(e.clone()))
+            .collect();
+        combined.insert(
+            yaml_serde::Value::String("entities".into()),
+            yaml_serde::Value::Sequence(seq),
+        );
     }
-    // Add user frontmatter (preserving as much of the original formatting as practical)
     if let Some(fm) = user_frontmatter {
         let fm_body = fm.trim();
-        // Strip the opening/closing `---` if present
-        let fm_body = fm_body
-            .strip_prefix("---")
-            .unwrap_or(fm_body)
-            .strip_suffix("---")
-            .unwrap_or(fm_body);
+        let fm_body = fm_body.strip_prefix("---").unwrap_or(fm_body);
+        let fm_body = fm_body.strip_suffix("---").unwrap_or(fm_body);
         let fm_body = fm_body.trim();
-        if !fm_body.is_empty() {
-            // Remove managed keys from user's frontmatter before including
-            let (remaining, _, _) = extract_managed_from_frontmatter(fm_body);
-            if let Some(ref r) = remaining {
-                // Already stripped ---, extract managed keys again
-                let (clean, _, _) = extract_managed_from_frontmatter(r);
-                if let Some(c) = clean {
-                    let c = c.trim();
-                    // Strip leading/trailing --- that might remain
-                    let c = c.strip_prefix("---").unwrap_or(c);
-                    let c = c.strip_suffix("---").unwrap_or(c);
-                    let c = c.trim();
-                    if !c.is_empty() {
-                        lines.push(c.to_string());
+        if let Ok(mut user_value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) {
+            // Strip managed keys from user mapping (managed lists already in `combined`)
+            if let Some(user_mapping) = user_value.as_mapping_mut() {
+                user_mapping.remove(&yaml_serde::Value::String("topics".into()));
+                user_mapping.remove(&yaml_serde::Value::String("entities".into()));
+            }
+            // Merge remaining user keys into the combined mapping
+            if let Some(user_map) = user_value.as_mapping() {
+                for (k, v) in user_map {
+                    if !combined.contains_key(k) {
+                        combined.insert(k.clone(), v.clone());
                     }
                 }
             }
         }
     }
-    lines.push("---".to_string());
-    Some(lines.join("\n"))
+    let inner = yaml_serde::to_string(&combined).unwrap_or_default();
+    let inner = inner.trim();
+    Some(format!("---\n{}\n---", inner))
 }
 /// Parse a full editable Markdown document into its components.
 ///
@@ -369,18 +322,6 @@ mod tests {
         assert_eq!(rest, input);
     }
     #[test]
-    fn test_parse_frontmatter_list_simple() {
-        let fm = "topics:\n  - rust\n  - async\nentities:\n  - Tokio\n";
-        let topics = parse_frontmatter_list(fm, "topics");
-        assert_eq!(topics, Some(vec!["rust".to_string(), "async".to_string()]));
-    }
-    #[test]
-    fn test_parse_frontmatter_list_empty_inline() {
-        let fm = "topics: []\nentities:\n  - Tokio\n";
-        let topics = parse_frontmatter_list(fm, "topics");
-        assert_eq!(topics, Some(vec![]));
-    }
-    #[test]
     fn test_parse_editable_doc_full() {
         let input = "---\ntopics:\n  - rust\nentities:\n  - PowerSync\ncustom: keep\n---\n# My Title\n\nBody goes here.\n";
         let doc = parse_editable_doc(input);
@@ -468,9 +409,9 @@ mod tests {
         assert!(fm.is_some());
         let fm = fm.unwrap();
         assert!(fm.contains("topics:"));
-        assert!(fm.contains("  - rust"));
+        assert!(fm.contains("- rust"));
         assert!(fm.contains("entities:"));
-        assert!(fm.contains("  - PowerSync"));
+        assert!(fm.contains("- PowerSync"));
     }
     #[test]
     fn test_render_frontmatter_none() {
