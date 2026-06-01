@@ -226,9 +226,9 @@ flicknote keyterm delete abc12345
 ## Uploading Files
 
 ```bash
-# Upload a file and create a file-type note
-flicknote upload screenshot.png --project myproject
-flicknote upload report.pdf
+# Add a file and create a file-type note
+flicknote add screenshot.png --project myproject
+flicknote add report.pdf
 ```
 
 ## Note Types
@@ -237,7 +237,7 @@ flicknote upload report.pdf
 |------|-----------|-------------|
 | `normal` | `flicknote add "text"` | Text note |
 | `link` | `flicknote add "https://..."` | URL auto-detected |
-| `file` | `flicknote upload <path>` | Uploaded file |
+| `file` | `flicknote add <path>` | Uploaded file |
 | `voice` | Mobile app | Voice memo (transcribed) |
 
 ## Not for Common Use

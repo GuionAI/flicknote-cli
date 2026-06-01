@@ -27,11 +27,6 @@ pub(crate) struct UploadUrlResponse {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct DownloadUrlResponse {
-    pub url: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct DeleteResponse {
     #[allow(dead_code)]
     pub deleted: bool,
@@ -111,57 +106,6 @@ impl ApiClient {
         }
 
         Ok(())
-    }
-
-    /// Get presigned download URL, then download file content
-    pub(crate) async fn download_attachment(
-        &self,
-        note_id: &str,
-        output_path: &std::path::Path,
-    ) -> Result<u64, CliError> {
-        let resp = self
-            .http
-            .post(attachment_endpoint(&self.base_url, "download-url"))
-            .bearer_auth(&self.access_token)
-            .json(&serde_json::json!({ "noteId": note_id }))
-            .send()
-            .await
-            .map_err(|e| CliError::Other(format!("Download URL request failed: {e}")))?;
-
-        if !resp.status().is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            return Err(CliError::Other(format!(
-                "Download URL request failed: {body}"
-            )));
-        }
-
-        let download_resp: DownloadUrlResponse = resp
-            .json()
-            .await
-            .map_err(|e| CliError::Other(format!("Failed to parse download URL response: {e}")))?;
-
-        // Download from R2 presigned URL
-        let file_resp = self
-            .http
-            .get(&download_resp.url)
-            .send()
-            .await
-            .map_err(|e| CliError::Other(format!("File download failed: {e}")))?;
-
-        if !file_resp.status().is_success() {
-            return Err(CliError::Other(format!(
-                "File download failed: HTTP {}",
-                file_resp.status()
-            )));
-        }
-
-        let bytes = file_resp
-            .bytes()
-            .await
-            .map_err(|e| CliError::Other(format!("Error reading response: {e}")))?;
-
-        std::fs::write(output_path, &bytes)?;
-        Ok(bytes.len() as u64)
     }
 
     /// DELETE /api/v1/attachments/:noteId

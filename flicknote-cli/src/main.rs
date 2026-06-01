@@ -73,10 +73,6 @@ enum Commands {
     Skill(commands::skill::SkillArgs),
     /// Import markdown files as notes
     Import(commands::import::ImportArgs),
-    /// Upload a file and create a file-type note
-    Upload(commands::upload::UploadArgs),
-    /// Interact with FlickNote API directly
-    Api(commands::api::ApiArgs),
     /// Rename a section heading in a note
     Rename(commands::rename::RenameArgs),
     /// Insert content before or after a section
@@ -179,8 +175,6 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
         Commands::Modify(args) => commands::modify::run(db, config, args).await,
         Commands::Open(args) => commands::open::run(db, config, args).await,
         Commands::Import(args) => commands::import::run(db, config, args).await,
-        Commands::Upload(args) => commands::upload::run(db, config, args).await,
-        Commands::Api(args) => commands::api::run(config, args).await,
         // Login/Logout/Sync/Skill are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Skill(_) => {
             unreachable!()

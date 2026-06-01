@@ -1,5 +1,4 @@
 pub(crate) mod add;
-pub(crate) mod api;
 pub(crate) mod append;
 pub(crate) mod content;
 pub(crate) mod count;
@@ -24,6 +23,5 @@ pub(crate) mod replace;
 pub(crate) mod restore;
 pub(crate) mod skill;
 pub(crate) mod sync;
-pub(crate) mod upload;
 pub(crate) mod upload_util;
 pub(crate) mod util;
