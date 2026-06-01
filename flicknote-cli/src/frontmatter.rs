@@ -115,7 +115,12 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
         if mapping.is_empty() {
             return (None, topics, entities);
         }
-        yaml_serde::to_string(&value).unwrap_or_default()
+        let Some(remaining) =
+            serialized_yaml_body(yaml_serde::to_string(&value), "unmanaged editable note")
+        else {
+            return (Some(fm_body.to_string()), topics, entities);
+        };
+        remaining
     } else {
         // Scalar value: re-serialize the original body
         fm_body.to_string()
@@ -270,9 +275,21 @@ pub(crate) fn render_frontmatter(
             return render_invalid_user_frontmatter(&combined, fm);
         }
     }
-    let inner = yaml_serde::to_string(&combined).unwrap_or_default();
-    let inner = inner.trim();
+    let inner = serialized_yaml_body(yaml_serde::to_string(&combined), "editable note")?;
     Some(format!("---\n{}\n---", inner))
+}
+
+fn serialized_yaml_body(
+    serialized: Result<String, yaml_serde::Error>,
+    context: &str,
+) -> Option<String> {
+    match serialized {
+        Ok(body) => Some(body.trim().to_string()),
+        Err(err) => {
+            log::warn!("failed to serialize {context} frontmatter: {err}");
+            None
+        }
+    }
 }
 
 fn render_invalid_user_frontmatter(
@@ -283,8 +300,10 @@ fn render_invalid_user_frontmatter(
         return Some(normalize_frontmatter_block(user_frontmatter));
     }
 
-    let managed = yaml_serde::to_string(combined).unwrap_or_default();
-    let managed = managed.trim();
+    let Some(managed) = serialized_yaml_body(yaml_serde::to_string(combined), "managed extraction")
+    else {
+        return Some(normalize_frontmatter_block(user_frontmatter));
+    };
     let user_body = frontmatter_body(user_frontmatter);
     let body = if user_body.is_empty() {
         managed.to_string()
@@ -834,6 +853,15 @@ mod tests {
         assert!(fm.contains("entities:"));
         assert!(fm.contains("- PowerSync"));
         assert!(fm.contains("custom: [unterminated"));
+    }
+
+    #[test]
+    fn test_serialized_yaml_body_error_returns_none() {
+        let err = <yaml_serde::Error as serde::ser::Error>::custom("serialize failed");
+
+        let body = serialized_yaml_body(Err(err), "test frontmatter");
+
+        assert!(body.is_none());
     }
 
     #[test]

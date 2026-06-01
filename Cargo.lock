@@ -755,6 +755,7 @@ dependencies = [
  "flicknote-sync",
  "futures-util",
  "libc",
+ "log",
  "mime_guess",
  "open",
  "pulldown-cmark",
