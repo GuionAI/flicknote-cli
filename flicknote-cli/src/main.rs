@@ -55,7 +55,7 @@ enum Commands {
     Find(commands::find::FindArgs),
     /// Show note details with full metadata
     Detail(commands::detail::DetailArgs),
-    /// Show note content with section IDs
+    /// Show note content
     Content(commands::content::ContentArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
@@ -180,5 +180,20 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
         Commands::Api(args) => commands::api::run(config, args).await,
         // Login/Logout/Sync are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_rejects_section_flag() {
+        assert!(Cli::try_parse_from(["flicknote", "detail", "abc123", "--section", "a1"]).is_err());
+    }
+
+    #[test]
+    fn content_rejects_raw_flag() {
+        assert!(Cli::try_parse_from(["flicknote", "content", "abc123", "--raw"]).is_err());
     }
 }

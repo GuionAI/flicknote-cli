@@ -6,9 +6,6 @@ use flicknote_core::error::CliError;
 pub(crate) struct DetailArgs {
     /// Note ID (full UUID or short prefix)
     id: String,
-    /// Extract a specific section by section ID (2-char base62)
-    #[arg(short = 's', long = "section")]
-    section: Option<String>,
     /// Show markdown heading structure
     #[arg(long)]
     tree: bool,
@@ -29,8 +26,7 @@ pub(crate) async fn run(
             id: args.id.clone(),
         });
     }
-    // Tree view or section extraction — both need parsed markdown
-    if args.tree || args.section.is_some() {
+    if args.tree {
         let full_id = if args.archived {
             db.resolve_archived_note_id(&args.id).await?
         } else {
@@ -41,36 +37,17 @@ pub(crate) async fn run(
         } else {
             db.find_note(&full_id).await?
         };
-        let content = note.content.as_deref().unwrap_or("");
-        if args.tree {
-            let display_content = crate::editable_document::render_editable_note(db, &note).await?;
-            let doc = crate::markdown::parse_markdown(&display_content);
-            let tree = doc.build_tree();
-            if tree.is_empty() {
-                println!("(no headings found)");
-                return Ok(());
-            }
-            for (i, node) in tree.iter().enumerate() {
-                let is_last = i == tree.len() - 1;
-                print!("{}", node.render_box_tree("", is_last));
-            }
+        let display_content = crate::editable_document::render_editable_note(db, &note).await?;
+        let doc = crate::markdown::parse_markdown(&display_content);
+        let tree = doc.build_tree();
+        if tree.is_empty() {
+            println!("(no headings found)");
             return Ok(());
         }
-        // --section: operates on raw stored content
-        if note.content.is_none() {
-            return Err(CliError::Other(
-                "This note has no text content (link or file note)".into(),
-            ));
+        for (i, node) in tree.iter().enumerate() {
+            let is_last = i == tree.len() - 1;
+            print!("{}", node.render_box_tree("", is_last));
         }
-        let doc = crate::markdown::parse_markdown(content);
-        let section_id = args.section.as_ref().unwrap();
-        let bounds = super::util::find_section(&doc, section_id, &args.id)?;
-        let body_start = content[bounds.start..]
-            .find('\n')
-            .map(|i| bounds.start + i + 1)
-            .unwrap_or(bounds.end);
-        let section_content = content[body_start..bounds.end].trim();
-        println!("{}", section_content);
         return Ok(());
     }
     let full_id = if args.archived {
@@ -127,10 +104,7 @@ pub(crate) async fn run(
         if let Some(ref _content) = note.content {
             println!("\nContent:");
             let display_content = crate::editable_document::render_editable_note(db, &note).await?;
-            println!(
-                "{}",
-                crate::markdown::render_content_with_ids(&display_content)
-            );
+            println!("{display_content}");
         }
         if let Some(url) = note.link_url() {
             println!("Link:       {url}");
