@@ -87,7 +87,6 @@ EDIT
 
 # Metadata only
 flicknote modify <id> --project <name>
-flicknote modify <id> --title "New Title"
 flicknote modify <id> --flagged   # or --unflagged
 ```
 

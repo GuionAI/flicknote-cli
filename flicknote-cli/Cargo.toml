@@ -32,6 +32,7 @@ uuid = { workspace = true }
 chrono = "0.4"
 url = "2"
 serde_json = { workspace = true }
+yaml_serde = "0.10"
 tokio = { workspace = true }
 libc = "0.2"
 dirs = { workspace = true }
@@ -44,8 +45,10 @@ sha2 = "0.10"
 open = "5"
 tempfile = "3"
 env_logger = "0.11"
+log = "0.4"
 
 [dev-dependencies]
+async-trait = { workspace = true }
 
 [lints]
 workspace = true

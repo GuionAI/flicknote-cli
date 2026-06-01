@@ -11,6 +11,8 @@ use flicknote_core::error::CliError;
 
 mod api_client;
 mod commands;
+mod editable_document;
+mod frontmatter;
 mod markdown;
 mod utils;
 

@@ -129,6 +129,23 @@ pub trait NoteDb {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError>;
+    /// Read extraction rows for one or more notes. Returns a map of note_id -> Vec<(type, value)>.
+    /// `extraction_types` filters which types to read (e.g. `topic`, `entity`).
+    /// Results are ordered by type then value for deterministic rendering.
+    async fn list_note_extractions(
+        &self,
+        note_ids: &[&str],
+        extraction_types: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError>;
+    /// Replace all extraction rows for one note and one managed type in a single operation.
+    /// `values` replaces all rows of the given type for the note.
+    /// An empty vec clears all rows for that type.
+    async fn set_note_extractions(
+        &self,
+        note_id: &str,
+        extraction_type: &str,
+        values: &[String],
+    ) -> Result<(), CliError>;
 
     // Prompt operations
     async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError>;
@@ -250,8 +267,17 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_LIST_TOPICS: &str = "SELECT note_id, value FROM note_extractions \
-     WHERE user_id = ? AND type = 'topic' AND note_id IN (SELECT value FROM json_each(?))";
+#[cfg(feature = "powersync")]
+const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extractions \
+     WHERE user_id = ? AND type IN (SELECT value FROM json_each(?)) \
+     AND note_id IN (SELECT value FROM json_each(?)) \
+     ORDER BY type, value";
+#[cfg(feature = "powersync")]
+const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
+     WHERE user_id = ? AND note_id = ? AND type = ?";
+#[cfg(feature = "powersync")]
+const SQ_INSERT_EXTRACTION: &str = "INSERT INTO note_extractions (note_id, user_id, type, value) \
+     VALUES (?, ?, ?, ?)";
 
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
@@ -805,21 +831,60 @@ impl NoteDb for SqliteBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        if note_ids.is_empty() {
+        let extractions = self.list_note_extractions(note_ids, &["topic"]).await?;
+        let mut map = std::collections::HashMap::new();
+        for (note_id, pairs) in extractions {
+            map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
+        }
+        Ok(map)
+    }
+    async fn list_note_extractions(
+        &self,
+        note_ids: &[&str],
+        extraction_types: &[&str],
+    ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError> {
+        if note_ids.is_empty() || extraction_types.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
         let note_ids_json = serde_json::to_string(note_ids)?;
-        let rows = sqlx::query_as::<_, (String, String)>(SQ_LIST_TOPICS)
+        let types_json = serde_json::to_string(extraction_types)?;
+        let rows = sqlx::query_as::<_, (String, String, String)>(SQ_LIST_EXTRACTIONS)
             .bind(&self.user_id)
+            .bind(types_json)
             .bind(note_ids_json)
             .fetch_all(&self.db.pool)
             .await?;
-        let mut map: std::collections::HashMap<String, Vec<String>> =
+        let mut map: std::collections::HashMap<String, Vec<(String, String)>> =
             std::collections::HashMap::new();
-        for (note_id, value) in rows {
-            map.entry(note_id).or_default().push(value);
+        for (note_id, ext_type, value) in rows {
+            map.entry(note_id).or_default().push((ext_type, value));
         }
         Ok(map)
+    }
+    async fn set_note_extractions(
+        &self,
+        note_id: &str,
+        extraction_type: &str,
+        values: &[String],
+    ) -> Result<(), CliError> {
+        // Delete all existing rows for this note + type
+        sqlx::query(SQ_CLEAR_EXTRACTIONS)
+            .bind(&self.user_id)
+            .bind(note_id)
+            .bind(extraction_type)
+            .execute(&self.db.pool)
+            .await?;
+        // Insert new values
+        for value in values {
+            sqlx::query(SQ_INSERT_EXTRACTION)
+                .bind(note_id)
+                .bind(&self.user_id)
+                .bind(extraction_type)
+                .bind(value)
+                .execute(&self.db.pool)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
