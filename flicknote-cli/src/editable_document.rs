@@ -87,6 +87,10 @@ pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, 
     })
 }
 
+pub(crate) fn normal_note_content_ref(parsed: &ParsedEditableNote) -> Option<&str> {
+    Some(parsed.stored_content.as_str())
+}
+
 fn stored_content_from_doc(doc: &EditableDoc) -> String {
     if let Some(ref fm) = doc.unmanaged_frontmatter {
         if doc.body.is_empty() {
@@ -233,6 +237,79 @@ mod tests {
         assert!(result.title_changed);
         assert!(result.content_changed);
         assert_eq!(result.stored_content, content);
+    }
+
+    #[test]
+    fn parse_editable_note_covers_round_trip_contract_cases() {
+        struct Case {
+            name: &'static str,
+            markdown: &'static str,
+            title: &'static str,
+            stored_content: &'static str,
+            topics: &'static [&'static str],
+            entities: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "title-only note stays an empty text note",
+                markdown: "# Title",
+                title: "Title",
+                stored_content: "",
+                topics: &[],
+                entities: &[],
+            },
+            Case {
+                name: "body leading whitespace is preserved",
+                markdown: "# Title\n\n  indented first line\n\tTabbed second line",
+                title: "Title",
+                stored_content: "  indented first line\n\tTabbed second line",
+                topics: &[],
+                entities: &[],
+            },
+            Case {
+                name: "managed empty lists clear extraction rows",
+                markdown: "---\ntopics: []\nentities: []\ncustom: keep\n---\n# Title\n\nBody.",
+                title: "Title",
+                stored_content: "---\ncustom: keep\n---\n\nBody.",
+                topics: &[],
+                entities: &[],
+            },
+        ];
+
+        for case in cases {
+            let parsed = parse_editable_note(case.markdown).unwrap_or_else(|err| {
+                panic!("{} should parse, got {err}", case.name);
+            });
+
+            assert_eq!(parsed.title, case.title, "{}", case.name);
+            assert_eq!(parsed.stored_content, case.stored_content, "{}", case.name);
+            assert_eq!(
+                parsed.topics,
+                case.topics
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                parsed.entities,
+                case.entities
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>(),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn normal_note_content_ref_preserves_empty_text_content() {
+        let parsed = parse_editable_note("# Title").unwrap();
+
+        assert_eq!(normal_note_content_ref(&parsed), Some(""));
     }
 
     #[async_trait::async_trait(?Send)]

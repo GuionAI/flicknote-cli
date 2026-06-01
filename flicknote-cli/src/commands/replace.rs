@@ -100,4 +100,27 @@ mod tests {
         assert!(content_starts_with_heading("My Section\n=========="));
         assert!(content_starts_with_heading("My Section\n----------"));
     }
+
+    #[test]
+    fn test_replace_section_preserves_frontmatter_outside_section_scope() {
+        let content = "---\ncustom: keep\n---\n\n## Target\nold body\n\n## Other\nother body";
+        let doc = crate::markdown::parse_markdown(content);
+        let heading = doc
+            .headings
+            .iter()
+            .find(|heading| heading.text == "Target")
+            .expect("target heading should parse");
+        let bounds = find_section(&doc, &heading.id, "note-id").unwrap();
+
+        let updated = crate::markdown::replace_entire_section(
+            content,
+            bounds.start,
+            bounds.end,
+            "## Target\nnew body",
+        );
+
+        assert!(updated.starts_with("---\ncustom: keep\n---"));
+        assert!(updated.contains("## Target\nnew body"));
+        assert!(updated.contains("## Other\nother body"));
+    }
 }

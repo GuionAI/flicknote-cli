@@ -108,17 +108,12 @@ async fn create_from_editor(
     } else {
         None
     };
-    let content_ref = if parsed.stored_content.is_empty() {
-        Some("")
-    } else {
-        Some(parsed.stored_content.as_str())
-    };
     db.insert_note(&InsertNoteReq {
         id: &id,
         note_type: "normal",
         status: "ai_queued",
         title: Some(parsed.title.as_str()),
-        content: content_ref,
+        content: crate::editable_document::normal_note_content_ref(&parsed),
         metadata: None,
         project_id: project_id.as_deref(),
         now: &now,

@@ -98,11 +98,36 @@ pub(crate) async fn run(
 }
 #[cfg(test)]
 mod tests {
-    use super::super::util::classify_stdin_buf;
+    use super::super::util::{classify_stdin_buf, find_section};
+
     #[test]
     fn test_classify_stdin_buf_via_util() {
         assert_eq!(classify_stdin_buf("  \n  "), None);
         assert_eq!(classify_stdin_buf("x"), Some("x".to_string()));
         assert_eq!(classify_stdin_buf(" foo "), Some(" foo".to_string()));
+    }
+
+    #[test]
+    fn test_modify_section_preserves_frontmatter_outside_section_scope() {
+        let content = "---\ncustom: keep\n---\n\n## Target\nold body\n\n## Other\nother body";
+        let doc = crate::markdown::parse_markdown(content);
+        let heading = doc
+            .headings
+            .iter()
+            .find(|heading| heading.text == "Target")
+            .expect("target heading should parse");
+        let bounds = find_section(&doc, &heading.id, "note-id").unwrap();
+        let scope = &content[bounds.start..bounds.end];
+        let match_info = super::super::edit_match::find_unique(scope, "old body").unwrap();
+        let absolute = super::super::edit_match::MatchInfo {
+            start: bounds.start + match_info.start,
+            end: bounds.start + match_info.end,
+        };
+
+        let updated = super::super::edit_match::splice(content, &absolute, "new body");
+
+        assert!(updated.starts_with("---\ncustom: keep\n---"));
+        assert!(updated.contains("## Target\nnew body"));
+        assert!(updated.contains("## Other\nother body"));
     }
 }
