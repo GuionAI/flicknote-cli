@@ -32,12 +32,10 @@ flicknote count --project <name>        # count in project
 ```bash
 flicknote detail <id>
 flicknote detail <id> --tree                  # heading structure with section IDs
-flicknote detail <id> --section <section-id>  # use ID from --tree output (e.g. 3K)
 flicknote detail <id> --json
 flicknote detail <id> --archived              # read an archived note
-flicknote content <id>                        # content-only with section IDs
+flicknote content <id>                        # content-only as pure markdown
 flicknote content <id> --section <section-id>
-flicknote content <id> --raw                  # pure markdown, no section ID annotations (safe for piping)
 ```
 
 To target a section, first run `--tree` to see IDs, then use the ID:
@@ -47,8 +45,7 @@ flicknote detail abc12345 --tree
 # └─ # My Note
 #    ├─ [3K] ## Summary
 #    └─ [aZ] ## Details
-# Note: H1 headings are not shown with IDs and cannot be targeted with --section
-flicknote detail abc12345 --section 3K
+flicknote content abc12345 --section 3K
 ```
 
 ## Replace (overwrite)

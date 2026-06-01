@@ -51,22 +51,17 @@ List columns: ID (full UUID) | Type | Title | Project | Topics | Flagged | Creat
 ## Reading Notes
 
 ```bash
-# Full metadata + content with section IDs
+# Full metadata + content
 flicknote detail abc12345
 
-# Content-only with section IDs after each heading
+# Content-only as pure markdown
 flicknote content abc12345
-
-# Content-only as pure markdown — no section ID annotations (safe for piping to sed/awk)
-flicknote content abc12345 --raw
 
 # See heading structure with section IDs
 flicknote detail abc12345 --tree
 
-# Extract a specific section — use ID from --tree or content output (e.g. 3K)
-flicknote detail abc12345 --section 3K
+# Extract a specific section — use ID from --tree (e.g. 3K)
 flicknote content abc12345 --section 3K
-flicknote content abc12345 --section 3K --raw   # raw section content, no ID annotation
 
 # JSON output
 flicknote detail abc12345 --json
@@ -81,10 +76,10 @@ flicknote detail abc12345 --archived --json
 
 Content output format:
 ```
-# My Note [Xk]
-## Summary [Fb]
+# My Note
+## Summary
 ...content...
-## Key Points [eg]
+## Key Points
 ...content...
 ```
 
@@ -95,7 +90,7 @@ flicknote detail abc12345 --tree
 # └─ # My Note
 #    ├─ [3K] ## Summary
 #    └─ [aZ] ## Details
-flicknote detail abc12345 --section 3K
+flicknote content abc12345 --section 3K
 ```
 
 ## Editing Notes
@@ -167,10 +162,6 @@ echo "## Analysis" | flicknote insert abc12345 --after aZ
 ```
 
 Mutating commands print the updated `--tree` after making changes.
-
-### Warning
-
-**Don't pipe `flicknote content` output through sed/awk.** The section IDs (`[Xk]` annotations) will corrupt diffs. Use `--raw` to get pure markdown without annotations.
 
 ### Migration from legacy `modify`
 

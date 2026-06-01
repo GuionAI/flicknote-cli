@@ -8,9 +8,6 @@ pub(crate) struct ContentArgs {
     /// Extract a specific section by section ID (2-char base62)
     #[arg(short = 's', long = "section")]
     section: Option<String>,
-    /// Output raw markdown without section ID annotations (safe for piping to sed/awk)
-    #[arg(long = "raw")]
-    raw: bool,
 }
 pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliError> {
     if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
@@ -34,11 +31,7 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
         let doc = crate::markdown::parse_markdown(&display_content);
         let bounds = super::util::find_section(&doc, section_id, &args.id)?;
         let output = display_content[bounds.start..bounds.end].trim().to_string();
-        if args.raw {
-            print!("{output}");
-        } else {
-            print!("{}", crate::markdown::render_content_with_ids(&output));
-        }
+        print!("{}", render_content_output(&output));
         return Ok(());
     }
     if note.content.is_none() {
@@ -47,10 +40,20 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
         ));
     }
     let output = crate::editable_document::render_editable_note(db, &note).await?;
-    if args.raw {
-        print!("{output}");
-    } else {
-        print!("{}", crate::markdown::render_content_with_ids(&output));
-    }
+    print!("{}", render_content_output(&output));
     Ok(())
+}
+
+fn render_content_output(content: &str) -> &str {
+    content
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn render_content_output_keeps_heading_text_clean() {
+        let content = "# Title\n\n## Section\n\nBody.";
+
+        assert_eq!(super::render_content_output(content), content);
+    }
 }
