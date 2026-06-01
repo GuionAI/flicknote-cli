@@ -69,6 +69,8 @@ enum Commands {
     Logout,
     /// Manage sync daemon
     Sync(commands::sync::SyncArgs),
+    /// Install agent skills
+    Skill(commands::skill::SkillArgs),
     /// Import markdown files as notes
     Import(commands::import::ImportArgs),
     /// Upload a file and create a file-type note
@@ -105,6 +107,7 @@ async fn run() -> Result<(), CliError> {
             Commands::Login(args) => return commands::login::run(&config, args).await,
             Commands::Logout => return commands::logout::run(&config),
             Commands::Sync(args) => return commands::sync::run(&config, args),
+            Commands::Skill(args) => return commands::skill::run(args),
             _ => {}
         }
     }
@@ -178,8 +181,10 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
         Commands::Import(args) => commands::import::run(db, config, args).await,
         Commands::Upload(args) => commands::upload::run(db, config, args).await,
         Commands::Api(args) => commands::api::run(config, args).await,
-        // Login/Logout/Sync are handled before dispatch() is called
-        Commands::Login(_) | Commands::Logout | Commands::Sync(_) => unreachable!(),
+        // Login/Logout/Sync/Skill are handled before dispatch() is called
+        Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Skill(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -195,5 +200,10 @@ mod tests {
     #[test]
     fn content_rejects_raw_flag() {
         assert!(Cli::try_parse_from(["flicknote", "content", "abc123", "--raw"]).is_err());
+    }
+
+    #[test]
+    fn skill_install_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "skill", "install"]).is_ok());
     }
 }
