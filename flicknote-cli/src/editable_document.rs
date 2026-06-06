@@ -50,6 +50,17 @@ pub(crate) async fn save_editable_note(
     let note = db.find_note(note_id).await?;
     let parsed = parse_editable_note(markdown)?;
 
+    // Only reject missing title when the old note had one — do not allow dropping
+    // the title on an existing note. New notes with no title are fine.
+    if note.title.as_deref().is_some_and(|t| !t.is_empty()) && parsed.title.trim().is_empty() {
+        return Err(CliError::Other(
+            "Full-note write requires a non-empty H1 title. \
+             This note had a title — removing it is not allowed. \
+             Add a `# Title` heading after any frontmatter."
+                .into(),
+        ));
+    }
+
     let title_changed = note.title.as_deref() != Some(parsed.title.as_str());
     if title_changed {
         db.update_note_title(note_id, &parsed.title).await?;
@@ -76,7 +87,6 @@ pub(crate) async fn save_editable_note(
 
 pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, CliError> {
     let doc = frontmatter::parse_editable_doc(markdown);
-    frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
     let stored_content = stored_content_from_doc(&doc);
 
     Ok(ParsedEditableNote {
