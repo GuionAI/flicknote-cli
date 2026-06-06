@@ -40,36 +40,6 @@ pub(crate) struct EditableDoc {
     /// Raw YAML string (including `---` delimiters) or None if no user frontmatter.
     pub unmanaged_frontmatter: Option<String>,
 }
-/// Error returned when a full-note editable document is missing a required H1 title.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct MissingTitleError {
-    pub message: String,
-}
-impl std::fmt::Display for MissingTitleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-impl std::error::Error for MissingTitleError {}
-/// Validate that a full-note editable document has a non-empty H1 title.
-///
-/// Full-note writes must contain a leading `# Title` after optional frontmatter.
-/// Missing or empty H1 is an error — do not silently preserve the old title.
-pub(crate) fn validate_title_required(doc: &EditableDoc) -> Result<(), MissingTitleError> {
-    match &doc.title {
-        None => Err(MissingTitleError {
-            message: "Full-note write requires a leading H1 title (e.g. `# My Title`) after optional frontmatter. \
-                     Missing H1 is not allowed — add a title to the document."
-                .into(),
-        }),
-        Some(t) if t.trim().is_empty() => Err(MissingTitleError {
-            message: "Full-note write requires a non-empty H1 title. \
-                     An empty `# ` heading is not a valid title."
-                .into(),
-        }),
-        _ => Ok(()),
-    }
-}
 /// Detect and parse leading YAML frontmatter.
 ///
 /// Returns `(frontmatter_body, rest_of_doc)` when document starts with `---`
@@ -607,57 +577,6 @@ mod tests {
         assert_eq!(topics, vec!["a".to_string()]);
         assert_eq!(entities, vec!["b".to_string()]);
         assert!(remaining.is_none());
-    }
-    // ─── Title guard tests ────────────────────────────────────────────────
-    #[test]
-    fn test_validate_title_required_some() {
-        let doc = EditableDoc {
-            title: Some("My Title".to_string()),
-            body: "Body.".to_string(),
-            topics: vec![],
-            entities: vec![],
-            unmanaged_frontmatter: None,
-        };
-        assert!(validate_title_required(&doc).is_ok());
-    }
-    #[test]
-    fn test_validate_title_required_none_rejected() {
-        let doc = EditableDoc {
-            title: None,
-            body: "Body.".to_string(),
-            topics: vec![],
-            entities: vec![],
-            unmanaged_frontmatter: None,
-        };
-        let err = validate_title_required(&doc);
-        assert!(err.is_err());
-        let msg = err.unwrap_err().message;
-        assert!(msg.contains("requires a leading H1 title"));
-    }
-    #[test]
-    fn test_validate_title_required_empty_rejected() {
-        let doc = EditableDoc {
-            title: Some("".to_string()),
-            body: "Body.".to_string(),
-            topics: vec![],
-            entities: vec![],
-            unmanaged_frontmatter: None,
-        };
-        let err = validate_title_required(&doc);
-        assert!(err.is_err());
-        assert!(err.unwrap_err().message.contains("non-empty H1"));
-    }
-    #[test]
-    fn test_validate_title_required_whitespace_only_rejected() {
-        let doc = EditableDoc {
-            title: Some("  ".to_string()),
-            body: "Body.".to_string(),
-            topics: vec![],
-            entities: vec![],
-            unmanaged_frontmatter: None,
-        };
-        let err = validate_title_required(&doc);
-        assert!(err.is_err());
     }
     // ─── Full-note write edge case tests ──────────────────────────────────
     #[test]

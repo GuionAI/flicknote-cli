@@ -50,6 +50,17 @@ pub(crate) async fn save_editable_note(
     let note = db.find_note(note_id).await?;
     let parsed = parse_editable_note(markdown)?;
 
+    // Only reject missing title when the old note had one — do not allow dropping
+    // the title on an existing note. New notes with no title are fine.
+    if note.title.as_deref().is_some_and(|t| !t.is_empty()) && parsed.title.trim().is_empty() {
+        return Err(CliError::Other(
+            "Full-note write requires a non-empty H1 title. \
+             This note had a title — removing it is not allowed. \
+             Add a `# Title` heading after any frontmatter."
+                .into(),
+        ));
+    }
+
     let title_changed = note.title.as_deref() != Some(parsed.title.as_str());
     if title_changed {
         db.update_note_title(note_id, &parsed.title).await?;
@@ -76,7 +87,6 @@ pub(crate) async fn save_editable_note(
 
 pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, CliError> {
     let doc = frontmatter::parse_editable_doc(markdown);
-    frontmatter::validate_title_required(&doc).map_err(|e| CliError::Other(e.message))?;
     let stored_content = stored_content_from_doc(&doc);
 
     Ok(ParsedEditableNote {
@@ -237,6 +247,43 @@ mod tests {
         assert!(result.title_changed);
         assert!(result.content_changed);
         assert_eq!(result.stored_content, content);
+    }
+
+    // ─── Title removal guard tests ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn save_rejects_dropping_title_when_old_note_has_one() {
+        let db = FakeNoteDb::new(note_with(Some("Old body."), Some("Existing Title")), vec![]);
+        // New markdown has no H1 — empty title
+        let result = save_editable_note(&db, NOTE_ID, "Body without heading").await;
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("requires a non-empty H1 title"),
+            "expected title-removal error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_allows_empty_title_when_old_note_has_empty_title() {
+        let db = FakeNoteDb::new(note_with(Some("Old body."), Some("")), vec![]);
+        let result = save_editable_note(&db, NOTE_ID, "New body without heading").await;
+        assert!(
+            result.is_ok(),
+            "should allow saving when old title was empty, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn save_allows_non_empty_title_when_old_note_has_title() {
+        let db = FakeNoteDb::new(note_with(Some("Old body."), Some("Old Title")), vec![]);
+        let result = save_editable_note(&db, NOTE_ID, "# New Title\n\nNew body.").await;
+        assert!(
+            result.is_ok(),
+            "should allow saving with valid title, got: {result:?}"
+        );
+        let note = db.note();
+        assert_eq!(note.title.as_deref(), Some("New Title"));
     }
 
     #[test]
