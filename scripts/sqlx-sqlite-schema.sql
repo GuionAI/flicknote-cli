@@ -10,7 +10,6 @@ CREATE TABLE notes (
   project_id TEXT,
   metadata TEXT,
   source TEXT,
-  external_id TEXT,
   created_at TEXT,
   updated_at TEXT,
   deleted_at TEXT
