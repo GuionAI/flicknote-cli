@@ -727,7 +727,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "flicknote-auth"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "base64",
  "rand 0.9.4",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-cli"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -772,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-core"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -790,7 +790,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-sync"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-trait",
  "flicknote-auth",
