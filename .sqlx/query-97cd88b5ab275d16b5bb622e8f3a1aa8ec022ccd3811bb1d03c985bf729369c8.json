@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n            SELECT\n                id as \"id!\",\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata,\n                source,\n                external_id,\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE user_id = ?\n              AND (deleted_at IS NOT NULL) = ?\n              AND (? IS NULL OR type = ?)\n              AND (? IS NULL OR project_id = ?)\n            ORDER BY created_at DESC\n            LIMIT ?\n            ",
+  "query": "\n            SELECT\n                id as \"id!\",\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata,\n                source,\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE user_id = ?\n              AND (deleted_at IS NOT NULL) = ?\n              AND (? IS NULL OR type = ?)\n              AND (? IS NULL OR project_id = ?)\n            ORDER BY created_at DESC\n            LIMIT ?\n            ",
   "describe": {
     "columns": [
       {
@@ -59,23 +59,18 @@
         "type_info": "Text"
       },
       {
-        "name": "external_id",
+        "name": "created_at",
         "ordinal": 11,
         "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "updated_at",
         "ordinal": 12,
         "type_info": "Text"
       },
       {
-        "name": "updated_at",
-        "ordinal": 13,
-        "type_info": "Text"
-      },
-      {
         "name": "deleted_at",
-        "ordinal": 14,
+        "ordinal": 13,
         "type_info": "Text"
       }
     ],
@@ -96,9 +91,8 @@
       true,
       true,
       true,
-      true,
       true
     ]
   },
-  "hash": "57d96969a7ae9bd59e82c9defbf45b4ff13b6d219f1c32725ef29f7f0738a494"
+  "hash": "97cd88b5ab275d16b5bb622e8f3a1aa8ec022ccd3811bb1d03c985bf729369c8"
 }

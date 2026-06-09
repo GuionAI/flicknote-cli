@@ -14,7 +14,6 @@ pub struct Note {
     pub project_id: Option<String>,
     pub metadata: Option<String>,
     pub source: Option<String>,
-    pub external_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub deleted_at: Option<String>,

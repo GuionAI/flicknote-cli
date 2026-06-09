@@ -189,7 +189,6 @@ mod tests {
             project_id: None,
             metadata: None,
             source: None,
-            external_id: None,
             created_at: None,
             updated_at: None,
             deleted_at: None,

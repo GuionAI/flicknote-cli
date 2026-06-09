@@ -209,11 +209,11 @@ const SQ_RESOLVE_ARCHIVED: &str =
     "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NOT NULL LIMIT 2";
 #[cfg(feature = "powersync")]
 const SQ_FIND: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_FIND_ARCHIVED: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NOT NULL LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_FIND_CONTENT: &str =
@@ -425,7 +425,6 @@ impl NoteDb for SqliteBackend {
                 project_id,
                 metadata,
                 source,
-                external_id,
                 created_at,
                 updated_at,
                 deleted_at
@@ -476,7 +475,6 @@ impl NoteDb for SqliteBackend {
                 project_id,
                 metadata,
                 source,
-                external_id,
                 created_at,
                 updated_at,
                 deleted_at

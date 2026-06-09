@@ -14,10 +14,10 @@ use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
 const PG_FIND_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
 const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
-     project_id, metadata, source, external_id, created_at, updated_at, deleted_at \
+     project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1";
 const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
      FROM projects WHERE id = $1 LIMIT 1";
@@ -47,7 +47,6 @@ struct NotePgRow {
     pub project_id: Option<Uuid>,
     pub metadata: Option<serde_json::Value>,
     pub source: Option<serde_json::Value>,
-    pub external_id: Option<serde_json::Value>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -100,7 +99,6 @@ impl From<NotePgRow> for Note {
             project_id: r.project_id.map(|u| u.to_string()),
             metadata: r.metadata.map(|v| v.to_string()),
             source: r.source.map(|v| v.to_string()),
-            external_id: r.external_id.map(|v| v.to_string()),
             created_at: r.created_at.map(|t| t.to_rfc3339()),
             updated_at: r.updated_at.map(|t| t.to_rfc3339()),
             deleted_at: r.deleted_at.map(|t| t.to_rfc3339()),
@@ -278,7 +276,6 @@ impl NoteDb for PgWireBackend {
                 project_id,
                 metadata as "metadata: _",
                 source as "source: _",
-                external_id as "external_id: _",
                 created_at,
                 updated_at,
                 deleted_at
@@ -326,7 +323,6 @@ impl NoteDb for PgWireBackend {
                 project_id,
                 metadata as "metadata: _",
                 source as "source: _",
-                external_id as "external_id: _",
                 created_at,
                 updated_at,
                 deleted_at
@@ -997,7 +993,6 @@ mod tests {
             project_id: None,
             metadata: Some(serde_json::json!({"key": "value"})),
             source: None,
-            external_id: None,
             created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
             updated_at: None,
             deleted_at: None,

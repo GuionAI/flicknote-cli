@@ -16,7 +16,6 @@ pub fn app_schema() -> Schema {
             Column::text("project_id"),
             Column::text("metadata"),
             Column::text("source"),
-            Column::text("external_id"),
             Column::text("created_at"),
             Column::text("updated_at"),
             Column::text("deleted_at"),

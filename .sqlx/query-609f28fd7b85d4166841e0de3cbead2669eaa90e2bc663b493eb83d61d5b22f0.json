@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id as \"id!\",\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata as \"metadata: _\",\n                source as \"source: _\",\n                external_id as \"external_id: _\",\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE (deleted_at IS NOT NULL) = $1\n              AND ($2::text IS NULL OR type = $2)\n              AND ($3::uuid IS NULL OR project_id = $3)\n            ORDER BY created_at DESC\n            LIMIT $4\n            ",
+  "query": "\n            SELECT\n                id as \"id!\",\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata as \"metadata: _\",\n                source as \"source: _\",\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE (deleted_at IS NOT NULL) = $1\n              AND ($2::text IS NULL OR type = $2)\n              AND ($3::uuid IS NULL OR project_id = $3)\n              AND EXISTS (\n                SELECT 1 FROM unnest($4::text[]) AS kw(term)\n                WHERE title ILIKE '%' || kw.term || '%'\n                   OR content ILIKE '%' || kw.term || '%'\n                   OR summary ILIKE '%' || kw.term || '%'\n              )\n            ORDER BY updated_at DESC\n            LIMIT $5\n            ",
   "describe": {
     "columns": [
       {
@@ -60,21 +60,16 @@
       },
       {
         "ordinal": 11,
-        "name": "external_id: _",
-        "type_info": "Jsonb"
-      },
-      {
-        "ordinal": 12,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 13,
+        "ordinal": 12,
         "name": "updated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 14,
+        "ordinal": 13,
         "name": "deleted_at",
         "type_info": "Timestamptz"
       }
@@ -84,6 +79,7 @@
         "Bool",
         "Text",
         "Uuid",
+        "TextArray",
         "Int8"
       ]
     },
@@ -99,11 +95,10 @@
       true,
       true,
       true,
-      true,
       false,
       false,
       true
     ]
   },
-  "hash": "d51bd3d4872e0aee38cd7f8892d90894a04a0b5515264e7f5da087dcf268f6ef"
+  "hash": "609f28fd7b85d4166841e0de3cbead2669eaa90e2bc663b493eb83d61d5b22f0"
 }
