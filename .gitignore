@@ -27,3 +27,4 @@ target/
 
 # Go binaries
 flicknote-tui/flicknote-tui
+.direnv/
