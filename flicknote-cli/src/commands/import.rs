@@ -6,7 +6,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
 use super::add::resolve_project;
-use super::util::resolve_project_arg;
+use super::util::{display_inserted_note_id, print_pending_short_id_hint, resolve_project_arg};
 
 #[derive(Args)]
 pub(crate) struct ImportArgs {
@@ -51,25 +51,38 @@ pub(crate) async fn run(
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let created_at = file_created_time(file);
 
-        db.insert_note(&InsertNoteReq {
-            id: &id,
-            note_type: "normal",
-            status: "ai_queued",
-            title: title.as_deref(),
-            content: Some(&stripped_content),
-            metadata: None,
-            project_id: project_id.as_deref(),
-            now: &created_at,
-        })
-        .await?;
+        let inserted = db
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: title.as_deref(),
+                content: Some(&stripped_content),
+                metadata: None,
+                project_id: project_id.as_deref(),
+                now: &created_at,
+            })
+            .await?;
 
-        imported.push((id, title, file.clone()));
+        imported.push((inserted, title, file.clone()));
     }
 
-    for (id, title, file) in &imported {
+    let mut has_pending = false;
+    for (inserted, title, file) in &imported {
         let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("?");
         let display_title = title.as_deref().unwrap_or("(untitled)");
-        println!("Imported {} → {} — {}", filename, id, display_title);
+        if inserted.short_id.is_none() {
+            has_pending = true;
+        }
+        println!(
+            "Imported {} → {} — {}",
+            filename,
+            display_inserted_note_id(inserted),
+            display_title
+        );
+    }
+    if has_pending {
+        print_pending_short_id_hint();
     }
     match effective_project.as_deref() {
         Some(name) => {

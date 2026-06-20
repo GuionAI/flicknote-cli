@@ -8,7 +8,7 @@ use super::upload_util::{
     cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, metadata_for_upload,
     note_type_for_extension, upload_file,
 };
-use super::util::resolve_project_arg;
+use super::util::{display_inserted_note_id, print_pending_short_id_hint, resolve_project_arg};
 
 #[derive(Args)]
 pub(crate) struct AddArgs {
@@ -75,7 +75,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
         None
     };
 
-    if is_file {
+    let inserted = if is_file {
         let file_path = std::path::PathBuf::from(&content);
         let filename = file_path
             .file_name()
@@ -88,7 +88,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
         let note_type = note_type_for_extension(&filename);
         let metadata = metadata_for_upload(&filename);
 
-        if let Err(e) = db
+        match db
             .insert_note(&InsertNoteReq {
                 id: &id,
                 note_type,
@@ -101,9 +101,12 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
             })
             .await
         {
-            #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
-            let _ = cleanup_uploaded_file(config, &id).await;
-            return Err(e);
+            Ok(inserted) => inserted,
+            Err(e) => {
+                #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+                let _ = cleanup_uploaded_file(config, &id).await;
+                return Err(e);
+            }
         }
     } else if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
@@ -117,7 +120,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
             project_id: project_id.as_deref(),
             now: &now,
         })
-        .await?;
+        .await?
     } else {
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let title_ref = title.as_deref();
@@ -131,12 +134,18 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &AddArgs) -> Res
             project_id: project_id.as_deref(),
             now: &now,
         })
-        .await?;
-    }
+        .await?
+    };
 
     match effective_project.as_deref() {
-        Some(name) => println!("Created note {} in project \"{name}\".", id),
-        None => println!("Created note {}.", id),
+        Some(name) => println!(
+            "Created note {} in project \"{name}\".",
+            display_inserted_note_id(&inserted)
+        ),
+        None => println!("Created note {}.", display_inserted_note_id(&inserted)),
+    }
+    if inserted.short_id.is_none() {
+        print_pending_short_id_hint();
     }
     Ok(())
 }

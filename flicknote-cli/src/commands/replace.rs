@@ -1,7 +1,7 @@
 //! `flicknote replace` — overwrite note content (whole note or section).
 use super::util::{
-    apply_project_move, content_starts_with_heading, find_section, get_note_content,
-    resolve_note_id, try_read_stdin, write_content,
+    apply_project_move, content_starts_with_heading, display_note_id, find_section,
+    get_note_content, resolve_note_id, try_read_stdin, write_content,
 };
 use clap::Args;
 use flicknote_core::backend::NoteDb;
@@ -9,7 +9,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Replace only the named section (stdin must start with a heading)
     #[arg(short = 's', long = "section")]
@@ -30,6 +30,8 @@ pub(crate) async fn run(
     args: &ReplaceArgs,
 ) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id).await?;
+    let note = db.find_note(&full_id).await?;
+    let display_id = display_note_id(&note);
     let has_metadata = args.project.is_some() || args.flagged || args.unflagged;
     let piped = try_read_stdin()?;
     // Nothing to do — no stdin and no metadata.
@@ -69,12 +71,12 @@ pub(crate) async fn run(
                 &shifted,
             );
             write_content(db, &full_id, new_content.trim()).await?;
-            println!("Replaced section in note {}.\n", full_id);
+            println!("Replaced section in note {}.\n", display_id);
             print!("{}", crate::markdown::render_tree(new_content.trim()));
         } else {
             let result =
                 crate::editable_document::save_editable_note(db, &full_id, &new_body).await?;
-            println!("Replaced content for note {}.\n", full_id);
+            println!("Replaced content for note {}.\n", display_id);
             print!("{}", crate::markdown::render_tree(&result.stored_content));
         }
     }
@@ -84,10 +86,10 @@ pub(crate) async fn run(
     }
     if args.flagged {
         db.update_note_flagged(&full_id, true).await?;
-        println!("Flagged note {}.", full_id);
+        println!("Flagged note {}.", display_id);
     } else if args.unflagged {
         db.update_note_flagged(&full_id, false).await?;
-        println!("Unflagged note {}.", full_id);
+        println!("Unflagged note {}.", display_id);
     }
     Ok(())
 }

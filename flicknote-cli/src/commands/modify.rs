@@ -1,6 +1,6 @@
 use super::util::{
-    apply_project_move, find_section, get_note_content, resolve_note_id, try_read_stdin,
-    write_content,
+    apply_project_move, display_note_id, find_section, get_note_content, resolve_note_id,
+    try_read_stdin, write_content,
 };
 use clap::Args;
 use flicknote_core::backend::NoteDb;
@@ -8,7 +8,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 #[derive(Args)]
 pub(crate) struct ModifyArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Edit only the named section (scope = full section including heading)
     #[arg(short = 's', long = "section")]
@@ -29,6 +29,8 @@ pub(crate) async fn run(
     args: &ModifyArgs,
 ) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id).await?;
+    let note = db.find_note(&full_id).await?;
+    let display_id = display_note_id(&note);
     let has_metadata = args.project.is_some() || args.flagged || args.unflagged;
     let piped = try_read_stdin()?;
     // Guard: stdin present but not edit-mode shape → redirect to `replace`.
@@ -69,7 +71,7 @@ pub(crate) async fn run(
             };
             let new_content = super::edit_match::splice(&full_content, &abs, &after);
             write_content(db, &full_id, new_content.trim()).await?;
-            println!("edit applied to note {} (1 replacement)\n", full_id);
+            println!("edit applied to note {} (1 replacement)\n", display_id);
             print!("{}", crate::markdown::render_tree(new_content.trim()));
         } else {
             let display_content =
@@ -79,7 +81,7 @@ pub(crate) async fn run(
             let new_display = super::edit_match::splice(&display_content, &m, &after);
             let result =
                 crate::editable_document::save_editable_note(db, &full_id, &new_display).await?;
-            println!("edit applied to note {} (1 replacement)\n", full_id);
+            println!("edit applied to note {} (1 replacement)\n", display_id);
             print!("{}", crate::markdown::render_tree(&result.stored_content));
         }
     }
@@ -89,10 +91,10 @@ pub(crate) async fn run(
     }
     if args.flagged {
         db.update_note_flagged(&full_id, true).await?;
-        println!("Flagged note {}.", full_id);
+        println!("Flagged note {}.", display_id);
     } else if args.unflagged {
         db.update_note_flagged(&full_id, false).await?;
-        println!("Unflagged note {}.", full_id);
+        println!("Unflagged note {}.", display_id);
     }
     Ok(())
 }

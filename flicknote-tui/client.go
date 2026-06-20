@@ -49,7 +49,7 @@ func (c *Client) SearchNotes(keywords ...string) ([]Note, error) {
 
 // GetNote fetches a single note's detail by ID.
 func (c *Client) GetNote(id string) (*NoteDetail, error) {
-	note, err := runJSON[NoteDetail]("get", id, "--json")
+	note, err := runJSON[NoteDetail]("detail", id, "--json")
 	if err != nil {
 		return nil, err
 	}
@@ -58,18 +58,18 @@ func (c *Client) GetNote(id string) (*NoteDetail, error) {
 
 // ArchiveNote soft-deletes a note.
 func (c *Client) ArchiveNote(id string) error {
-	cmd := exec.Command("flicknote", "archive", id)
+	cmd := exec.Command("flicknote", "delete", id)
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return fmt.Errorf("flicknote archive: %w\n%s", err, strings.TrimSpace(string(exitErr.Stderr)))
+			return fmt.Errorf("flicknote delete: %w\n%s", err, strings.TrimSpace(string(exitErr.Stderr)))
 		}
-		// Output() captures stdout; for archive, any stdout output is diagnostic
+		// Output() captures stdout; for delete, any stdout output is diagnostic
 		if len(out) > 0 {
-			return fmt.Errorf("flicknote archive: %w\n%s", err, strings.TrimSpace(string(out)))
+			return fmt.Errorf("flicknote delete: %w\n%s", err, strings.TrimSpace(string(out)))
 		}
-		return fmt.Errorf("flicknote archive: %w", err)
+		return fmt.Errorf("flicknote delete: %w", err)
 	}
 	return nil
 }

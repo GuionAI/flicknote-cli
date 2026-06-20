@@ -27,7 +27,33 @@ pub struct InsertNoteReq<'a> {
     pub now: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertedNote {
+    pub uuid: String,
+    pub short_id: Option<i64>,
+}
+
+pub(crate) enum NoteLookup<'a> {
+    ShortId(i64),
+    Uuid(&'a str),
+}
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
+
+pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError> {
+    if input.chars().all(|c| c.is_ascii_digit()) {
+        let short_id = input.parse::<i64>().map_err(|_| CliError::NoteNotFound {
+            id: input.to_string(),
+        })?;
+        return Ok(NoteLookup::ShortId(short_id));
+    }
+    if uuid::Uuid::parse_str(input).is_ok() {
+        return Ok(NoteLookup::Uuid(input));
+    }
+    Err(CliError::NoteNotFound {
+        id: input.to_string(),
+    })
+}
 
 /// Validate that an ID prefix contains only hex digits and hyphens.
 /// Returns `NoteNotFound` for invalid characters so the error message is consistent.
@@ -63,7 +89,7 @@ pub trait NoteDb {
     ) -> Result<Vec<Note>, CliError>;
 
     // Note writes
-    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError>;
+    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
     async fn update_note_content(
         &self,
@@ -202,17 +228,23 @@ pub struct SqliteBackend {
 // id column is TEXT in SQLite schema, so LIKE works directly.
 
 #[cfg(feature = "powersync")]
-const SQ_RESOLVE: &str =
-    "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NULL LIMIT 2";
+const SQ_RESOLVE_UUID: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_RESOLVE_ARCHIVED: &str =
-    "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NOT NULL LIMIT 2";
+const SQ_RESOLVE_SHORT_ID: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND short_id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_FIND: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+const SQ_RESOLVE_ARCHIVED_UUID: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NOT NULL LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_RESOLVE_ARCHIVED_SHORT_ID: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND short_id = ? AND deleted_at IS NOT NULL LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_FIND: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_FIND_ARCHIVED: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+const SQ_FIND_ARCHIVED: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NOT NULL LIMIT 1";
 #[cfg(feature = "powersync")]
@@ -330,6 +362,34 @@ async fn resolve_sqlite_id(
 }
 
 #[cfg(feature = "powersync")]
+async fn resolve_sqlite_note_id(
+    pool: &SqlitePool,
+    user_id: &str,
+    input: &str,
+    uuid_sql: &str,
+    short_id_sql: &str,
+) -> Result<String, CliError> {
+    match parse_note_lookup(input)? {
+        NoteLookup::ShortId(short_id) => sqlx::query_scalar::<_, String>(short_id_sql)
+            .bind(user_id)
+            .bind(short_id)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound {
+                id: input.to_string(),
+            }),
+        NoteLookup::Uuid(uuid) => sqlx::query_scalar::<_, String>(uuid_sql)
+            .bind(user_id)
+            .bind(uuid)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound {
+                id: input.to_string(),
+            }),
+    }
+}
+
+#[cfg(feature = "powersync")]
 async fn sqlite_exists(
     pool: &SqlitePool,
     sql: &str,
@@ -352,31 +412,23 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError> {
-        validate_id_prefix(prefix)?;
-        resolve_sqlite_id(
+        resolve_sqlite_note_id(
             &self.db.pool,
-            SQ_RESOLVE,
             &self.user_id,
             prefix,
-            "ID",
-            || CliError::NoteNotFound {
-                id: prefix.to_string(),
-            },
+            SQ_RESOLVE_UUID,
+            SQ_RESOLVE_SHORT_ID,
         )
         .await
     }
 
     async fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError> {
-        validate_id_prefix(prefix)?;
-        resolve_sqlite_id(
+        resolve_sqlite_note_id(
             &self.db.pool,
-            SQ_RESOLVE_ARCHIVED,
             &self.user_id,
             prefix,
-            "ID",
-            || CliError::NoteNotFound {
-                id: prefix.to_string(),
-            },
+            SQ_RESOLVE_ARCHIVED_UUID,
+            SQ_RESOLVE_ARCHIVED_SHORT_ID,
         )
         .await
     }
@@ -410,14 +462,14 @@ impl NoteDb for SqliteBackend {
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let limit = i64::from(filter.limit);
-        Ok(sqlx::query_as!(
-            Note,
+        Ok(sqlx::query_as::<_, Note>(
             r#"
             SELECT
-                id as "id!",
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
@@ -436,14 +488,14 @@ impl NoteDb for SqliteBackend {
             ORDER BY created_at DESC
             LIMIT ?
             "#,
-            self.user_id,
-            filter.archived,
-            filter.note_type,
-            filter.note_type,
-            filter.project_id,
-            filter.project_id,
-            limit,
         )
+        .bind(&self.user_id)
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(filter.note_type)
+        .bind(filter.project_id)
+        .bind(filter.project_id)
+        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }
@@ -460,14 +512,14 @@ impl NoteDb for SqliteBackend {
         }
         let limit = i64::from(filter.limit);
         let keywords_json = serde_json::to_string(keywords)?;
-        Ok(sqlx::query_as!(
-            Note,
+        Ok(sqlx::query_as::<_, Note>(
             r#"
             SELECT
-                id as "id!",
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
@@ -492,20 +544,20 @@ impl NoteDb for SqliteBackend {
             ORDER BY updated_at DESC
             LIMIT ?
             "#,
-            self.user_id,
-            filter.archived,
-            filter.note_type,
-            filter.note_type,
-            filter.project_id,
-            filter.project_id,
-            keywords_json,
-            limit,
         )
+        .bind(&self.user_id)
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(filter.note_type)
+        .bind(filter.project_id)
+        .bind(filter.project_id)
+        .bind(keywords_json)
+        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }
 
-    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
+    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
         sqlx::query(SQ_INSERT)
             .bind(req.id)
             .bind(&self.user_id)
@@ -519,7 +571,10 @@ impl NoteDb for SqliteBackend {
             .bind(req.now)
             .execute(&self.db.pool)
             .await?;
-        Ok(())
+        Ok(InsertedNote {
+            uuid: req.id.to_string(),
+            short_id: None,
+        })
     }
 
     async fn update_note_content(
@@ -1124,7 +1179,7 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
 
-        backend
+        let inserted = backend
             .insert_note(&InsertNoteReq {
                 id: &id,
                 note_type: "normal",
@@ -1138,15 +1193,29 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(inserted.uuid, id);
+        assert_eq!(inserted.short_id, None);
+
         // Find by full id
         let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.id, id);
         assert_eq!(note.title, Some("Hello world".to_string()));
 
-        // Find by prefix
-        let prefix = &id[..8];
-        let resolved = backend.resolve_note_id(prefix).await.unwrap();
+        // Find by full UUID compatibility path
+        let resolved = backend.resolve_note_id(&id).await.unwrap();
         assert_eq!(resolved, id);
+
+        sqlx::query("UPDATE notes SET short_id = 42 WHERE id = ?")
+            .bind(&id)
+            .execute(&backend.db.pool)
+            .await
+            .unwrap();
+        let resolved = backend.resolve_note_id("42").await.unwrap();
+        assert_eq!(resolved, id);
+
+        // UUID prefixes are no longer accepted.
+        let prefix = &id[..8];
+        assert!(backend.resolve_note_id(prefix).await.is_err());
 
         // Find content
         let content = backend.find_note_content(&id).await.unwrap();

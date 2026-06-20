@@ -40,7 +40,7 @@ type Model struct {
 	height int
 
 	// Status
-	err       error
+	err error
 }
 
 func NewModel(project string) Model {
@@ -222,7 +222,7 @@ func (m Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.adjustListOffset()
 	case "enter", "l", "right":
 		if len(m.notes) > 0 {
-			return m, m.loadDetail(m.notes[m.cursor].ID)
+			return m, m.loadDetail(m.notes[m.cursor].Ref())
 		}
 	case "/":
 		m.searchInput.SetValue(m.searchQuery)
@@ -231,7 +231,7 @@ func (m Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d":
 		if len(m.notes) > 0 {
-			id := m.notes[m.cursor].ID
+			id := m.notes[m.cursor].Ref()
 			return m, func() tea.Msg {
 				if err := m.client.ArchiveNote(id); err != nil {
 					return errMsg{err}

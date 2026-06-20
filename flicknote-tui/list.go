@@ -62,7 +62,7 @@ func (m Model) viewList() string {
 
 	// Status bar
 	count := len(m.notes)
-	status := fmt.Sprintf(" %d notes  │  j/k navigate  │  enter open  │  / search  │  d archive  │  r refresh  │  q quit", count)
+	status := fmt.Sprintf(" %d notes  │  j/k navigate  │  enter open  │  / search  │  d delete  │  r refresh  │  q quit", count)
 	b.WriteString(statusBarStyle.Width(m.width).Render(status))
 
 	return b.String()

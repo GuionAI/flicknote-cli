@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct Note {
     pub id: String,
+    pub short_id: Option<i64>,
     pub user_id: String,
     #[sqlx(rename = "type")]
     pub r#type: String,

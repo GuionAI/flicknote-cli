@@ -2,9 +2,11 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+
+use super::util::{display_note_id, note_json};
 #[derive(Args)]
 pub(crate) struct DetailArgs {
-    /// Note ID (full UUID or short prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Show markdown heading structure
     #[arg(long)]
@@ -21,11 +23,6 @@ pub(crate) async fn run(
     _config: &Config,
     args: &DetailArgs,
 ) -> Result<(), CliError> {
-    if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return Err(CliError::NoteNotFound {
-            id: args.id.clone(),
-        });
-    }
     if args.tree {
         let full_id = if args.archived {
             db.resolve_archived_note_id(&args.id).await?
@@ -66,24 +63,13 @@ pub(crate) async fn run(
         None
     };
     if args.json {
-        let json_output = serde_json::json!({
-            "id": note.id,
-            "type": note.r#type,
-            "title": note.title,
-            "project": project_name,
-            "project_id": note.project_id,
-            "summary": note.summary,
-            "content": note.content,
-            "is_flagged": note.is_flagged,
-            "created_at": note.created_at,
-            "updated_at": note.updated_at,
-        });
+        let json_output = note_json(&note, project_name.as_deref());
         println!(
             "{}",
             serde_json::to_string_pretty(&json_output).map_err(CliError::Json)?
         );
     } else {
-        println!("ID:         {}", note.id);
+        println!("ID:         {}", display_note_id(&note));
         println!("Type:       {}", note.r#type);
         println!(
             "Title:      {}",
@@ -92,9 +78,9 @@ pub(crate) async fn run(
         if let Some(ref summary) = note.summary {
             println!("Summary:    {summary}");
         }
-        if let Some(ref pid) = note.project_id {
+        if note.project_id.is_some() {
             let name = project_name.as_deref().unwrap_or("(unknown)");
-            println!("Project:    {name} ({pid})");
+            println!("Project:    {name}");
         }
         if note.is_flagged == Some(1) {
             println!("Flagged:    yes");

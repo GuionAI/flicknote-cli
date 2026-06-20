@@ -46,32 +46,34 @@ flicknote count --project myproject     # count in project
 flicknote count "API"                   # count by keyword filter
 ```
 
-List columns: ID (full UUID) | Type | Title | Project | Topics | Flagged | Created
+List columns: ID (numeric short ID, or `pending`) | Type | Title | Project | Topics | Flagged | Created
+
+Note commands use the numeric short ID shown by `list`. A full UUID is also accepted for pending-sync notes, but UUID prefixes are not supported. In `--json`, `id` is the numeric short ID and `uuid` is the original UUID.
 
 ## Reading Notes
 
 ```bash
 # Full metadata + content
-flicknote detail abc12345
+flicknote detail 123
 
 # Content-only as pure markdown
-flicknote content abc12345
+flicknote content 123
 
 # See heading structure with section IDs
-flicknote detail abc12345 --tree
+flicknote detail 123 --tree
 
 # Extract a specific section — use ID from --tree (e.g. 3K)
-flicknote content abc12345 --section 3K
+flicknote content 123 --section 3K
 
 # JSON output
-flicknote detail abc12345 --json
+flicknote detail 123 --json
 
 # Read an archived note
-flicknote detail abc12345 --archived
+flicknote detail 123 --archived
 
 # Works with other flags
-flicknote detail abc12345 --archived --tree
-flicknote detail abc12345 --archived --json
+flicknote detail 123 --archived --tree
+flicknote detail 123 --archived --json
 ```
 
 Content output format:
@@ -86,11 +88,11 @@ Content output format:
 To target a section, first run `--tree` to see IDs, then use the ID with `--section`:
 
 ```bash
-flicknote detail abc12345 --tree
+flicknote detail 123 --tree
 # └─ # My Note
 #    ├─ [3K] ## Summary
 #    └─ [aZ] ## Details
-flicknote content abc12345 --section 3K
+flicknote content 123 --section 3K
 ```
 
 ## Editing Notes
@@ -103,11 +105,11 @@ Content-writing commands read from **stdin only** — pipe content in or use her
 
 ```bash
 # Replace entire note content
-echo "new content" | flicknote replace abc12345
+echo "new content" | flicknote replace 123
 
 # Replace a section (stdin MUST start with a heading — heading level is capped at original)
 echo "## New Heading
-new body" | flicknote replace abc12345 --section 3K
+new body" | flicknote replace 123 --section 3K
 ```
 
 `--section` requires stdin to start with an ATX or setext heading.
@@ -118,7 +120,7 @@ new body" | flicknote replace abc12345 --section 3K
 
 ```bash
 # Edit mode: exact-string replacement (fails on zero or multiple matches)
-cat <<'EDIT' | flicknote modify abc12345
+cat <<'EDIT' | flicknote modify 123
 ===BEFORE===
 old text (exactly as in the note, whitespace-sensitive)
 ===AFTER===
@@ -126,7 +128,7 @@ new text
 EDIT
 
 # Scope to a section (scope = full section including heading)
-cat <<'EDIT' | flicknote modify abc12345 --section 3K
+cat <<'EDIT' | flicknote modify 123 --section 3K
 ===BEFORE===
 old text inside that section
 ===AFTER===
@@ -134,8 +136,8 @@ new text
 EDIT
 
 # Metadata only
-flicknote modify abc12345 --project newproject
-flicknote modify abc12345 --flagged
+flicknote modify 123 --project newproject
+flicknote modify 123 --flagged
 ```
 
 **Rules:**
@@ -148,17 +150,17 @@ flicknote modify abc12345 --flagged
 
 ```bash
 # Append to an existing note (stdin required, adds with \n\n separator)
-echo "more content" | flicknote append abc12345
+echo "more content" | flicknote append 123
 
 # Remove a section by ID
-flicknote delete abc12345 --section 3K
+flicknote delete 123 --section 3K
 
 # Rename a section heading (preserves heading level and body)
-flicknote rename abc12345 --section 3K "Final"
+flicknote rename 123 --section 3K "Final"
 
 # Insert content before or after a section by ID
-echo "## Preface" | flicknote insert abc12345 --before 3K
-echo "## Analysis" | flicknote insert abc12345 --after aZ
+echo "## Preface" | flicknote insert 123 --before 3K
+echo "## Analysis" | flicknote insert 123 --after aZ
 ```
 
 Mutating commands print the updated `--tree` after making changes.
@@ -179,14 +181,14 @@ body" \| flicknote replace <id> --section <s>`   |
 ## Opening Notes in Browser
 
 ```bash
-flicknote open abc12345    # open note in browser
+flicknote open 123    # open note in browser
 ```
 
 ## Deleting & Restoring Notes
 
 ```bash
-flicknote delete abc12345      # soft-delete a note (hidden from normal listing)
-flicknote restore abc12345     # restore a deleted note
+flicknote delete 123      # soft-delete a note (hidden from normal listing)
+flicknote restore 123     # restore a deleted note
 flicknote list --archived      # list deleted notes
 ```
 

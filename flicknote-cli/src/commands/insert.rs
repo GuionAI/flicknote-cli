@@ -3,12 +3,14 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use super::util::{find_section, get_note_content, read_stdin_required, resolve_note_id};
+use super::util::{
+    display_note_id, find_section, get_note_content, read_stdin_required, resolve_note_id,
+};
 
 #[derive(Args)]
 #[command(group(clap::ArgGroup::new("position").required(true)))]
 pub(crate) struct InsertArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Insert before this section
     #[arg(long, group = "position")]
@@ -24,6 +26,8 @@ pub(crate) async fn run(
     args: &InsertArgs,
 ) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id).await?;
+    let note = db.find_note(&full_id).await?;
+    let display_id = display_note_id(&note);
     let (section_name, insert_before) = match (&args.before, &args.after) {
         (Some(s), None) => (s.as_str(), true),
         (None, Some(s)) => (s.as_str(), false),
@@ -36,7 +40,7 @@ pub(crate) async fn run(
 
     let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
-    let bounds = find_section(&doc, section_name, &args.id)?;
+    let bounds = find_section(&doc, section_name, &full_id)?;
 
     let insert_content = read_stdin_required()?;
 
@@ -62,7 +66,7 @@ pub(crate) async fn run(
     let position = if insert_before { "before" } else { "after" };
     println!(
         "Inserted content {position} '{}' in note {}.\n",
-        bounds.heading.text, full_id
+        bounds.heading.text, display_id
     );
     print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())
