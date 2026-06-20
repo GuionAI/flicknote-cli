@@ -1,5 +1,8 @@
 use super::add::resolve_project;
-use super::util::{resolve_note_id, resolve_project_arg};
+use super::util::{
+    display_inserted_note_id, display_note_id, print_pending_short_id_hint, resolve_note_id,
+    resolve_project_arg,
+};
 use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
@@ -7,7 +10,7 @@ use flicknote_core::error::CliError;
 use std::io::Write;
 #[derive(Args)]
 pub(crate) struct EditArgs {
-    /// Note ID (full UUID or prefix). Omit to create a new note.
+    /// Note short ID. A full UUID is also accepted for pending-sync notes. Omit to create a new note.
     id: Option<String>,
     /// Assign to project by name (only for new notes)
     #[arg(long)]
@@ -81,10 +84,12 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
     }
     let result = crate::editable_document::save_editable_note(db, &full_id, &edited).await?;
     if result.title_changed {
-        println!("Updated title for note {}.", full_id);
+        let note = db.find_note(&full_id).await?;
+        println!("Updated title for note {}.", display_note_id(&note));
     }
     if result.content_changed {
-        println!("Updated content for note {}.", full_id);
+        let note = db.find_note(&full_id).await?;
+        println!("Updated content for note {}.", display_note_id(&note));
     }
     Ok(())
 }
@@ -108,17 +113,18 @@ async fn create_from_editor(
     } else {
         None
     };
-    db.insert_note(&InsertNoteReq {
-        id: &id,
-        note_type: "normal",
-        status: "ai_queued",
-        title: Some(parsed.title.as_str()),
-        content: crate::editable_document::normal_note_content_ref(&parsed),
-        metadata: None,
-        project_id: project_id.as_deref(),
-        now: &now,
-    })
-    .await?;
+    let inserted = db
+        .insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "ai_queued",
+            title: Some(parsed.title.as_str()),
+            content: crate::editable_document::normal_note_content_ref(&parsed),
+            metadata: None,
+            project_id: project_id.as_deref(),
+            now: &now,
+        })
+        .await?;
     // Insert extraction rows
     if !parsed.topics.is_empty() {
         db.set_note_extractions(&id, "topic", &parsed.topics)
@@ -129,8 +135,14 @@ async fn create_from_editor(
             .await?;
     }
     match effective_project.as_deref() {
-        Some(name) => println!("Created note {} in project \"{name}\".", id),
-        None => println!("Created note {}.", id),
+        Some(name) => println!(
+            "Created note {} in project \"{name}\".",
+            display_inserted_note_id(&inserted)
+        ),
+        None => println!("Created note {}.", display_inserted_note_id(&inserted)),
+    }
+    if inserted.short_id.is_none() {
+        print_pending_short_id_hint();
     }
     Ok(())
 }

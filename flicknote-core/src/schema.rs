@@ -6,6 +6,7 @@ pub fn app_schema() -> Schema {
     schema.tables.push(Table::create(
         "notes",
         vec![
+            Column::integer("short_id"),
             Column::text("user_id"),
             Column::text("type"),
             Column::text("status"),
@@ -22,6 +23,14 @@ pub fn app_schema() -> Schema {
         ],
         |t| {
             t.indexes = vec![
+                Index {
+                    name: "short_id".into(),
+                    columns: vec![IndexedColumn {
+                        name: "short_id".into(),
+                        ascending: true,
+                        type_name: "INTEGER".into(),
+                    }],
+                },
                 Index {
                     name: "type".into(),
                     columns: vec![IndexedColumn {
@@ -155,6 +164,7 @@ pub fn app_schema() -> Schema {
     schema.tables.push(Table::create(
         "tc_tasks",
         vec![
+            Column::integer("short_id"),
             Column::text("user_id"),
             Column::text("data"),
             Column::text("entry_at"),

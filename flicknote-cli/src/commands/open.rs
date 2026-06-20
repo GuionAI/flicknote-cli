@@ -3,9 +3,11 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
+use super::util::display_note_id;
+
 #[derive(Args)]
 pub(crate) struct OpenArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
 }
 
@@ -17,8 +19,14 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Re
         )
     })?;
     let full_id = db.resolve_note_id(&args.id).await?;
-    let url = format!("{}/notes/{}", web_url.trim_end_matches('/'), full_id);
+    let note = db.find_note(&full_id).await?;
+    let display_id = display_note_id(&note);
+    let url_id = note
+        .short_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| full_id.clone());
+    let url = format!("{}/notes/{}", web_url.trim_end_matches('/'), url_id);
     open::that(&url).map_err(CliError::Io)?;
-    println!("Opened {} — {}", full_id, url);
+    println!("Opened {} — {}", display_id, url);
     Ok(())
 }

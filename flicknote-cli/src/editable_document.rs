@@ -138,7 +138,7 @@ async fn load_managed_extractions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicknote_core::backend::{InsertNoteReq, NoteFilter};
+    use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteFilter};
     use flicknote_core::types::{Keyterm, Project, Prompt};
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -179,6 +179,7 @@ mod tests {
     fn note_with(content: Option<&str>, title: Option<&str>) -> Note {
         Note {
             id: NOTE_ID.to_string(),
+            short_id: Some(1),
             user_id: "user".to_string(),
             r#type: "normal".to_string(),
             status: "synced".to_string(),
@@ -400,7 +401,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn insert_note(&self, _req: &InsertNoteReq<'_>) -> Result<(), CliError> {
+        async fn insert_note(&self, _req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
             unimplemented!()
         }
 

@@ -2,7 +2,7 @@ use clap::Args;
 use flicknote_core::backend::{NoteDb, NoteFilter};
 use flicknote_core::error::CliError;
 
-use super::util::{print_notes_table, resolve_project_arg};
+use super::util::{note_json, print_notes_table, resolve_project_arg};
 
 #[derive(Args)]
 pub(crate) struct ListArgs {
@@ -54,9 +54,10 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError
         .await?;
 
     if args.json {
+        let values: Vec<_> = notes.iter().map(|note| note_json(note, None)).collect();
         println!(
             "{}",
-            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
         );
     } else {
         // Fetch topics for all notes

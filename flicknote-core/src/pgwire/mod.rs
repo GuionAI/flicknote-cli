@@ -9,14 +9,14 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::backend::{InsertNoteReq, NoteDb, NoteFilter};
+use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
-const PG_FIND_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+const PG_FIND_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1";
-const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, user_id, type, status, title, content, summary, is_flagged, \
+const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1";
 const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
@@ -36,6 +36,7 @@ const PG_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, 
 #[derive(sqlx::FromRow)]
 struct NotePgRow {
     pub id: Uuid,
+    pub short_id: Option<i32>,
     pub user_id: Uuid,
     #[sqlx(rename = "type")]
     pub r#type: String,
@@ -89,6 +90,7 @@ impl From<NotePgRow> for Note {
     fn from(r: NotePgRow) -> Self {
         Self {
             id: r.id.to_string(),
+            short_id: r.short_id.map(i64::from),
             user_id: r.user_id.to_string(),
             r#type: r.r#type,
             status: r.status,
@@ -162,6 +164,32 @@ fn parse_iso_utc(s: &str) -> Result<DateTime<Utc>, CliError> {
         .map_err(|e| CliError::Database(format!("invalid ISO timestamp {s:?}: {e}")))
 }
 
+async fn resolve_pg_note_id(
+    pool: &PgPool,
+    input: &str,
+    uuid_sql: &str,
+    short_id_sql: &str,
+) -> Result<String, CliError> {
+    match crate::backend::parse_note_lookup(input)? {
+        NoteLookup::ShortId(short_id) => sqlx::query_scalar::<_, String>(short_id_sql)
+            .bind(i32::try_from(short_id).map_err(|_| CliError::NoteNotFound {
+                id: input.to_string(),
+            })?)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound {
+                id: input.to_string(),
+            }),
+        NoteLookup::Uuid(uuid) => sqlx::query_scalar::<_, String>(uuid_sql)
+            .bind(parse_uuid(uuid)?)
+            .fetch_optional(pool)
+            .await?
+            .ok_or_else(|| CliError::NoteNotFound {
+                id: input.to_string(),
+            }),
+    }
+}
+
 async fn resolve_uuid_prefix(
     pool: &PgPool,
     sql: &str,
@@ -203,29 +231,21 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn resolve_note_id(&self, prefix: &str) -> Result<String, CliError> {
-        crate::backend::validate_id_prefix(prefix)?;
-        resolve_uuid_prefix(
+        resolve_pg_note_id(
             &self.pool,
-            "SELECT id::text FROM notes WHERE id::text LIKE $1 AND deleted_at IS NULL LIMIT 2",
             prefix,
-            "ID",
-            || CliError::NoteNotFound {
-                id: prefix.to_string(),
-            },
+            "SELECT id::text FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1",
+            "SELECT id::text FROM notes WHERE short_id = $1 AND deleted_at IS NULL LIMIT 1",
         )
         .await
     }
 
     async fn resolve_archived_note_id(&self, prefix: &str) -> Result<String, CliError> {
-        crate::backend::validate_id_prefix(prefix)?;
-        resolve_uuid_prefix(
+        resolve_pg_note_id(
             &self.pool,
-            "SELECT id::text FROM notes WHERE id::text LIKE $1 AND deleted_at IS NOT NULL LIMIT 2",
             prefix,
-            "ID",
-            || CliError::NoteNotFound {
-                id: prefix.to_string(),
-            },
+            "SELECT id::text FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1",
+            "SELECT id::text FROM notes WHERE short_id = $1 AND deleted_at IS NOT NULL LIMIT 1",
         )
         .await
     }
@@ -261,21 +281,21 @@ impl NoteDb for PgWireBackend {
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let project_id = parse_uuid_opt(filter.project_id)?;
         let limit = i64::from(filter.limit);
-        let rows = sqlx::query_as!(
-            NotePgRow,
+        let rows = sqlx::query_as::<_, NotePgRow>(
             r#"
             SELECT
-                id as "id!",
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
                 is_flagged,
                 project_id,
-                metadata as "metadata: _",
-                source as "source: _",
+                metadata,
+                source,
                 created_at,
                 updated_at,
                 deleted_at
@@ -286,11 +306,11 @@ impl NoteDb for PgWireBackend {
             ORDER BY created_at DESC
             LIMIT $4
             "#,
-            filter.archived,
-            filter.note_type,
-            project_id,
-            limit,
         )
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(project_id)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(Note::from).collect())
@@ -308,21 +328,21 @@ impl NoteDb for PgWireBackend {
         }
         let project_id = parse_uuid_opt(filter.project_id)?;
         let limit = i64::from(filter.limit);
-        let rows = sqlx::query_as!(
-            NotePgRow,
+        let rows = sqlx::query_as::<_, NotePgRow>(
             r#"
             SELECT
-                id as "id!",
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
                 is_flagged,
                 project_id,
-                metadata as "metadata: _",
-                source as "source: _",
+                metadata,
+                source,
                 created_at,
                 updated_at,
                 deleted_at
@@ -339,28 +359,29 @@ impl NoteDb for PgWireBackend {
             ORDER BY updated_at DESC
             LIMIT $5
             "#,
-            filter.archived,
-            filter.note_type,
-            project_id,
-            keywords,
-            limit,
         )
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(project_id)
+        .bind(keywords)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(Note::from).collect())
     }
 
-    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<(), CliError> {
+    async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
         let metadata: Option<serde_json::Value> = req
             .metadata
             .map(serde_json::from_str)
             .transpose()
             .map_err(|e| CliError::Database(format!("invalid metadata JSON: {e}")))?;
         let now = parse_iso_utc(req.now)?;
-        sqlx::query(
+        let row = sqlx::query(
             "INSERT INTO notes \
              (id, type, status, title, content, metadata, project_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             RETURNING id::text, short_id",
         )
         .bind(parse_uuid(req.id)?)
         .bind(req.note_type)
@@ -371,9 +392,12 @@ impl NoteDb for PgWireBackend {
         .bind(parse_uuid_opt(req.project_id)?)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-        Ok(())
+        Ok(InsertedNote {
+            uuid: row.try_get::<String, _>(0)?,
+            short_id: row.try_get::<Option<i32>, _>(1)?.map(i64::from),
+        })
     }
 
     async fn update_note_content(
@@ -983,6 +1007,7 @@ mod tests {
         use chrono::TimeZone;
         let pg_row = NotePgRow {
             id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
+            short_id: Some(42),
             user_id: Uuid::nil(),
             r#type: "text".into(),
             status: "active".into(),
@@ -999,6 +1024,7 @@ mod tests {
         };
         let note: Note = pg_row.into();
         assert_eq!(note.id, "550e8400-e29b-41d4-a716-446655440000");
+        assert_eq!(note.short_id, Some(42));
         assert_eq!(note.is_flagged, Some(1));
         assert!(note.created_at.is_some());
         assert!(note.metadata.is_some());

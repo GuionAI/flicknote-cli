@@ -27,7 +27,7 @@ func renderMarkdown(content string, width int) string {
 func buildDetailContent(d *NoteDetail, renderedMD string) string {
 	var b strings.Builder
 
-	b.WriteString("ID:       " + d.ID + "\n")
+	b.WriteString("ID:       " + d.DisplayID() + "\n")
 	b.WriteString("Type:     " + d.Type + "\n")
 	if d.Project != nil {
 		b.WriteString("Project:  " + *d.Project + "\n")

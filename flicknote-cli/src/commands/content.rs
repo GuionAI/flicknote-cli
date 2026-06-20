@@ -3,18 +3,13 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 #[derive(Args)]
 pub(crate) struct ContentArgs {
-    /// Note ID (full UUID or short prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Extract a specific section by section ID (2-char base62)
     #[arg(short = 's', long = "section")]
     section: Option<String>,
 }
 pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliError> {
-    if !args.id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        return Err(CliError::NoteNotFound {
-            id: args.id.clone(),
-        });
-    }
     let full_id = db.resolve_note_id(&args.id).await?;
     let note = db.find_note(&full_id).await?;
     // --section: operates on note body without frontmatter

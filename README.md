@@ -87,9 +87,12 @@ flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
 
+# Note IDs are numeric short IDs from list/detail. A full UUID is also accepted
+# for notes before short ID sync completes; UUID prefixes are not supported.
+
 # Get a specific note (use --tree to see section IDs)
-flicknote get <note-id>
-flicknote get <note-id> --tree
+flicknote detail <note-id>
+flicknote detail <note-id> --tree
 
 # Edit note content
 # Precision edit (exact-string replace)
@@ -108,8 +111,8 @@ body" | flicknote replace <note-id> --section <section-id>
 # Append
 echo "more content" | flicknote append <note-id>
 
-# Archive
-flicknote archive <note-id>
+# Delete
+flicknote delete <note-id>
 
 # Manage sync daemon
 flicknote sync start

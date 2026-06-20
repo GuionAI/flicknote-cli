@@ -1,3 +1,4 @@
+use flicknote_core::backend::InsertedNote;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
@@ -55,6 +56,40 @@ pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<Str
     db.resolve_note_id(prefix).await
 }
 
+pub(crate) fn display_note_id(note: &Note) -> String {
+    note.short_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "pending".to_string())
+}
+
+pub(crate) fn display_inserted_note_id(note: &InsertedNote) -> String {
+    note.short_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| note.uuid.clone())
+}
+
+pub(crate) fn print_pending_short_id_hint() {
+    println!("Short ID pending sync; use the UUID until it appears in list/detail.");
+}
+
+pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "id": note.short_id,
+        "uuid": note.id,
+        "type": note.r#type,
+        "status": note.status,
+        "title": note.title,
+        "project": project_name,
+        "project_id": note.project_id,
+        "summary": note.summary,
+        "content": note.content,
+        "is_flagged": note.is_flagged,
+        "created_at": note.created_at,
+        "updated_at": note.updated_at,
+        "deleted_at": note.deleted_at,
+    })
+}
+
 /// Fetch note content from DB, returning `None` for NULL/missing content.
 pub(crate) async fn get_note_content_optional(
     db: &dyn NoteDb,
@@ -80,17 +115,17 @@ pub(crate) async fn write_content(
 }
 
 /// Print notes as a formatted table to stdout.
-/// Columns: ID (full uuid) | Type | Title | Project | Topics | Flagged | Created
+/// Columns: ID (short_id or pending) | Type | Title | Project | Topics | Flagged | Created
 pub(crate) fn print_notes_table(
     notes: &[Note],
     topics_map: &std::collections::HashMap<String, Vec<String>>,
     project_names: &std::collections::HashMap<String, String>,
 ) {
     println!(
-        "{:<36} {:<8} {:<30} {:<15} {:<20} {:<7} Created",
+        "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} Created",
         "ID", "Type", "Title", "Project", "Topics", "Flagged"
     );
-    println!("{}", "-".repeat(130));
+    println!("{}", "-".repeat(102));
     for note in notes {
         let date = note
             .created_at
@@ -132,8 +167,21 @@ pub(crate) fn print_notes_table(
             ""
         };
         println!(
-            "{:<36} {:<8} {:<30} {:<15} {:<20} {:<7} {}",
-            note.id, note.r#type, title, project, topics, flagged, date
+            "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} {}",
+            display_note_id(note),
+            note.r#type,
+            title,
+            project,
+            topics,
+            flagged,
+            date
+        );
+    }
+
+    let pending = notes.iter().filter(|note| note.short_id.is_none()).count();
+    if pending > 0 {
+        println!(
+            "\n{pending} note(s) are waiting for short ID sync. Use `flicknote list --json` to get UUIDs."
         );
     }
 }
@@ -200,13 +248,14 @@ pub(crate) async fn apply_project_move(
     project_name: &str,
 ) -> Result<Option<String>, CliError> {
     let old_note = db.find_note(full_id).await?;
+    let display_id = display_note_id(&old_note);
     let old_project_id = old_note.project_id.clone();
     let new_project_id = resolve_project(db, project_name).await?;
 
     if old_project_id.as_deref() == Some(new_project_id.as_str()) {
         println!(
             "Note {} is already in project \"{}\".",
-            full_id, project_name
+            display_id, project_name
         );
         return Ok(None);
     }
@@ -214,7 +263,7 @@ pub(crate) async fn apply_project_move(
     let deleted_name = db
         .move_note_to_project(full_id, &new_project_id, old_project_id.as_deref())
         .await?;
-    println!("Moved note {} to project \"{}\".", full_id, project_name);
+    println!("Moved note {} to project \"{}\".", display_id, project_name);
     if let Some(ref name) = deleted_name {
         println!("Deleted empty project \"{}\".", name);
     }

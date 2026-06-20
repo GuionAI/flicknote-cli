@@ -3,11 +3,11 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use super::util::{find_section, get_note_content, resolve_note_id};
+use super::util::{display_note_id, find_section, get_note_content, resolve_note_id};
 
 #[derive(Args)]
 pub(crate) struct RenameArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
     /// Section heading to rename (case-insensitive contains match)
     #[arg(short = 's', long = "section")]
@@ -22,6 +22,8 @@ pub(crate) async fn run(
     args: &RenameArgs,
 ) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, &args.id).await?;
+    let note = db.find_note(&full_id).await?;
+    let display_id = display_note_id(&note);
     let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
     let bounds = find_section(&doc, &args.section, &args.id)?;
@@ -43,7 +45,7 @@ pub(crate) async fn run(
 
     println!(
         "Renamed '{}' → '{}' in note {}.\n",
-        bounds.heading.text, args.name, full_id
+        bounds.heading.text, args.name, display_id
     );
     print!("{}", crate::markdown::render_tree(new_content.trim()));
     Ok(())

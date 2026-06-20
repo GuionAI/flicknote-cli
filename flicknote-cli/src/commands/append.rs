@@ -3,11 +3,13 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use super::util::{get_note_content_optional, read_stdin_required, resolve_note_id};
+use super::util::{
+    display_note_id, get_note_content_optional, read_stdin_required, resolve_note_id,
+};
 
 #[derive(Args)]
 pub(crate) struct AppendArgs {
-    /// Note ID (full UUID or prefix)
+    /// Note short ID. A full UUID is also accepted for pending-sync notes.
     id: String,
 }
 
@@ -33,6 +35,7 @@ pub(crate) async fn run(
     // Update — no status change (do not re-queue for AI)
     db.update_note_content(&full_id, &combined, false).await?;
 
-    println!("Appended to note {}.", full_id);
+    let note = db.find_note(&full_id).await?;
+    println!("Appended to note {}.", display_note_id(&note));
     Ok(())
 }
