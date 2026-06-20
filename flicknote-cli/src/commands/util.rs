@@ -31,7 +31,7 @@ pub(crate) fn find_section<'a>(
         .position(|h| h.id == section_id)
         .ok_or_else(|| {
             CliError::Other(format!(
-                "error: unknown section ID {section_id:?} — run `flicknote get {display_id} --tree` to see current IDs"
+                "error: unknown section ID {section_id:?} — run `flicknote detail {display_id} --tree` to see current IDs"
             ))
         })?;
 

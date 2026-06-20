@@ -1205,6 +1205,14 @@ mod tests {
         let resolved = backend.resolve_note_id(&id).await.unwrap();
         assert_eq!(resolved, id);
 
+        sqlx::query("UPDATE notes SET short_id = 42 WHERE id = ?")
+            .bind(&id)
+            .execute(&backend.db.pool)
+            .await
+            .unwrap();
+        let resolved = backend.resolve_note_id("42").await.unwrap();
+        assert_eq!(resolved, id);
+
         // UUID prefixes are no longer accepted.
         let prefix = &id[..8];
         assert!(backend.resolve_note_id(prefix).await.is_err());

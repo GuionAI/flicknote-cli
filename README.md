@@ -6,7 +6,7 @@ Local-first note management CLI with cloud sync. Captures, queries, and manages 
 
 - **Add & capture notes** — text, URLs (auto-detected as links), files
 - **List & search notes** — filter by type, project, or keyword (`find`)
-- **Get note details** — retrieve by full or partial UUID; view heading structure with `--tree`
+- **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — replace, append, insert, remove, rename sections by ID
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
