@@ -62,7 +62,7 @@ pub(crate) async fn run(
             // Section-scoped edit: operates on raw content, no frontmatter
             let full_content = get_note_content(db, &full_id).await?;
             let doc = crate::markdown::parse_markdown(&full_content);
-            let bounds = find_section(&doc, section_id, &display_id)?;
+            let bounds = find_section(&doc, section_id, &full_id)?;
             let scope = &full_content[bounds.start..bounds.end];
             let m = super::edit_match::find_unique(scope, &before)?;
             let abs = super::edit_match::MatchInfo {

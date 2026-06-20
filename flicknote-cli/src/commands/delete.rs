@@ -27,7 +27,7 @@ pub(crate) async fn run(
         // Section deletion — remove the section from content
         let content = get_note_content(db, &full_id).await?;
         let doc = crate::markdown::parse_markdown(&content);
-        let bounds = find_section(&doc, section_id, &args.id)?;
+        let bounds = find_section(&doc, section_id, &full_id)?;
 
         let before = &content[..bounds.start];
         let after = &content[bounds.end..];

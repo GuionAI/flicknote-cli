@@ -23,7 +23,7 @@ pub(crate) struct SectionBounds<'a> {
 pub(crate) fn find_section<'a>(
     doc: &'a Document,
     section_id: &str,
-    display_id: &str,
+    note_ref: &str,
 ) -> Result<SectionBounds<'a>, CliError> {
     let heading_idx = doc
         .headings
@@ -31,7 +31,7 @@ pub(crate) fn find_section<'a>(
         .position(|h| h.id == section_id)
         .ok_or_else(|| {
             CliError::Other(format!(
-                "error: unknown section ID {section_id:?} — run `flicknote detail {display_id} --tree` to see current IDs"
+                "error: unknown section ID {section_id:?} — run `flicknote detail {note_ref} --tree` to see current IDs"
             ))
         })?;
 
@@ -297,8 +297,8 @@ mod tests {
                 "error message should include the unknown ID"
             );
             assert!(
-                msg.contains("--tree"),
-                "error message should suggest --tree"
+                msg.contains("flicknote detail test-id --tree"),
+                "error message should suggest the detail tree command"
             );
         }
     }

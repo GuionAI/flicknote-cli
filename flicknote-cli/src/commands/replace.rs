@@ -52,7 +52,7 @@ pub(crate) async fn run(
             // Section-scoped replace: no frontmatter parsing
             let content = get_note_content(db, &full_id).await?;
             let doc = crate::markdown::parse_markdown(&content);
-            let bounds = find_section(&doc, section_id, &display_id)?;
+            let bounds = find_section(&doc, section_id, &full_id)?;
             // Validate that stdin starts with a heading.
             if !content_starts_with_heading(&new_body) {
                 return Err(CliError::Other(

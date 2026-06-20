@@ -26,7 +26,7 @@ pub(crate) async fn run(
     let display_id = display_note_id(&note);
     let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
-    let bounds = find_section(&doc, &args.section, &args.id)?;
+    let bounds = find_section(&doc, &args.section, &full_id)?;
 
     let heading_line_end = content[bounds.start..]
         .find('\n')

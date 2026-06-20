@@ -24,7 +24,7 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliEr
             content.to_string()
         };
         let doc = crate::markdown::parse_markdown(&display_content);
-        let bounds = super::util::find_section(&doc, section_id, &args.id)?;
+        let bounds = super::util::find_section(&doc, section_id, &full_id)?;
         let output = display_content[bounds.start..bounds.end].trim().to_string();
         print!("{}", render_content_output(&output));
         return Ok(());

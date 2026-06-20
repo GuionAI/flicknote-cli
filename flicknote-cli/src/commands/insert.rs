@@ -40,7 +40,7 @@ pub(crate) async fn run(
 
     let content = get_note_content(db, &full_id).await?;
     let doc = crate::markdown::parse_markdown(&content);
-    let bounds = find_section(&doc, section_name, &args.id)?;
+    let bounds = find_section(&doc, section_name, &full_id)?;
 
     let insert_content = read_stdin_required()?;
 
