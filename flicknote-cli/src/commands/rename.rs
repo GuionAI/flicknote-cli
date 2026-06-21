@@ -7,7 +7,7 @@ use super::util::{display_note_id, find_section, get_note_content, resolve_note_
 
 #[derive(Args)]
 pub(crate) struct RenameArgs {
-    /// Note short ID. A full UUID is also accepted for pending-sync notes.
+    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
     id: String,
     /// Section heading to rename (case-insensitive contains match)
     #[arg(short = 's', long = "section")]

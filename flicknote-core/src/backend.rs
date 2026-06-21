@@ -36,6 +36,7 @@ pub struct InsertedNote {
 pub(crate) enum NoteLookup<'a> {
     ShortId(i64),
     Uuid(&'a str),
+    UuidPrefix(&'a str),
 }
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────
@@ -49,6 +50,10 @@ pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError>
     }
     if uuid::Uuid::parse_str(input).is_ok() {
         return Ok(NoteLookup::Uuid(input));
+    }
+    validate_id_prefix(input)?;
+    if !input.is_empty() {
+        return Ok(NoteLookup::UuidPrefix(input));
     }
     Err(CliError::NoteNotFound {
         id: input.to_string(),
@@ -231,11 +236,17 @@ pub struct SqliteBackend {
 const SQ_RESOLVE_UUID: &str =
     "SELECT id FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
+const SQ_RESOLVE_UUID_PREFIX: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NULL LIMIT 2";
+#[cfg(feature = "powersync")]
 const SQ_RESOLVE_SHORT_ID: &str =
     "SELECT id FROM notes WHERE user_id = ? AND short_id = ? AND deleted_at IS NULL LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_ARCHIVED_UUID: &str =
     "SELECT id FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NOT NULL LIMIT 1";
+#[cfg(feature = "powersync")]
+const SQ_RESOLVE_ARCHIVED_UUID_PREFIX: &str =
+    "SELECT id FROM notes WHERE user_id = ? AND id LIKE ? AND deleted_at IS NOT NULL LIMIT 2";
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_ARCHIVED_SHORT_ID: &str =
     "SELECT id FROM notes WHERE user_id = ? AND short_id = ? AND deleted_at IS NOT NULL LIMIT 1";
@@ -368,17 +379,26 @@ async fn resolve_sqlite_note_id(
     user_id: &str,
     input: &str,
     uuid_sql: &str,
+    uuid_prefix_sql: &str,
     short_id_sql: &str,
 ) -> Result<String, CliError> {
     match parse_note_lookup(input)? {
-        NoteLookup::ShortId(short_id) => sqlx::query_scalar::<_, String>(short_id_sql)
-            .bind(user_id)
-            .bind(short_id)
-            .fetch_optional(pool)
-            .await?
-            .ok_or_else(|| CliError::NoteNotFound {
-                id: input.to_string(),
-            }),
+        NoteLookup::ShortId(short_id) => {
+            if let Some(id) = sqlx::query_scalar::<_, String>(short_id_sql)
+                .bind(user_id)
+                .bind(short_id)
+                .fetch_optional(pool)
+                .await?
+            {
+                return Ok(id);
+            }
+            resolve_sqlite_id(pool, uuid_prefix_sql, user_id, input, "note", || {
+                CliError::NoteNotFound {
+                    id: input.to_string(),
+                }
+            })
+            .await
+        }
         NoteLookup::Uuid(uuid) => sqlx::query_scalar::<_, String>(uuid_sql)
             .bind(user_id)
             .bind(uuid)
@@ -387,6 +407,14 @@ async fn resolve_sqlite_note_id(
             .ok_or_else(|| CliError::NoteNotFound {
                 id: input.to_string(),
             }),
+        NoteLookup::UuidPrefix(prefix) => {
+            resolve_sqlite_id(pool, uuid_prefix_sql, user_id, prefix, "note", || {
+                CliError::NoteNotFound {
+                    id: input.to_string(),
+                }
+            })
+            .await
+        }
     }
 }
 
@@ -404,7 +432,6 @@ async fn sqlite_exists(
         .await?;
     Ok(exists.is_some())
 }
-
 #[cfg(feature = "powersync")]
 #[async_trait(?Send)]
 impl NoteDb for SqliteBackend {
@@ -418,6 +445,7 @@ impl NoteDb for SqliteBackend {
             &self.user_id,
             prefix,
             SQ_RESOLVE_UUID,
+            SQ_RESOLVE_UUID_PREFIX,
             SQ_RESOLVE_SHORT_ID,
         )
         .await
@@ -429,6 +457,7 @@ impl NoteDb for SqliteBackend {
             &self.user_id,
             prefix,
             SQ_RESOLVE_ARCHIVED_UUID,
+            SQ_RESOLVE_ARCHIVED_UUID_PREFIX,
             SQ_RESOLVE_ARCHIVED_SHORT_ID,
         )
         .await
@@ -1216,9 +1245,10 @@ mod tests {
         let resolved = backend.resolve_note_id("42").await.unwrap();
         assert_eq!(resolved, id);
 
-        // UUID prefixes are no longer accepted.
+        // UUID prefixes remain a fallback for notes waiting on short ID sync.
         let prefix = &id[..8];
-        assert!(backend.resolve_note_id(prefix).await.is_err());
+        let resolved = backend.resolve_note_id(prefix).await.unwrap();
+        assert_eq!(resolved, id);
 
         // Find content
         let content = backend.find_note_content(&id).await.unwrap();

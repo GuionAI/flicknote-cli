@@ -9,7 +9,7 @@ use super::util::{
 
 #[derive(Args)]
 pub(crate) struct AppendArgs {
-    /// Note short ID. A full UUID is also accepted for pending-sync notes.
+    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
     id: String,
 }
 

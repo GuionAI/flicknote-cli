@@ -87,8 +87,8 @@ flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
 
-# Note IDs are numeric short IDs from list/detail. A full UUID is also accepted
-# for notes before short ID sync completes; UUID prefixes are not supported.
+# Note IDs are numeric short IDs from list/detail. Pending-sync notes may show
+# a UUID prefix; full UUIDs are also accepted for compatibility.
 
 # Get a specific note (use --tree to see section IDs)
 flicknote detail <note-id>

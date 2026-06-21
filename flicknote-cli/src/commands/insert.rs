@@ -10,7 +10,7 @@ use super::util::{
 #[derive(Args)]
 #[command(group(clap::ArgGroup::new("position").required(true)))]
 pub(crate) struct InsertArgs {
-    /// Note short ID. A full UUID is also accepted for pending-sync notes.
+    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
     id: String,
     /// Insert before this section
     #[arg(long, group = "position")]
