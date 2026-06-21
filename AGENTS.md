@@ -2,6 +2,13 @@
 
 Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
+## Agent Instruction Source
+
+- `AGENTS.md` is the project instruction source of truth for agents.
+- Do not add or update `CLAUDE.md`; this repo no longer uses it.
+- Keep agent-facing workflow rules here when they affect future coding,
+  release, verification, or review behavior.
+
 ## Architecture
 
 Rust workspace with 4 crates:
@@ -26,6 +33,23 @@ cargo fmt --check          # format check
 ```
 
 Or use the Makefile: `make build`, `make test`, `make check`, `make install`
+
+### SQLx metadata
+
+After changing any `sqlx::query!`, `query_as!`, or `query_scalar!` macro, run
+`make sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
+files.
+
+For pgwire metadata, `make sqlx-prepare` must run against a local Postgres
+schema that already has the matching FlickNote backend migrations applied. If
+prepare reports a missing column or relation, update the local prepare DB from
+the backend migrations first, then rerun prepare. Keep
+`scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected columns.
+
+When the CLI depends on a fresh backend schema change, confirm the local prepare
+database has that backend migration applied before trusting generated metadata.
+For short-id work, this means the local database must include the backend
+`add_user_short_ids` migration before regenerating pgwire metadata.
 
 ## Git Hooks (lefthook)
 
@@ -76,7 +100,7 @@ The `skills/` directory contains command reference docs for AI agents:
 
 - `skills/flicknote.md` — FlickNote CLI command reference
 
-Agent quick reference (SSOT) is deployed via `ttal sync` to `~/.claude/rules/flicknote-cli.md`.
+Agent quick reference is deployed via `ttal sync` to the runtime agent rules.
 
 ## Commit Style
 
