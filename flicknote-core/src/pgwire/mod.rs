@@ -164,10 +164,6 @@ fn parse_iso_utc(s: &str) -> Result<DateTime<Utc>, CliError> {
         .map_err(|e| CliError::Database(format!("invalid ISO timestamp {s:?}: {e}")))
 }
 
-fn pg_short_id_param(short_id: i64) -> Option<i32> {
-    i32::try_from(short_id).ok()
-}
-
 async fn resolve_pg_note_id(
     pool: &PgPool,
     input: &str,
@@ -177,11 +173,14 @@ async fn resolve_pg_note_id(
 ) -> Result<String, CliError> {
     match crate::backend::parse_note_lookup(input)? {
         NoteLookup::ShortId(short_id) => {
-            if let Some(short_id) = pg_short_id_param(short_id)
-                && let Some(id) = sqlx::query_scalar::<_, String>(short_id_sql)
-                    .bind(short_id)
-                    .fetch_optional(pool)
-                    .await?
+            // PostgreSQL short_id is int4. The UUID-prefix fallback shown by the CLI is
+            // exactly 8 characters, so an all-digit fallback prefix still fits in i32.
+            if let Some(id) = sqlx::query_scalar::<_, String>(short_id_sql)
+                .bind(i32::try_from(short_id).map_err(|_| CliError::NoteNotFound {
+                    id: input.to_string(),
+                })?)
+                .fetch_optional(pool)
+                .await?
             {
                 return Ok(id);
             }
@@ -994,12 +993,6 @@ mod tests {
         let result = parse_uuid_opt(None);
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
-    }
-
-    #[test]
-    fn test_pg_short_id_param_skips_out_of_range_numeric_prefix() {
-        assert_eq!(pg_short_id_param(42), Some(42));
-        assert_eq!(pg_short_id_param(i64::from(i32::MAX) + 1), None);
     }
 
     #[test]
