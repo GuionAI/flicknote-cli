@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
+use crate::backend::{
+    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, is_display_uuid_prefix,
+};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
@@ -168,18 +170,34 @@ async fn resolve_pg_note_id(
     pool: &PgPool,
     input: &str,
     uuid_sql: &str,
+    uuid_prefix_sql: &str,
     short_id_sql: &str,
 ) -> Result<String, CliError> {
     match crate::backend::parse_note_lookup(input)? {
-        NoteLookup::ShortId(short_id) => sqlx::query_scalar::<_, String>(short_id_sql)
-            .bind(i32::try_from(short_id).map_err(|_| CliError::NoteNotFound {
-                id: input.to_string(),
-            })?)
-            .fetch_optional(pool)
-            .await?
-            .ok_or_else(|| CliError::NoteNotFound {
-                id: input.to_string(),
-            }),
+        NoteLookup::ShortId(short_id) => {
+            // PostgreSQL short_id is int4. The UUID-prefix fallback shown by the CLI is
+            // exactly 8 characters, so an all-digit fallback prefix still fits in i32.
+            if let Some(id) = sqlx::query_scalar::<_, String>(short_id_sql)
+                .bind(i32::try_from(short_id).map_err(|_| CliError::NoteNotFound {
+                    id: input.to_string(),
+                })?)
+                .fetch_optional(pool)
+                .await?
+            {
+                return Ok(id);
+            }
+            if !is_display_uuid_prefix(input) {
+                return Err(CliError::NoteNotFound {
+                    id: input.to_string(),
+                });
+            }
+            resolve_uuid_prefix(pool, uuid_prefix_sql, input, "note", || {
+                CliError::NoteNotFound {
+                    id: input.to_string(),
+                }
+            })
+            .await
+        }
         NoteLookup::Uuid(uuid) => sqlx::query_scalar::<_, String>(uuid_sql)
             .bind(parse_uuid(uuid)?)
             .fetch_optional(pool)
@@ -187,6 +205,14 @@ async fn resolve_pg_note_id(
             .ok_or_else(|| CliError::NoteNotFound {
                 id: input.to_string(),
             }),
+        NoteLookup::UuidPrefix(prefix) => {
+            resolve_uuid_prefix(pool, uuid_prefix_sql, prefix, "note", || {
+                CliError::NoteNotFound {
+                    id: input.to_string(),
+                }
+            })
+            .await
+        }
     }
 }
 
@@ -235,6 +261,7 @@ impl NoteDb for PgWireBackend {
             &self.pool,
             prefix,
             "SELECT id::text FROM notes WHERE id = $1 AND deleted_at IS NULL LIMIT 1",
+            "SELECT id::text FROM notes WHERE id::text LIKE $1 AND deleted_at IS NULL LIMIT 2",
             "SELECT id::text FROM notes WHERE short_id = $1 AND deleted_at IS NULL LIMIT 1",
         )
         .await
@@ -245,6 +272,7 @@ impl NoteDb for PgWireBackend {
             &self.pool,
             prefix,
             "SELECT id::text FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1",
+            "SELECT id::text FROM notes WHERE id::text LIKE $1 AND deleted_at IS NOT NULL LIMIT 2",
             "SELECT id::text FROM notes WHERE short_id = $1 AND deleted_at IS NOT NULL LIMIT 1",
         )
         .await

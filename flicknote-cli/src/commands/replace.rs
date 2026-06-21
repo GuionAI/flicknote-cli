@@ -9,7 +9,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 #[derive(Args)]
 pub(crate) struct ReplaceArgs {
-    /// Note short ID. A full UUID is also accepted for pending-sync notes.
+    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
     id: String,
     /// Replace only the named section (stdin must start with a heading)
     #[arg(short = 's', long = "section")]

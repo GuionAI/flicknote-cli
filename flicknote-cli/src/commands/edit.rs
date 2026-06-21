@@ -10,7 +10,7 @@ use flicknote_core::error::CliError;
 use std::io::Write;
 #[derive(Args)]
 pub(crate) struct EditArgs {
-    /// Note short ID. A full UUID is also accepted for pending-sync notes. Omit to create a new note.
+    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility. Omit to create a new note.
     id: Option<String>,
     /// Assign to project by name (only for new notes)
     #[arg(long)]

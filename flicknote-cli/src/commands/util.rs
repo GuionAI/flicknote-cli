@@ -59,17 +59,17 @@ pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<Str
 pub(crate) fn display_note_id(note: &Note) -> String {
     note.short_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| "pending".to_string())
+        .unwrap_or_else(|| note.id.chars().take(8).collect())
 }
 
 pub(crate) fn display_inserted_note_id(note: &InsertedNote) -> String {
     note.short_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| note.uuid.clone())
+        .unwrap_or_else(|| note.uuid.chars().take(8).collect())
 }
 
 pub(crate) fn print_pending_short_id_hint() {
-    println!("Short ID pending sync; use the UUID until it appears in list/detail.");
+    println!("Short ID pending sync; use the shown UUID prefix until the numeric ID appears.");
 }
 
 pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
@@ -115,7 +115,7 @@ pub(crate) async fn write_content(
 }
 
 /// Print notes as a formatted table to stdout.
-/// Columns: ID (short_id or pending) | Type | Title | Project | Topics | Flagged | Created
+/// Columns: ID (short_id or UUID prefix) | Type | Title | Project | Topics | Flagged | Created
 pub(crate) fn print_notes_table(
     notes: &[Note],
     topics_map: &std::collections::HashMap<String, Vec<String>>,
@@ -181,7 +181,7 @@ pub(crate) fn print_notes_table(
     let pending = notes.iter().filter(|note| note.short_id.is_none()).count();
     if pending > 0 {
         println!(
-            "\n{pending} note(s) are waiting for short ID sync. Use `flicknote list --json` to get UUIDs."
+            "\n{pending} note(s) are waiting for short ID sync. Use the shown UUID prefix until the numeric ID appears."
         );
     }
 }
@@ -274,6 +274,40 @@ pub(crate) async fn apply_project_move(
 mod tests {
     use super::*;
     use crate::markdown::parse_markdown;
+
+    fn note_with_ids(id: &str, short_id: Option<i64>) -> Note {
+        Note {
+            id: id.to_string(),
+            short_id,
+            user_id: "test-user".to_string(),
+            r#type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: None,
+            content: None,
+            summary: None,
+            is_flagged: None,
+            project_id: None,
+            metadata: None,
+            source: None,
+            created_at: None,
+            updated_at: None,
+            deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn test_display_note_id_prefers_short_id() {
+        let note = note_with_ids("550e8400-e29b-41d4-a716-446655440000", Some(42));
+
+        assert_eq!(display_note_id(&note), "42");
+    }
+
+    #[test]
+    fn test_display_note_id_uses_uuid_prefix_without_short_id() {
+        let note = note_with_ids("550e8400-e29b-41d4-a716-446655440000", None);
+
+        assert_eq!(display_note_id(&note), "550e8400");
+    }
 
     #[test]
     fn test_find_section_by_id_returns_index() {
