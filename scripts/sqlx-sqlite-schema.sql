@@ -1,5 +1,6 @@
 CREATE TABLE notes (
   id TEXT PRIMARY KEY,
+  short_id INTEGER,
   user_id TEXT,
   type TEXT,
   status TEXT,

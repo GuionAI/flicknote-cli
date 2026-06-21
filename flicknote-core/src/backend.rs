@@ -250,6 +250,7 @@ const SQ_FIND_ARCHIVED: &str = "SELECT id, short_id, user_id, type, status, titl
 #[cfg(feature = "powersync")]
 const SQ_FIND_CONTENT: &str =
     "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1";
+#[cfg(feature = "powersync")]
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -462,14 +463,15 @@ impl NoteDb for SqliteBackend {
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let limit = i64::from(filter.limit);
-        Ok(sqlx::query_as::<_, Note>(
+        Ok(sqlx::query_as!(
+            Note,
             r#"
             SELECT
-                id,
+                id as "id!",
                 short_id,
-                user_id,
-                type,
-                status,
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
                 title,
                 content,
                 summary,
@@ -488,14 +490,14 @@ impl NoteDb for SqliteBackend {
             ORDER BY created_at DESC
             LIMIT ?
             "#,
+            self.user_id,
+            filter.archived,
+            filter.note_type,
+            filter.note_type,
+            filter.project_id,
+            filter.project_id,
+            limit,
         )
-        .bind(&self.user_id)
-        .bind(filter.archived)
-        .bind(filter.note_type)
-        .bind(filter.note_type)
-        .bind(filter.project_id)
-        .bind(filter.project_id)
-        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }
@@ -512,14 +514,15 @@ impl NoteDb for SqliteBackend {
         }
         let limit = i64::from(filter.limit);
         let keywords_json = serde_json::to_string(keywords)?;
-        Ok(sqlx::query_as::<_, Note>(
+        Ok(sqlx::query_as!(
+            Note,
             r#"
             SELECT
-                id,
+                id as "id!",
                 short_id,
-                user_id,
-                type,
-                status,
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
                 title,
                 content,
                 summary,
@@ -544,15 +547,15 @@ impl NoteDb for SqliteBackend {
             ORDER BY updated_at DESC
             LIMIT ?
             "#,
+            self.user_id,
+            filter.archived,
+            filter.note_type,
+            filter.note_type,
+            filter.project_id,
+            filter.project_id,
+            keywords_json,
+            limit,
         )
-        .bind(&self.user_id)
-        .bind(filter.archived)
-        .bind(filter.note_type)
-        .bind(filter.note_type)
-        .bind(filter.project_id)
-        .bind(filter.project_id)
-        .bind(keywords_json)
-        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }

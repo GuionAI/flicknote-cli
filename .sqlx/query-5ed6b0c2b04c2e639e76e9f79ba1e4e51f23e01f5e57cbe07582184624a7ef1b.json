@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT\n                id as \"id!\",\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata as \"metadata: _\",\n                source as \"source: _\",\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE (deleted_at IS NOT NULL) = $1\n              AND ($2::text IS NULL OR type = $2)\n              AND ($3::uuid IS NULL OR project_id = $3)\n              AND EXISTS (\n                SELECT 1 FROM unnest($4::text[]) AS kw(term)\n                WHERE title ILIKE '%' || kw.term || '%'\n                   OR content ILIKE '%' || kw.term || '%'\n                   OR summary ILIKE '%' || kw.term || '%'\n              )\n            ORDER BY updated_at DESC\n            LIMIT $5\n            ",
+  "query": "\n            SELECT\n                id as \"id!\",\n                short_id,\n                user_id as \"user_id!\",\n                type as \"type!\",\n                status as \"status!\",\n                title,\n                content,\n                summary,\n                is_flagged,\n                project_id,\n                metadata as \"metadata: _\",\n                source as \"source: _\",\n                created_at,\n                updated_at,\n                deleted_at\n            FROM notes\n            WHERE (deleted_at IS NOT NULL) = $1\n              AND ($2::text IS NULL OR type = $2)\n              AND ($3::uuid IS NULL OR project_id = $3)\n            ORDER BY created_at DESC\n            LIMIT $4\n            ",
   "describe": {
     "columns": [
       {
@@ -10,66 +10,71 @@
       },
       {
         "ordinal": 1,
+        "name": "short_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
         "name": "user_id!",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 2,
+        "ordinal": 3,
         "name": "type!",
         "type_info": "Text"
       },
       {
-        "ordinal": 3,
+        "ordinal": 4,
         "name": "status!",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "title",
         "type_info": "Text"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "content",
         "type_info": "Text"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "summary",
         "type_info": "Text"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "is_flagged",
         "type_info": "Bool"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "project_id",
         "type_info": "Uuid"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "metadata: _",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "source: _",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "created_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "updated_at",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 13,
+        "ordinal": 14,
         "name": "deleted_at",
         "type_info": "Timestamptz"
       }
@@ -79,11 +84,11 @@
         "Bool",
         "Text",
         "Uuid",
-        "TextArray",
         "Int8"
       ]
     },
     "nullable": [
+      false,
       false,
       false,
       false,
@@ -100,5 +105,5 @@
       true
     ]
   },
-  "hash": "609f28fd7b85d4166841e0de3cbead2669eaa90e2bc663b493eb83d61d5b22f0"
+  "hash": "5ed6b0c2b04c2e639e76e9f79ba1e4e51f23e01f5e57cbe07582184624a7ef1b"
 }
