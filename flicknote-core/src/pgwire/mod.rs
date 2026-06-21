@@ -753,8 +753,9 @@ impl NoteDb for PgWireBackend {
         // Insert new values
         for value in values {
             sqlx::query(
-                "INSERT INTO note_extractions (note_id, user_id, type, value) VALUES ($1, (SELECT user_id FROM notes WHERE id = $1), $2, $3)",
+                "INSERT INTO note_extractions (id, note_id, user_id, type, value) VALUES ($1, $2, (SELECT user_id FROM notes WHERE id = $2), $3, $4)",
             )
+            .bind(Uuid::new_v4())
             .bind(note_uuid)
             .bind(extraction_type)
             .bind(value)

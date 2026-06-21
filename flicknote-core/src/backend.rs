@@ -326,8 +326,8 @@ const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extract
 const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
      WHERE user_id = ? AND note_id = ? AND type = ?";
 #[cfg(feature = "powersync")]
-const SQ_INSERT_EXTRACTION: &str = "INSERT INTO note_extractions (note_id, user_id, type, value) \
-     VALUES (?, ?, ?, ?)";
+const SQ_INSERT_EXTRACTION: &str =
+    "INSERT INTO note_extractions (id, note_id, user_id, type, value) VALUES (?, ?, ?, ?, ?)";
 
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
@@ -972,7 +972,9 @@ impl NoteDb for SqliteBackend {
             .await?;
         // Insert new values
         for value in values {
+            let id = uuid::Uuid::new_v4().to_string();
             sqlx::query(SQ_INSERT_EXTRACTION)
+                .bind(id)
                 .bind(note_id)
                 .bind(&self.user_id)
                 .bind(extraction_type)
@@ -1312,6 +1314,72 @@ mod tests {
 
         let resolved = backend.resolve_note_id("12345678").await.unwrap();
         assert_eq!(resolved, id);
+    }
+
+    #[tokio::test]
+    async fn test_resolved_note_id_can_update_content_and_extractions() {
+        let backend = make_backend().await;
+        let id = "11fa49a2-6ac4-421e-94bf-240ee4197bb7".to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Editable note"),
+                content: Some("hello"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+        sqlx::query("UPDATE notes SET short_id = 1172 WHERE id = ?")
+            .bind(&id)
+            .execute(&backend.db.pool)
+            .await
+            .unwrap();
+
+        let from_prefix = backend.resolve_note_id("11fa49a2").await.unwrap();
+        backend
+            .update_note_content(&from_prefix, "hi from prefix", true)
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.find_note_content(&id).await.unwrap(),
+            Some("hi from prefix".to_string())
+        );
+
+        let from_short_id = backend.resolve_note_id("1172").await.unwrap();
+        backend
+            .update_note_content(&from_short_id, "hi from short id", true)
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.find_note_content(&id).await.unwrap(),
+            Some("hi from short id".to_string())
+        );
+
+        backend
+            .set_note_extractions(
+                &from_short_id,
+                "topic",
+                &["orientation".to_string(), "cli".to_string()],
+            )
+            .await
+            .unwrap();
+        let extractions = backend
+            .list_note_extractions(&[&id], &["topic"])
+            .await
+            .unwrap();
+        assert_eq!(
+            extractions.get(&id),
+            Some(&vec![
+                ("topic".to_string(), "cli".to_string()),
+                ("topic".to_string(), "orientation".to_string())
+            ])
+        );
     }
 
     #[tokio::test]
