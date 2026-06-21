@@ -24,12 +24,19 @@ pub fn app_schema() -> Schema {
         |t| {
             t.indexes = vec![
                 Index {
-                    name: "short_id".into(),
-                    columns: vec![IndexedColumn {
-                        name: "short_id".into(),
-                        ascending: true,
-                        type_name: "INTEGER".into(),
-                    }],
+                    name: "notes_user_short_id_idx".into(),
+                    columns: vec![
+                        IndexedColumn {
+                            name: "user_id".into(),
+                            ascending: true,
+                            type_name: "TEXT".into(),
+                        },
+                        IndexedColumn {
+                            name: "short_id".into(),
+                            ascending: true,
+                            type_name: "INTEGER".into(),
+                        },
+                    ],
                 },
                 Index {
                     name: "type".into(),
@@ -183,6 +190,21 @@ pub fn app_schema() -> Schema {
         ],
         |t| {
             t.indexes = vec![
+                Index {
+                    name: "tc_tasks_user_short_id_idx".into(),
+                    columns: vec![
+                        IndexedColumn {
+                            name: "user_id".into(),
+                            ascending: true,
+                            type_name: "TEXT".into(),
+                        },
+                        IndexedColumn {
+                            name: "short_id".into(),
+                            ascending: true,
+                            type_name: "INTEGER".into(),
+                        },
+                    ],
+                },
                 Index {
                     name: "tc_tasks_status".into(),
                     columns: vec![IndexedColumn {

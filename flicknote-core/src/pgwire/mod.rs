@@ -281,21 +281,22 @@ impl NoteDb for PgWireBackend {
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let project_id = parse_uuid_opt(filter.project_id)?;
         let limit = i64::from(filter.limit);
-        let rows = sqlx::query_as::<_, NotePgRow>(
+        let rows = sqlx::query_as!(
+            NotePgRow,
             r#"
             SELECT
-                id,
+                id as "id!",
                 short_id,
-                user_id,
-                type,
-                status,
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
                 title,
                 content,
                 summary,
                 is_flagged,
                 project_id,
-                metadata,
-                source,
+                metadata as "metadata: _",
+                source as "source: _",
                 created_at,
                 updated_at,
                 deleted_at
@@ -306,11 +307,11 @@ impl NoteDb for PgWireBackend {
             ORDER BY created_at DESC
             LIMIT $4
             "#,
+            filter.archived,
+            filter.note_type,
+            project_id,
+            limit,
         )
-        .bind(filter.archived)
-        .bind(filter.note_type)
-        .bind(project_id)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(Note::from).collect())
@@ -328,21 +329,22 @@ impl NoteDb for PgWireBackend {
         }
         let project_id = parse_uuid_opt(filter.project_id)?;
         let limit = i64::from(filter.limit);
-        let rows = sqlx::query_as::<_, NotePgRow>(
+        let rows = sqlx::query_as!(
+            NotePgRow,
             r#"
             SELECT
-                id,
+                id as "id!",
                 short_id,
-                user_id,
-                type,
-                status,
+                user_id as "user_id!",
+                type as "type!",
+                status as "status!",
                 title,
                 content,
                 summary,
                 is_flagged,
                 project_id,
-                metadata,
-                source,
+                metadata as "metadata: _",
+                source as "source: _",
                 created_at,
                 updated_at,
                 deleted_at
@@ -359,12 +361,12 @@ impl NoteDb for PgWireBackend {
             ORDER BY updated_at DESC
             LIMIT $5
             "#,
+            filter.archived,
+            filter.note_type,
+            project_id,
+            keywords,
+            limit,
         )
-        .bind(filter.archived)
-        .bind(filter.note_type)
-        .bind(project_id)
-        .bind(keywords)
-        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(Note::from).collect())
