@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
+use crate::backend::{
+    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, is_display_uuid_prefix,
+};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
@@ -183,6 +185,11 @@ async fn resolve_pg_note_id(
                 .await?
             {
                 return Ok(id);
+            }
+            if !is_display_uuid_prefix(input) {
+                return Err(CliError::NoteNotFound {
+                    id: input.to_string(),
+                });
             }
             resolve_uuid_prefix(pool, uuid_prefix_sql, input, "note", || {
                 CliError::NoteNotFound {

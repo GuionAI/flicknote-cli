@@ -39,6 +39,8 @@ pub(crate) enum NoteLookup<'a> {
     UuidPrefix(&'a str),
 }
 
+pub(crate) const DISPLAY_UUID_PREFIX_LEN: usize = 8;
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError> {
@@ -58,6 +60,10 @@ pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError>
     Err(CliError::NoteNotFound {
         id: input.to_string(),
     })
+}
+
+pub(crate) fn is_display_uuid_prefix(input: &str) -> bool {
+    input.len() == DISPLAY_UUID_PREFIX_LEN
 }
 
 /// Validate that an ID prefix contains only hex digits and hyphens.
@@ -391,6 +397,11 @@ async fn resolve_sqlite_note_id(
                 .await?
             {
                 return Ok(id);
+            }
+            if !is_display_uuid_prefix(input) {
+                return Err(CliError::NoteNotFound {
+                    id: input.to_string(),
+                });
             }
             resolve_sqlite_id(pool, uuid_prefix_sql, user_id, input, "note", || {
                 CliError::NoteNotFound {
@@ -1253,6 +1264,54 @@ mod tests {
         // Find content
         let content = backend.find_note_content(&id).await.unwrap();
         assert_eq!(content, Some("# Hello world\n\nContent here.".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_numeric_short_id_ref_does_not_fallback_to_short_uuid_prefix() {
+        let backend = make_backend().await;
+        let id = "42000000-e29b-41d4-a716-446655440000".to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Numeric prefix note"),
+                content: Some("content"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+
+        let err = backend.resolve_note_id("42").await.unwrap_err();
+        assert!(matches!(err, CliError::NoteNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_eight_digit_uuid_prefix_fallback_resolves_pending_note() {
+        let backend = make_backend().await;
+        let id = "12345678-e29b-41d4-a716-446655440000".to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Eight digit prefix note"),
+                content: Some("content"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+
+        let resolved = backend.resolve_note_id("12345678").await.unwrap();
+        assert_eq!(resolved, id);
     }
 
     #[tokio::test]
