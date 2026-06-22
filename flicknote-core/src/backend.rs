@@ -317,7 +317,6 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-#[cfg(feature = "powersync")]
 const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extractions \
      WHERE user_id = ? AND type IN (SELECT value FROM json_each(?)) \
      AND note_id IN (SELECT value FROM json_each(?)) \
@@ -326,6 +325,8 @@ const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extract
 const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
      WHERE user_id = ? AND note_id = ? AND type = ?";
 #[cfg(feature = "powersync")]
+// PowerSync managed tables expose an implicit text `id` column for row identity.
+// We write it so extraction rows sync, but reads/deletes use the domain key.
 const SQ_INSERT_EXTRACTION: &str =
     "INSERT INTO note_extractions (id, note_id, user_id, type, value) VALUES (?, ?, ?, ?, ?)";
 
