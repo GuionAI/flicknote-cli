@@ -4,7 +4,10 @@ use flicknote_core::error::CliError;
 
 use super::util::{note_json, print_notes_table, resolve_project_arg};
 
+const FIND_HELP: &str = include_str!("../help/find.md");
+
 #[derive(Args)]
+#[command(after_help = FIND_HELP)]
 pub(crate) struct FindArgs {
     /// Keywords to search (OR match across title, content, summary)
     #[arg(required = true)]
