@@ -5,7 +5,7 @@ use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 
-use super::add::resolve_project;
+use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request, resolve_project};
 use super::util::{display_inserted_note_id, print_pending_short_id_hint, resolve_project_arg};
 
 #[derive(Args)]
@@ -19,8 +19,9 @@ pub(crate) struct ImportArgs {
 
 pub(crate) async fn run(
     db: &dyn NoteDb,
-    _config: &Config,
+    config: &Config,
     args: &ImportArgs,
+    mode: AddCreateMode,
 ) -> Result<(), CliError> {
     // Collect .md files
     let files = collect_md_files(&args.path)?;
@@ -51,8 +52,23 @@ pub(crate) async fn run(
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let created_at = file_created_time(file);
 
-        let inserted = db
-            .insert_note(&InsertNoteReq {
+        let inserted = if matches!(mode, AddCreateMode::DaemonForNonFile) {
+            create_note_with_daemon(
+                config,
+                daemon_create_request(&InsertNoteReq {
+                    id: &id,
+                    note_type: "normal",
+                    status: "ai_queued",
+                    title: title.as_deref(),
+                    content: Some(&stripped_content),
+                    metadata: None,
+                    project_id: project_id.as_deref(),
+                    now: &created_at,
+                }),
+            )
+            .await?
+        } else {
+            db.insert_note(&InsertNoteReq {
                 id: &id,
                 note_type: "normal",
                 status: "ai_queued",
@@ -62,7 +78,8 @@ pub(crate) async fn run(
                 project_id: project_id.as_deref(),
                 now: &created_at,
             })
-            .await?;
+            .await?
+        };
 
         imported.push((inserted, title, file.clone()));
     }
