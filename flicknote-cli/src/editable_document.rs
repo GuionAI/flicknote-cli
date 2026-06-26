@@ -54,9 +54,9 @@ pub(crate) async fn save_editable_note(
     // the title on an existing note. New notes with no title are fine.
     if note.title.as_deref().is_some_and(|t| !t.is_empty()) && parsed.title.trim().is_empty() {
         return Err(CliError::Other(
-            "Full-note write requires a non-empty H1 title. \
+            "Full-note write requires a non-empty `title:` frontmatter field. \
              This note had a title — removing it is not allowed. \
-             Add a `# Title` heading after any frontmatter."
+             Add `title: Your Title` to the leading frontmatter."
                 .into(),
         ));
     }
@@ -214,7 +214,8 @@ mod tests {
         assert!(markdown.contains("entities:"));
         assert!(markdown.contains("- PowerSync"));
         assert!(markdown.contains("custom: keep"));
-        assert!(markdown.contains("# Title"));
+        assert!(markdown.contains("title: Title"));
+        assert!(!markdown.contains("# Title"));
         assert!(markdown.trim_end().ends_with("Body."));
     }
 
@@ -225,7 +226,7 @@ mod tests {
             vec![("topic".to_string(), "old".to_string())],
         );
 
-        let markdown = "---\ntopics: [rust, async]\nentities:\n  - PowerSync\ncustom:\n  nested: true\n---\n# New Title\n\nNew body.";
+        let markdown = "---\ntitle: New Title\ntopics: [rust, async]\nentities:\n  - PowerSync\ncustom:\n  nested: true\n---\nNew body.";
         let result = save_editable_note(&db, NOTE_ID, markdown).await.unwrap();
 
         let note = db.note();
@@ -254,14 +255,29 @@ mod tests {
     #[tokio::test]
     async fn save_rejects_dropping_title_when_old_note_has_one() {
         let db = FakeNoteDb::new(note_with(Some("Old body."), Some("Existing Title")), vec![]);
-        // New markdown has no H1 — empty title
+        // New markdown has no title frontmatter — empty title
         let result = save_editable_note(&db, NOTE_ID, "Body without heading").await;
         let err = result.unwrap_err();
         let msg = format!("{err}");
         assert!(
-            msg.contains("requires a non-empty H1 title"),
+            msg.contains("requires a non-empty `title:` frontmatter field"),
             "expected title-removal error, got: {msg}"
         );
+    }
+
+    #[tokio::test]
+    async fn save_does_not_fallback_to_h1_title() {
+        let db = FakeNoteDb::new(note_with(Some("Old body."), Some("Existing Title")), vec![]);
+
+        let result = save_editable_note(&db, NOTE_ID, "# New Title\n\nNew body.").await;
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+
+        assert!(
+            msg.contains("requires a non-empty `title:` frontmatter field"),
+            "expected title-frontmatter error, got: {msg}"
+        );
+        assert_eq!(db.note().title.as_deref(), Some("Existing Title"));
     }
 
     #[tokio::test]
@@ -277,7 +293,8 @@ mod tests {
     #[tokio::test]
     async fn save_allows_non_empty_title_when_old_note_has_title() {
         let db = FakeNoteDb::new(note_with(Some("Old body."), Some("Old Title")), vec![]);
-        let result = save_editable_note(&db, NOTE_ID, "# New Title\n\nNew body.").await;
+        let result =
+            save_editable_note(&db, NOTE_ID, "---\ntitle: New Title\n---\n\nNew body.").await;
         assert!(
             result.is_ok(),
             "should allow saving with valid title, got: {result:?}"
@@ -300,7 +317,7 @@ mod tests {
         let cases = [
             Case {
                 name: "title-only note stays an empty text note",
-                markdown: "# Title",
+                markdown: "---\ntitle: Title\n---",
                 title: "Title",
                 stored_content: "",
                 topics: &[],
@@ -308,7 +325,7 @@ mod tests {
             },
             Case {
                 name: "body leading whitespace is preserved",
-                markdown: "# Title\n\n  indented first line\n\tTabbed second line",
+                markdown: "---\ntitle: Title\n---\n\n  indented first line\n\tTabbed second line",
                 title: "Title",
                 stored_content: "  indented first line\n\tTabbed second line",
                 topics: &[],
@@ -316,7 +333,7 @@ mod tests {
             },
             Case {
                 name: "managed empty lists clear extraction rows",
-                markdown: "---\ntopics: []\nentities: []\ncustom: keep\n---\n# Title\n\nBody.",
+                markdown: "---\ntitle: Title\ntopics: []\nentities: []\ncustom: keep\n---\nBody.",
                 title: "Title",
                 stored_content: "---\ncustom: keep\n---\n\nBody.",
                 topics: &[],
@@ -354,7 +371,7 @@ mod tests {
 
     #[test]
     fn normal_note_content_ref_preserves_empty_text_content() {
-        let parsed = parse_editable_note("# Title").unwrap();
+        let parsed = parse_editable_note("---\ntitle: Title\n---").unwrap();
 
         assert_eq!(normal_note_content_ref(&parsed), Some(""));
     }
