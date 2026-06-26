@@ -22,7 +22,7 @@ mod utils;
 #[command(
     name = "flicknote",
     about = "FlickNote CLI — local-first note management",
-    long_about = ROOT_HELP
+    after_help = ROOT_HELP
 )]
 #[command(version)]
 struct Cli {

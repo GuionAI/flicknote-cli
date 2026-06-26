@@ -1,5 +1,3 @@
-FlickNote CLI — local-first note management.
-
 Notes are stored locally and synced to the cloud.
 Run `flicknote <command> --help` for exact flags and examples.
 
