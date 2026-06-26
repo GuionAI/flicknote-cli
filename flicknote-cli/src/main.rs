@@ -129,7 +129,7 @@ async fn run() -> Result<(), CliError> {
     #[cfg(feature = "storage-pgwire")]
     if let Ok(database_url) = std::env::var("DATABASE_URL") {
         let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url).await?;
-        return dispatch(&cli, &config, &backend).await;
+        return dispatch(&cli, &config, &backend, commands::add::AddCreateMode::Local).await;
     }
 
     #[cfg(not(feature = "powersync"))]
@@ -143,11 +143,22 @@ async fn run() -> Result<(), CliError> {
         let db = Database::open_local(&config).await?;
         let user_id = flicknote_core::session::get_user_id(&config)?;
         let backend = SqliteBackend { db, user_id };
-        dispatch(&cli, &config, &backend).await
+        dispatch(
+            &cli,
+            &config,
+            &backend,
+            commands::add::AddCreateMode::DaemonForNonFile,
+        )
+        .await
     }
 }
 
-async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), CliError> {
+async fn dispatch(
+    cli: &Cli,
+    config: &Config,
+    db: &dyn NoteDb,
+    add_mode: commands::add::AddCreateMode,
+) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()
@@ -156,10 +167,10 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
     };
 
     match command {
-        Commands::Add(args) => commands::add::run(db, config, args).await,
+        Commands::Add(args) => commands::add::run(db, config, args, add_mode).await,
         Commands::Append(args) => commands::append::run(db, config, args).await,
         Commands::Delete(args) => commands::delete::run(db, config, args).await,
-        Commands::Edit(args) => commands::edit::run(db, config, args).await,
+        Commands::Edit(args) => commands::edit::run(db, config, args, add_mode).await,
         Commands::Restore(args) => commands::restore::run(db, config, args).await,
         Commands::List(args) => commands::list::run(db, args).await,
         Commands::Count(args) => commands::count::run(db, args).await,
@@ -174,7 +185,7 @@ async fn dispatch(cli: &Cli, config: &Config, db: &dyn NoteDb) -> Result<(), Cli
         Commands::Replace(args) => commands::replace::run(db, config, args).await,
         Commands::Modify(args) => commands::modify::run(db, config, args).await,
         Commands::Open(args) => commands::open::run(db, config, args).await,
-        Commands::Import(args) => commands::import::run(db, config, args).await,
+        Commands::Import(args) => commands::import::run(db, config, args, add_mode).await,
         // Login/Logout/Sync/Skill are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Skill(_) => {
             unreachable!()

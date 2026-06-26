@@ -11,7 +11,12 @@ use powersync::{
     BackendConnector, ConnectionPool, PowerSyncCredentials, PowerSyncDatabase, SyncOptions,
     UpdateType, env::PowerSyncEnvironment, error::PowerSyncError,
 };
-use tokio::sync::mpsc;
+use rusqlite::{OptionalExtension, params};
+use serde::Deserialize;
+use tokio::{net::UnixListener, sync::mpsc};
+
+pub mod ipc;
+use ipc::{CreateNoteRequest, CreatedNote, DaemonError, DaemonRequest, DaemonResponse};
 
 /// Helper to convert arbitrary errors into PowerSyncError.
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
@@ -414,6 +419,28 @@ impl Drop for PidGuard {
     }
 }
 
+struct SocketGuard(PathBuf);
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        if let Err(e) = std::fs::remove_file(&self.0) {
+            log::warn!("Failed to remove socket file: {}", e);
+        }
+    }
+}
+
+fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn std::error::Error>> {
+    let path = ipc::socket_path(config);
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let listener = UnixListener::bind(&path)?;
+    Ok((listener, SocketGuard(path)))
+}
+
 /// Check for an existing sync daemon and write our PID file.
 ///
 /// Note: there is a small TOCTOU window between the `kill(pid, 0)` liveness
@@ -454,11 +481,13 @@ fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::error::Erro
 async fn shutdown_daemon(
     upload_handle: &mut tokio::task::JoinHandle<()>,
     checkpoint_handle: &mut tokio::task::JoinHandle<()>,
+    socket_handle: &mut tokio::task::JoinHandle<()>,
     db: &PowerSyncDatabase,
     db_path: PathBuf,
 ) {
     upload_handle.abort();
     checkpoint_handle.abort();
+    socket_handle.abort();
     db.disconnect().await;
     if let Err(e) = tokio::task::spawn_blocking(move || {
         checkpoint_wal_standalone(&db_path, "shutdown", WalCheckpointMode::Truncate)
@@ -470,12 +499,165 @@ async fn shutdown_daemon(
     log::info!("Sync daemon stopped");
 }
 
+#[derive(Debug, Deserialize)]
+struct RemoteNoteRow {
+    id: String,
+    short_id: Option<i64>,
+}
+
+async fn create_note_remotely_and_wait(
+    db: &PowerSyncDatabase,
+    http: &reqwest::Client,
+    auth: &GoTrueClient,
+    config: &Config,
+    req: CreateNoteRequest,
+) -> Result<CreatedNote, DaemonError> {
+    let session = auth.get_session().await.map_err(|e| DaemonError::Other {
+        message: format!("Auth error: {e}"),
+    })?;
+
+    let metadata = match req.metadata.as_deref() {
+        Some(raw) => {
+            serde_json::from_str::<serde_json::Value>(raw).map_err(|e| DaemonError::Other {
+                message: format!("Invalid note metadata JSON: {e}"),
+            })?
+        }
+        None => serde_json::Value::Null,
+    };
+
+    let payload = serde_json::json!({
+        "id": req.id,
+        "user_id": session.user.id,
+        "type": req.note_type,
+        "status": req.status,
+        "title": req.title,
+        "content": req.content,
+        "metadata": metadata,
+        "project_id": req.project_id,
+        "created_at": req.now,
+        "updated_at": req.now,
+    });
+
+    let resp = http
+        .post(format!("{}/rest/v1/notes", config.supabase_url))
+        .header("apikey", &config.supabase_anon_key)
+        .bearer_auth(&session.access_token)
+        .header("Prefer", "return=representation")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Remote note create failed: {e}"),
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!("Remote note create failed ({status}): {body}"),
+        });
+    }
+
+    let mut rows = resp
+        .json::<Vec<RemoteNoteRow>>()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Failed to parse remote note create response: {e}"),
+        })?;
+    let row = rows.pop().ok_or_else(|| DaemonError::Other {
+        message: "Remote note create returned no row".to_string(),
+    })?;
+    let short_id = row.short_id.ok_or_else(|| DaemonError::Other {
+        message: "Remote note create returned no short id".to_string(),
+    })?;
+
+    wait_for_local_note(db, &row.id, short_id, ipc::LOCAL_SYNC_TIMEOUT_SECS).await?;
+    Ok(CreatedNote {
+        uuid: row.id,
+        short_id,
+    })
+}
+
+async fn wait_for_local_note(
+    db: &PowerSyncDatabase,
+    id: &str,
+    short_id: i64,
+    timeout_secs: u64,
+) -> Result<(), DaemonError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let found = {
+            let reader = db.reader().await.map_err(|e| DaemonError::Other {
+                message: format!("Failed to read local PowerSync database: {e}"),
+            })?;
+            let mut stmt = reader
+                .prepare_cached("SELECT short_id FROM notes WHERE id = ? LIMIT 1")
+                .map_err(|e| DaemonError::Other {
+                    message: format!("Failed to prepare local sync check: {e}"),
+                })?;
+            stmt.query_row(params![id], |row| row.get::<_, Option<i64>>(0))
+                .optional()
+                .map_err(|e| DaemonError::Other {
+                    message: format!("Failed to query local sync check: {e}"),
+                })?
+                .flatten()
+        };
+        if found == Some(short_id) {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(DaemonError::RemoteCreatedLocalSyncTimeout {
+                short_id,
+                timeout_secs,
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn serve_socket(
+    listener: UnixListener,
+    db: PowerSyncDatabase,
+    auth: Arc<GoTrueClient>,
+    http: reqwest::Client,
+    config: Arc<Config>,
+) {
+    loop {
+        let (mut stream, _) = match listener.accept().await {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("IPC accept failed: {e}");
+                continue;
+            }
+        };
+        let db = db.clone();
+        let auth = Arc::clone(&auth);
+        let http = http.clone();
+        let config = Arc::clone(&config);
+        tokio::spawn(async move {
+            let response = match ipc::read_request(&mut stream).await {
+                Ok(DaemonRequest::CreateNote(req)) => {
+                    match create_note_remotely_and_wait(&db, &http, &auth, &config, req).await {
+                        Ok(note) => DaemonResponse::NoteCreated(note),
+                        Err(e) => DaemonResponse::Error(e),
+                    }
+                }
+                Err(e) => DaemonResponse::Error(e),
+            };
+            if let Err(e) = ipc::write_response(&mut stream, &response).await {
+                log::warn!("IPC response failed: {e}");
+            }
+        });
+    }
+}
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load()?;
     config.validate()?;
 
     let pid_file = pid_path(&config);
     let _pid_guard = check_and_write_pid(&pid_file)?;
+    let (socket_listener, _socket_guard) = bind_socket(&config)?;
 
     PowerSyncEnvironment::powersync_auto_extension()?;
 
@@ -650,12 +832,28 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    let socket_config = Arc::new(config);
+    let socket_config_for_task = Arc::clone(&socket_config);
+    let socket_db = db.clone();
+    let socket_auth = Arc::clone(&auth);
+    let socket_http = reqwest::Client::new();
+    let mut socket_handle = tokio::spawn(async move {
+        serve_socket(
+            socket_listener,
+            socket_db,
+            socket_auth,
+            socket_http,
+            socket_config_for_task,
+        )
+        .await;
+    });
+
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
         res = &mut upload_handle => {
             if let Err(e) = res {
                 log::error!("Upload task panicked: {e}");
-                shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &db, config.paths.db_file.clone()).await;
+                shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
                 return Err(e.into());
             }
         }
@@ -665,15 +863,25 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 Err(ref e) => log::error!("Checkpoint task panicked: {e}"),
             }
             let err_msg = format!("Checkpoint task exited: {res:?}");
-            shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &db, config.paths.db_file.clone()).await;
+            shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
+            return Err(err_msg.into());
+        }
+        res = &mut socket_handle => {
+            match res {
+                Ok(_) => log::error!("Socket task exited unexpectedly"),
+                Err(ref e) => log::error!("Socket task panicked: {e}"),
+            }
+            let err_msg = format!("Socket task exited: {res:?}");
+            shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
             return Err(err_msg.into());
         }
     }
     shutdown_daemon(
         &mut upload_handle,
         &mut checkpoint_handle,
+        &mut socket_handle,
         &db,
-        config.paths.db_file.clone(),
+        socket_config.paths.db_file.clone(),
     )
     .await;
 

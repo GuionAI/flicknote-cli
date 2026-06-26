@@ -1,4 +1,5 @@
 use super::add::resolve_project;
+use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request};
 use super::util::{
     display_inserted_note_id, display_note_id, print_pending_short_id_hint, resolve_note_id,
     resolve_project_arg,
@@ -96,8 +97,9 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
 /// Create a new note from editor.
 async fn create_from_editor(
     db: &dyn NoteDb,
-    _config: &Config,
+    config: &Config,
     project_arg: &Option<String>,
+    mode: AddCreateMode,
 ) -> Result<(), CliError> {
     let edited = open_in_editor("")?;
     if edited.is_empty() {
@@ -113,8 +115,23 @@ async fn create_from_editor(
     } else {
         None
     };
-    let inserted = db
-        .insert_note(&InsertNoteReq {
+    let inserted = if matches!(mode, AddCreateMode::DaemonForNonFile) {
+        create_note_with_daemon(
+            config,
+            daemon_create_request(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some(parsed.title.as_str()),
+                content: crate::editable_document::normal_note_content_ref(&parsed),
+                metadata: None,
+                project_id: project_id.as_deref(),
+                now: &now,
+            }),
+        )
+        .await?
+    } else {
+        db.insert_note(&InsertNoteReq {
             id: &id,
             note_type: "normal",
             status: "ai_queued",
@@ -124,7 +141,8 @@ async fn create_from_editor(
             project_id: project_id.as_deref(),
             now: &now,
         })
-        .await?;
+        .await?
+    };
     // Insert extraction rows
     if !parsed.topics.is_empty() {
         db.set_note_extractions(&id, "topic", &parsed.topics)
@@ -146,7 +164,12 @@ async fn create_from_editor(
     }
     Ok(())
 }
-pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &EditArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    config: &Config,
+    args: &EditArgs,
+    mode: AddCreateMode,
+) -> Result<(), CliError> {
     if args.id.is_some() && args.project.is_some() {
         return Err(CliError::Other(
             "--project is only valid when creating a new note (omit the ID)".into(),
@@ -154,7 +177,7 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &EditArgs) -> Re
     }
     match &args.id {
         Some(id) => edit_existing(db, config, id).await,
-        None => create_from_editor(db, config, &args.project).await,
+        None => create_from_editor(db, config, &args.project, mode).await,
     }
 }
 #[cfg(test)]

@@ -16,7 +16,7 @@ flicknote-auth = { path = "../flicknote-auth" }
 powersync = { workspace = true }
 rusqlite = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "sync", "io-util", "time"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "charset", "http2", "rustls", "stream"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
