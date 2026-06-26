@@ -40,13 +40,13 @@ struct AddKeytermArgs {
 
 #[derive(Args)]
 struct DetailKeytermArgs {
-    /// Keyterm ID (full UUID or prefix)
+    /// Keyterm ID (full UUID)
     id: String,
 }
 
 #[derive(Args)]
 struct ModifyKeytermArgs {
-    /// Keyterm ID (full UUID or prefix)
+    /// Keyterm ID (full UUID)
     id: String,
     /// New name
     #[arg(long)]
@@ -61,7 +61,7 @@ struct ModifyKeytermArgs {
 
 #[derive(Args)]
 struct DeleteKeytermArgs {
-    /// Keyterm ID (full UUID or prefix)
+    /// Keyterm ID (full UUID)
     id: String,
 }
 

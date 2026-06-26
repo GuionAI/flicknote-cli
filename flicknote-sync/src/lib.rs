@@ -510,6 +510,118 @@ struct RemoteNoteRow {
     short_id: Option<i64>,
 }
 
+fn attachment_endpoint(base_url: &str, path: &str) -> String {
+    let versioned_base = base_url
+        .trim_end_matches('/')
+        .trim_end_matches("/api/v1")
+        .trim_end_matches('/');
+    let path = path.trim_matches('/');
+    format!("{versioned_base}/api/v1/attachments/{path}")
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UploadUrlResponse {
+    upload_url: String,
+    content_type: String,
+}
+
+fn validate_api_url(config: &Config) -> Result<(), DaemonError> {
+    if config.api_url.is_empty() {
+        return Err(DaemonError::Other {
+            message: "apiUrl is not configured — set it in config.json or FLICKNOTE_API_URL"
+                .to_string(),
+        });
+    }
+    Ok(())
+}
+
+async fn upload_attachment(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+    file_path: &Path,
+) -> Result<(), DaemonError> {
+    validate_api_url(config)?;
+    let filename = file_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| DaemonError::Other {
+            message: "Invalid filename".to_string(),
+        })?
+        .to_string();
+
+    let resp = http
+        .post(attachment_endpoint(&config.api_url, "upload-url"))
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({ "noteId": note_id, "filename": filename }))
+        .send()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Upload URL request failed: {e}"),
+        })?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!("Upload URL request failed: {body}"),
+        });
+    }
+
+    let upload_resp: UploadUrlResponse = resp.json().await.map_err(|e| DaemonError::Other {
+        message: format!("Failed to parse upload URL response: {e}"),
+    })?;
+
+    let file_bytes = std::fs::read(file_path).map_err(|e| DaemonError::Other {
+        message: format!("Failed to read {}: {e}", file_path.display()),
+    })?;
+    let put_resp = http
+        .put(&upload_resp.upload_url)
+        .header("Content-Type", &upload_resp.content_type)
+        .body(file_bytes)
+        .send()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("File upload failed: {e}"),
+        })?;
+
+    if !put_resp.status().is_success() {
+        let body = put_resp.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!("File upload to R2 failed: {body}"),
+        });
+    }
+
+    Ok(())
+}
+
+async fn delete_attachment(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+) -> Result<(), DaemonError> {
+    validate_api_url(config)?;
+    let resp = http
+        .delete(attachment_endpoint(&config.api_url, note_id))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Delete request failed: {e}"),
+        })?;
+
+    if resp.status().is_success() {
+        return Ok(());
+    }
+
+    let body = resp.text().await.unwrap_or_default();
+    Err(DaemonError::Other {
+        message: format!("Delete failed: {body}"),
+    })
+}
+
 async fn create_note_remotely_and_wait(
     db: &PowerSyncDatabase,
     http: &reqwest::Client,
@@ -530,6 +642,11 @@ async fn create_note_remotely_and_wait(
         None => serde_json::Value::Null,
     };
 
+    let attachment_path = req.attachment_path.as_deref().map(Path::new);
+    if let Some(path) = attachment_path {
+        upload_attachment(http, config, &session.access_token, &req.id, path).await?;
+    }
+
     let payload = serde_json::json!({
         "id": req.id,
         "user_id": session.user.id,
@@ -543,7 +660,7 @@ async fn create_note_remotely_and_wait(
         "updated_at": req.now,
     });
 
-    let resp = http
+    let resp = match http
         .post(format!("{}/rest/v1/notes", config.supabase_url))
         .header("apikey", &config.supabase_anon_key)
         .bearer_auth(&session.access_token)
@@ -551,13 +668,31 @@ async fn create_note_remotely_and_wait(
         .json(&payload)
         .send()
         .await
-        .map_err(|e| DaemonError::Other {
-            message: format!("Remote note create failed: {e}"),
-        })?;
+    {
+        Ok(resp) => resp,
+        Err(e) => {
+            if attachment_path.is_some()
+                && let Err(cleanup_err) =
+                    delete_attachment(http, config, &session.access_token, &req.id).await
+            {
+                log::warn!(
+                    "Failed to clean up uploaded attachment after note create request failure: {cleanup_err}"
+                );
+            }
+            return Err(DaemonError::Other {
+                message: format!("Remote note create failed: {e}"),
+            });
+        }
+    };
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        if attachment_path.is_some()
+            && let Err(e) = delete_attachment(http, config, &session.access_token, &req.id).await
+        {
+            log::warn!("Failed to clean up uploaded attachment after note create failure: {e}");
+        }
         return Err(DaemonError::Other {
             message: format!("Remote note create failed ({status}): {body}"),
         });

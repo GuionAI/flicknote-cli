@@ -195,23 +195,24 @@ async fn resolve_pg_note_id(
     }
 }
 
-async fn resolve_uuid_prefix(
+async fn resolve_pg_uuid_id(
     pool: &PgPool,
     sql: &str,
-    prefix: &str,
-    label: &str,
+    input: &str,
     missing: impl FnOnce() -> CliError,
 ) -> Result<String, CliError> {
+    let uuid = match parse_uuid(input) {
+        Ok(uuid) => uuid,
+        Err(_) => return Err(missing()),
+    };
     let rows = sqlx::query_scalar::<_, String>(sql)
-        .bind(format!("{prefix}%"))
+        .bind(uuid)
         .fetch_all(pool)
         .await?;
     match rows.as_slice() {
-        [_, _, ..] => Err(CliError::Other(format!(
-            "Ambiguous {label} prefix: {prefix}"
-        ))),
         [id] => Ok(id.clone()),
         [] => Err(missing()),
+        [_, _, ..] => unreachable!("exact UUID lookup returns at most one row"),
     }
 }
 
@@ -564,12 +565,10 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
-        crate::backend::validate_id_prefix(prefix)?;
-        resolve_uuid_prefix(
+        resolve_pg_uuid_id(
             &self.pool,
-            "SELECT id::text FROM projects WHERE id::text LIKE $1 LIMIT 2",
+            "SELECT id::text FROM projects WHERE id = $1 LIMIT 1",
             prefix,
-            "project ID",
             || CliError::Other(format!("Project not found: {prefix}")),
         )
         .await
@@ -745,12 +744,10 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
-        crate::backend::validate_id_prefix(prefix)?;
-        resolve_uuid_prefix(
+        resolve_pg_uuid_id(
             &self.pool,
-            "SELECT id::text FROM prompts WHERE id::text LIKE $1 LIMIT 2",
+            "SELECT id::text FROM prompts WHERE id = $1 LIMIT 1",
             prefix,
-            "prompt ID",
             || CliError::Other(format!("Prompt not found: {prefix}")),
         )
         .await
@@ -844,12 +841,10 @@ impl NoteDb for PgWireBackend {
     }
 
     async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
-        crate::backend::validate_id_prefix(prefix)?;
-        resolve_uuid_prefix(
+        resolve_pg_uuid_id(
             &self.pool,
-            "SELECT id::text FROM keyterms WHERE id::text LIKE $1 LIMIT 2",
+            "SELECT id::text FROM keyterms WHERE id = $1 LIMIT 1",
             prefix,
-            "keyterm ID",
             || CliError::Other(format!("Keyterm not found: {prefix}")),
         )
         .await

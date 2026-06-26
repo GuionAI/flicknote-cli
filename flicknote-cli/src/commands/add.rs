@@ -104,8 +104,6 @@ pub(crate) async fn run(
             .ok_or_else(|| CliError::Other("Invalid filename".into()))?
             .to_string();
 
-        upload_file(config, &id, &file_path).await?;
-
         let note_type = note_type_for_extension(&filename);
         let metadata = metadata_for_upload(&filename);
 
@@ -119,18 +117,21 @@ pub(crate) async fn run(
             project_id: project_id.as_deref(),
             now: &now,
         };
-        let result = if mode.uses_daemon() {
-            create_note_with_daemon(config, daemon_create_request(&req)).await
+        if mode.uses_daemon() {
+            create_note_with_daemon(
+                config,
+                daemon_create_request(&req).with_attachment_path(file_path.to_string_lossy()),
+            )
+            .await?
         } else {
-            db.insert_note(&req).await
-        };
-
-        match result {
-            Ok(inserted) => inserted,
-            Err(e) => {
-                #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
-                let _ = cleanup_uploaded_file(config, &id).await;
-                return Err(e);
+            upload_file(config, &id, &file_path).await?;
+            match db.insert_note(&req).await {
+                Ok(inserted) => inserted,
+                Err(e) => {
+                    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
+                    let _ = cleanup_uploaded_file(config, &id).await;
+                    return Err(e);
+                }
             }
         }
     } else if is_url {
@@ -226,6 +227,7 @@ pub(crate) fn daemon_create_request_with_extractions(
         now: req.now.to_string(),
         topics: topics.to_vec(),
         entities: entities.to_vec(),
+        attachment_path: None,
     }
 }
 
@@ -315,12 +317,15 @@ mod tests {
             now: "2026-06-26T00:00:00Z",
         });
 
+        let req = req.with_attachment_path("/tmp/report.pdf");
+
         assert!(AddCreateMode::Daemon.uses_daemon());
         assert_eq!(req.note_type, "file");
         assert_eq!(req.status, "source_queued");
         assert_eq!(req.content, None);
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
         assert_eq!(req.project_id.as_deref(), Some("project-id"));
+        assert_eq!(req.attachment_path.as_deref(), Some("/tmp/report.pdf"));
     }
 
     #[test]

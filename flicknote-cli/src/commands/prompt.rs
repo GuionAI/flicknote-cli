@@ -40,13 +40,13 @@ struct AddPromptArgs {
 
 #[derive(Args)]
 struct DetailPromptArgs {
-    /// Prompt ID (full UUID or prefix)
+    /// Prompt ID (full UUID)
     id: String,
 }
 
 #[derive(Args)]
 struct ModifyPromptArgs {
-    /// Prompt ID (full UUID or prefix)
+    /// Prompt ID (full UUID)
     id: String,
     /// New title
     #[arg(long)]
@@ -61,7 +61,7 @@ struct ModifyPromptArgs {
 
 #[derive(Args)]
 struct DeletePromptArgs {
-    /// Prompt ID (full UUID or prefix)
+    /// Prompt ID (full UUID)
     id: String,
 }
 

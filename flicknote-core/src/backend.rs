@@ -55,18 +55,6 @@ pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError>
     })
 }
 
-/// Validate that an ID prefix contains only hex digits and hyphens.
-/// Returns `NoteNotFound` for invalid characters so the error message is consistent.
-pub(crate) fn validate_id_prefix(prefix: &str) -> Result<(), CliError> {
-    if prefix.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
-        Ok(())
-    } else {
-        Err(CliError::NoteNotFound {
-            id: prefix.to_string(),
-        })
-    }
-}
-
 // ─── NoteDb trait ────────────────────────────────────────────────────────────
 
 #[async_trait(?Send)]
@@ -316,11 +304,11 @@ const SQ_INSERT_EXTRACTION: &str =
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id LIKE ? LIMIT 2";
+const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id LIKE ? LIMIT 2";
+const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_INSERT_PROMPT: &str = "INSERT INTO prompts (id, user_id, title, description, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)";
 #[cfg(feature = "powersync")]
@@ -330,7 +318,7 @@ const SQ_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, c
 #[cfg(feature = "powersync")]
 const SQ_DELETE_PROMPT: &str = "DELETE FROM prompts WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id LIKE ? LIMIT 2";
+const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_INSERT_KEYTERM: &str = "INSERT INTO keyterms (id, user_id, name, description, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)";
 #[cfg(feature = "powersync")]
@@ -340,26 +328,26 @@ const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, 
 #[cfg(feature = "powersync")]
 const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-async fn resolve_sqlite_id(
+async fn resolve_sqlite_uuid_id(
     pool: &SqlitePool,
     sql: &str,
     user_id: &str,
-    prefix: &str,
-    ambiguous: &str,
+    input: &str,
     missing: impl FnOnce() -> CliError,
 ) -> Result<String, CliError> {
+    if uuid::Uuid::parse_str(input).is_err() {
+        return Err(missing());
+    }
     let rows = sqlx::query_scalar::<_, String>(sql)
         .bind(user_id)
-        .bind(format!("{prefix}%"))
+        .bind(input)
         .fetch_all(pool)
         .await?;
 
     match rows.as_slice() {
-        [_, _, ..] => Err(CliError::Other(format!(
-            "Ambiguous {ambiguous} prefix: {prefix}"
-        ))),
         [id] => Ok(id.clone()),
         [] => Err(missing()),
+        [_, _, ..] => unreachable!("exact UUID lookup returns at most one row"),
     }
 }
 
@@ -749,13 +737,11 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError> {
-        validate_id_prefix(prefix)?;
-        resolve_sqlite_id(
+        resolve_sqlite_uuid_id(
             &self.db.pool,
             SQ_RESOLVE_PROJECT,
             &self.user_id,
             prefix,
-            "project ID",
             || CliError::Other(format!("Project not found: {prefix}")),
         )
         .await
@@ -951,13 +937,11 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
-        validate_id_prefix(prefix)?;
-        resolve_sqlite_id(
+        resolve_sqlite_uuid_id(
             &self.db.pool,
             SQ_RESOLVE_PROMPT,
             &self.user_id,
             prefix,
-            "prompt ID",
             || CliError::Other(format!("Prompt not found: {prefix}")),
         )
         .await
@@ -1045,13 +1029,11 @@ impl NoteDb for SqliteBackend {
     }
 
     async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
-        validate_id_prefix(prefix)?;
-        resolve_sqlite_id(
+        resolve_sqlite_uuid_id(
             &self.db.pool,
             SQ_RESOLVE_KEYTERM,
             &self.user_id,
             prefix,
-            "keyterm ID",
             || CliError::Other(format!("Keyterm not found: {prefix}")),
         )
         .await
@@ -1804,5 +1786,44 @@ mod tests {
             CliError::Other(msg) => assert!(msg.contains("not found"), "got: {msg}"),
             _ => panic!("expected Other error, got {:?}", err),
         }
+    }
+
+    #[tokio::test]
+    async fn test_project_prompt_keyterm_resolvers_reject_uuid_prefixes() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let project_id = backend.create_project("Exact Project").await.unwrap();
+        let prompt_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_prompt(&prompt_id, "Prompt", None, "Body", &now)
+            .await
+            .unwrap();
+        let keyterm_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_keyterm(&keyterm_id, "Keyterm", None, None, &now)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            backend.resolve_project_id(&project_id).await.unwrap(),
+            project_id
+        );
+        assert_eq!(
+            backend.resolve_prompt_id(&prompt_id).await.unwrap(),
+            prompt_id
+        );
+        assert_eq!(
+            backend.resolve_keyterm_id(&keyterm_id).await.unwrap(),
+            keyterm_id
+        );
+
+        let project_prefix = &project_id[..8];
+        let prompt_prefix = &prompt_id[..8];
+        let keyterm_prefix = &keyterm_id[..8];
+
+        assert!(backend.resolve_project_id(project_prefix).await.is_err());
+        assert!(backend.resolve_prompt_id(prompt_prefix).await.is_err());
+        assert!(backend.resolve_keyterm_id(keyterm_prefix).await.is_err());
     }
 }
