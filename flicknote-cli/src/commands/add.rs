@@ -6,8 +6,7 @@ use flicknote_sync::ipc::{CreateNoteRequest, DaemonRequest, DaemonResponse};
 use std::io::{IsTerminal, Read};
 
 use super::upload_util::{
-    cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, metadata_for_upload,
-    note_type_for_extension, upload_file,
+    is_readable_text_file, is_uploadable_file, metadata_for_upload, note_type_for_extension,
 };
 use super::util::{display_inserted_note_id, resolve_project_arg};
 
@@ -32,6 +31,15 @@ pub(crate) enum AddCreateMode {
 impl AddCreateMode {
     pub(crate) fn uses_daemon(self) -> bool {
         matches!(self, Self::Daemon)
+    }
+
+    pub(crate) fn validate_file_upload_supported(self) -> Result<(), CliError> {
+        if self.uses_daemon() {
+            return Ok(());
+        }
+        Err(CliError::Other(
+            "File uploads require the local sync daemon.".to_string(),
+        ))
     }
 }
 
@@ -97,6 +105,7 @@ pub(crate) async fn run(
     };
 
     let inserted = if is_file {
+        mode.validate_file_upload_supported()?;
         let file_path = std::path::PathBuf::from(&content);
         let filename = file_path
             .file_name()
@@ -117,23 +126,11 @@ pub(crate) async fn run(
             project_id: project_id.as_deref(),
             now: &now,
         };
-        if mode.uses_daemon() {
-            create_note_with_daemon(
-                config,
-                daemon_create_request(&req).with_attachment_path(file_path.to_string_lossy()),
-            )
-            .await?
-        } else {
-            upload_file(config, &id, &file_path).await?;
-            match db.insert_note(&req).await {
-                Ok(inserted) => inserted,
-                Err(e) => {
-                    #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
-                    let _ = cleanup_uploaded_file(config, &id).await;
-                    return Err(e);
-                }
-            }
-        }
+        create_note_with_daemon(
+            config,
+            daemon_create_request(&req).with_attachment_path(file_path.to_string_lossy()),
+        )
+        .await?
     } else if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
         if mode.uses_daemon() {
@@ -326,6 +323,15 @@ mod tests {
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
         assert_eq!(req.project_id.as_deref(), Some("project-id"));
         assert_eq!(req.attachment_path.as_deref(), Some("/tmp/report.pdf"));
+    }
+
+    #[test]
+    fn local_mode_rejects_file_uploads() {
+        let err = AddCreateMode::Local
+            .validate_file_upload_supported()
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("File uploads require the local sync daemon"));
     }
 
     #[test]
