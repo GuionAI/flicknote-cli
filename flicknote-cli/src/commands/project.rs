@@ -53,13 +53,13 @@ struct ListArgs {
 
 #[derive(Args)]
 struct DetailArgs {
-    /// Project ID (full UUID or prefix)
+    /// Project ID (full UUID)
     id: String,
 }
 
 #[derive(Args)]
 struct ModifyProjectArgs {
-    /// Project ID (full UUID or prefix)
+    /// Project ID (full UUID)
     id: String,
     /// Associate a prompt by ID (use "none" to clear)
     #[arg(long)]
@@ -74,7 +74,7 @@ struct ModifyProjectArgs {
 
 #[derive(Args)]
 struct DeleteProjectArgs {
-    /// Project ID (full UUID or prefix)
+    /// Project ID (full UUID)
     id: String,
 }
 

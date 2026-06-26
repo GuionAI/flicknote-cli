@@ -11,7 +11,6 @@ use flicknote_core::error::CliError;
 
 const ROOT_HELP: &str = include_str!("help/root.md");
 
-mod api_client;
 mod commands;
 mod editable_document;
 mod frontmatter;
@@ -150,7 +149,7 @@ async fn run() -> Result<(), CliError> {
             &cli,
             &config,
             &backend,
-            commands::add::AddCreateMode::DaemonForNonFile,
+            commands::add::AddCreateMode::Daemon,
         )
         .await
     }

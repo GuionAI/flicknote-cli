@@ -28,6 +28,15 @@ pub struct CreateNoteRequest {
     pub topics: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entities: Vec<String>,
+    #[serde(default)]
+    pub attachment_path: Option<String>,
+}
+
+impl CreateNoteRequest {
+    pub fn with_attachment_path(mut self, path: impl Into<String>) -> Self {
+        self.attachment_path = Some(path.into());
+        self
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -178,6 +187,7 @@ mod tests {
             now: "2026-06-26T00:00:00Z".to_string(),
             topics: vec!["rust".to_string()],
             entities: vec!["PowerSync".to_string()],
+            attachment_path: None,
         });
 
         assert_eq!(
@@ -194,7 +204,8 @@ mod tests {
                     "project_id": "project-id",
                     "now": "2026-06-26T00:00:00Z",
                     "topics": ["rust"],
-                    "entities": ["PowerSync"]
+                    "entities": ["PowerSync"],
+                    "attachment_path": null
                 }
             })
         );
