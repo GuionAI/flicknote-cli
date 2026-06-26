@@ -28,8 +28,8 @@ flicknote content <id>
 flicknote content <id> --section <section-id>
 ```
 
-Use the numeric short ID shown by `flicknote list`. Pending-sync notes may need
-the full UUID shown when the note is created.
+Use the numeric short ID shown by `flicknote list`. Pending-sync notes use the
+shown UUID prefix until the numeric ID appears.
 
 ## Editing Rules
 

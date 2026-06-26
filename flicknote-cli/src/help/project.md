@@ -1,6 +1,6 @@
 Examples:
   flicknote project list
-  flicknote project add research
+  flicknote project add work
   flicknote project detail <project-id>
   flicknote project modify <project-id> --prompt <prompt-id>
   flicknote project modify <project-id> --keyterm <keyterm-id>
@@ -8,4 +8,4 @@ Examples:
   flicknote project modify <project-id> --prompt none
   flicknote project delete <project-id>
 
-Use project names with note commands, for example `flicknote add "text" --project research`.
+Use project names with note commands, for example `flicknote add "text" --project work`.
