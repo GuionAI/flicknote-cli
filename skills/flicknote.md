@@ -8,20 +8,18 @@ description: "FlickNote CLI for managing notes - add, find, detail, modify, and 
 Use FlickNote to save and retrieve local-first notes from the command line.
 Run `flicknote <command> --help` for exact flags and examples.
 
-## Agent Defaults
+## Project Use
 
-Use only these projects for agent-written notes unless the user asks otherwise:
-
-- `orientation` - plans, task context, design decisions, implementation strategy
-- `research` - findings, references, discoveries, reusable knowledge
+Use `--project <name>` when the note belongs to a known project. Follow the
+user's project name if they provide one; otherwise omit `--project`.
 
 ## Common Commands
 
 ```bash
-flicknote add "note text" --project orientation
-cat findings.md | flicknote add --project research
+flicknote add "note text" --project <project>
+cat note.md | flicknote add --project <project>
 flicknote find "keyword"
-flicknote list --project research
+flicknote list --project <project>
 flicknote detail <id>
 flicknote detail <id> --tree
 flicknote content <id>
