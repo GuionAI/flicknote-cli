@@ -6,9 +6,13 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+
+const MODIFY_HELP: &str = include_str!("../help/modify.md");
+
 #[derive(Args)]
+#[command(after_help = MODIFY_HELP)]
 pub(crate) struct ModifyArgs {
-    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
+    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
     id: String,
     /// Edit only the named section (scope = full section including heading)
     #[arg(short = 's', long = "section")]

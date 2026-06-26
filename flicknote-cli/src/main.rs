@@ -9,6 +9,8 @@ use flicknote_core::config::Config;
 use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
 
+const ROOT_HELP: &str = include_str!("help/root.md");
+
 mod api_client;
 mod commands;
 mod editable_document;
@@ -19,7 +21,8 @@ mod utils;
 #[derive(Parser)]
 #[command(
     name = "flicknote",
-    about = "FlickNote CLI — local-first note management"
+    about = "FlickNote CLI — local-first note management",
+    after_help = ROOT_HELP
 )]
 #[command(version)]
 struct Cli {

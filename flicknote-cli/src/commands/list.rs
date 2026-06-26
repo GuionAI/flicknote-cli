@@ -4,7 +4,10 @@ use flicknote_core::error::CliError;
 
 use super::util::{note_json, print_notes_table, resolve_project_arg};
 
+const LIST_HELP: &str = include_str!("../help/list.md");
+
 #[derive(Args)]
+#[command(after_help = LIST_HELP)]
 pub(crate) struct ListArgs {
     /// Filter by type
     #[arg(long, value_parser = ["normal", "voice", "link"])]

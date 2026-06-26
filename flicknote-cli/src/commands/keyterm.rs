@@ -2,7 +2,10 @@ use clap::{Args, Subcommand};
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 
+const KEYTERM_HELP: &str = include_str!("../help/keyterm.md");
+
 #[derive(Args)]
+#[command(after_help = KEYTERM_HELP)]
 pub(crate) struct KeytermArgs {
     #[command(subcommand)]
     command: KeytermCommands,
