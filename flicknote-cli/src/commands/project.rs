@@ -3,7 +3,10 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Project;
 
+const PROJECT_HELP: &str = include_str!("../help/project.md");
+
 #[derive(Args)]
+#[command(after_help = PROJECT_HELP)]
 pub(crate) struct ProjectArgs {
     #[command(subcommand)]
     command: ProjectCommands,

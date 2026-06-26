@@ -1,247 +1,71 @@
 ---
 name: flicknote
-description: "FlickNote CLI for managing notes — add, list, detail, modify, and organize by project"
+description: "FlickNote CLI for managing notes - add, find, detail, modify, and organize by project"
 ---
 
 # FlickNote CLI
 
-Local-first note management. Notes are stored in a local SQLite database and synced to the cloud.
+Use FlickNote to save and retrieve local-first notes from the command line.
+Run `flicknote <command> --help` for exact flags and examples.
 
-## Adding Notes
+## Agent Defaults
 
-```bash
-# Add a text note (title is auto-generated from content)
-flicknote add "Meeting notes about API redesign"
+Use only these projects for agent-written notes unless the user asks otherwise:
 
-# Add a URL (auto-detected as link note)
-flicknote add "https://example.com/article"
+- `orientation` - plans, task context, design decisions, implementation strategy
+- `research` - findings, references, discoveries, reusable knowledge
 
-# Add to a project (creates project if it doesn't exist)
-flicknote add "Design doc draft" --project myproject
-
-# Pipe content from stdin
-echo "long content here" | flicknote add --project myproject
-cat notes.md | flicknote add --project research
-
-# Heredoc for multiline content with special characters ($, backticks, \)
-cat <<'EOF' | flicknote add --project myproject
-# My Note
-Content with **markdown** and $variables safely handled
-EOF
-```
-
-## Listing & Finding Notes
+## Common Commands
 
 ```bash
-flicknote list                          # recent notes (default: 20)
-flicknote list --project myproject      # notes in a project
-flicknote find "API"                    # search by keyword (OR match)
-flicknote find "API" "REST"             # multiple keywords
-flicknote list --type link              # filter by type (normal, voice, link)
-flicknote list --limit 50               # more results
-flicknote list --archived               # show archived notes
-flicknote list --json                   # JSON output
-flicknote count                         # count active notes
-flicknote count --project myproject     # count in project
-flicknote count "API"                   # count by keyword filter
+flicknote add "note text" --project orientation
+cat findings.md | flicknote add --project research
+flicknote find "keyword"
+flicknote list --project research
+flicknote detail <id>
+flicknote detail <id> --tree
+flicknote content <id>
+flicknote content <id> --section <section-id>
 ```
 
-List columns: ID (numeric short ID, or `pending`) | Type | Title | Project | Topics | Flagged | Created
+Use the numeric short ID shown by `flicknote list`. Pending-sync notes may need
+the full UUID shown when the note is created.
 
-Note commands use the numeric short ID shown by `list`. A full UUID is also accepted for pending-sync notes, but UUID prefixes are not supported. In `--json`, `id` is the numeric short ID and `uuid` is the original UUID.
+## Editing Rules
 
-## Reading Notes
+Prefer `modify` for precise edits and `replace` for overwrite.
 
 ```bash
-# Full metadata + content
-flicknote detail 123
-
-# Content-only as pure markdown
-flicknote content 123
-
-# See heading structure with section IDs
-flicknote detail 123 --tree
-
-# Extract a specific section — use ID from --tree (e.g. 3K)
-flicknote content 123 --section 3K
-
-# JSON output
-flicknote detail 123 --json
-
-# Read an archived note
-flicknote detail 123 --archived
-
-# Works with other flags
-flicknote detail 123 --archived --tree
-flicknote detail 123 --archived --json
-```
-
-Content output format:
-```
-# My Note
-## Summary
-...content...
-## Key Points
-...content...
-```
-
-To target a section, first run `--tree` to see IDs, then use the ID with `--section`:
-
-```bash
-flicknote detail 123 --tree
-# └─ # My Note
-#    ├─ [3K] ## Summary
-#    └─ [aZ] ## Details
-flicknote content 123 --section 3K
-```
-
-## Editing Notes
-
-Content-writing commands read from **stdin only** — pipe content in or use heredoc.
-
-### Replace (overwrite)
-
-> `flicknote replace <id>` overwrites the whole note or a whole section including its heading. Prefer `modify` for precision edits.
-
-```bash
-# Replace entire note content
-echo "new content" | flicknote replace 123
-
-# Replace a section (stdin MUST start with a heading — heading level is capped at original)
-echo "## New Heading
-new body" | flicknote replace 123 --section 3K
-```
-
-`--section` requires stdin to start with an ATX or setext heading.
-
-### Modify (edit-mode + metadata)
-
-> `flicknote modify <id>` does precision string-replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata.
-
-```bash
-# Edit mode: exact-string replacement (fails on zero or multiple matches)
-cat <<'EDIT' | flicknote modify 123
+cat <<'EDIT' | flicknote modify <id>
 ===BEFORE===
-old text (exactly as in the note, whitespace-sensitive)
+old text exactly as it appears
 ===AFTER===
 new text
 EDIT
 
-# Scope to a section (scope = full section including heading)
-cat <<'EDIT' | flicknote modify 123 --section 3K
-===BEFORE===
-old text inside that section
-===AFTER===
-new text
-EDIT
-
-# Metadata only
-flicknote modify 123 --project newproject
-flicknote modify 123 --flagged
+cat note.md | flicknote replace <id>
 ```
 
-**Rules:**
-- **Exact match, whitespace-sensitive.** No fuzzy fallbacks.
-- **Unique-match required.** If `BEFORE` matches 0 or >1 times, you get a clear error. Add surrounding context to disambiguate.
-- **Single block per call.** Multiple `===BEFORE===`/`===AFTER===` pairs in one stdin → error. Run modify multiple times.
-- **Append** is a different command: `echo "more" | flicknote append <id>`
+`modify` requires one exact, whitespace-sensitive `===BEFORE===` /
+`===AFTER===` block. The match must be unique. Add surrounding context if the
+text appears more than once.
 
-### Other content operations
+`replace` overwrites the whole note or section. With `--section`, stdin must
+start with a heading. For section IDs, run `flicknote detail <id> --tree`.
+
+Mutating section commands print the updated tree after the change.
+
+## More Help
 
 ```bash
-# Append to an existing note (stdin required, adds with \n\n separator)
-echo "more content" | flicknote append 123
-
-# Remove a section by ID
-flicknote delete 123 --section 3K
-
-# Rename a section heading (preserves heading level and body)
-flicknote rename 123 --section 3K "Final"
-
-# Insert content before or after a section by ID
-echo "## Preface" | flicknote insert 123 --before 3K
-echo "## Analysis" | flicknote insert 123 --after aZ
+flicknote --help
+flicknote add --help
+flicknote list --help
+flicknote detail --help
+flicknote content --help
+flicknote modify --help
+flicknote replace --help
+flicknote project --help
+flicknote prompt --help
+flicknote keyterm --help
 ```
-
-Mutating commands print the updated `--tree` after making changes.
-
-### Migration from legacy `modify`
-
-| Old                                                           | New                                                 |
-|---------------------------------------------------------------|-----------------------------------------------------|
-| `cat x.md \| flicknote modify <id>`                            | `cat x.md \| flicknote replace <id>`                 |
-| `echo body \| flicknote modify <id> --section <s>`             | `echo "## Heading
-body" \| flicknote replace <id> --section <s>`   |
-| `cat "## X
-..." \| flicknote modify <id> --section <s> --with-heading` | `echo "## X
-..." \| flicknote replace <id> --section <s>`   (heading always in stdin; --with-heading removed) |
-
-`--with-heading` is removed.
-
-## Opening Notes in Browser
-
-```bash
-flicknote open 123    # open note in browser
-```
-
-## Deleting & Restoring Notes
-
-```bash
-flicknote delete 123      # soft-delete a note (hidden from normal listing)
-flicknote restore 123     # restore a deleted note
-flicknote list --archived      # list deleted notes
-```
-
-## Projects
-
-```bash
-flicknote project list                  # list projects
-flicknote project add myproject         # create a project
-flicknote project detail abc12345       # show project details
-flicknote project modify abc12345 --prompt <uuid>    # associate a prompt
-flicknote project modify abc12345 --keyterm <uuid>   # associate keyterms
-flicknote project modify abc12345 --color "#FF5733"  # set color
-flicknote project modify abc12345 --prompt none      # clear prompt
-flicknote project delete abc12345       # archive/delete a project
-```
-
-## Prompts
-
-```bash
-flicknote prompt add --title "My Prompt" --prompt "You are a ..."
-flicknote prompt list
-flicknote prompt detail abc12345
-flicknote prompt modify abc12345 --title "New Title"
-flicknote prompt delete abc12345
-```
-
-## Keyterms
-
-```bash
-flicknote keyterm add --name "My Terms" --content "term1: definition\nterm2: definition"
-flicknote keyterm list
-flicknote keyterm detail abc12345
-flicknote keyterm modify abc12345 --content "updated content"
-flicknote keyterm delete abc12345
-```
-
-## Uploading Files
-
-```bash
-# Add a file and create a file-type note
-flicknote add screenshot.png --project myproject
-flicknote add report.pdf
-```
-
-## Note Types
-
-| Type | Created by | Description |
-|------|-----------|-------------|
-| `normal` | `flicknote add "text"` | Text note |
-| `link` | `flicknote add "https://..."` | URL auto-detected |
-| `file` | `flicknote add <path>` | Uploaded file |
-| `voice` | Mobile app | Voice memo (transcribed) |
-
-## Not for Common Use
-
-- `flicknote import` — migration tool for importing markdown files into FlickNote. One-time use, not part of regular workflow.

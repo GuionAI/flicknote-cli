@@ -2,7 +2,10 @@ use clap::{Args, Subcommand};
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 
+const PROMPT_HELP: &str = include_str!("../help/prompt.md");
+
 #[derive(Args)]
+#[command(after_help = PROMPT_HELP)]
 pub(crate) struct PromptArgs {
     #[command(subcommand)]
     command: PromptCommands,

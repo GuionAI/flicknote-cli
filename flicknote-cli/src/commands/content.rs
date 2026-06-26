@@ -1,7 +1,11 @@
 use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+
+const CONTENT_HELP: &str = include_str!("../help/content.md");
+
 #[derive(Args)]
+#[command(after_help = CONTENT_HELP)]
 pub(crate) struct ContentArgs {
     /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
     id: String,

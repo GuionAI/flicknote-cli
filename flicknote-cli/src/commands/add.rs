@@ -11,7 +11,10 @@ use super::upload_util::{
 };
 use super::util::{display_inserted_note_id, print_pending_short_id_hint, resolve_project_arg};
 
+const ADD_HELP: &str = include_str!("../help/add.md");
+
 #[derive(Args)]
+#[command(after_help = ADD_HELP)]
 pub(crate) struct AddArgs {
     /// Note content or URL. Reads from stdin if omitted.
     value: Option<String>,
