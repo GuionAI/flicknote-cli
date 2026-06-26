@@ -59,17 +59,13 @@ pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<Str
 pub(crate) fn display_note_id(note: &Note) -> String {
     note.short_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| note.id.chars().take(8).collect())
+        .unwrap_or_else(|| note.id.clone())
 }
 
 pub(crate) fn display_inserted_note_id(note: &InsertedNote) -> String {
     note.short_id
         .map(|id| id.to_string())
-        .unwrap_or_else(|| note.uuid.chars().take(8).collect())
-}
-
-pub(crate) fn print_pending_short_id_hint() {
-    println!("Short ID pending sync; use the shown UUID prefix until the numeric ID appears.");
+        .unwrap_or_else(|| note.uuid.clone())
 }
 
 pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
@@ -115,7 +111,7 @@ pub(crate) async fn write_content(
 }
 
 /// Print notes as a formatted table to stdout.
-/// Columns: ID (short_id or UUID prefix) | Type | Title | Project | Topics | Flagged | Created
+/// Columns: ID (short_id or full UUID) | Type | Title | Project | Topics | Flagged | Created
 pub(crate) fn print_notes_table(
     notes: &[Note],
     topics_map: &std::collections::HashMap<String, Vec<String>>,
@@ -175,13 +171,6 @@ pub(crate) fn print_notes_table(
             topics,
             flagged,
             date
-        );
-    }
-
-    let pending = notes.iter().filter(|note| note.short_id.is_none()).count();
-    if pending > 0 {
-        println!(
-            "\n{pending} note(s) are waiting for short ID sync. Use the shown UUID prefix until the numeric ID appears."
         );
     }
 }
@@ -303,10 +292,13 @@ mod tests {
     }
 
     #[test]
-    fn test_display_note_id_uses_uuid_prefix_without_short_id() {
+    fn test_display_note_id_uses_full_uuid_without_short_id() {
         let note = note_with_ids("550e8400-e29b-41d4-a716-446655440000", None);
 
-        assert_eq!(display_note_id(&note), "550e8400");
+        assert_eq!(
+            display_note_id(&note),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
     }
 
     #[test]

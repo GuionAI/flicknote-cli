@@ -9,7 +9,7 @@ use super::upload_util::{
     cleanup_uploaded_file, is_readable_text_file, is_uploadable_file, metadata_for_upload,
     note_type_for_extension, upload_file,
 };
-use super::util::{display_inserted_note_id, print_pending_short_id_hint, resolve_project_arg};
+use super::util::{display_inserted_note_id, resolve_project_arg};
 
 const ADD_HELP: &str = include_str!("../help/add.md");
 
@@ -26,7 +26,13 @@ pub(crate) struct AddArgs {
 #[derive(Clone, Copy)]
 pub(crate) enum AddCreateMode {
     Local,
-    DaemonForNonFile,
+    Daemon,
+}
+
+impl AddCreateMode {
+    pub(crate) fn uses_daemon(self) -> bool {
+        matches!(self, Self::Daemon)
+    }
 }
 
 pub(crate) async fn run(
@@ -103,19 +109,23 @@ pub(crate) async fn run(
         let note_type = note_type_for_extension(&filename);
         let metadata = metadata_for_upload(&filename);
 
-        match db
-            .insert_note(&InsertNoteReq {
-                id: &id,
-                note_type,
-                status: "source_queued",
-                title: None,
-                content: None,
-                metadata: Some(&metadata),
-                project_id: project_id.as_deref(),
-                now: &now,
-            })
-            .await
-        {
+        let req = InsertNoteReq {
+            id: &id,
+            note_type,
+            status: "source_queued",
+            title: None,
+            content: None,
+            metadata: Some(&metadata),
+            project_id: project_id.as_deref(),
+            now: &now,
+        };
+        let result = if mode.uses_daemon() {
+            create_note_with_daemon(config, daemon_create_request(&req)).await
+        } else {
+            db.insert_note(&req).await
+        };
+
+        match result {
             Ok(inserted) => inserted,
             Err(e) => {
                 #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
@@ -125,7 +135,7 @@ pub(crate) async fn run(
         }
     } else if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
-        if matches!(mode, AddCreateMode::DaemonForNonFile) {
+        if mode.uses_daemon() {
             create_note_with_daemon(
                 config,
                 daemon_create_request(&InsertNoteReq {
@@ -156,7 +166,7 @@ pub(crate) async fn run(
     } else {
         let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
         let title_ref = title.as_deref();
-        if matches!(mode, AddCreateMode::DaemonForNonFile) {
+        if mode.uses_daemon() {
             create_note_with_daemon(
                 config,
                 daemon_create_request(&InsertNoteReq {
@@ -192,9 +202,6 @@ pub(crate) async fn run(
             display_inserted_note_id(&inserted)
         ),
         None => println!("Created note {}.", display_inserted_note_id(&inserted)),
-    }
-    if inserted.short_id.is_none() {
-        print_pending_short_id_hint();
     }
     Ok(())
 }
@@ -292,6 +299,28 @@ mod tests {
         assert_eq!(req.note_type, "link");
         assert_eq!(req.status, "source_queued");
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
+    }
+
+    #[test]
+    fn daemon_mode_applies_to_file_notes() {
+        let metadata = metadata_for_upload("report.pdf");
+        let req = daemon_create_request(&InsertNoteReq {
+            id: "note-id",
+            note_type: note_type_for_extension("report.pdf"),
+            status: "source_queued",
+            title: None,
+            content: None,
+            metadata: Some(&metadata),
+            project_id: Some("project-id"),
+            now: "2026-06-26T00:00:00Z",
+        });
+
+        assert!(AddCreateMode::Daemon.uses_daemon());
+        assert_eq!(req.note_type, "file");
+        assert_eq!(req.status, "source_queued");
+        assert_eq!(req.content, None);
+        assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
+        assert_eq!(req.project_id.as_deref(), Some("project-id"));
     }
 
     #[test]

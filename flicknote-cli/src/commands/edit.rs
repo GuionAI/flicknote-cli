@@ -1,8 +1,7 @@
 use super::add::resolve_project;
 use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request_with_extractions};
 use super::util::{
-    display_inserted_note_id, display_note_id, print_pending_short_id_hint, resolve_note_id,
-    resolve_project_arg,
+    display_inserted_note_id, display_note_id, resolve_note_id, resolve_project_arg,
 };
 use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
@@ -115,7 +114,7 @@ async fn create_from_editor(
     } else {
         None
     };
-    let inserted = if matches!(mode, AddCreateMode::DaemonForNonFile) {
+    let inserted = if mode.uses_daemon() {
         create_note_with_daemon(
             config,
             daemon_create_request_with_extractions(
@@ -161,9 +160,6 @@ async fn create_from_editor(
             display_inserted_note_id(&inserted)
         ),
         None => println!("Created note {}.", display_inserted_note_id(&inserted)),
-    }
-    if inserted.short_id.is_none() {
-        print_pending_short_id_hint();
     }
     Ok(())
 }

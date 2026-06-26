@@ -150,7 +150,7 @@ async fn run() -> Result<(), CliError> {
             &cli,
             &config,
             &backend,
-            commands::add::AddCreateMode::DaemonForNonFile,
+            commands::add::AddCreateMode::Daemon,
         )
         .await
     }
