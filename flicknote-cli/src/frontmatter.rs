@@ -2,25 +2,25 @@
 //!
 //! The editable-note contract:
 //!
-//! Full-note Markdown uses Obsidian-style YAML frontmatter at byte 0 when frontmatter
-//! exists, followed by the leading H1 title convention:
+//! Full-note Markdown uses Obsidian-style YAML frontmatter at byte 0 for managed
+//! note fields:
 //!
 //! ```markdown
 //! ---
+//! title: Note title
 //! topics:
 //!   - rust
 //! entities:
 //!   - PowerSync
 //! custom: keep me
 //! ---
-//! # Note title
-//!
 //! Body...
 //! ```
 //!
 //! Rules:
-//! - `notes.title` is represented only as the leading H1, not as a frontmatter key.
+//! - `notes.title` is represented only as the `title` frontmatter key.
 //! - Managed extraction frontmatter keys are `topics` and `entities`.
+//! - Markdown headings are normal body content.
 //! - Existing user frontmatter keys must round-trip transparently.
 //! - Read paths merge DB extraction rows into displayed frontmatter.
 //! - Write paths split the document back into `notes.title`, stored body content,
@@ -29,9 +29,9 @@
 /// Result of parsing a full editable Markdown document.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct EditableDoc {
-    /// Title extracted from leading H1 after optional frontmatter.
+    /// Title extracted from frontmatter.
     pub title: Option<String>,
-    /// Body content without the synthetic H1 line.
+    /// Body content without managed frontmatter.
     pub body: String,
     /// Managed extraction values: `topics` and `entities`.
     pub topics: Vec<String>,
@@ -70,25 +70,28 @@ pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
 ///
 /// Uses `yaml_serde` for proper YAML parsing so that all valid YAML keys
 /// (including nested structures, quoted strings, and inline lists) round-trip
-/// correctly. Returns `(remaining_yaml, topics, entities)`.
+/// correctly. Returns `(remaining_yaml, title, topics, entities)`.
 /// If after removing managed keys the mapping is empty, returns None for remaining.
-fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<String>, Vec<String>) {
+fn extract_managed_from_frontmatter(
+    fm_body: &str,
+) -> (Option<String>, Option<String>, Vec<String>, Vec<String>) {
     // Split_frontmatter includes the closing --- in its returned slice.
     // Strip it so yaml_serde receives a clean YAML body.
     let fm_body = frontmatter_body(fm_body);
     let Ok(mut value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) else {
         return extract_managed_from_invalid_frontmatter(fm_body);
     };
+    let title = take_yaml_string(&mut value, "title");
     let topics = take_yaml_list(&mut value, "topics");
     let entities = take_yaml_list(&mut value, "entities");
     let remaining = if let Some(mapping) = value.as_mapping() {
         if mapping.is_empty() {
-            return (None, topics, entities);
+            return (None, title, topics, entities);
         }
         let Some(remaining) =
             serialized_yaml_body(yaml_serde::to_string(&value), "unmanaged editable note")
         else {
-            return (Some(fm_body.to_string()), topics, entities);
+            return (Some(fm_body.to_string()), title, topics, entities);
         };
         remaining
     } else {
@@ -97,15 +100,16 @@ fn extract_managed_from_frontmatter(fm_body: &str) -> (Option<String>, Vec<Strin
     };
     let remaining = remaining.trim().to_string();
     if remaining.is_empty() {
-        (None, topics, entities)
+        (None, title, topics, entities)
     } else {
-        (Some(remaining), topics, entities)
+        (Some(remaining), title, topics, entities)
     }
 }
 
 fn extract_managed_from_invalid_frontmatter(
     fm_body: &str,
-) -> (Option<String>, Vec<String>, Vec<String>) {
+) -> (Option<String>, Option<String>, Vec<String>, Vec<String>) {
+    let mut title = None;
     let mut topics = Vec::new();
     let mut entities = Vec::new();
     let mut remaining = Vec::new();
@@ -129,24 +133,26 @@ fn extract_managed_from_invalid_frontmatter(
             remaining.extend_from_slice(&lines[start..index]);
             continue;
         };
-        let values = take_yaml_list(&mut value, key);
         match key {
-            "topics" => topics = values,
-            "entities" => entities = values,
+            "title" => title = take_yaml_string(&mut value, key),
+            "topics" => topics = take_yaml_list(&mut value, key),
+            "entities" => entities = take_yaml_list(&mut value, key),
             _ => unreachable!("managed_key_line returned an unknown key"),
         }
     }
 
     let remaining = remaining.join("\n").trim().to_string();
     if remaining.is_empty() {
-        (None, topics, entities)
+        (None, title, topics, entities)
     } else {
-        (Some(remaining), topics, entities)
+        (Some(remaining), title, topics, entities)
     }
 }
 
 fn managed_key_line(line: &str) -> Option<&'static str> {
-    if line.starts_with("topics:") {
+    if line.starts_with("title:") {
+        Some("title")
+    } else if line.starts_with("topics:") {
         Some("topics")
     } else if line.starts_with("entities:") {
         Some("entities")
@@ -166,6 +172,32 @@ fn is_top_level_mapping_key(line: &str) -> bool {
         return false;
     };
     !key.trim().is_empty()
+}
+
+fn take_yaml_string(value: &mut yaml_serde::Value, key: &str) -> Option<String> {
+    let mapping = value.as_mapping_mut()?;
+    let k = yaml_serde::Value::String(key.to_string());
+    match mapping.remove(&k) {
+        Some(yaml_serde::Value::String(value)) => {
+            let value = value.trim().to_string();
+            if value.is_empty() { None } else { Some(value) }
+        }
+        Some(yaml_serde::Value::Sequence(seq)) => {
+            if seq.len() > 1 {
+                log::warn!(
+                    "{key} frontmatter sequence has {} values; using the first non-empty string",
+                    seq.len()
+                );
+            }
+            seq.into_iter().find_map(|v| {
+                v.as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Remove and return the list value for `key` from a YAML mapping.
@@ -191,11 +223,13 @@ fn take_yaml_list(value: &mut yaml_serde::Value, key: &str) -> Vec<String> {
 /// if only managed values exist). Returns the full frontmatter block including `---`
 /// delimiters, or None if there is nothing to render.
 pub(crate) fn render_frontmatter(
+    title: Option<&str>,
     topics: &[String],
     entities: &[String],
     user_frontmatter: Option<&str>,
 ) -> Option<String> {
-    let has_managed = !topics.is_empty() || !entities.is_empty();
+    let title = title.map(str::trim).filter(|title| !title.is_empty());
+    let has_managed = title.is_some() || !topics.is_empty() || !entities.is_empty();
     let has_user = user_frontmatter.is_some_and(|fm| {
         let body = fm.trim();
         !body.is_empty() && body != "---"
@@ -205,6 +239,12 @@ pub(crate) fn render_frontmatter(
     }
     // Build a combined YAML mapping: managed lists + user keys
     let mut combined = yaml_serde::Mapping::new();
+    if let Some(title) = title {
+        combined.insert(
+            yaml_serde::Value::String("title".into()),
+            yaml_serde::Value::String(title.to_string()),
+        );
+    }
     if !topics.is_empty() {
         let seq: yaml_serde::Sequence = topics
             .iter()
@@ -230,6 +270,7 @@ pub(crate) fn render_frontmatter(
         if let Ok(mut user_value) = yaml_serde::from_str::<yaml_serde::Value>(fm_body) {
             // Strip managed keys from user mapping (managed lists already in `combined`)
             if let Some(user_mapping) = user_value.as_mapping_mut() {
+                user_mapping.remove(yaml_serde::Value::String("title".into()));
                 user_mapping.remove(yaml_serde::Value::String("topics".into()));
                 user_mapping.remove(yaml_serde::Value::String("entities".into()));
             }
@@ -244,6 +285,9 @@ pub(crate) fn render_frontmatter(
         } else {
             return render_invalid_user_frontmatter(&combined, fm);
         }
+    }
+    if combined.is_empty() {
+        return None;
     }
     let inner = serialized_yaml_body(yaml_serde::to_string(&combined), "editable note")?;
     Some(format!("---\n{}\n---", inner))
@@ -301,29 +345,27 @@ fn frontmatter_body(fm: &str) -> &str {
 /// Parse a full editable Markdown document into its components.
 ///
 /// Extracts:
-/// - title from leading H1 after optional frontmatter
-/// - body without the synthetic H1
+/// - title from frontmatter
+/// - body content
 /// - managed extraction values for `topics` and `entities`
 /// - unmanaged frontmatter preserved in stored content when unknown keys remain
 pub(crate) fn parse_editable_doc(content: &str) -> EditableDoc {
     let (fm_opt, after_fm) = split_frontmatter(content);
-    let (unmanaged_fm, topics, entities) = if let Some(fm) = fm_opt {
+    let (unmanaged_fm, title, topics, entities) = if let Some(fm) = fm_opt {
         let fm_body = fm
             .strip_prefix("---")
             .unwrap_or(fm)
             .strip_suffix("---")
             .unwrap_or(fm);
-        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let (remaining, title, topics, entities) = extract_managed_from_frontmatter(fm_body);
         let wrapped = remaining.map(|body| format!("---\n{}\n---", body));
-        (wrapped, topics, entities)
+        (wrapped, title, topics, entities)
     } else {
-        (None, Vec::new(), Vec::new())
+        (None, None, Vec::new(), Vec::new())
     };
-    // Extract title from leading H1
-    let (title, body) = crate::utils::extract_title_and_strip(after_fm);
     EditableDoc {
         title,
-        body,
+        body: after_fm.to_string(),
         topics,
         entities,
         unmanaged_frontmatter: unmanaged_fm,
@@ -332,7 +374,7 @@ pub(crate) fn parse_editable_doc(content: &str) -> EditableDoc {
 /// Build the full editable document content for reading.
 ///
 /// Takes a title, body content, DB extraction rows, and optional stored unmanaged
-/// frontmatter. Returns the full Markdown with frontmatter + H1 + body.
+/// frontmatter. Returns the full Markdown with frontmatter + body.
 pub(crate) fn build_editable_content(
     title: Option<&str>,
     body: &str,
@@ -342,23 +384,16 @@ pub(crate) fn build_editable_content(
 ) -> String {
     let mut parts = Vec::new();
     // Frontmatter
-    let fm = render_frontmatter(topics, entities, stored_frontmatter);
+    let fm = render_frontmatter(title, topics, entities, stored_frontmatter);
     if let Some(fm) = fm {
         parts.push(fm);
     }
-    // Leading H1
-    if let Some(t) = title {
-        parts.push(format!("# {t}"));
-    }
-    // Body (with blank line separator after H1)
     let body = body.trim_end();
     if !body.is_empty() {
-        if title.is_some() {
-            parts.push(String::new()); // blank line after H1
+        if !parts.is_empty() {
+            parts.push(String::new());
         }
         parts.push(body.to_string());
-    } else if title.is_some() {
-        // Just a title, no body — no trailing blank line
     }
     let result = parts.join("\n");
     // Ensure trailing newline
@@ -371,6 +406,43 @@ pub(crate) fn build_editable_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_LOGGER: TestLogger = TestLogger;
+    static TEST_LOG_MESSAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct TestLogger;
+
+    impl log::Log for TestLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if !self.enabled(record.metadata()) {
+                return;
+            }
+            TEST_LOG_MESSAGES
+                .lock()
+                .unwrap()
+                .push(record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn clear_test_logs() {
+        match log::set_logger(&TEST_LOGGER) {
+            Ok(()) | Err(_) => {}
+        }
+        log::set_max_level(log::LevelFilter::Warn);
+        TEST_LOG_MESSAGES.lock().unwrap().clear();
+    }
+
+    fn test_logs() -> Vec<String> {
+        TEST_LOG_MESSAGES.lock().unwrap().clone()
+    }
+
     #[test]
     fn test_split_frontmatter_simple() {
         let input = "---\ntopics:\n  - rust\n---\n# Title\n\nBody.\n";
@@ -411,10 +483,10 @@ mod tests {
     }
     #[test]
     fn test_parse_editable_doc_full() {
-        let input = "---\ntopics:\n  - rust\nentities:\n  - PowerSync\ncustom: keep\n---\n# My Title\n\nBody goes here.\n";
+        let input = "---\ntitle: My Title\ntopics:\n  - rust\nentities:\n  - PowerSync\ncustom: keep\n---\n# Body Heading\n\nBody goes here.\n";
         let doc = parse_editable_doc(input);
         assert_eq!(doc.title, Some("My Title".to_string()));
-        assert_eq!(doc.body, "Body goes here.\n");
+        assert_eq!(doc.body, "# Body Heading\n\nBody goes here.\n");
         assert_eq!(doc.topics, vec!["rust".to_string()]);
         assert_eq!(doc.entities, vec!["PowerSync".to_string()]);
         assert!(doc.unmanaged_frontmatter.is_some());
@@ -423,8 +495,8 @@ mod tests {
     fn test_parse_editable_doc_no_frontmatter() {
         let input = "# Just a Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
-        assert_eq!(doc.title, Some("Just a Title".to_string()));
-        assert_eq!(doc.body, "Body.\n");
+        assert_eq!(doc.title, None);
+        assert_eq!(doc.body, "# Just a Title\n\nBody.\n");
         assert!(doc.topics.is_empty());
         assert!(doc.entities.is_empty());
         assert!(doc.unmanaged_frontmatter.is_none());
@@ -455,7 +527,7 @@ mod tests {
         // Stored content has custom keys only; read output adds managed keys
         let input = "---\ncustom: keep me\npriority: high\n---\n# Title\n\nBody.\n";
         let doc = parse_editable_doc(input);
-        assert_eq!(doc.title, Some("Title".to_string()));
+        assert_eq!(doc.title, None);
         assert!(doc.topics.is_empty());
         assert!(doc.entities.is_empty());
         assert!(doc.unmanaged_frontmatter.is_some());
@@ -493,7 +565,7 @@ mod tests {
     fn test_render_frontmatter_managed_only() {
         let topics = vec!["rust".to_string()];
         let entities = vec!["PowerSync".to_string()];
-        let fm = render_frontmatter(&topics, &entities, None);
+        let fm = render_frontmatter(None, &topics, &entities, None);
         assert!(fm.is_some());
         let fm = fm.unwrap();
         assert!(fm.contains("topics:"));
@@ -503,7 +575,13 @@ mod tests {
     }
     #[test]
     fn test_render_frontmatter_none() {
-        let fm = render_frontmatter(&[], &[], None);
+        let fm = render_frontmatter(None, &[], &[], None);
+        assert!(fm.is_none());
+    }
+    #[test]
+    fn test_render_frontmatter_strips_stored_managed_keys_without_rendering_empty_map() {
+        let fm = render_frontmatter(None, &[], &[], Some("---\ntitle: Old\n---"));
+
         assert!(fm.is_none());
     }
     #[test]
@@ -512,7 +590,7 @@ mod tests {
         let topics = vec!["rust".to_string()];
         let entities = vec!["PowerSync".to_string()];
         let user_fm = "---\ncustom: keep\npriority: high\n---\n";
-        let fm = render_frontmatter(&topics, &entities, Some(user_fm));
+        let fm = render_frontmatter(None, &topics, &entities, Some(user_fm));
         assert!(fm.is_some());
         let fm = fm.unwrap();
         assert!(fm.contains("topics:"));
@@ -530,14 +608,39 @@ mod tests {
             None,
         );
         assert!(content.starts_with("---\n"));
-        assert!(content.contains("# My Title"));
+        assert!(content.contains("title: My Title"));
+        assert!(!content.contains("# My Title"));
         assert!(content.contains("Body text."));
+    }
+    #[test]
+    fn test_build_editable_content_renders_title_as_frontmatter() {
+        let content = build_editable_content(Some("My Title"), "Body text.", &[], &[], None);
+
+        assert_eq!(content, "---\ntitle: My Title\n---\n\nBody text.\n");
+    }
+    #[test]
+    fn test_parse_editable_doc_uses_frontmatter_title_and_preserves_h1_body() {
+        let input = "---\ntitle: Frontmatter Title\ntopics: [rust]\n---\n# Body Heading\n\nBody.\n";
+        let doc = parse_editable_doc(input);
+
+        assert_eq!(doc.title, Some("Frontmatter Title".to_string()));
+        assert_eq!(doc.body, "# Body Heading\n\nBody.\n");
+        assert_eq!(doc.topics, vec!["rust".to_string()]);
+        assert!(doc.unmanaged_frontmatter.is_none());
+    }
+    #[test]
+    fn test_parse_editable_doc_no_frontmatter_title_does_not_extract_h1() {
+        let doc = parse_editable_doc("# Body Heading\n\nBody.\n");
+
+        assert_eq!(doc.title, None);
+        assert_eq!(doc.body, "# Body Heading\n\nBody.\n");
     }
     #[test]
     fn test_build_editable_content_no_extractions() {
         let content = build_editable_content(Some("Title"), "Body.", &[], &[], None);
-        assert!(!content.starts_with("---"));
-        assert!(content.starts_with("# Title"));
+        assert!(content.starts_with("---"));
+        assert!(content.contains("title: Title"));
+        assert!(!content.contains("# Title"));
     }
     #[test]
     fn test_build_editable_content_with_stored_frontmatter() {
@@ -549,7 +652,8 @@ mod tests {
         assert!(content.starts_with("---\n"));
         assert!(content.contains("topics:"));
         assert!(content.contains("custom: keep"));
-        assert!(content.contains("# Title"));
+        assert!(content.contains("title: Title"));
+        assert!(!content.contains("# Title"));
     }
     #[test]
     fn test_build_editable_content_no_title() {
@@ -561,7 +665,8 @@ mod tests {
     #[test]
     fn test_extract_managed_from_frontmatter_clean() {
         let fm_body = "topics:\n  - a\nentities:\n  - b\ncustom: y\n";
-        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let (remaining, title, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        assert!(title.is_none());
         assert_eq!(topics, vec!["a".to_string()]);
         assert_eq!(entities, vec!["b".to_string()]);
         assert!(remaining.is_some());
@@ -573,7 +678,8 @@ mod tests {
     #[test]
     fn test_extract_managed_from_frontmatter_only_managed() {
         let fm_body = "topics:\n  - a\nentities:\n  - b\n";
-        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let (remaining, title, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        assert!(title.is_none());
         assert_eq!(topics, vec!["a".to_string()]);
         assert_eq!(entities, vec!["b".to_string()]);
         assert!(remaining.is_none());
@@ -581,10 +687,11 @@ mod tests {
     // ─── Full-note write edge case tests ──────────────────────────────────
     #[test]
     fn test_parse_editable_doc_h1_after_frontmatter() {
-        // H1 after frontmatter is detected as title
+        // H1 after frontmatter remains normal body content.
         let input = "---\ntopics:\n  - rust\n---\n# After FM\n\nBody.\n";
         let doc = parse_editable_doc(input);
-        assert_eq!(doc.title, Some("After FM".to_string()));
+        assert_eq!(doc.title, None);
+        assert_eq!(doc.body, "# After FM\n\nBody.\n");
         assert_eq!(doc.topics, vec!["rust".to_string()]);
     }
     #[test]
@@ -688,8 +795,9 @@ mod tests {
     #[test]
     fn test_extract_managed_from_frontmatter_inline_topics() {
         let fm_body = "topics: [rust, async]\ncustom: keep\n";
-        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let (remaining, title, topics, entities) = extract_managed_from_frontmatter(fm_body);
 
+        assert!(title.is_none());
         assert_eq!(topics, vec!["rust".to_string(), "async".to_string()]);
         assert!(entities.is_empty());
         let remaining = remaining.expect("custom frontmatter should remain");
@@ -700,14 +808,34 @@ mod tests {
     #[test]
     fn test_extract_managed_from_frontmatter_quoted_strings() {
         let fm_body = "topics: [\"rust lang\", 'async runtime']\nentities:\n  - \"PowerSync\"\n";
-        let (remaining, topics, entities) = extract_managed_from_frontmatter(fm_body);
+        let (remaining, title, topics, entities) = extract_managed_from_frontmatter(fm_body);
 
+        assert!(title.is_none());
         assert_eq!(
             topics,
             vec!["rust lang".to_string(), "async runtime".to_string()]
         );
         assert_eq!(entities, vec!["PowerSync".to_string()]);
         assert!(remaining.is_none());
+    }
+
+    #[test]
+    fn test_extract_managed_from_frontmatter_warns_for_multiple_title_values() {
+        clear_test_logs();
+
+        let (_remaining, title, topics, entities) =
+            extract_managed_from_frontmatter("title: [First, Second]\n");
+
+        assert_eq!(title.as_deref(), Some("First"));
+        assert!(topics.is_empty());
+        assert!(entities.is_empty());
+        assert!(
+            test_logs()
+                .iter()
+                .any(|message| message.contains("title frontmatter sequence has 2 values")),
+            "expected warning for multiple title values, got {:?}",
+            test_logs()
+        );
     }
 
     #[test]
@@ -753,7 +881,7 @@ mod tests {
 
     #[test]
     fn test_render_frontmatter_invalid_user_frontmatter_is_preserved_without_managed_values() {
-        let fm = render_frontmatter(&[], &[], Some("---\ncustom: [unterminated\n---"));
+        let fm = render_frontmatter(None, &[], &[], Some("---\ncustom: [unterminated\n---"));
 
         assert_eq!(fm, Some("---\ncustom: [unterminated\n---".to_string()));
     }
@@ -761,6 +889,7 @@ mod tests {
     #[test]
     fn test_render_frontmatter_invalid_user_frontmatter_keeps_managed_values_visible() {
         let fm = render_frontmatter(
+            None,
             &["rust".to_string()],
             &["PowerSync".to_string()],
             Some("---\ncustom: [unterminated\n---"),
