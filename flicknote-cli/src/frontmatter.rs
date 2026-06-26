@@ -432,7 +432,9 @@ mod tests {
     }
 
     fn clear_test_logs() {
-        let _ = log::set_logger(&TEST_LOGGER);
+        match log::set_logger(&TEST_LOGGER) {
+            Ok(()) | Err(_) => {}
+        }
         log::set_max_level(log::LevelFilter::Warn);
         TEST_LOG_MESSAGES.lock().unwrap().clear();
     }
