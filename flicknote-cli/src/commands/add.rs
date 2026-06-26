@@ -197,6 +197,14 @@ pub(crate) async fn run(
 }
 
 pub(crate) fn daemon_create_request(req: &InsertNoteReq<'_>) -> CreateNoteRequest {
+    daemon_create_request_with_extractions(req, &[], &[])
+}
+
+pub(crate) fn daemon_create_request_with_extractions(
+    req: &InsertNoteReq<'_>,
+    topics: &[String],
+    entities: &[String],
+) -> CreateNoteRequest {
     CreateNoteRequest {
         id: req.id.to_string(),
         note_type: req.note_type.to_string(),
@@ -206,6 +214,8 @@ pub(crate) fn daemon_create_request(req: &InsertNoteReq<'_>) -> CreateNoteReques
         metadata: req.metadata.map(str::to_string),
         project_id: req.project_id.map(str::to_string),
         now: req.now.to_string(),
+        topics: topics.to_vec(),
+        entities: entities.to_vec(),
     }
 }
 
@@ -279,5 +289,28 @@ mod tests {
         assert_eq!(req.note_type, "link");
         assert_eq!(req.status, "source_queued");
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
+    }
+
+    #[test]
+    fn daemon_create_request_can_include_extractions() {
+        let topics = vec!["rust".to_string()];
+        let entities = vec!["PowerSync".to_string()];
+        let req = daemon_create_request_with_extractions(
+            &InsertNoteReq {
+                id: "note-id",
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Title"),
+                content: Some("Body"),
+                metadata: None,
+                project_id: None,
+                now: "2026-06-26T00:00:00Z",
+            },
+            &topics,
+            &entities,
+        );
+
+        assert_eq!(req.topics, topics);
+        assert_eq!(req.entities, entities);
     }
 }

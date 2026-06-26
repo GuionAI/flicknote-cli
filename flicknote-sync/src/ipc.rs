@@ -24,6 +24,10 @@ pub struct CreateNoteRequest {
     pub metadata: Option<String>,
     pub project_id: Option<String>,
     pub now: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -172,6 +176,8 @@ mod tests {
             metadata: None,
             project_id: Some("project-id".to_string()),
             now: "2026-06-26T00:00:00Z".to_string(),
+            topics: vec!["rust".to_string()],
+            entities: vec!["PowerSync".to_string()],
         });
 
         assert_eq!(
@@ -186,7 +192,9 @@ mod tests {
                     "content": "Body",
                     "metadata": null,
                     "project_id": "project-id",
-                    "now": "2026-06-26T00:00:00Z"
+                    "now": "2026-06-26T00:00:00Z",
+                    "topics": ["rust"],
+                    "entities": ["PowerSync"]
                 }
             })
         );

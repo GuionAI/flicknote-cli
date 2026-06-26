@@ -571,10 +571,74 @@ async fn create_note_remotely_and_wait(
         message: "Remote note create returned no short id".to_string(),
     })?;
 
-    wait_for_local_note(db, &row.id, short_id, ipc::LOCAL_SYNC_TIMEOUT_SECS).await?;
+    create_extractions_remotely(
+        http,
+        config,
+        &session.access_token,
+        &session.user.id,
+        &row.id,
+        &req,
+    )
+    .await?;
+    wait_for_local_note(db, &row.id, short_id, &req, ipc::LOCAL_SYNC_TIMEOUT_SECS).await?;
     Ok(CreatedNote {
         uuid: row.id,
         short_id,
+    })
+}
+
+async fn create_extractions_remotely(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    user_id: &str,
+    note_id: &str,
+    req: &CreateNoteRequest,
+) -> Result<(), DaemonError> {
+    let mut rows = Vec::new();
+    for value in &req.topics {
+        rows.push(serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "note_id": note_id,
+            "user_id": user_id,
+            "type": "topic",
+            "value": value,
+        }));
+    }
+    for value in &req.entities {
+        rows.push(serde_json::json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "note_id": note_id,
+            "user_id": user_id,
+            "type": "entity",
+            "value": value,
+        }));
+    }
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let resp = http
+        .post(format!("{}/rest/v1/note_extractions", config.supabase_url))
+        .header("apikey", &config.supabase_anon_key)
+        .bearer_auth(access_token)
+        .json(&rows)
+        .send()
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Remote note extraction create failed: {e}"),
+        })?;
+
+    if resp.status().is_success() {
+        return Ok(());
+    }
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    Err(DaemonError::Other {
+        message: format!(
+            "Created note remotely, but failed to create note extractions ({status}): {body}\nDo not create it again. Check `flicknote sync status`; the note should appear after sync catches up."
+        ),
     })
 }
 
@@ -582,6 +646,7 @@ async fn wait_for_local_note(
     db: &PowerSyncDatabase,
     id: &str,
     short_id: i64,
+    req: &CreateNoteRequest,
     timeout_secs: u64,
 ) -> Result<(), DaemonError> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -602,7 +667,9 @@ async fn wait_for_local_note(
                 })?
                 .flatten()
         };
-        if found == Some(short_id) {
+        let topics_synced = local_extraction_count(db, id, "topic").await? >= req.topics.len();
+        let entities_synced = local_extraction_count(db, id, "entity").await? >= req.entities.len();
+        if found == Some(short_id) && topics_synced && entities_synced {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -613,6 +680,29 @@ async fn wait_for_local_note(
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+}
+
+async fn local_extraction_count(
+    db: &PowerSyncDatabase,
+    note_id: &str,
+    extraction_type: &str,
+) -> Result<usize, DaemonError> {
+    let reader = db.reader().await.map_err(|e| DaemonError::Other {
+        message: format!("Failed to read local PowerSync database: {e}"),
+    })?;
+    let mut stmt = reader
+        .prepare_cached("SELECT COUNT(*) FROM note_extractions WHERE note_id = ? AND type = ?")
+        .map_err(|e| DaemonError::Other {
+            message: format!("Failed to prepare local extraction sync check: {e}"),
+        })?;
+    let count = stmt
+        .query_row(params![note_id, extraction_type], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| DaemonError::Other {
+            message: format!("Failed to query local extraction sync check: {e}"),
+        })?;
+    Ok(count as usize)
 }
 
 async fn serve_socket(

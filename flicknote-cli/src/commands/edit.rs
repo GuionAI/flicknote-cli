@@ -1,5 +1,5 @@
 use super::add::resolve_project;
-use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request};
+use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request_with_extractions};
 use super::util::{
     display_inserted_note_id, display_note_id, print_pending_short_id_hint, resolve_note_id,
     resolve_project_arg,
@@ -118,16 +118,20 @@ async fn create_from_editor(
     let inserted = if matches!(mode, AddCreateMode::DaemonForNonFile) {
         create_note_with_daemon(
             config,
-            daemon_create_request(&InsertNoteReq {
-                id: &id,
-                note_type: "normal",
-                status: "ai_queued",
-                title: Some(parsed.title.as_str()),
-                content: crate::editable_document::normal_note_content_ref(&parsed),
-                metadata: None,
-                project_id: project_id.as_deref(),
-                now: &now,
-            }),
+            daemon_create_request_with_extractions(
+                &InsertNoteReq {
+                    id: &id,
+                    note_type: "normal",
+                    status: "ai_queued",
+                    title: Some(parsed.title.as_str()),
+                    content: crate::editable_document::normal_note_content_ref(&parsed),
+                    metadata: None,
+                    project_id: project_id.as_deref(),
+                    now: &now,
+                },
+                &parsed.topics,
+                &parsed.entities,
+            ),
         )
         .await?
     } else {
@@ -143,12 +147,11 @@ async fn create_from_editor(
         })
         .await?
     };
-    // Insert extraction rows
-    if !parsed.topics.is_empty() {
+    if matches!(mode, AddCreateMode::Local) && !parsed.topics.is_empty() {
         db.set_note_extractions(&id, "topic", &parsed.topics)
             .await?;
     }
-    if !parsed.entities.is_empty() {
+    if matches!(mode, AddCreateMode::Local) && !parsed.entities.is_empty() {
         db.set_note_extractions(&id, "entity", &parsed.entities)
             .await?;
     }
