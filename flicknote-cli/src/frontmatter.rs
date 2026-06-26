@@ -182,12 +182,20 @@ fn take_yaml_string(value: &mut yaml_serde::Value, key: &str) -> Option<String> 
             let value = value.trim().to_string();
             if value.is_empty() { None } else { Some(value) }
         }
-        Some(yaml_serde::Value::Sequence(seq)) => seq.into_iter().find_map(|v| {
-            v.as_str()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-        }),
+        Some(yaml_serde::Value::Sequence(seq)) => {
+            if seq.len() > 1 {
+                log::warn!(
+                    "{key} frontmatter sequence has {} values; using the first non-empty string",
+                    seq.len()
+                );
+            }
+            seq.into_iter().find_map(|v| {
+                v.as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            })
+        }
         _ => None,
     }
 }
@@ -398,6 +406,41 @@ pub(crate) fn build_editable_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static TEST_LOGGER: TestLogger = TestLogger;
+    static TEST_LOG_MESSAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct TestLogger;
+
+    impl log::Log for TestLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() <= log::Level::Warn
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if !self.enabled(record.metadata()) {
+                return;
+            }
+            TEST_LOG_MESSAGES
+                .lock()
+                .unwrap()
+                .push(record.args().to_string());
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn clear_test_logs() {
+        let _ = log::set_logger(&TEST_LOGGER);
+        log::set_max_level(log::LevelFilter::Warn);
+        TEST_LOG_MESSAGES.lock().unwrap().clear();
+    }
+
+    fn test_logs() -> Vec<String> {
+        TEST_LOG_MESSAGES.lock().unwrap().clone()
+    }
+
     #[test]
     fn test_split_frontmatter_simple() {
         let input = "---\ntopics:\n  - rust\n---\n# Title\n\nBody.\n";
@@ -772,6 +815,25 @@ mod tests {
         );
         assert_eq!(entities, vec!["PowerSync".to_string()]);
         assert!(remaining.is_none());
+    }
+
+    #[test]
+    fn test_extract_managed_from_frontmatter_warns_for_multiple_title_values() {
+        clear_test_logs();
+
+        let (_remaining, title, topics, entities) =
+            extract_managed_from_frontmatter("title: [First, Second]\n");
+
+        assert_eq!(title.as_deref(), Some("First"));
+        assert!(topics.is_empty());
+        assert!(entities.is_empty());
+        assert!(
+            test_logs()
+                .iter()
+                .any(|message| message.contains("title frontmatter sequence has 2 values")),
+            "expected warning for multiple title values, got {:?}",
+            test_logs()
+        );
     }
 
     #[test]
