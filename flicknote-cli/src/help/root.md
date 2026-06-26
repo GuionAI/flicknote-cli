@@ -11,4 +11,4 @@ Common workflows:
   cat edit.md | flicknote modify <id>
   cat note.md | flicknote replace <id>
 
-Use numeric note IDs from `flicknote list`. Pending-sync notes use the shown UUID prefix.
+Use numeric note IDs from `flicknote list`.

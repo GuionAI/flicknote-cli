@@ -14,5 +14,5 @@ Rules:
 Examples:
   cat edit.md | flicknote modify 123
   cat edit.md | flicknote modify 123 --section 3K
-  flicknote modify 123 --project research
+  flicknote modify 123 --project work
   flicknote modify 123 --flagged

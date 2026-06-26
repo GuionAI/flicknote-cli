@@ -7,7 +7,7 @@ const CONTENT_HELP: &str = include_str!("../help/content.md");
 #[derive(Args)]
 #[command(after_help = CONTENT_HELP)]
 pub(crate) struct ContentArgs {
-    /// Note ID. Use the numeric short ID shown in list/detail. Pending-sync notes may show a UUID prefix; full UUIDs are also accepted for compatibility.
+    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
     id: String,
     /// Extract a specific section by section ID (2-char base62)
     #[arg(short = 's', long = "section")]
