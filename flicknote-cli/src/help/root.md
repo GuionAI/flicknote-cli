@@ -3,6 +3,7 @@ Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:
   flicknote add "Meeting notes" --project work
+  flicknote upload file.pdf --project work
   flicknote find "keyword"
   flicknote detail <id> --tree
   flicknote content <id> --section <section-id>
