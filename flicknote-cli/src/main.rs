@@ -71,7 +71,7 @@ enum Commands {
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
     Logout,
-    /// Manage sync daemon
+    /// Manage local workspace sync
     Sync(commands::sync::SyncArgs),
     /// Install agent skills
     Skill(commands::skill::SkillArgs),
@@ -89,6 +89,65 @@ enum Commands {
     Open(commands::open::OpenArgs),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceMode {
+    Local,
+    Managed,
+}
+
+impl WorkspaceMode {
+    fn detect() -> Self {
+        if std::env::var("DATABASE_URL").is_ok() {
+            Self::Managed
+        } else {
+            Self::Local
+        }
+    }
+}
+
+impl Commands {
+    fn local_workspace_command_name(&self) -> Option<&'static str> {
+        match self {
+            Commands::Upload(_) => Some("upload"),
+            Commands::Edit(_) => Some("edit"),
+            Commands::Login(_) => Some("login"),
+            Commands::Logout => Some("logout"),
+            Commands::Sync(_) => Some("sync"),
+            Commands::Skill(_) => Some("skill"),
+            Commands::Import(_) => Some("import"),
+            Commands::Open(_) => Some("open"),
+            _ => None,
+        }
+    }
+}
+
+fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError> {
+    if mode == WorkspaceMode::Local {
+        return Ok(());
+    }
+
+    if cli.tui {
+        return Err(local_workspace_required_error("--tui"));
+    }
+
+    let Some(ref command) = cli.command else {
+        return Ok(());
+    };
+
+    if let Some(name) = command.local_workspace_command_name() {
+        return Err(local_workspace_required_error(name));
+    }
+
+    Ok(())
+}
+
+fn local_workspace_required_error(command: &str) -> CliError {
+    CliError::Other(format!(
+        "`flicknote {command}` is not available in managed workspaces.\n\
+         Use a local workspace for file, editor, browser, sync, sign-in, and skill commands."
+    ))
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(e) = run().await {
@@ -99,6 +158,8 @@ async fn main() {
 
 async fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
+    let workspace_mode = WorkspaceMode::detect();
+    enforce_workspace_gate(&cli, workspace_mode)?;
     let config = Config::load()?;
 
     // Commands that don't need a database connection or session
@@ -220,5 +281,58 @@ mod tests {
     #[test]
     fn upload_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
+    }
+
+    #[test]
+    fn managed_workspace_blocks_local_workspace_commands() {
+        for argv in [
+            ["flicknote", "upload", "file.pdf"].as_slice(),
+            ["flicknote", "edit"].as_slice(),
+            ["flicknote", "login"].as_slice(),
+            ["flicknote", "logout"].as_slice(),
+            ["flicknote", "sync", "status"].as_slice(),
+            ["flicknote", "skill", "install"].as_slice(),
+            ["flicknote", "import", "notes"].as_slice(),
+            ["flicknote", "open", "123"].as_slice(),
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();
+            assert!(format!("{err}").contains("not available in managed workspaces"));
+        }
+    }
+
+    #[test]
+    fn managed_workspace_allows_data_commands() {
+        for argv in [
+            ["flicknote", "add", "note"].as_slice(),
+            ["flicknote", "append", "1"].as_slice(),
+            ["flicknote", "delete", "1"].as_slice(),
+            ["flicknote", "restore", "1"].as_slice(),
+            ["flicknote", "list"].as_slice(),
+            ["flicknote", "count"].as_slice(),
+            ["flicknote", "find", "keyword"].as_slice(),
+            ["flicknote", "detail", "1"].as_slice(),
+            ["flicknote", "content", "1"].as_slice(),
+            ["flicknote", "project", "list"].as_slice(),
+            ["flicknote", "prompt", "list"].as_slice(),
+            ["flicknote", "keyterm", "list"].as_slice(),
+            ["flicknote", "rename", "--section", "a1", "1", "New"].as_slice(),
+            ["flicknote", "insert", "1", "--after", "a1"].as_slice(),
+            ["flicknote", "replace", "1"].as_slice(),
+            ["flicknote", "modify", "1"].as_slice(),
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap();
+        }
+    }
+
+    #[test]
+    fn managed_workspace_blocks_tui() {
+        let cli = Cli::try_parse_from(["flicknote", "-t"]).unwrap();
+        let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();
+        let message = format!("{err}");
+
+        assert!(message.contains("`flicknote --tui`"));
+        assert!(message.contains("not available in managed workspaces"));
     }
 }

@@ -5,4 +5,4 @@ Examples:
   flicknote upload clip.wav --project meetings
 
 Markdown and text files are imported as text notes.
-Other supported files are uploaded and require the local sync daemon.
+Other supported files are uploaded in local workspaces.

@@ -1,4 +1,6 @@
-Notes are stored locally and synced to the cloud.
+FlickNote works with local and managed workspaces.
+Managed workspaces support note and organization commands.
+Local workspaces are required for file, editor, browser, sync, sign-in, and skill commands.
 Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:
