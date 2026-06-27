@@ -108,14 +108,14 @@ impl WorkspaceMode {
 impl Commands {
     fn local_workspace_command_name(&self) -> Option<&'static str> {
         match self {
-            Commands::Upload(_) => Some("upload"),
-            Commands::Edit(_) => Some("edit"),
-            Commands::Login(_) => Some("login"),
-            Commands::Logout => Some("logout"),
-            Commands::Sync(_) => Some("sync"),
-            Commands::Skill(_) => Some("skill"),
-            Commands::Import(_) => Some("import"),
-            Commands::Open(_) => Some("open"),
+            Self::Upload(_) => Some("upload"),
+            Self::Edit(_) => Some("edit"),
+            Self::Login(_) => Some("login"),
+            Self::Logout => Some("logout"),
+            Self::Sync(_) => Some("sync"),
+            Self::Skill(_) => Some("skill"),
+            Self::Import(_) => Some("import"),
+            Self::Open(_) => Some("open"),
             _ => None,
         }
     }
