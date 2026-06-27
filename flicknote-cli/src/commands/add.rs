@@ -5,9 +5,6 @@ use flicknote_core::error::CliError;
 use flicknote_sync::ipc::{CreateNoteRequest, DaemonRequest, DaemonResponse};
 use std::io::{IsTerminal, Read};
 
-use super::upload_util::{
-    is_readable_text_file, is_uploadable_file, metadata_for_upload, note_type_for_extension,
-};
 use super::util::{display_inserted_note_id, resolve_project_arg};
 
 const ADD_HELP: &str = include_str!("../help/add.md");
@@ -32,15 +29,6 @@ impl AddCreateMode {
     pub(crate) fn uses_daemon(self) -> bool {
         matches!(self, Self::Daemon)
     }
-
-    pub(crate) fn validate_file_upload_supported(self) -> Result<(), CliError> {
-        if self.uses_daemon() {
-            return Ok(());
-        }
-        Err(CliError::Other(
-            "File uploads require the local sync daemon.".to_string(),
-        ))
-    }
 }
 
 pub(crate) async fn run(
@@ -52,7 +40,7 @@ pub(crate) async fn run(
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
 
-    let mut content = match &args.value {
+    let content = match &args.value {
         Some(v) => v.to_owned(),
         None => {
             if std::io::stdin().is_terminal() {
@@ -72,30 +60,7 @@ pub(crate) async fn run(
 
     let from_arg = args.value.is_some();
     let is_url_arg = content.starts_with("http://") || content.starts_with("https://");
-
-    let path = std::path::Path::new(&content);
-    let looks_like_file_path =
-        from_arg && !is_url_arg && path.extension().is_some() && path.file_name().is_some();
-
-    let is_text_file = from_arg && looks_like_file_path && is_readable_text_file(&content);
-
-    if from_arg && looks_like_file_path && !is_uploadable_file(&content) && !is_text_file {
-        return Err(CliError::Other(format!(
-            "File not found or unsupported: {}",
-            content
-        )));
-    }
-
-    // Read text file content into `content` so the rest of the function treats it as normal text
-    if is_text_file {
-        let path = content.clone();
-        content = std::fs::read_to_string(&path)
-            .map_err(|e| CliError::Other(format!("Failed to read {}: {}", path, e)))?;
-        content = content.trim_end().to_string();
-    }
-
-    let is_file = from_arg && !is_text_file && is_uploadable_file(&content);
-    let is_url = !is_file && is_url_arg;
+    let is_url = from_arg && is_url_arg;
 
     let effective_project = resolve_project_arg(&args.project);
     let project_id = if let Some(ref name) = effective_project {
@@ -104,34 +69,7 @@ pub(crate) async fn run(
         None
     };
 
-    let inserted = if is_file {
-        mode.validate_file_upload_supported()?;
-        let file_path = std::path::PathBuf::from(&content);
-        let filename = file_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .ok_or_else(|| CliError::Other("Invalid filename".into()))?
-            .to_string();
-
-        let note_type = note_type_for_extension(&filename);
-        let metadata = metadata_for_upload(&filename);
-
-        let req = InsertNoteReq {
-            id: &id,
-            note_type,
-            status: "source_queued",
-            title: None,
-            content: None,
-            metadata: Some(&metadata),
-            project_id: project_id.as_deref(),
-            now: &now,
-        };
-        create_note_with_daemon(
-            config,
-            daemon_create_request(&req).with_attachment_path(file_path.to_string_lossy()),
-        )
-        .await?
-    } else if is_url {
+    let inserted = if is_url {
         let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
         if mode.uses_daemon() {
             create_note_with_daemon(
@@ -298,40 +236,6 @@ mod tests {
         assert_eq!(req.note_type, "link");
         assert_eq!(req.status, "source_queued");
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
-    }
-
-    #[test]
-    fn daemon_mode_applies_to_file_notes() {
-        let metadata = metadata_for_upload("report.pdf");
-        let req = daemon_create_request(&InsertNoteReq {
-            id: "note-id",
-            note_type: note_type_for_extension("report.pdf"),
-            status: "source_queued",
-            title: None,
-            content: None,
-            metadata: Some(&metadata),
-            project_id: Some("project-id"),
-            now: "2026-06-26T00:00:00Z",
-        });
-
-        let req = req.with_attachment_path("/tmp/report.pdf");
-
-        assert!(AddCreateMode::Daemon.uses_daemon());
-        assert_eq!(req.note_type, "file");
-        assert_eq!(req.status, "source_queued");
-        assert_eq!(req.content, None);
-        assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
-        assert_eq!(req.project_id.as_deref(), Some("project-id"));
-        assert_eq!(req.attachment_path.as_deref(), Some("/tmp/report.pdf"));
-    }
-
-    #[test]
-    fn local_mode_rejects_file_uploads() {
-        let err = AddCreateMode::Local
-            .validate_file_upload_supported()
-            .unwrap_err();
-
-        assert!(format!("{err}").contains("File uploads require the local sync daemon"));
     }
 
     #[test]

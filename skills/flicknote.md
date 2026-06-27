@@ -18,6 +18,7 @@ user's project name if they provide one; otherwise omit `--project`.
 ```bash
 flicknote add "note text" --project <project>
 cat note.md | flicknote add --project <project>
+flicknote upload file.pdf --project <project>
 flicknote find "keyword"
 flicknote list --project <project>
 flicknote detail <id>
@@ -57,6 +58,7 @@ Mutating section commands print the updated tree after the change.
 ```bash
 flicknote --help
 flicknote add --help
+flicknote upload --help
 flicknote list --help
 flicknote detail --help
 flicknote content --help

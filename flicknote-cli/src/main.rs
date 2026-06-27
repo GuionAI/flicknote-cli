@@ -41,6 +41,8 @@ struct Cli {
 enum Commands {
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
+    /// Upload a file as a note
+    Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
     /// Delete a note (soft-delete) or remove a section
@@ -170,6 +172,7 @@ async fn dispatch(
 
     match command {
         Commands::Add(args) => commands::add::run(db, config, args, add_mode).await,
+        Commands::Upload(args) => commands::upload::run(db, config, args, add_mode).await,
         Commands::Append(args) => commands::append::run(db, config, args).await,
         Commands::Delete(args) => commands::delete::run(db, config, args).await,
         Commands::Edit(args) => commands::edit::run(db, config, args, add_mode).await,
@@ -212,5 +215,10 @@ mod tests {
     #[test]
     fn skill_install_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "skill", "install"]).is_ok());
+    }
+
+    #[test]
+    fn upload_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
     }
 }
