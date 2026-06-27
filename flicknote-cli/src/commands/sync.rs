@@ -11,15 +11,15 @@ pub(crate) struct SyncArgs {
 
 #[derive(Subcommand)]
 enum SyncCommand {
-    /// Start sync daemon in background
+    /// Start local sync service in background
     Start,
-    /// Stop sync daemon
+    /// Stop local sync service
     Stop,
-    /// Check sync daemon status
+    /// Check local sync service status
     Status,
-    /// Install sync daemon as launchd service
+    /// Install local sync service
     Install,
-    /// Uninstall sync daemon launchd service
+    /// Uninstall local sync service
     Uninstall,
 }
 
@@ -35,7 +35,7 @@ pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
 
 fn start(config: &Config) -> Result<(), CliError> {
     if let Some(pid) = super::daemon::read_pid(config) {
-        println!("Sync daemon already running (pid {pid})");
+        println!("Local sync service already running (pid {pid})");
         return Ok(());
     }
 
@@ -58,24 +58,24 @@ fn start(config: &Config) -> Result<(), CliError> {
 
     let pid = child.id();
     fs::write(super::daemon::pid_file(config), pid.to_string())?;
-    println!("Sync daemon started (pid {pid})");
+    println!("Local sync service started (pid {pid})");
     Ok(())
 }
 
 fn stop(config: &Config) -> Result<(), CliError> {
     if super::daemon::read_pid(config).is_none() {
-        println!("Sync daemon not running");
+        println!("Local sync service not running");
         return Ok(());
     }
     super::daemon::stop(config)?;
-    println!("Sync daemon stopped");
+    println!("Local sync service stopped");
     Ok(())
 }
 
 fn status(config: &Config) -> Result<(), CliError> {
     match super::daemon::read_pid(config) {
-        Some(pid) => println!("Sync daemon: running (pid {pid})"),
-        None => println!("Sync daemon: not running"),
+        Some(pid) => println!("Local sync service: running (pid {pid})"),
+        None => println!("Local sync service: not running"),
     }
     Ok(())
 }
