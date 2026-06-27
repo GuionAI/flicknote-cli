@@ -72,11 +72,7 @@ pub(crate) async fn run(
             db.insert_note(&req).await?
         }
     } else {
-        if !mode.uses_daemon() {
-            return Err(CliError::Other(
-                "File uploads require the local sync daemon.".to_string(),
-            ));
-        }
+        validate_attachment_upload_supported(mode)?;
         let filename = file_path
             .file_name()
             .and_then(|n| n.to_str())
@@ -111,6 +107,15 @@ pub(crate) async fn run(
     Ok(())
 }
 
+fn validate_attachment_upload_supported(mode: AddCreateMode) -> Result<(), CliError> {
+    if mode.uses_daemon() {
+        return Ok(());
+    }
+    Err(CliError::Other(
+        "File uploads require the local sync daemon.".to_string(),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,5 +141,12 @@ mod tests {
         assert_eq!(req.metadata.as_deref(), Some(metadata.as_str()));
         assert_eq!(req.project_id.as_deref(), Some("project-id"));
         assert_eq!(req.attachment_path.as_deref(), Some("/tmp/report.pdf"));
+    }
+
+    #[test]
+    fn local_mode_rejects_attachment_uploads() {
+        let err = validate_attachment_upload_supported(AddCreateMode::Local).unwrap_err();
+
+        assert!(format!("{err}").contains("File uploads require the local sync daemon"));
     }
 }
