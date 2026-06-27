@@ -41,7 +41,7 @@ struct Cli {
 enum Commands {
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
-    /// Upload a file as a note
+    /// Import or upload a file as a note
     Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),

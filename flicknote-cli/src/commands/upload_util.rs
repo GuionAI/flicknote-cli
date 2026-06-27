@@ -79,6 +79,12 @@ pub(crate) fn is_uploadable_file(value: &str) -> bool {
     file_has_extension(value, UPLOADABLE_EXTENSIONS)
 }
 
+const TEXT_IMPORT_EXTENSIONS: &[&str] = &["md", "markdown", "txt"];
+
+pub(crate) fn is_text_import_file(value: &str) -> bool {
+    file_has_extension(value, TEXT_IMPORT_EXTENSIONS)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,6 +132,24 @@ mod tests {
         let result = is_uploadable_file(path.to_str().unwrap());
         std::fs::remove_file(&path).unwrap();
         assert!(result, "should detect real csv file as uploadable");
+    }
+
+    #[test]
+    fn test_markdown_and_text_files_are_text_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("notes.md");
+        let txt_path = dir.path().join("notes.txt");
+        let markdown_path = dir.path().join("notes.markdown");
+        std::fs::write(&md_path, "# Note\n\nBody").unwrap();
+        std::fs::write(&txt_path, "Plain text").unwrap();
+        std::fs::write(&markdown_path, "# Note\n\nBody").unwrap();
+
+        assert!(is_text_import_file(md_path.to_str().unwrap()));
+        assert!(is_text_import_file(txt_path.to_str().unwrap()));
+        assert!(is_text_import_file(markdown_path.to_str().unwrap()));
+        assert!(!is_uploadable_file(md_path.to_str().unwrap()));
+        assert!(!is_uploadable_file(txt_path.to_str().unwrap()));
+        assert!(!is_uploadable_file(markdown_path.to_str().unwrap()));
     }
 
     #[test]
