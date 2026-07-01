@@ -133,20 +133,31 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
     let uid = unsafe { libc::getuid() };
     bootout_service(uid, label);
 
-    let output = Command::new("launchctl")
-        .args([
-            "bootstrap",
-            &format!("gui/{uid}"),
-            plist_path.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .map_err(|e| CliError::Other(format!("launchctl bootstrap failed to execute: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Other(format!(
-            "launchctl bootstrap failed: {stderr}"
-        )));
+    for args in launchd_install_commands(uid, label, &plist_path) {
+        let command_name = args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "launchctl".to_string());
+        let output = Command::new("launchctl")
+            .args(&args)
+            .output()
+            .map_err(|e| {
+                CliError::Other(format!("launchctl {command_name} failed to execute: {e}"))
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CliError::Other(format!(
+                "launchctl {command_name} failed: {stderr}"
+            )));
+        }
     }
+
+    wait_for_path(
+        &flicknote_sync::ipc::socket_path(config),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_millis(100),
+    )
+    .map_err(|e| CliError::Other(format!("Sync daemon did not become ready: {e}")))?;
 
     Ok(())
 }
@@ -178,6 +189,46 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn launchd_install_commands(
+    uid: u32,
+    label: &str,
+    plist_path: &std::path::Path,
+) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "bootstrap".to_string(),
+            format!("gui/{uid}"),
+            plist_path.to_string_lossy().into_owned(),
+        ],
+        vec![
+            "kickstart".to_string(),
+            "-k".to_string(),
+            format!("gui/{uid}/{label}"),
+        ],
+    ]
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn wait_for_path(
+    path: &std::path::Path,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if path.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(interval);
+    }
+    Err(format!(
+        "{} did not appear within {:?}",
+        path.display(),
+        timeout
+    ))
+}
+
 /// Run `launchctl bootout`, warning on unexpected errors (not-loaded is expected and silent).
 #[cfg(target_os = "macos")]
 fn bootout_service(uid: u32, label: &str) {
@@ -194,5 +245,61 @@ fn bootout_service(uid: u32, label: &str) {
         if !is_expected && !stderr.trim().is_empty() {
             eprintln!("Warning: launchctl bootout: {}", stderr.trim());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launchd_install_runs_bootstrap_then_kickstart() {
+        let plist = PathBuf::from("/Users/neil/Library/LaunchAgents/io.guion.flicknote.sync.plist");
+        let commands = launchd_install_commands(501, "io.guion.flicknote.sync", &plist);
+
+        assert_eq!(
+            commands,
+            vec![
+                vec![
+                    "bootstrap".to_string(),
+                    "gui/501".to_string(),
+                    plist.to_string_lossy().into_owned(),
+                ],
+                vec![
+                    "kickstart".to_string(),
+                    "-k".to_string(),
+                    "gui/501/io.guion.flicknote.sync".to_string(),
+                ],
+            ]
+        );
+    }
+
+    #[test]
+    fn wait_for_path_returns_when_socket_appears() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let socket = dir.path().join("sync.sock");
+        fs::write(&socket, "").expect("write socket marker");
+
+        wait_for_path(
+            &socket,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+        )
+        .expect("socket ready");
+    }
+
+    #[test]
+    fn wait_for_path_errors_when_socket_never_appears() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let socket = dir.path().join("sync.sock");
+
+        let err = wait_for_path(
+            &socket,
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .expect_err("missing socket should fail");
+
+        assert!(err.contains("sync.sock"));
     }
 }
