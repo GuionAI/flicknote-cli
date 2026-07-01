@@ -123,6 +123,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn parent_process_does_not_write_daemon_pid_file() {
         let dir = tempfile::tempdir().expect("temp dir");
