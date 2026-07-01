@@ -57,10 +57,12 @@ fn start(config: &Config) -> Result<(), CliError> {
         .spawn()?;
 
     let pid = child.id();
-    fs::write(super::daemon::pid_file(config), pid.to_string())?;
+    record_spawned_daemon(config, pid);
     println!("Local sync service started (pid {pid})");
     Ok(())
 }
+
+fn record_spawned_daemon(_config: &Config, _pid: u32) {}
 
 fn stop(config: &Config) -> Result<(), CliError> {
     if super::daemon::read_pid(config).is_none() {
@@ -90,4 +92,39 @@ fn uninstall() -> Result<(), CliError> {
     super::daemon::uninstall()?;
     println!("Uninstalled: io.guion.flicknote.sync");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use flicknote_core::config::{Config, ConfigPaths};
+
+    use super::*;
+
+    fn test_config(dir: &std::path::Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: dir.to_path_buf(),
+                data_dir: dir.to_path_buf(),
+                config_file: dir.join("config.json"),
+                session_file: dir.join("session.json"),
+                db_file: dir.join("flicknote.db"),
+                log_file: dir.join("flicknote.log"),
+            },
+        }
+    }
+
+    #[test]
+    fn parent_process_does_not_write_daemon_pid_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = test_config(dir.path());
+
+        record_spawned_daemon(&config, 12345);
+
+        assert!(!super::super::daemon::pid_file(&config).exists());
+    }
 }

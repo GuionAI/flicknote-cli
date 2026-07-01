@@ -133,19 +133,23 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
     let uid = unsafe { libc::getuid() };
     bootout_service(uid, label);
 
-    let output = Command::new("launchctl")
-        .args([
-            "bootstrap",
-            &format!("gui/{uid}"),
-            plist_path.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .map_err(|e| CliError::Other(format!("launchctl bootstrap failed to execute: {e}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(CliError::Other(format!(
-            "launchctl bootstrap failed: {stderr}"
-        )));
+    for args in launchd_install_commands(uid, label, &plist_path) {
+        let command_name = args
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "launchctl".to_string());
+        let output = Command::new("launchctl")
+            .args(&args)
+            .output()
+            .map_err(|e| {
+                CliError::Other(format!("launchctl {command_name} failed to execute: {e}"))
+            })?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CliError::Other(format!(
+                "launchctl {command_name} failed: {stderr}"
+            )));
+        }
     }
 
     Ok(())
@@ -178,6 +182,26 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn launchd_install_commands(
+    uid: u32,
+    label: &str,
+    plist_path: &std::path::Path,
+) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "bootstrap".to_string(),
+            format!("gui/{uid}"),
+            plist_path.to_string_lossy().into_owned(),
+        ],
+        vec![
+            "kickstart".to_string(),
+            "-k".to_string(),
+            format!("gui/{uid}/{label}"),
+        ],
+    ]
+}
+
 /// Run `launchctl bootout`, warning on unexpected errors (not-loaded is expected and silent).
 #[cfg(target_os = "macos")]
 fn bootout_service(uid: u32, label: &str) {
@@ -194,5 +218,32 @@ fn bootout_service(uid: u32, label: &str) {
         if !is_expected && !stderr.trim().is_empty() {
             eprintln!("Warning: launchctl bootout: {}", stderr.trim());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launchd_install_runs_bootstrap_then_kickstart() {
+        let plist = PathBuf::from("/Users/neil/Library/LaunchAgents/io.guion.flicknote.sync.plist");
+        let commands = launchd_install_commands(501, "io.guion.flicknote.sync", &plist);
+
+        assert_eq!(
+            commands,
+            vec![
+                vec![
+                    "bootstrap".to_string(),
+                    "gui/501".to_string(),
+                    plist.to_string_lossy().into_owned(),
+                ],
+                vec![
+                    "kickstart".to_string(),
+                    "-k".to_string(),
+                    "gui/501/io.guion.flicknote.sync".to_string(),
+                ],
+            ]
+        );
     }
 }
