@@ -152,6 +152,13 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
         }
     }
 
+    wait_for_path(
+        &flicknote_sync::ipc::socket_path(config),
+        std::time::Duration::from_secs(5),
+        std::time::Duration::from_millis(100),
+    )
+    .map_err(|e| CliError::Other(format!("Sync daemon did not become ready: {e}")))?;
+
     Ok(())
 }
 
@@ -202,6 +209,26 @@ fn launchd_install_commands(
     ]
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn wait_for_path(
+    path: &std::path::Path,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        if path.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(interval);
+    }
+    Err(format!(
+        "{} did not appear within {:?}",
+        path.display(),
+        timeout
+    ))
+}
+
 /// Run `launchctl bootout`, warning on unexpected errors (not-loaded is expected and silent).
 #[cfg(target_os = "macos")]
 fn bootout_service(uid: u32, label: &str) {
@@ -245,5 +272,34 @@ mod tests {
                 ],
             ]
         );
+    }
+
+    #[test]
+    fn wait_for_path_returns_when_socket_appears() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let socket = dir.path().join("sync.sock");
+        fs::write(&socket, "").expect("write socket marker");
+
+        wait_for_path(
+            &socket,
+            std::time::Duration::from_secs(1),
+            std::time::Duration::from_millis(1),
+        )
+        .expect("socket ready");
+    }
+
+    #[test]
+    fn wait_for_path_errors_when_socket_never_appears() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let socket = dir.path().join("sync.sock");
+
+        let err = wait_for_path(
+            &socket,
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(1),
+        )
+        .expect_err("missing socket should fail");
+
+        assert!(err.contains("sync.sock"));
     }
 }
