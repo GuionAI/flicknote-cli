@@ -143,21 +143,21 @@ pub trait NoteDb {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError>;
-    /// Read extraction rows for one or more notes. Returns a map of note_id -> Vec<(type, value)>.
-    /// `extraction_types` filters which types to read (e.g. `topic`, `entity`).
-    /// Results are ordered by type then value for deterministic rendering.
+    /// Read extraction rows for one or more notes. Returns a map of note_id -> Vec<(key, value)>.
+    /// `extraction_keys` filters which keys to read (e.g. `::topic`, `::company`).
+    /// Results are ordered by key then value for deterministic rendering.
     async fn list_note_extractions(
         &self,
         note_ids: &[&str],
-        extraction_types: &[&str],
+        extraction_keys: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError>;
-    /// Replace all extraction rows for one note and one managed type in a single operation.
-    /// `values` replaces all rows of the given type for the note.
-    /// An empty vec clears all rows for that type.
+    /// Replace all extraction rows for one note and one managed key in a single operation.
+    /// `values` replaces all rows of the given key for the note.
+    /// An empty vec clears all rows for that key.
     async fn set_note_extractions(
         &self,
         note_id: &str,
-        extraction_type: &str,
+        extraction_key: &str,
         values: &[String],
     ) -> Result<(), CliError>;
 
@@ -288,18 +288,18 @@ const SQ_UPDATE_TITLE: &str =
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
-const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, type, value FROM note_extractions \
-     WHERE user_id = ? AND type IN (SELECT value FROM json_each(?)) \
+const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, key, value FROM note_extractions \
+     WHERE user_id = ? AND key IN (SELECT value FROM json_each(?)) \
      AND note_id IN (SELECT value FROM json_each(?)) \
-     ORDER BY type, value";
+     ORDER BY key, value";
 #[cfg(feature = "powersync")]
 const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
-     WHERE user_id = ? AND note_id = ? AND type = ?";
+     WHERE user_id = ? AND note_id = ? AND key = ?";
 #[cfg(feature = "powersync")]
 // PowerSync managed tables expose an implicit text `id` column for row identity.
 // We write it so extraction rows sync, but reads/deletes use the domain key.
 const SQ_INSERT_EXTRACTION: &str =
-    "INSERT INTO note_extractions (id, note_id, user_id, type, value) VALUES (?, ?, ?, ?, ?)";
+    "INSERT INTO note_extractions (id, note_id, user_id, key, value) VALUES (?, ?, ?, ?, ?)";
 
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
@@ -878,7 +878,7 @@ impl NoteDb for SqliteBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self.list_note_extractions(note_ids, &["topic"]).await?;
+        let extractions = self.list_note_extractions(note_ids, &["::topic"]).await?;
         let mut map = std::collections::HashMap::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
@@ -888,16 +888,16 @@ impl NoteDb for SqliteBackend {
     async fn list_note_extractions(
         &self,
         note_ids: &[&str],
-        extraction_types: &[&str],
+        extraction_keys: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError> {
-        if note_ids.is_empty() || extraction_types.is_empty() {
+        if note_ids.is_empty() || extraction_keys.is_empty() {
             return Ok(std::collections::HashMap::new());
         }
         let note_ids_json = serde_json::to_string(note_ids)?;
-        let types_json = serde_json::to_string(extraction_types)?;
+        let keys_json = serde_json::to_string(extraction_keys)?;
         let rows = sqlx::query_as::<_, (String, String, String)>(SQ_LIST_EXTRACTIONS)
             .bind(&self.user_id)
-            .bind(types_json)
+            .bind(keys_json)
             .bind(note_ids_json)
             .fetch_all(&self.db.pool)
             .await?;
@@ -911,14 +911,14 @@ impl NoteDb for SqliteBackend {
     async fn set_note_extractions(
         &self,
         note_id: &str,
-        extraction_type: &str,
+        extraction_key: &str,
         values: &[String],
     ) -> Result<(), CliError> {
-        // Delete all existing rows for this note + type
+        // Delete all existing rows for this note + key.
         sqlx::query(SQ_CLEAR_EXTRACTIONS)
             .bind(&self.user_id)
             .bind(note_id)
-            .bind(extraction_type)
+            .bind(extraction_key)
             .execute(&self.db.pool)
             .await?;
         // Insert new values
@@ -928,7 +928,7 @@ impl NoteDb for SqliteBackend {
                 .bind(id)
                 .bind(note_id)
                 .bind(&self.user_id)
-                .bind(extraction_type)
+                .bind(extraction_key)
                 .bind(value)
                 .execute(&self.db.pool)
                 .await?;
@@ -1311,20 +1311,20 @@ mod tests {
         backend
             .set_note_extractions(
                 &from_short_id,
-                "topic",
+                "::topic",
                 &["orientation".to_string(), "cli".to_string()],
             )
             .await
             .unwrap();
         let extractions = backend
-            .list_note_extractions(&[&id], &["topic"])
+            .list_note_extractions(&[&id], &["::topic"])
             .await
             .unwrap();
         assert_eq!(
             extractions.get(&id),
             Some(&vec![
-                ("topic".to_string(), "cli".to_string()),
-                ("topic".to_string(), "orientation".to_string())
+                ("::topic".to_string(), "cli".to_string()),
+                ("::topic".to_string(), "orientation".to_string())
             ])
         );
     }

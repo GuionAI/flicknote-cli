@@ -1,5 +1,5 @@
 use super::add::resolve_project;
-use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request_with_extractions};
+use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request_with_topics};
 use super::util::{
     display_inserted_note_id, display_note_id, resolve_note_id, resolve_project_arg,
 };
@@ -117,7 +117,7 @@ async fn create_from_editor(
     let inserted = if mode.uses_daemon() {
         create_note_with_daemon(
             config,
-            daemon_create_request_with_extractions(
+            daemon_create_request_with_topics(
                 &InsertNoteReq {
                     id: &id,
                     note_type: "normal",
@@ -129,7 +129,6 @@ async fn create_from_editor(
                     now: &now,
                 },
                 &parsed.topics,
-                &parsed.entities,
             ),
         )
         .await?
@@ -147,11 +146,7 @@ async fn create_from_editor(
         .await?
     };
     if matches!(mode, AddCreateMode::Local) && !parsed.topics.is_empty() {
-        db.set_note_extractions(&id, "topic", &parsed.topics)
-            .await?;
-    }
-    if matches!(mode, AddCreateMode::Local) && !parsed.entities.is_empty() {
-        db.set_note_extractions(&id, "entity", &parsed.entities)
+        db.set_note_extractions(&id, "::topic", &parsed.topics)
             .await?;
     }
     match effective_project.as_deref() {

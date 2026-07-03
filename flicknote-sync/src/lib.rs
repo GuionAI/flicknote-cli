@@ -741,16 +741,7 @@ async fn create_extractions_remotely(
             "id": uuid::Uuid::new_v4().to_string(),
             "note_id": note_id,
             "user_id": user_id,
-            "type": "topic",
-            "value": value,
-        }));
-    }
-    for value in &req.entities {
-        rows.push(serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "note_id": note_id,
-            "user_id": user_id,
-            "type": "entity",
+            "key": "::topic",
             "value": value,
         }));
     }
@@ -807,9 +798,8 @@ async fn wait_for_local_note(
                 })?
                 .flatten()
         };
-        let topics_synced = local_extraction_count(db, id, "topic").await? >= req.topics.len();
-        let entities_synced = local_extraction_count(db, id, "entity").await? >= req.entities.len();
-        if found == Some(short_id) && topics_synced && entities_synced {
+        let topics_synced = local_extraction_count(db, id, "::topic").await? >= req.topics.len();
+        if found == Some(short_id) && topics_synced {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -825,20 +815,18 @@ async fn wait_for_local_note(
 async fn local_extraction_count(
     db: &PowerSyncDatabase,
     note_id: &str,
-    extraction_type: &str,
+    extraction_key: &str,
 ) -> Result<usize, DaemonError> {
     let reader = db.reader().await.map_err(|e| DaemonError::Other {
         message: format!("Failed to read local PowerSync database: {e}"),
     })?;
     let mut stmt = reader
-        .prepare_cached("SELECT COUNT(*) FROM note_extractions WHERE note_id = ? AND type = ?")
+        .prepare_cached("SELECT COUNT(*) FROM note_extractions WHERE note_id = ? AND key = ?")
         .map_err(|e| DaemonError::Other {
             message: format!("Failed to prepare local extraction sync check: {e}"),
         })?;
     let count = stmt
-        .query_row(params![note_id, extraction_type], |row| {
-            row.get::<_, i64>(0)
-        })
+        .query_row(params![note_id, extraction_key], |row| row.get::<_, i64>(0))
         .map_err(|e| DaemonError::Other {
             message: format!("Failed to query local extraction sync check: {e}"),
         })?;

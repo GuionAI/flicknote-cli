@@ -50,6 +50,6 @@ CREATE TABLE note_extractions (
   id TEXT,
   note_id TEXT,
   user_id TEXT,
-  type TEXT,
+  key TEXT,
   value TEXT
 );
