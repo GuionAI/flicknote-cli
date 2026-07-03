@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flicknote_auth::client::GoTrueClient;
-use flicknote_core::{config::Config, schema::app_schema};
+use flicknote_core::{TOPIC_EXTRACTION_KEY, config::Config, schema::app_schema};
 use futures_lite::StreamExt;
 use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use powersync::{
@@ -741,7 +741,7 @@ async fn create_extractions_remotely(
             "id": uuid::Uuid::new_v4().to_string(),
             "note_id": note_id,
             "user_id": user_id,
-            "key": "::topic",
+            "key": TOPIC_EXTRACTION_KEY,
             "value": value,
         }));
     }
@@ -798,7 +798,8 @@ async fn wait_for_local_note(
                 })?
                 .flatten()
         };
-        let topics_synced = local_extraction_count(db, id, "::topic").await? >= req.topics.len();
+        let topics_synced =
+            local_extraction_count(db, id, TOPIC_EXTRACTION_KEY).await? >= req.topics.len();
         if found == Some(short_id) && topics_synced {
             return Ok(());
         }

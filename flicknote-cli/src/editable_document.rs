@@ -1,11 +1,10 @@
 //! Service boundary for the editable full-note Markdown contract.
 
 use crate::frontmatter::{self, EditableDoc};
+use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
-
-const TOPIC_EXTRACTION: &str = "::topic";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedEditableNote {
@@ -62,7 +61,7 @@ pub(crate) async fn save_editable_note(
         db.update_note_title(note_id, &parsed.title).await?;
     }
 
-    db.set_note_extractions(note_id, TOPIC_EXTRACTION, &parsed.topics)
+    db.set_note_extractions(note_id, TOPIC_EXTRACTION_KEY, &parsed.topics)
         .await?;
 
     let old_content = note.content.as_deref().unwrap_or("");
@@ -106,14 +105,14 @@ fn stored_content_from_doc(doc: &EditableDoc) -> String {
 
 async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<String>, CliError> {
     let extractions = db
-        .list_note_extractions(&[note_id], &[TOPIC_EXTRACTION])
+        .list_note_extractions(&[note_id], &[TOPIC_EXTRACTION_KEY])
         .await?;
     let pairs = extractions.get(note_id);
     let mut topics = Vec::new();
 
     if let Some(pairs) = pairs {
         for (key, value) in pairs {
-            if key == TOPIC_EXTRACTION {
+            if key == TOPIC_EXTRACTION_KEY {
                 topics.push(value.clone());
             }
         }
@@ -188,7 +187,7 @@ mod tests {
         let db = FakeNoteDb::new(
             note_with(Some("---\ncustom: keep\n---\nBody.\n"), Some("Title")),
             vec![
-                ("::topic".to_string(), "rust".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "rust".to_string()),
                 ("::company".to_string(), "PowerSync".to_string()),
             ],
         );
@@ -212,7 +211,7 @@ mod tests {
             note_with(Some("---\ncustom: keep\n---\nBody.\n"), Some("Title")),
             vec![
                 ("topic".to_string(), "old-topic".to_string()),
-                ("::topic".to_string(), "new-topic".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "new-topic".to_string()),
                 ("::company".to_string(), "ReadOnlyCo".to_string()),
             ],
         );
@@ -229,7 +228,7 @@ mod tests {
     async fn save_editable_note_writes_title_body_custom_frontmatter_and_extractions() {
         let db = FakeNoteDb::new(
             note_with(Some("Old body."), Some("Old Title")),
-            vec![("::topic".to_string(), "old".to_string())],
+            vec![(TOPIC_EXTRACTION_KEY.to_string(), "old".to_string())],
         );
 
         let markdown = "---\ntitle: New Title\ntopics: [rust, async]\nentities:\n  - PowerSync\ncustom:\n  nested: true\n---\nNew body.";
@@ -245,7 +244,7 @@ mod tests {
         assert!(content.contains("New body."));
         assert!(!content.contains("topics:"));
         assert_eq!(
-            db.extraction_values("::topic"),
+            db.extraction_values(TOPIC_EXTRACTION_KEY),
             vec!["rust".to_string(), "async".to_string()]
         );
         assert!(db.extraction_values("topic").is_empty());
@@ -259,7 +258,7 @@ mod tests {
         let db = FakeNoteDb::new(
             note_with(Some("Old body."), Some("Old Title")),
             vec![
-                ("::topic".to_string(), "old".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "old".to_string()),
                 ("::company".to_string(), "ReadOnlyCo".to_string()),
             ],
         );
@@ -271,7 +270,10 @@ mod tests {
         let content = db.note().content.expect("content should be stored");
         assert!(content.contains("entities:"));
         assert!(content.contains("- user-owned"));
-        assert_eq!(db.extraction_values("::topic"), vec!["rust".to_string()]);
+        assert_eq!(
+            db.extraction_values(TOPIC_EXTRACTION_KEY),
+            vec!["rust".to_string()]
+        );
         assert!(db.extraction_values("topic").is_empty());
         assert_eq!(
             db.extraction_values("::company"),

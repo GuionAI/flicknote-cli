@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
+use crate::TOPIC_EXTRACTION_KEY;
 use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
@@ -678,7 +679,9 @@ impl NoteDb for PgWireBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self.list_note_extractions(note_ids, &["::topic"]).await?;
+        let extractions = self
+            .list_note_extractions(note_ids, &[TOPIC_EXTRACTION_KEY])
+            .await?;
         let mut map = std::collections::HashMap::<String, Vec<String>>::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());

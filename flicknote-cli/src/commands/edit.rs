@@ -4,6 +4,7 @@ use super::util::{
     display_inserted_note_id, display_note_id, resolve_note_id, resolve_project_arg,
 };
 use clap::Args;
+use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::backend::{InsertNoteReq, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
@@ -146,7 +147,7 @@ async fn create_from_editor(
         .await?
     };
     if matches!(mode, AddCreateMode::Local) && !parsed.topics.is_empty() {
-        db.set_note_extractions(&id, "::topic", &parsed.topics)
+        db.set_note_extractions(&id, TOPIC_EXTRACTION_KEY, &parsed.topics)
             .await?;
     }
     match effective_project.as_deref() {

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 #[cfg(feature = "powersync")]
 use sqlx::SqlitePool;
 
+use crate::TOPIC_EXTRACTION_KEY;
 #[cfg(feature = "powersync")]
 use crate::db::Database;
 use crate::error::CliError;
@@ -878,7 +879,9 @@ impl NoteDb for SqliteBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self.list_note_extractions(note_ids, &["::topic"]).await?;
+        let extractions = self
+            .list_note_extractions(note_ids, &[TOPIC_EXTRACTION_KEY])
+            .await?;
         let mut map = std::collections::HashMap::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
@@ -1311,20 +1314,20 @@ mod tests {
         backend
             .set_note_extractions(
                 &from_short_id,
-                "::topic",
+                TOPIC_EXTRACTION_KEY,
                 &["orientation".to_string(), "cli".to_string()],
             )
             .await
             .unwrap();
         let extractions = backend
-            .list_note_extractions(&[&id], &["::topic"])
+            .list_note_extractions(&[&id], &[TOPIC_EXTRACTION_KEY])
             .await
             .unwrap();
         assert_eq!(
             extractions.get(&id),
             Some(&vec![
-                ("::topic".to_string(), "cli".to_string()),
-                ("::topic".to_string(), "orientation".to_string())
+                (TOPIC_EXTRACTION_KEY.to_string(), "cli".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "orientation".to_string())
             ])
         );
     }
