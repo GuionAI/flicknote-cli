@@ -26,8 +26,6 @@ pub struct CreateNoteRequest {
     pub now: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub topics: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entities: Vec<String>,
     #[serde(default)]
     pub attachment_path: Option<String>,
 }
@@ -186,7 +184,6 @@ mod tests {
             project_id: Some("project-id".to_string()),
             now: "2026-06-26T00:00:00Z".to_string(),
             topics: vec!["rust".to_string()],
-            entities: vec!["PowerSync".to_string()],
             attachment_path: None,
         });
 
@@ -204,11 +201,30 @@ mod tests {
                     "project_id": "project-id",
                     "now": "2026-06-26T00:00:00Z",
                     "topics": ["rust"],
-                    "entities": ["PowerSync"],
                     "attachment_path": null
                 }
             })
         );
+    }
+
+    #[test]
+    fn create_note_request_does_not_serialize_entities() {
+        let req = DaemonRequest::CreateNote(CreateNoteRequest {
+            id: "note-id".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some("Title".to_string()),
+            content: Some("Body".to_string()),
+            metadata: None,
+            project_id: None,
+            now: "2026-06-26T00:00:00Z".to_string(),
+            topics: vec!["rust".to_string()],
+            attachment_path: None,
+        });
+
+        let value = serde_json::to_value(req).unwrap();
+        assert_eq!(value["payload"]["topics"], json!(["rust"]));
+        assert!(value["payload"].get("entities").is_none());
     }
 
     #[test]

@@ -1,20 +1,16 @@
 //! Service boundary for the editable full-note Markdown contract.
 
 use crate::frontmatter::{self, EditableDoc};
+use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Note;
-
-const EXTRACTION_TYPES: [&str; 2] = ["topic", "entity"];
-const TOPIC_EXTRACTION: &str = "topic";
-const ENTITY_EXTRACTION: &str = "entity";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedEditableNote {
     pub title: String,
     pub stored_content: String,
     pub topics: Vec<String>,
-    pub entities: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,14 +26,13 @@ pub(crate) async fn load_editable_note(db: &dyn NoteDb, note_id: &str) -> Result
 }
 
 pub(crate) async fn render_editable_note(db: &dyn NoteDb, note: &Note) -> Result<String, CliError> {
-    let (topics, entities) = load_managed_extractions(db, &note.id).await?;
+    let topics = load_managed_topics(db, &note.id).await?;
     let content = note.content.as_deref().unwrap_or("");
     let (stored_frontmatter, body_without_fm) = frontmatter::split_frontmatter(content);
     Ok(frontmatter::build_editable_content(
         note.title.as_deref(),
         body_without_fm,
         &topics,
-        &entities,
         stored_frontmatter,
     ))
 }
@@ -66,9 +61,7 @@ pub(crate) async fn save_editable_note(
         db.update_note_title(note_id, &parsed.title).await?;
     }
 
-    db.set_note_extractions(note_id, TOPIC_EXTRACTION, &parsed.topics)
-        .await?;
-    db.set_note_extractions(note_id, ENTITY_EXTRACTION, &parsed.entities)
+    db.set_note_extractions(note_id, TOPIC_EXTRACTION_KEY, &parsed.topics)
         .await?;
 
     let old_content = note.content.as_deref().unwrap_or("");
@@ -93,7 +86,6 @@ pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, 
         title: doc.title.unwrap_or_default(),
         stored_content,
         topics: doc.topics,
-        entities: doc.entities,
     })
 }
 
@@ -111,28 +103,22 @@ fn stored_content_from_doc(doc: &EditableDoc) -> String {
     doc.body.clone()
 }
 
-async fn load_managed_extractions(
-    db: &dyn NoteDb,
-    note_id: &str,
-) -> Result<(Vec<String>, Vec<String>), CliError> {
+async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<String>, CliError> {
     let extractions = db
-        .list_note_extractions(&[note_id], &EXTRACTION_TYPES)
+        .list_note_extractions(&[note_id], &[TOPIC_EXTRACTION_KEY])
         .await?;
     let pairs = extractions.get(note_id);
     let mut topics = Vec::new();
-    let mut entities = Vec::new();
 
     if let Some(pairs) = pairs {
-        for (extraction_type, value) in pairs {
-            match extraction_type.as_str() {
-                TOPIC_EXTRACTION => topics.push(value.clone()),
-                ENTITY_EXTRACTION => entities.push(value.clone()),
-                _ => {}
+        for (key, value) in pairs {
+            if key == TOPIC_EXTRACTION_KEY {
+                topics.push(value.clone());
             }
         }
     }
 
-    Ok((topics, entities))
+    Ok(topics)
 }
 
 #[cfg(test)]
@@ -201,8 +187,8 @@ mod tests {
         let db = FakeNoteDb::new(
             note_with(Some("---\ncustom: keep\n---\nBody.\n"), Some("Title")),
             vec![
-                ("topic".to_string(), "rust".to_string()),
-                ("entity".to_string(), "PowerSync".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "rust".to_string()),
+                ("::company".to_string(), "PowerSync".to_string()),
             ],
         );
 
@@ -211,8 +197,8 @@ mod tests {
         assert!(markdown.starts_with("---\n"));
         assert!(markdown.contains("topics:"));
         assert!(markdown.contains("- rust"));
-        assert!(markdown.contains("entities:"));
-        assert!(markdown.contains("- PowerSync"));
+        assert!(!markdown.contains("entities:"));
+        assert!(!markdown.contains("PowerSync"));
         assert!(markdown.contains("custom: keep"));
         assert!(markdown.contains("title: Title"));
         assert!(!markdown.contains("# Title"));
@@ -220,10 +206,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_editable_note_reads_topics_from_keyed_topic_only() {
+        let db = FakeNoteDb::new(
+            note_with(Some("---\ncustom: keep\n---\nBody.\n"), Some("Title")),
+            vec![
+                ("topic".to_string(), "old-topic".to_string()),
+                (TOPIC_EXTRACTION_KEY.to_string(), "new-topic".to_string()),
+                ("::company".to_string(), "ReadOnlyCo".to_string()),
+            ],
+        );
+
+        let markdown = load_editable_note(&db, NOTE_ID).await.unwrap();
+
+        assert!(markdown.contains("- new-topic"));
+        assert!(!markdown.contains("old-topic"));
+        assert!(!markdown.contains("ReadOnlyCo"));
+        assert!(!markdown.contains("entities:"));
+    }
+
+    #[tokio::test]
     async fn save_editable_note_writes_title_body_custom_frontmatter_and_extractions() {
         let db = FakeNoteDb::new(
             note_with(Some("Old body."), Some("Old Title")),
-            vec![("topic".to_string(), "old".to_string())],
+            vec![(TOPIC_EXTRACTION_KEY.to_string(), "old".to_string())],
         );
 
         let markdown = "---\ntitle: New Title\ntopics: [rust, async]\nentities:\n  - PowerSync\ncustom:\n  nested: true\n---\nNew body.";
@@ -234,20 +239,46 @@ mod tests {
         let content = note.content.expect("content should be stored");
         assert!(content.contains("custom:"));
         assert!(content.contains("nested: true"));
+        assert!(content.contains("entities:"));
+        assert!(content.contains("- PowerSync"));
         assert!(content.contains("New body."));
         assert!(!content.contains("topics:"));
-        assert!(!content.contains("entities:"));
         assert_eq!(
-            db.extraction_values("topic"),
+            db.extraction_values(TOPIC_EXTRACTION_KEY),
             vec!["rust".to_string(), "async".to_string()]
         );
-        assert_eq!(
-            db.extraction_values("entity"),
-            vec!["PowerSync".to_string()]
-        );
+        assert!(db.extraction_values("topic").is_empty());
         assert!(result.title_changed);
         assert!(result.content_changed);
         assert_eq!(result.stored_content, content);
+    }
+
+    #[tokio::test]
+    async fn save_editable_note_writes_keyed_topics_and_preserves_user_entities() {
+        let db = FakeNoteDb::new(
+            note_with(Some("Old body."), Some("Old Title")),
+            vec![
+                (TOPIC_EXTRACTION_KEY.to_string(), "old".to_string()),
+                ("::company".to_string(), "ReadOnlyCo".to_string()),
+            ],
+        );
+
+        let markdown =
+            "---\ntitle: New Title\ntopics: [rust]\nentities:\n  - user-owned\n---\nNew body.";
+        save_editable_note(&db, NOTE_ID, markdown).await.unwrap();
+
+        let content = db.note().content.expect("content should be stored");
+        assert!(content.contains("entities:"));
+        assert!(content.contains("- user-owned"));
+        assert_eq!(
+            db.extraction_values(TOPIC_EXTRACTION_KEY),
+            vec!["rust".to_string()]
+        );
+        assert!(db.extraction_values("topic").is_empty());
+        assert_eq!(
+            db.extraction_values("::company"),
+            vec!["ReadOnlyCo".to_string()]
+        );
     }
 
     // ─── Title removal guard tests ───────────────────────────────────────
@@ -311,7 +342,6 @@ mod tests {
             title: &'static str,
             stored_content: &'static str,
             topics: &'static [&'static str],
-            entities: &'static [&'static str],
         }
 
         let cases = [
@@ -321,7 +351,6 @@ mod tests {
                 title: "Title",
                 stored_content: "",
                 topics: &[],
-                entities: &[],
             },
             Case {
                 name: "body leading whitespace is preserved",
@@ -329,15 +358,13 @@ mod tests {
                 title: "Title",
                 stored_content: "  indented first line\n\tTabbed second line",
                 topics: &[],
-                entities: &[],
             },
             Case {
                 name: "managed empty lists clear extraction rows",
                 markdown: "---\ntitle: Title\ntopics: []\nentities: []\ncustom: keep\n---\nBody.",
                 title: "Title",
-                stored_content: "---\ncustom: keep\n---\n\nBody.",
+                stored_content: "---\ncustom: keep\nentities: []\n---\n\nBody.",
                 topics: &[],
-                entities: &[],
             },
         ];
 
@@ -351,15 +378,6 @@ mod tests {
             assert_eq!(
                 parsed.topics,
                 case.topics
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect::<Vec<_>>(),
-                "{}",
-                case.name
-            );
-            assert_eq!(
-                parsed.entities,
-                case.entities
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>(),

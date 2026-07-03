@@ -143,7 +143,7 @@ pub fn app_schema() -> Schema {
         vec![
             Column::text("note_id"),
             Column::text("user_id"),
-            Column::text("type"),
+            Column::text("key"),
             Column::text("value"),
         ],
         |t| {
@@ -157,9 +157,9 @@ pub fn app_schema() -> Schema {
                     }],
                 },
                 Index {
-                    name: "note_extractions_type_idx".into(),
+                    name: "note_extractions_key_idx".into(),
                     columns: vec![IndexedColumn {
-                        name: "type".into(),
+                        name: "key".into(),
                         ascending: true,
                         type_name: "TEXT".into(),
                     }],

@@ -9,3 +9,5 @@ pub mod pgwire;
 pub mod schema;
 pub mod session;
 pub mod types;
+
+pub const TOPIC_EXTRACTION_KEY: &str = "::topic";

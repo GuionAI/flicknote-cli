@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
+use crate::TOPIC_EXTRACTION_KEY;
 use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
@@ -678,7 +679,9 @@ impl NoteDb for PgWireBackend {
         &self,
         note_ids: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<String>>, CliError> {
-        let extractions = self.list_note_extractions(note_ids, &["topic"]).await?;
+        let extractions = self
+            .list_note_extractions(note_ids, &[TOPIC_EXTRACTION_KEY])
+            .await?;
         let mut map = std::collections::HashMap::<String, Vec<String>>::new();
         for (note_id, pairs) in extractions {
             map.insert(note_id, pairs.into_iter().map(|(_, value)| value).collect());
@@ -688,9 +691,9 @@ impl NoteDb for PgWireBackend {
     async fn list_note_extractions(
         &self,
         note_ids: &[&str],
-        extraction_types: &[&str],
+        extraction_keys: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError> {
-        if note_ids.is_empty() || extraction_types.is_empty() {
+        if note_ids.is_empty() || extraction_keys.is_empty() {
             return Ok(std::collections::HashMap::<String, Vec<(String, String)>>::new());
         }
         let ids = note_ids
@@ -698,9 +701,9 @@ impl NoteDb for PgWireBackend {
             .map(|id| parse_uuid(id))
             .collect::<Result<Vec<_>, _>>()?;
         let rows = sqlx::query(
-            "SELECT note_id::text, type, value FROM note_extractions WHERE type = ANY($1) AND note_id = ANY($2) ORDER BY type, value",
+            "SELECT note_id::text, key, value FROM note_extractions WHERE key = ANY($1) AND note_id = ANY($2) ORDER BY key, value",
         )
-        .bind(extraction_types)
+        .bind(extraction_keys)
         .bind(&ids)
         .fetch_all(&self.pool)
         .await?;
@@ -716,26 +719,26 @@ impl NoteDb for PgWireBackend {
     async fn set_note_extractions(
         &self,
         note_id: &str,
-        extraction_type: &str,
+        extraction_key: &str,
         values: &[String],
     ) -> Result<(), CliError> {
         let note_uuid = parse_uuid(note_id)?;
-        // Delete all existing rows for this note + type
-        sqlx::query("DELETE FROM note_extractions WHERE note_id = $1 AND type = $2")
+        // Delete all existing rows for this note + key.
+        sqlx::query("DELETE FROM note_extractions WHERE note_id = $1 AND key = $2")
             .bind(note_uuid)
-            .bind(extraction_type)
+            .bind(extraction_key)
             .execute(&self.pool)
             .await?;
         // Insert new values
         for value in values {
             // The backend row id is required for sync identity; callers address
-            // extractions by (note_id, type, value).
+            // extractions by (note_id, key, value).
             sqlx::query(
-                "INSERT INTO note_extractions (id, note_id, user_id, type, value) VALUES ($1, $2, (SELECT user_id FROM notes WHERE id = $2), $3, $4)",
+                "INSERT INTO note_extractions (id, note_id, user_id, key, value) VALUES ($1, $2, (SELECT user_id FROM notes WHERE id = $2), $3, $4)",
             )
             .bind(Uuid::new_v4())
             .bind(note_uuid)
-            .bind(extraction_type)
+            .bind(extraction_key)
             .bind(value)
             .execute(&self.pool)
             .await?;
