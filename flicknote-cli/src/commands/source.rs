@@ -14,6 +14,9 @@ pub(crate) struct SourceArgs {
     /// Print raw source JSON instead of rendered text
     #[arg(long)]
     json: bool,
+    /// Print source type, range unit, and count
+    #[arg(long)]
+    info: bool,
     /// Read an archived note
     #[arg(long)]
     archived: bool,
@@ -38,7 +41,19 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &SourceArgs) -> Result<(), CliErr
             "range cannot be used with --json source output".into(),
         ));
     }
-    let output = if args.json {
+    if args.info && args.range.is_some() {
+        return Err(CliError::Other(
+            "range cannot be used with --info source output".into(),
+        ));
+    }
+    if args.info && args.json {
+        return Err(CliError::Other(
+            "--info cannot be used with --json source output".into(),
+        ));
+    }
+    let output = if args.info {
+        render_source_info(&source)?
+    } else if args.json {
         render_json_source(&source)?
     } else {
         render_source(&source, args.range.as_deref())?
@@ -98,7 +113,7 @@ fn render_source(source: &str, range: Option<&str>) -> Result<String, CliError> 
         Err(_) => return render_text_source(source, range),
     };
 
-    if let Some(content) = text_content(&value) {
+    if let Some((_, content)) = text_source(&value) {
         return render_text_source(content, range);
     }
 
@@ -126,16 +141,40 @@ fn render_json_source(source: &str) -> Result<String, CliError> {
     render_json_value(&value)
 }
 
+fn render_source_info(source: &str) -> Result<String, CliError> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(source) else {
+        return Ok(source_info("text", "line", source.lines().count()));
+    };
+
+    if let Some((kind, content)) = text_source(&value) {
+        return Ok(source_info(kind, "line", content.lines().count()));
+    }
+
+    if let Some(transcripts) = value
+        .get("voice")
+        .and_then(|voice| voice.get("transcripts"))
+        .and_then(serde_json::Value::as_array)
+    {
+        return Ok(source_info("voice", "sentence", transcripts.len()));
+    }
+
+    Ok(source_info("json", "none", 0))
+}
+
+fn source_info(kind: &str, range_unit: &str, count: usize) -> String {
+    format!("type: {kind}\nrange_unit: {range_unit}\ncount: {count}\n")
+}
+
 fn render_json_value(value: &serde_json::Value) -> Result<String, CliError> {
     let mut output = serde_json::to_string_pretty(value).map_err(CliError::Json)?;
     output.push('\n');
     Ok(output)
 }
 
-fn text_content(value: &serde_json::Value) -> Option<&str> {
+fn text_source(value: &serde_json::Value) -> Option<(&'static str, &str)> {
     ["link", "scan", "file", "flash"]
         .into_iter()
-        .find_map(|kind| value.get(kind)?.get("content")?.as_str())
+        .find_map(|kind| Some((kind, value.get(kind)?.get("content")?.as_str()?)))
 }
 
 fn render_text_source(source: &str, range: Option<&str>) -> Result<String, CliError> {
@@ -258,6 +297,16 @@ mod tests {
     }
 
     #[test]
+    fn render_source_info_counts_text_source_lines() {
+        let source = r#"{"link":{"content":"one\ntwo\nthree"}}"#;
+
+        assert_eq!(
+            render_source_info(source).unwrap(),
+            "type: link\nrange_unit: line\ncount: 3\n"
+        );
+    }
+
+    #[test]
     fn render_source_slices_voice_sources_by_sentence_number() {
         let source = r#"{"voice":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98],[2000,3000,"third",97]]}}"#;
 
@@ -273,6 +322,16 @@ mod tests {
 
         let err = render_source(source, Some("1")).unwrap_err();
         assert!(err.to_string().contains("outside available range"));
+    }
+
+    #[test]
+    fn render_source_info_counts_voice_transcripts() {
+        let source = r#"{"voice":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98]]}}"#;
+
+        assert_eq!(
+            render_source_info(source).unwrap(),
+            "type: voice\nrange_unit: sentence\ncount: 2\n"
+        );
     }
 
     #[test]

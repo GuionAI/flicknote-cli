@@ -25,6 +25,7 @@ flicknote topic list
 flicknote entity list --type person
 flicknote source <id>
 flicknote source <id> 12:19
+flicknote source <id> --info
 flicknote list --project <project>
 flicknote detail <id>
 flicknote detail <id> --tree

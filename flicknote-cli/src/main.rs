@@ -299,6 +299,7 @@ mod tests {
         assert!(Cli::try_parse_from(["flicknote", "source", "42"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "source", "42", "12:19"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "source", "42", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "42", "--info"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "find", "::topic::AI::person::瓜子"]).is_ok());
     }
 
