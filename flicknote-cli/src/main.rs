@@ -296,9 +296,10 @@ mod tests {
     fn metadata_discovery_and_source_commands_parse() {
         assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());
-        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42"]).is_ok());
-        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "12:19"]).is_ok());
-        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "42"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "42", "12:19"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "42", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "42", "--info"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "find", "::topic::AI::person::瓜子"]).is_ok());
     }
 
@@ -332,7 +333,7 @@ mod tests {
             ["flicknote", "find", "keyword"].as_slice(),
             ["flicknote", "topic", "list"].as_slice(),
             ["flicknote", "entity", "list"].as_slice(),
-            ["flicknote", "source", "show", "1"].as_slice(),
+            ["flicknote", "source", "1"].as_slice(),
             ["flicknote", "detail", "1"].as_slice(),
             ["flicknote", "content", "1"].as_slice(),
             ["flicknote", "project", "list"].as_slice(),

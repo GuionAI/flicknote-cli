@@ -10,7 +10,7 @@ Common workflows:
   flicknote find "::topic::AI::person::瓜子"
   flicknote topic list
   flicknote entity list --type person
-  flicknote source show <id>
+  flicknote source <id>
   flicknote detail <id> --tree
   flicknote content <id> --section <section-id>
   cat edit.md | flicknote modify <id>
