@@ -1,5 +1,5 @@
 use clap::Args;
-use flicknote_core::backend::{NoteDb, NoteFilter};
+use flicknote_core::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
 use flicknote_core::error::CliError;
 
 use super::util::{note_json, print_notes_table, resolve_project_arg};
@@ -26,8 +26,46 @@ pub(crate) struct FindArgs {
     json: bool,
 }
 
+#[derive(Debug)]
+struct ParsedSearch {
+    keywords: Vec<String>,
+    extractions: Vec<MetadataFilter>,
+}
+
+fn parse_search_input(args: &[String]) -> Result<ParsedSearch, CliError> {
+    let mut keywords = Vec::new();
+    let mut extractions = Vec::new();
+
+    for arg in args {
+        if !arg.starts_with("::") {
+            keywords.push(arg.clone());
+            continue;
+        }
+
+        let parts = arg.split("::").skip(1).collect::<Vec<_>>();
+        if parts.len() % 2 != 0 || parts.iter().any(|part| part.is_empty()) {
+            return Err(CliError::Other(
+                "structured find filters must use ::type::value pairs".into(),
+            ));
+        }
+
+        for pair in parts.chunks(2) {
+            extractions.push(MetadataFilter {
+                key: format!("::{}", pair[0]),
+                value: pair[1].to_string(),
+            });
+        }
+    }
+
+    Ok(ParsedSearch {
+        keywords,
+        extractions,
+    })
+}
+
 pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError> {
     let effective_project = resolve_project_arg(&args.project);
+    let parsed = parse_search_input(&args.keywords)?;
 
     let project_id: Option<String> = if let Some(ref name) = effective_project {
         if args.project.is_none() {
@@ -46,8 +84,11 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError
     };
 
     let notes = db
-        .search_notes(
-            &args.keywords,
+        .search_notes_structured(
+            &NoteSearch {
+                keywords: parsed.keywords.clone(),
+                extractions: parsed.extractions,
+            },
             &NoteFilter {
                 project_id: project_id.as_deref(),
                 note_type: None,
@@ -89,7 +130,56 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError
 
 #[cfg(test)]
 mod tests {
-    // Search logic is now internal to SqliteBackend / PostgRestBackend.
-    // Tests verify search behavior via the NoteDb trait in backend::tests.
-    // No pure-SQL tests needed here.
+    use super::*;
+
+    #[test]
+    fn parse_search_input_splits_plain_keywords_and_structured_filters() {
+        let parsed = parse_search_input(&[
+            "whisper".to_string(),
+            "::topic::ASR::person::瓜子".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.keywords, vec!["whisper"]);
+        assert_eq!(
+            parsed.extractions,
+            vec![
+                MetadataFilter {
+                    key: "::topic".to_string(),
+                    value: "ASR".to_string(),
+                },
+                MetadataFilter {
+                    key: "::person".to_string(),
+                    value: "瓜子".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_search_input_accepts_structured_only_search() {
+        let parsed = parse_search_input(&["::topic::AI::company::OpenAI".to_string()]).unwrap();
+
+        assert!(parsed.keywords.is_empty());
+        assert_eq!(
+            parsed.extractions,
+            vec![
+                MetadataFilter {
+                    key: "::topic".to_string(),
+                    value: "AI".to_string(),
+                },
+                MetadataFilter {
+                    key: "::company".to_string(),
+                    value: "OpenAI".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_search_input_rejects_incomplete_structured_filter() {
+        let err = parse_search_input(&["::topic::AI::person".to_string()]).unwrap_err();
+
+        assert!(err.to_string().contains("structured find filters"));
+    }
 }

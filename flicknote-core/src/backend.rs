@@ -17,6 +17,18 @@ pub struct NoteFilter<'a> {
     pub limit: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetadataFilter {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteSearch {
+    pub keywords: Vec<String>,
+    pub extractions: Vec<MetadataFilter>,
+}
+
 pub struct InsertNoteReq<'a> {
     pub id: &'a str,
     pub note_type: &'a str,
@@ -74,6 +86,11 @@ pub trait NoteDb {
     async fn search_notes(
         &self,
         keywords: &[String],
+        filter: &NoteFilter<'_>,
+    ) -> Result<Vec<Note>, CliError>;
+    async fn search_notes_structured(
+        &self,
+        search: &NoteSearch,
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<Note>, CliError>;
 
@@ -152,6 +169,11 @@ pub trait NoteDb {
         note_ids: &[&str],
         extraction_keys: &[&str],
     ) -> Result<std::collections::HashMap<String, Vec<(String, String)>>, CliError>;
+    async fn list_extraction_values(
+        &self,
+        extraction_keys: &[&str],
+        archived: bool,
+    ) -> Result<Vec<String>, CliError>;
     /// Replace all extraction rows for one note and one managed key in a single operation.
     /// `values` replaces all rows of the given key for the note.
     /// An empty vec clears all rows for that key.
@@ -293,6 +315,12 @@ const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, key, value FROM note_extracti
      WHERE user_id = ? AND key IN (SELECT value FROM json_each(?)) \
      AND note_id IN (SELECT value FROM json_each(?)) \
      ORDER BY key, value";
+#[cfg(feature = "powersync")]
+const SQ_LIST_EXTRACTION_VALUES: &str = "SELECT DISTINCT e.value FROM note_extractions e \
+     JOIN notes n ON n.id = e.note_id AND n.user_id = e.user_id \
+     WHERE e.user_id = ? AND e.key IN (SELECT value FROM json_each(?)) \
+     AND (n.deleted_at IS NOT NULL) = ? \
+     ORDER BY e.value";
 #[cfg(feature = "powersync")]
 const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
      WHERE user_id = ? AND note_id = ? AND key = ?";
@@ -457,15 +485,14 @@ impl NoteDb for SqliteBackend {
 
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
         let limit = i64::from(filter.limit);
-        Ok(sqlx::query_as!(
-            Note,
+        Ok(sqlx::query_as::<_, Note>(
             r#"
             SELECT
-                id as "id!",
+                id,
                 short_id,
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
@@ -484,14 +511,14 @@ impl NoteDb for SqliteBackend {
             ORDER BY created_at DESC
             LIMIT ?
             "#,
-            self.user_id,
-            filter.archived,
-            filter.note_type,
-            filter.note_type,
-            filter.project_id,
-            filter.project_id,
-            limit,
         )
+        .bind(&self.user_id)
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(filter.note_type)
+        .bind(filter.project_id)
+        .bind(filter.project_id)
+        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }
@@ -508,15 +535,14 @@ impl NoteDb for SqliteBackend {
         }
         let limit = i64::from(filter.limit);
         let keywords_json = serde_json::to_string(keywords)?;
-        Ok(sqlx::query_as!(
-            Note,
+        Ok(sqlx::query_as::<_, Note>(
             r#"
             SELECT
-                id as "id!",
+                id,
                 short_id,
-                user_id as "user_id!",
-                type as "type!",
-                status as "status!",
+                user_id,
+                type,
+                status,
                 title,
                 content,
                 summary,
@@ -541,15 +567,98 @@ impl NoteDb for SqliteBackend {
             ORDER BY updated_at DESC
             LIMIT ?
             "#,
-            self.user_id,
-            filter.archived,
-            filter.note_type,
-            filter.note_type,
-            filter.project_id,
-            filter.project_id,
-            keywords_json,
-            limit,
         )
+        .bind(&self.user_id)
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(filter.note_type)
+        .bind(filter.project_id)
+        .bind(filter.project_id)
+        .bind(keywords_json)
+        .bind(limit)
+        .fetch_all(&self.db.pool)
+        .await?)
+    }
+
+    async fn search_notes_structured(
+        &self,
+        search: &NoteSearch,
+        filter: &NoteFilter<'_>,
+    ) -> Result<Vec<Note>, CliError> {
+        if search.keywords.is_empty() && search.extractions.is_empty() {
+            return Err(CliError::Other(
+                "search_notes_structured requires at least one keyword or structured filter".into(),
+            ));
+        }
+        let limit = i64::from(filter.limit);
+        let keywords_json = serde_json::to_string(&search.keywords)?;
+        let extractions_json = serde_json::to_string(
+            &search
+                .extractions
+                .iter()
+                .map(|filter| {
+                    serde_json::json!({
+                        "key": filter.key,
+                        "value": filter.value,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(sqlx::query_as::<_, Note>(
+            r#"
+            SELECT
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
+                title,
+                content,
+                summary,
+                is_flagged,
+                project_id,
+                metadata,
+                source,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM notes
+            WHERE user_id = ?
+              AND (deleted_at IS NOT NULL) = ?
+              AND (? IS NULL OR type = ?)
+              AND (? IS NULL OR project_id = ?)
+              AND (
+                json_array_length(?) = 0 OR EXISTS (
+                  SELECT 1 FROM json_each(?) AS kw
+                  WHERE title LIKE '%' || kw.value || '%'
+                     OR content LIKE '%' || kw.value || '%'
+                     OR summary LIKE '%' || kw.value || '%'
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM json_each(?) AS filter
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM note_extractions extraction
+                  WHERE extraction.user_id = notes.user_id
+                    AND extraction.note_id = notes.id
+                    AND extraction.key = json_extract(filter.value, '$.key')
+                    AND extraction.value = json_extract(filter.value, '$.value')
+                )
+              )
+            ORDER BY updated_at DESC
+            LIMIT ?
+            "#,
+        )
+        .bind(&self.user_id)
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(filter.note_type)
+        .bind(filter.project_id)
+        .bind(filter.project_id)
+        .bind(keywords_json.clone())
+        .bind(keywords_json)
+        .bind(extractions_json)
+        .bind(limit)
         .fetch_all(&self.db.pool)
         .await?)
     }
@@ -910,6 +1019,23 @@ impl NoteDb for SqliteBackend {
             map.entry(note_id).or_default().push((ext_type, value));
         }
         Ok(map)
+    }
+
+    async fn list_extraction_values(
+        &self,
+        extraction_keys: &[&str],
+        archived: bool,
+    ) -> Result<Vec<String>, CliError> {
+        if extraction_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let keys_json = serde_json::to_string(extraction_keys)?;
+        Ok(sqlx::query_scalar::<_, String>(SQ_LIST_EXTRACTION_VALUES)
+            .bind(&self.user_id)
+            .bind(keys_json)
+            .bind(archived)
+            .fetch_all(&self.db.pool)
+            .await?)
     }
     async fn set_note_extractions(
         &self,
@@ -1434,6 +1560,167 @@ mod tests {
             )
             .await;
         assert!(err.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_backend_search_notes_matches_all_extraction_filters() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        let matching_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &matching_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Whisper pipeline"),
+                content: Some("ASR notes"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+        backend
+            .set_note_extractions(
+                &matching_id,
+                TOPIC_EXTRACTION_KEY,
+                &["ASR".to_string(), "AI".to_string()],
+            )
+            .await
+            .unwrap();
+        backend
+            .set_note_extractions(&matching_id, "::person", &["瓜子".to_string()])
+            .await
+            .unwrap();
+
+        let topic_only_id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &topic_only_id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("Whisper without person"),
+                content: Some("ASR notes"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+        backend
+            .set_note_extractions(&topic_only_id, TOPIC_EXTRACTION_KEY, &["ASR".to_string()])
+            .await
+            .unwrap();
+
+        let results = backend
+            .search_notes_structured(
+                &NoteSearch {
+                    keywords: vec!["Whisper".to_string()],
+                    extractions: vec![
+                        MetadataFilter {
+                            key: TOPIC_EXTRACTION_KEY.to_string(),
+                            value: "ASR".to_string(),
+                        },
+                        MetadataFilter {
+                            key: "::person".to_string(),
+                            value: "瓜子".to_string(),
+                        },
+                    ],
+                },
+                &NoteFilter {
+                    project_id: None,
+                    note_type: None,
+                    archived: false,
+                    limit: 20,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, matching_id);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_backend_search_notes_accepts_structured_only_query() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let id = uuid::Uuid::new_v4().to_string();
+
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "ai_queued",
+                title: Some("No keyword match here"),
+                content: Some("body"),
+                metadata: None,
+                project_id: None,
+                now: &now,
+            })
+            .await
+            .unwrap();
+        backend
+            .set_note_extractions(&id, "::company", &["OpenAI".to_string()])
+            .await
+            .unwrap();
+
+        let results = backend
+            .search_notes_structured(
+                &NoteSearch {
+                    keywords: Vec::new(),
+                    extractions: vec![MetadataFilter {
+                        key: "::company".to_string(),
+                        value: "OpenAI".to_string(),
+                    }],
+                },
+                &NoteFilter {
+                    project_id: None,
+                    note_type: None,
+                    archived: false,
+                    limit: 20,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, id);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_backend_list_extraction_values_dedupes_and_sorts() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+
+        for value in ["ASR", "AI", "ASR"] {
+            let id = uuid::Uuid::new_v4().to_string();
+            backend
+                .insert_note(&InsertNoteReq {
+                    id: &id,
+                    note_type: "normal",
+                    status: "ai_queued",
+                    title: Some(value),
+                    content: Some("body"),
+                    metadata: None,
+                    project_id: None,
+                    now: &now,
+                })
+                .await
+                .unwrap();
+            backend
+                .set_note_extractions(&id, TOPIC_EXTRACTION_KEY, &[value.to_string()])
+                .await
+                .unwrap();
+        }
+
+        let values = backend
+            .list_extraction_values(&[TOPIC_EXTRACTION_KEY], false)
+            .await
+            .unwrap();
+
+        assert_eq!(values, vec!["AI".to_string(), "ASR".to_string()]);
     }
 
     #[tokio::test]

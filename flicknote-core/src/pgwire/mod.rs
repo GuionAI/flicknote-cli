@@ -10,7 +10,7 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::TOPIC_EXTRACTION_KEY;
-use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup};
+use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project, Prompt};
 
@@ -379,6 +379,84 @@ impl NoteDb for PgWireBackend {
         Ok(rows.into_iter().map(Note::from).collect())
     }
 
+    async fn search_notes_structured(
+        &self,
+        search: &NoteSearch,
+        filter: &NoteFilter<'_>,
+    ) -> Result<Vec<Note>, CliError> {
+        if search.keywords.is_empty() && search.extractions.is_empty() {
+            return Err(CliError::Other(
+                "search_notes_structured requires at least one keyword or structured filter".into(),
+            ));
+        }
+        let project_id = parse_uuid_opt(filter.project_id)?;
+        let limit = i64::from(filter.limit);
+        let extraction_keys = search
+            .extractions
+            .iter()
+            .map(|filter| filter.key.as_str())
+            .collect::<Vec<_>>();
+        let extraction_values = search
+            .extractions
+            .iter()
+            .map(|filter| filter.value.as_str())
+            .collect::<Vec<_>>();
+        let rows = sqlx::query_as::<_, NotePgRow>(
+            r#"
+            SELECT
+                id,
+                short_id,
+                user_id,
+                type,
+                status,
+                title,
+                content,
+                summary,
+                is_flagged,
+                project_id,
+                metadata,
+                source,
+                created_at,
+                updated_at,
+                deleted_at
+            FROM notes
+            WHERE (deleted_at IS NOT NULL) = $1
+              AND ($2::text IS NULL OR type = $2)
+              AND ($3::uuid IS NULL OR project_id = $3)
+              AND (
+                cardinality($4::text[]) = 0 OR EXISTS (
+                  SELECT 1 FROM unnest($4::text[]) AS kw(term)
+                  WHERE title ILIKE '%' || kw.term || '%'
+                     OR content ILIKE '%' || kw.term || '%'
+                     OR summary ILIKE '%' || kw.term || '%'
+                )
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM unnest($5::text[], $6::text[]) AS filter(key, value)
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM note_extractions extraction
+                  WHERE extraction.note_id = notes.id
+                    AND extraction.key = filter.key
+                    AND extraction.value = filter.value
+                )
+              )
+            ORDER BY updated_at DESC
+            LIMIT $7
+            "#,
+        )
+        .bind(filter.archived)
+        .bind(filter.note_type)
+        .bind(project_id)
+        .bind(&search.keywords)
+        .bind(extraction_keys)
+        .bind(extraction_values)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(Note::from).collect())
+    }
+
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
         let metadata: Option<serde_json::Value> = req
             .metadata
@@ -715,6 +793,30 @@ impl NoteDb for PgWireBackend {
             map.entry(note_id).or_default().push((ext_type, value));
         }
         Ok(map)
+    }
+
+    async fn list_extraction_values(
+        &self,
+        extraction_keys: &[&str],
+        archived: bool,
+    ) -> Result<Vec<String>, CliError> {
+        if extraction_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT DISTINCT extraction.value
+            FROM note_extractions extraction
+            JOIN notes ON notes.id = extraction.note_id
+            WHERE extraction.key = ANY($1)
+              AND (notes.deleted_at IS NOT NULL) = $2
+            ORDER BY extraction.value
+            "#,
+        )
+        .bind(extraction_keys)
+        .bind(archived)
+        .fetch_all(&self.pool)
+        .await?)
     }
     async fn set_note_extractions(
         &self,
