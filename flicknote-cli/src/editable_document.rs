@@ -124,7 +124,7 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteFilter};
+    use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
     use flicknote_core::types::{Keyterm, Project, Prompt};
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -436,6 +436,14 @@ mod tests {
             unimplemented!()
         }
 
+        async fn search_notes_structured(
+            &self,
+            _search: &NoteSearch,
+            _filter: &NoteFilter<'_>,
+        ) -> Result<Vec<Note>, CliError> {
+            unimplemented!()
+        }
+
         async fn insert_note(&self, _req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
             unimplemented!()
         }
@@ -560,6 +568,14 @@ mod tests {
                 result.insert((*note_id).to_string(), filtered);
             }
             Ok(result)
+        }
+
+        async fn list_extraction_values(
+            &self,
+            _extraction_keys: &[&str],
+            _archived: bool,
+        ) -> Result<Vec<String>, CliError> {
+            unimplemented!()
         }
 
         async fn set_note_extractions(

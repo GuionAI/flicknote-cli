@@ -11,3 +11,4 @@ pub mod session;
 pub mod types;
 
 pub const TOPIC_EXTRACTION_KEY: &str = "::topic";
+pub const ENTITY_EXTRACTION_KEYS: &[&str] = &["::person", "::company", "::location", "::product"];

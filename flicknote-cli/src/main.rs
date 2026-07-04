@@ -57,6 +57,12 @@ enum Commands {
     Count(commands::count::CountArgs),
     /// Find notes by keyword (OR match across title, content, summary)
     Find(commands::find::FindArgs),
+    /// Discover topics
+    Topic(commands::topic::TopicArgs),
+    /// Discover entities
+    Entity(commands::entity::EntityArgs),
+    /// Inspect raw note sources
+    Source(commands::source::SourceArgs),
     /// Show note details with full metadata
     Detail(commands::detail::DetailArgs),
     /// Show note content
@@ -241,6 +247,9 @@ async fn dispatch(
         Commands::List(args) => commands::list::run(db, args).await,
         Commands::Count(args) => commands::count::run(db, args).await,
         Commands::Find(args) => commands::find::run(db, args).await,
+        Commands::Topic(args) => commands::topic::run(db, args).await,
+        Commands::Entity(args) => commands::entity::run(db, args).await,
+        Commands::Source(args) => commands::source::run(db, args).await,
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
         Commands::Project(args) => commands::project::run(db, args).await,
@@ -284,6 +293,16 @@ mod tests {
     }
 
     #[test]
+    fn metadata_discovery_and_source_commands_parse() {
+        assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "12:19"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "--json"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "find", "::topic::AI::person::瓜子"]).is_ok());
+    }
+
+    #[test]
     fn managed_workspace_blocks_local_workspace_commands() {
         for argv in [
             ["flicknote", "upload", "file.pdf"].as_slice(),
@@ -311,6 +330,9 @@ mod tests {
             ["flicknote", "list"].as_slice(),
             ["flicknote", "count"].as_slice(),
             ["flicknote", "find", "keyword"].as_slice(),
+            ["flicknote", "topic", "list"].as_slice(),
+            ["flicknote", "entity", "list"].as_slice(),
+            ["flicknote", "source", "show", "1"].as_slice(),
             ["flicknote", "detail", "1"].as_slice(),
             ["flicknote", "content", "1"].as_slice(),
             ["flicknote", "project", "list"].as_slice(),
