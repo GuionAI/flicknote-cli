@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 
@@ -7,19 +7,6 @@ const SOURCE_HELP: &str = include_str!("../help/source.md");
 #[derive(Args)]
 #[command(after_help = SOURCE_HELP)]
 pub(crate) struct SourceArgs {
-    #[command(subcommand)]
-    command: SourceCommands,
-}
-
-#[derive(Subcommand)]
-enum SourceCommands {
-    /// Show the stored source for a note
-    Show(ShowArgs),
-}
-
-#[derive(Args)]
-#[command(after_help = SOURCE_HELP)]
-struct ShowArgs {
     /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted.
     id: String,
     /// Optional 1-based range. Voice uses sentence indices; text sources use line numbers.
@@ -33,12 +20,6 @@ struct ShowArgs {
 }
 
 pub(crate) async fn run(db: &dyn NoteDb, args: &SourceArgs) -> Result<(), CliError> {
-    match &args.command {
-        SourceCommands::Show(args) => show(db, args).await,
-    }
-}
-
-async fn show(db: &dyn NoteDb, args: &ShowArgs) -> Result<(), CliError> {
     let full_id = if args.archived {
         db.resolve_archived_note_id(&args.id).await?
     } else {
