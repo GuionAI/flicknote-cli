@@ -24,6 +24,7 @@ flicknote find "::topic::AI::person::瓜子"
 flicknote topic list
 flicknote entity list --type person
 flicknote source show <id>
+flicknote source show <id> 12:19
 flicknote list --project <project>
 flicknote detail <id>
 flicknote detail <id> --tree

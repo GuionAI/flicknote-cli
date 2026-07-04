@@ -297,6 +297,8 @@ mod tests {
         assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "source", "show", "42"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "12:19"]).is_ok());
+        assert!(Cli::try_parse_from(["flicknote", "source", "show", "42", "--json"]).is_ok());
         assert!(Cli::try_parse_from(["flicknote", "find", "::topic::AI::person::瓜子"]).is_ok());
     }
 
