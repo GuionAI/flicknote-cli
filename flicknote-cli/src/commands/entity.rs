@@ -4,6 +4,12 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 
 const ENTITY_HELP: &str = include_str!("../help/entity.md");
+const ENTITY_LIST_HELP: &str = "Examples:
+  flicknote entity list
+  flicknote entity list --type person
+  flicknote entity list --type company
+
+Prints known entities as a comma-separated list.";
 
 #[derive(Args)]
 #[command(after_help = ENTITY_HELP)]
@@ -19,6 +25,7 @@ enum EntityCommands {
 }
 
 #[derive(Args)]
+#[command(after_help = ENTITY_LIST_HELP)]
 struct ListArgs {
     /// Filter by entity type
     #[arg(long = "type", value_parser = ["person", "company", "location", "product"])]

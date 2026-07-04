@@ -4,6 +4,10 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 
 const TOPIC_HELP: &str = include_str!("../help/topic.md");
+const TOPIC_LIST_HELP: &str = "Examples:
+  flicknote topic list
+
+Prints known topics as a comma-separated list.";
 
 #[derive(Args)]
 #[command(after_help = TOPIC_HELP)]
@@ -19,6 +23,7 @@ enum TopicCommands {
 }
 
 #[derive(Args)]
+#[command(after_help = TOPIC_LIST_HELP)]
 struct ListArgs {}
 
 pub(crate) async fn run(db: &dyn NoteDb, args: &TopicArgs) -> Result<(), CliError> {
