@@ -158,6 +158,10 @@ fn text_content(value: &serde_json::Value) -> Option<&str> {
 }
 
 fn render_text_source(source: &str, range: Option<&str>) -> Result<String, CliError> {
+    if range.is_none() {
+        return Ok(source.to_string());
+    }
+
     let lines = source.lines().collect::<Vec<_>>();
     let (start, end) = resolve_range(range, lines.len())?;
     let mut output = lines[start..end].join("\n");
@@ -201,6 +205,11 @@ fn render_voice_source(
 
 fn resolve_range(range: Option<&str>, len: usize) -> Result<(usize, usize), CliError> {
     if len == 0 {
+        if let Some(range) = range {
+            return Err(CliError::Other(format!(
+                "source range {range:?} is outside available range; source is empty"
+            )));
+        }
         return Ok((0, 0));
     }
 
@@ -253,6 +262,21 @@ mod tests {
     }
 
     #[test]
+    fn render_source_preserves_text_content_without_range() {
+        let source = r#"{"link":{"content":"one"}}"#;
+
+        assert_eq!(render_source(source, None).unwrap(), "one");
+    }
+
+    #[test]
+    fn render_source_rejects_range_for_empty_text_content() {
+        let source = r#"{"link":{"content":""}}"#;
+
+        let err = render_source(source, Some("1")).unwrap_err();
+        assert!(err.to_string().contains("outside available range"));
+    }
+
+    #[test]
     fn render_source_slices_voice_sources_by_sentence_number() {
         let source = r#"{"voice":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98],[2000,3000,"third",97]]}}"#;
 
@@ -260,6 +284,14 @@ mod tests {
             render_source(source, Some("2")).unwrap(),
             "2  00:01.000-00:02.000  second\n"
         );
+    }
+
+    #[test]
+    fn render_source_rejects_range_for_empty_voice_transcripts() {
+        let source = r#"{"voice":{"transcripts":[]}}"#;
+
+        let err = render_source(source, Some("1")).unwrap_err();
+        assert!(err.to_string().contains("outside available range"));
     }
 
     #[test]
