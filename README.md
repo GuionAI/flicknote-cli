@@ -93,6 +93,10 @@ flicknote find rust effect                 # OR match across multiple keywords
 # Get a specific note (use --tree to see section IDs)
 flicknote detail <note-id>
 flicknote detail <note-id> --tree
+flicknote share <note-id>
+flicknote unshare <note-id>
+flicknote project share <project-id>
+flicknote project unshare <project-id>
 
 # Edit note content
 # Precision edit (exact-string replace)

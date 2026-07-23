@@ -29,6 +29,10 @@ flicknote source <id> --info
 flicknote list --project <project>
 flicknote detail <id>
 flicknote detail <id> --tree
+flicknote share <id>
+flicknote unshare <id>
+flicknote project share <project-id>
+flicknote project unshare <project-id>
 flicknote content <id>
 flicknote content <id> --section <section-id>
 ```

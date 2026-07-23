@@ -168,7 +168,7 @@ pub(crate) async fn create_note_with_daemon(
     config: &Config,
     req: CreateNoteRequest,
 ) -> Result<InsertedNote, CliError> {
-    match flicknote_sync::ipc::send_request(config, &DaemonRequest::CreateNote(req))
+    match flicknote_sync::ipc::send_request(config, &DaemonRequest::CreateNote(Box::new(req)))
         .await
         .map_err(|e| CliError::Other(e.to_string()))?
     {
@@ -177,6 +177,9 @@ pub(crate) async fn create_note_with_daemon(
             short_id: Some(note.short_id),
         }),
         DaemonResponse::Error(e) => Err(CliError::Other(e.to_string())),
+        _ => Err(CliError::Other(
+            "Sync daemon returned an unexpected response to the create request".into(),
+        )),
     }
 }
 

@@ -11,7 +11,22 @@ pub const LOCAL_SYNC_TIMEOUT_SECS: u64 = 10;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonRequest {
-    CreateNote(CreateNoteRequest),
+    CreateNote(Box<CreateNoteRequest>),
+    GetOrCreateShare(ShareRequest),
+    RevokeShare(ShareRequest),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShareResource {
+    Note,
+    Project,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShareRequest {
+    pub resource: ShareResource,
+    pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,7 +56,14 @@ impl CreateNoteRequest {
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonResponse {
     NoteCreated(CreatedNote),
+    ShareUrl(ShareUrlResponse),
+    ShareRevoked,
     Error(DaemonError),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShareUrlResponse {
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -174,7 +196,7 @@ mod tests {
 
     #[test]
     fn create_note_request_serializes_as_tagged_json() {
-        let req = DaemonRequest::CreateNote(CreateNoteRequest {
+        let req = DaemonRequest::CreateNote(Box::new(CreateNoteRequest {
             id: "note-id".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -185,7 +207,7 @@ mod tests {
             now: "2026-06-26T00:00:00Z".to_string(),
             topics: vec!["rust".to_string()],
             attachment_path: None,
-        });
+        }));
 
         assert_eq!(
             serde_json::to_value(req).unwrap(),
@@ -209,7 +231,7 @@ mod tests {
 
     #[test]
     fn create_note_request_does_not_serialize_entities() {
-        let req = DaemonRequest::CreateNote(CreateNoteRequest {
+        let req = DaemonRequest::CreateNote(Box::new(CreateNoteRequest {
             id: "note-id".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -220,11 +242,37 @@ mod tests {
             now: "2026-06-26T00:00:00Z".to_string(),
             topics: vec!["rust".to_string()],
             attachment_path: None,
-        });
+        }));
 
         let value = serde_json::to_value(req).unwrap();
         assert_eq!(value["payload"]["topics"], json!(["rust"]));
         assert!(value["payload"].get("entities").is_none());
+    }
+
+    #[test]
+    fn share_request_deserializes() {
+        let value = json!({
+            "type": "get_or_create_share",
+            "payload": {
+                "resource": "note",
+                "id": "550e8400-e29b-41d4-a716-446655440000"
+            }
+        });
+
+        assert!(serde_json::from_value::<DaemonRequest>(value).is_ok());
+    }
+
+    #[test]
+    fn unshare_request_deserializes() {
+        let value = json!({
+            "type": "revoke_share",
+            "payload": {
+                "resource": "project",
+                "id": "550e8400-e29b-41d4-a716-446655440000"
+            }
+        });
+
+        assert!(serde_json::from_value::<DaemonRequest>(value).is_ok());
     }
 
     #[test]

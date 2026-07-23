@@ -1,4 +1,5 @@
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,7 +17,10 @@ use serde::Deserialize;
 use tokio::{net::UnixListener, sync::mpsc};
 
 pub mod ipc;
-use ipc::{CreateNoteRequest, CreatedNote, DaemonError, DaemonRequest, DaemonResponse};
+use ipc::{
+    CreateNoteRequest, CreatedNote, DaemonError, DaemonRequest, DaemonResponse, ShareRequest,
+    ShareResource, ShareUrlResponse,
+};
 
 /// Helper to convert arbitrary errors into PowerSyncError.
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
@@ -519,6 +523,180 @@ fn attachment_endpoint(base_url: &str, path: &str) -> String {
     format!("{versioned_base}/api/v1/attachments/{path}")
 }
 
+#[derive(Deserialize)]
+struct ShareResponse {
+    url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ShareApiError {
+    error_code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Default)]
+struct ShareRequestLock {
+    mutex: tokio::sync::Mutex<()>,
+}
+
+impl ShareRequestLock {
+    async fn run<T>(&self, operation: impl Future<Output = T>) -> T {
+        let _guard = self.mutex.lock().await;
+        operation.await
+    }
+}
+
+impl ShareResource {
+    fn path_segment(self) -> &'static str {
+        match self {
+            Self::Note => "notes",
+            Self::Project => "projects",
+        }
+    }
+
+    fn missing_error_code(self) -> &'static str {
+        match self {
+            Self::Note => "SHARE_NOT_FOUND",
+            Self::Project => "PROJECT_SHARE_NOT_FOUND",
+        }
+    }
+}
+
+fn share_endpoint(api_url: &str, request: &ShareRequest) -> String {
+    let versioned_base = api_url
+        .trim_end_matches('/')
+        .trim_end_matches("/api/v1")
+        .trim_end_matches('/');
+    format!(
+        "{versioned_base}/api/v1/{}/{}/share",
+        request.resource.path_segment(),
+        request.id
+    )
+}
+
+fn share_api_error(status: reqwest::StatusCode, body: String) -> DaemonError {
+    let message = serde_json::from_str::<ShareApiError>(&body)
+        .ok()
+        .and_then(|error| error.message)
+        .unwrap_or(body);
+    DaemonError::Other {
+        message: format!("Share API returned {status}: {message}"),
+    }
+}
+
+async fn parse_share_url(response: reqwest::Response) -> Result<String, DaemonError> {
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        return Err(share_api_error(status, body));
+    }
+    response
+        .json::<ShareResponse>()
+        .await
+        .map(|share| share.url)
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to parse share API response: {error}"),
+        })
+}
+
+async fn get_or_create_share_with_token(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    request: &ShareRequest,
+) -> Result<String, DaemonError> {
+    validate_api_url(config)?;
+    let endpoint = share_endpoint(&config.api_url, request);
+    let response = http
+        .get(&endpoint)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Share request failed: {error}"),
+        })?;
+
+    if response.status().is_success() {
+        return parse_share_url(response).await;
+    }
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    let is_missing_share = status == reqwest::StatusCode::NOT_FOUND
+        && serde_json::from_str::<ShareApiError>(&body)
+            .ok()
+            .and_then(|error| error.error_code)
+            .is_some_and(|code| code == request.resource.missing_error_code());
+    if !is_missing_share {
+        return Err(share_api_error(status, body));
+    }
+
+    let response = http
+        .post(endpoint)
+        .bearer_auth(access_token)
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Share create request failed: {error}"),
+        })?;
+    parse_share_url(response).await
+}
+
+async fn revoke_share_with_token(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    request: &ShareRequest,
+) -> Result<(), DaemonError> {
+    validate_api_url(config)?;
+    let response = http
+        .delete(share_endpoint(&config.api_url, request))
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Share revoke request failed: {error}"),
+        })?;
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let body = response.text().await.unwrap_or_default();
+    Err(share_api_error(status, body))
+}
+
+async fn get_or_create_share(
+    http: &reqwest::Client,
+    auth: &GoTrueClient,
+    config: &Config,
+    request: &ShareRequest,
+) -> Result<String, DaemonError> {
+    let session = auth
+        .get_session()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Auth error: {error}"),
+        })?;
+    get_or_create_share_with_token(http, config, &session.access_token, request).await
+}
+
+async fn revoke_share(
+    http: &reqwest::Client,
+    auth: &GoTrueClient,
+    config: &Config,
+    request: &ShareRequest,
+) -> Result<(), DaemonError> {
+    let session = auth
+        .get_session()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Auth error: {error}"),
+        })?;
+    revoke_share_with_token(http, config, &session.access_token, request).await
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadUrlResponse {
@@ -840,6 +1018,7 @@ async fn serve_socket(
     auth: Arc<GoTrueClient>,
     http: reqwest::Client,
     config: Arc<Config>,
+    share_lock: Arc<ShareRequestLock>,
 ) {
     loop {
         let (mut stream, _) = match listener.accept().await {
@@ -853,11 +1032,30 @@ async fn serve_socket(
         let auth = Arc::clone(&auth);
         let http = http.clone();
         let config = Arc::clone(&config);
+        let share_lock = Arc::clone(&share_lock);
         tokio::spawn(async move {
             let response = match ipc::read_request(&mut stream).await {
                 Ok(DaemonRequest::CreateNote(req)) => {
-                    match create_note_remotely_and_wait(&db, &http, &auth, &config, req).await {
+                    match create_note_remotely_and_wait(&db, &http, &auth, &config, *req).await {
                         Ok(note) => DaemonResponse::NoteCreated(note),
+                        Err(e) => DaemonResponse::Error(e),
+                    }
+                }
+                Ok(DaemonRequest::GetOrCreateShare(req)) => {
+                    match share_lock
+                        .run(get_or_create_share(&http, &auth, &config, &req))
+                        .await
+                    {
+                        Ok(url) => DaemonResponse::ShareUrl(ShareUrlResponse { url }),
+                        Err(e) => DaemonResponse::Error(e),
+                    }
+                }
+                Ok(DaemonRequest::RevokeShare(req)) => {
+                    match share_lock
+                        .run(revoke_share(&http, &auth, &config, &req))
+                        .await
+                    {
+                        Ok(()) => DaemonResponse::ShareRevoked,
                         Err(e) => DaemonResponse::Error(e),
                     }
                 }
@@ -1056,6 +1254,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket_db = db.clone();
     let socket_auth = Arc::clone(&auth);
     let socket_http = reqwest::Client::new();
+    let socket_share_lock = Arc::new(ShareRequestLock::default());
     let mut socket_handle = tokio::spawn(async move {
         serve_socket(
             socket_listener,
@@ -1063,6 +1262,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             socket_auth,
             socket_http,
             socket_config_for_task,
+            socket_share_lock,
         )
         .await;
     });
@@ -1109,7 +1309,167 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread;
+
+    use flicknote_core::config::ConfigPaths;
+
     use super::*;
+
+    #[tokio::test]
+    async fn share_request_lock_serializes_operations() {
+        let lock = Arc::new(ShareRequestLock::default());
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let operation = || {
+            let lock = Arc::clone(&lock);
+            let active = Arc::clone(&active);
+            let max_active = Arc::clone(&max_active);
+            async move {
+                lock.run(async {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await;
+            }
+        };
+
+        tokio::join!(operation(), operation());
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
+
+    fn test_config(api_url: String) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url,
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: PathBuf::new(),
+                data_dir: PathBuf::new(),
+                config_file: PathBuf::new(),
+                session_file: PathBuf::new(),
+                db_file: PathBuf::new(),
+                log_file: PathBuf::new(),
+            },
+        }
+    }
+
+    fn spawn_server(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 4096];
+                let count = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer[..count]);
+                requests.push(request.lines().next().unwrap_or_default().to_string());
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[tokio::test]
+    async fn returns_existing_note_share_without_replacing_it() {
+        let (api_origin, server) = spawn_server(vec![(
+            "200 OK",
+            r#"{"token":"existing","url":"https://flicknote.app/s/existing"}"#,
+        )]);
+        let config = test_config(format!("{api_origin}/api/v1"));
+        let request = ShareRequest {
+            resource: ShareResource::Note,
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        };
+
+        let url = get_or_create_share_with_token(
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            &request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(url, "https://flicknote.app/s/existing");
+        assert_eq!(
+            server.join().unwrap(),
+            ["GET /api/v1/notes/550e8400-e29b-41d4-a716-446655440000/share HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn creates_project_share_when_none_exists() {
+        let (api_url, server) = spawn_server(vec![
+            (
+                "404 Not Found",
+                r#"{"_tag":"NotFoundError","message":"No project share link exists for this project","errorCode":"PROJECT_SHARE_NOT_FOUND"}"#,
+            ),
+            (
+                "200 OK",
+                r#"{"token":"new-token","url":"https://flicknote.app/p/new-token"}"#,
+            ),
+        ]);
+        let config = test_config(api_url);
+        let request = ShareRequest {
+            resource: ShareResource::Project,
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        };
+
+        let url = get_or_create_share_with_token(
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            &request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(url, "https://flicknote.app/p/new-token");
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "GET /api/v1/projects/550e8400-e29b-41d4-a716-446655440000/share HTTP/1.1",
+                "POST /api/v1/projects/550e8400-e29b-41d4-a716-446655440000/share HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn revokes_existing_note_share() {
+        let (api_url, server) = spawn_server(vec![("200 OK", r#"{"success":true}"#)]);
+        let config = test_config(api_url);
+        let request = ShareRequest {
+            resource: ShareResource::Note,
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        };
+
+        revoke_share_with_token(&reqwest::Client::new(), &config, "access-token", &request)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            server.join().unwrap(),
+            ["DELETE /api/v1/notes/550e8400-e29b-41d4-a716-446655440000/share HTTP/1.1"]
+        );
+    }
 
     #[test]
     fn test_extract_fatal_code_fk_violation() {

@@ -67,6 +67,10 @@ enum Commands {
     Detail(commands::detail::DetailArgs),
     /// Show note content
     Content(commands::content::ContentArgs),
+    /// Get or create a share link for a note
+    Share(commands::share::ShareArgs),
+    /// Revoke the share link for a note
+    Unshare(commands::share::UnshareArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
     /// Manage prompts
@@ -122,6 +126,9 @@ impl Commands {
             Self::Skill(_) => Some("skill"),
             Self::Import(_) => Some("import"),
             Self::Open(_) => Some("open"),
+            Self::Share(_) => Some("share"),
+            Self::Unshare(_) => Some("unshare"),
+            Self::Project(args) => args.local_workspace_command_name(),
             _ => None,
         }
     }
@@ -150,7 +157,7 @@ fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError
 fn local_workspace_required_error(command: &str) -> CliError {
     CliError::Other(format!(
         "`flicknote {command}` is not available in managed workspaces.\n\
-         Use a local workspace for file, editor, browser, sync, sign-in, and skill commands."
+         Use a local workspace for file, editor, browser, sharing, sync, sign-in, and skill commands."
     ))
 }
 
@@ -252,7 +259,9 @@ async fn dispatch(
         Commands::Source(args) => commands::source::run(db, args).await,
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
-        Commands::Project(args) => commands::project::run(db, args).await,
+        Commands::Share(args) => commands::share::run_note(db, config, args).await,
+        Commands::Unshare(args) => commands::share::run_unshare_note(db, config, args).await,
+        Commands::Project(args) => commands::project::run(db, config, args).await,
         Commands::Prompt(args) => commands::prompt::run(db, args).await,
         Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
         Commands::Rename(args) => commands::rename::run(db, config, args).await,
@@ -288,6 +297,42 @@ mod tests {
     }
 
     #[test]
+    fn note_share_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "share", "123"]).is_ok());
+    }
+
+    #[test]
+    fn project_share_command_parses() {
+        assert!(
+            Cli::try_parse_from([
+                "flicknote",
+                "project",
+                "share",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn note_unshare_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "unshare", "123"]).is_ok());
+    }
+
+    #[test]
+    fn project_unshare_command_parses() {
+        assert!(
+            Cli::try_parse_from([
+                "flicknote",
+                "project",
+                "unshare",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn upload_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
     }
@@ -314,6 +359,22 @@ mod tests {
             ["flicknote", "skill", "install"].as_slice(),
             ["flicknote", "import", "notes"].as_slice(),
             ["flicknote", "open", "123"].as_slice(),
+            ["flicknote", "share", "123"].as_slice(),
+            ["flicknote", "unshare", "123"].as_slice(),
+            [
+                "flicknote",
+                "project",
+                "share",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ]
+            .as_slice(),
+            [
+                "flicknote",
+                "project",
+                "unshare",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ]
+            .as_slice(),
         ] {
             let cli = Cli::try_parse_from(argv).unwrap();
             let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();

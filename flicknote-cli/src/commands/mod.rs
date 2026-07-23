@@ -22,6 +22,7 @@ pub(crate) mod prompt;
 pub(crate) mod rename;
 pub(crate) mod replace;
 pub(crate) mod restore;
+pub(crate) mod share;
 pub(crate) mod skill;
 pub(crate) mod source;
 pub(crate) mod sync;
