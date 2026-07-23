@@ -74,7 +74,8 @@ and tag through `og`, which uses the daemon's project-scoped credentials. The
 tag triggers cargo-dist.
 
 Use `just --dry-run release patch` to print the commands without running them.
-If a push fails, rerun the same release command to resume the pending tag.
+If a push fails, keep `main` at the release commit and rerun the same command to
+resume the pending tag.
 
 ## Usage
 
