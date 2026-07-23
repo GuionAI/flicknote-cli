@@ -12,7 +12,13 @@ Rules:
   - For overwrite, use `flicknote replace <id>`.
 
 Examples:
-  cat edit.md | flicknote modify 123
-  cat edit.md | flicknote modify 123 --section 3K
   flicknote modify 123 --project work
   flicknote modify 123 --flagged
+
+Apply an exact replacement from stdin:
+cat <<'EOF' | flicknote modify 123
+===BEFORE===
+old text exactly as it appears
+===AFTER===
+new text
+EOF
