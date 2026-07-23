@@ -194,7 +194,7 @@ async fn run() -> Result<(), CliError> {
         let status = cmd.status().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 CliError::Other(
-                    "flicknote-tui not found — install it with: make install-tui".into(),
+                    "flicknote-tui not found — install it with: just install-tui".into(),
                 )
             } else {
                 CliError::Other(format!("failed to launch flicknote-tui: {e}"))

@@ -32,15 +32,15 @@ cargo clippy               # lint
 cargo fmt --check          # format check
 ```
 
-Or use the Makefile: `make build`, `make test`, `make check`, `make install`
+Or use the justfile: `just build`, `just test`, `just check`, `just install`
 
 ### SQLx metadata
 
 After changing any `sqlx::query!`, `query_as!`, or `query_scalar!` macro, run
-`make sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
+`just sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
 files.
 
-For pgwire metadata, `make sqlx-prepare` must run against a local Postgres
+For pgwire metadata, `just sqlx-prepare` must run against a local Postgres
 schema that already has the matching FlickNote backend migrations applied. If
 prepare reports a missing column or relation, update the local prepare DB from
 the backend migrations first, then rerun prepare. Keep
@@ -53,7 +53,7 @@ For short-id work, this means the local database must include the backend
 
 ## Git Hooks (lefthook)
 
-This repo uses lefthook for git hooks. Install once with `lefthook install` (or `make setup`).
+This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).
 
 - **pre-commit** runs `cargo fmt --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt` then re-commit.
 - **pre-push** runs clippy, cargo deny, go vet, and golangci-lint. Requires `cargo install cargo-deny` and `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`

@@ -14,6 +14,7 @@ version = "0.3.7"
 shared-version = true
 tag-name = "v{{version}}"
 publish = false
+allow-branch = ["main"]
 pre-release-commit-message = "chore: release {{version}}"
 
 [workspace.dependencies]

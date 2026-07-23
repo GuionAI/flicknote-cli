@@ -14,27 +14,28 @@ Local-first note management CLI with cloud sync. Captures, queries, and manages 
 
 ## Build
 
-Requires Rust 2024 edition (nightly or recent stable with edition support).
+Requires Rust 2024 edition (nightly or recent stable with edition support) and
+[`just`](https://github.com/casey/just).
 
 ```bash
 # Build all crates
-make build
+just build
 
 # Run tests
-make test
+just test
 
 # Lint + format check
-make check
+just check
 
 # Refresh sqlx offline metadata after SQL macro changes
-make sqlx-prepare
+just sqlx-prepare
 
 # Install to ~/.cargo/bin
-make install
+just install
 ```
 
 CI sets `SQLX_OFFLINE=true`. After adding or changing `sqlx::query!`,
-`query_as!`, or `query_scalar!` macros, run `make sqlx-prepare` and commit
+`query_as!`, or `query_scalar!` macros, run `just sqlx-prepare` and commit
 the generated `.sqlx` metadata. The prepare script checks SQLite against a
 local fixture DB and pgwire against the local Supabase Postgres used by
 `flicknote-services` sqlc (`localhost:30432/supabase` by default), then merges
@@ -64,11 +65,17 @@ Installs both `flicknote` and `flicknote-sync`.
 
 ```bash
 cargo install cargo-release --locked
-make release-plan VERSION=0.1.8
-make cut-release VERSION=0.1.8
+just release patch
 ```
 
-`cargo-release` updates the shared workspace version, commits it, creates the `vX.Y.Z` tag, and pushes the tag that triggers cargo-dist.
+Use `major`, `minor`, or `patch`. `cargo-release` updates the shared workspace
+version, commits it, and creates the `vX.Y.Z` tag. The recipe pushes the commit
+and tag through `og`, which uses the daemon's project-scoped credentials. The
+tag triggers cargo-dist.
+
+Use `just --dry-run release patch` to print the commands without running them.
+If a push fails, keep `main` at the release commit and rerun the same command to
+resume the pending tag.
 
 ## Usage
 
