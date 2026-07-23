@@ -1,6 +1,6 @@
 FlickNote works with local and managed workspaces.
-Managed workspaces support note and organization commands.
-Local workspaces are required for file, editor, browser, sync, sign-in, and skill commands.
+Managed workspaces support data commands that do not require local files or services.
+Local workspaces are required for file, editor, browser, sharing, sync, sign-in, and skill commands.
 Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:

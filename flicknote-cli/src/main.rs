@@ -157,7 +157,7 @@ fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError
 fn local_workspace_required_error(command: &str) -> CliError {
     CliError::Other(format!(
         "`flicknote {command}` is not available in managed workspaces.\n\
-         Use a local workspace for file, editor, browser, sync, sign-in, and skill commands."
+         Use a local workspace for file, editor, browser, sharing, sync, sign-in, and skill commands."
     ))
 }
 
