@@ -13,6 +13,8 @@ Common workflows:
   flicknote source <id>
   flicknote detail <id> --tree
   flicknote content <id> --section <section-id>
+  flicknote share <id>
+  flicknote project share <project-id>
   cat edit.md | flicknote modify <id>
   cat note.md | flicknote replace <id>
 

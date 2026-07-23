@@ -67,6 +67,8 @@ enum Commands {
     Detail(commands::detail::DetailArgs),
     /// Show note content
     Content(commands::content::ContentArgs),
+    /// Get or create a share link for a note
+    Share(commands::share::ShareArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
     /// Manage prompts
@@ -252,7 +254,8 @@ async fn dispatch(
         Commands::Source(args) => commands::source::run(db, args).await,
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
-        Commands::Project(args) => commands::project::run(db, args).await,
+        Commands::Share(args) => commands::share::run_note(db, config, args).await,
+        Commands::Project(args) => commands::project::run(db, config, args).await,
         Commands::Prompt(args) => commands::prompt::run(db, args).await,
         Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
         Commands::Rename(args) => commands::rename::run(db, config, args).await,
@@ -285,6 +288,24 @@ mod tests {
     #[test]
     fn skill_install_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "skill", "install"]).is_ok());
+    }
+
+    #[test]
+    fn note_share_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "share", "123"]).is_ok());
+    }
+
+    #[test]
+    fn project_share_command_parses() {
+        assert!(
+            Cli::try_parse_from([
+                "flicknote",
+                "project",
+                "share",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

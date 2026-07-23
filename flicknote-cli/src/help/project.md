@@ -2,6 +2,7 @@ Examples:
   flicknote project list
   flicknote project add work
   flicknote project detail <project-id>
+  flicknote project share <project-id>
   flicknote project modify <project-id> --prompt <prompt-id>
   flicknote project modify <project-id> --keyterm <keyterm-id>
   flicknote project modify <project-id> --color "#FF5733"

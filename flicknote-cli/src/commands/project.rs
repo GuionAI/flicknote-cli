@@ -1,5 +1,6 @@
 use clap::{Args, Subcommand};
 use flicknote_core::backend::NoteDb;
+use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::types::Project;
 
@@ -20,6 +21,8 @@ enum ProjectCommands {
     Add(AddProjectArgs),
     /// Show project details
     Detail(DetailArgs),
+    /// Get or create a share link for a project
+    Share(ShareProjectArgs),
     /// Modify project metadata
     Modify(ModifyProjectArgs),
     /// Delete (archive) a project
@@ -58,6 +61,12 @@ struct DetailArgs {
 }
 
 #[derive(Args)]
+struct ShareProjectArgs {
+    /// Project ID (full UUID)
+    id: String,
+}
+
+#[derive(Args)]
 struct ModifyProjectArgs {
     /// Project ID (full UUID)
     id: String,
@@ -78,11 +87,16 @@ struct DeleteProjectArgs {
     id: String,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &ProjectArgs) -> Result<(), CliError> {
+pub(crate) async fn run(
+    db: &dyn NoteDb,
+    config: &Config,
+    args: &ProjectArgs,
+) -> Result<(), CliError> {
     match &args.command {
         ProjectCommands::List(a) => list(db, a).await,
         ProjectCommands::Add(a) => add(db, a).await,
         ProjectCommands::Detail(a) => detail(db, a).await,
+        ProjectCommands::Share(a) => super::share::run_project(db, config, &a.id).await,
         ProjectCommands::Modify(a) => modify(db, a).await,
         ProjectCommands::Delete(a) => delete(db, a).await,
     }
