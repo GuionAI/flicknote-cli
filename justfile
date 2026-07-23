@@ -1,4 +1,5 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
+set positional-arguments
 
 # List available recipes.
 default:
@@ -71,13 +72,4 @@ install-hooks: setup
 
 # Cut and push a major, minor, or patch release.
 release level:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    level="{{ level }}"
-    case "$level" in
-        major|minor|patch) ;;
-        *) echo "level must be major, minor, or patch" >&2; exit 2 ;;
-    esac
-    cargo release "$level" --execute --no-push
-    og git push
-    og git tag --bump "$level"
+    ./scripts/release.sh "$1"
