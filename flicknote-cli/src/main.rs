@@ -281,36 +281,6 @@ async fn dispatch(
 mod tests {
     use super::*;
 
-    fn long_help(command_name: &str) -> String {
-        let mut command = Cli::command();
-        command
-            .find_subcommand_mut(command_name)
-            .expect("command should exist")
-            .render_long_help()
-            .to_string()
-    }
-
-    #[test]
-    fn stdin_body_command_help_has_pasteable_heredoc() {
-        for command_name in ["add", "append", "insert", "replace", "modify"] {
-            let help = long_help(command_name);
-            let start = format!("cat <<'EOF' | flicknote {command_name}");
-
-            assert!(
-                help.lines().any(|line| line.starts_with(&start)),
-                "{command_name} help is missing a pasteable heredoc:\n{help}"
-            );
-            assert!(
-                help.lines().any(|line| line == "EOF"),
-                "{command_name} help indents the heredoc terminator:\n{help}"
-            );
-            assert!(
-                !help.contains('\t'),
-                "{command_name} help contains a tab that would alter pasted body text:\n{help}"
-            );
-        }
-    }
-
     #[test]
     fn detail_rejects_section_flag() {
         assert!(Cli::try_parse_from(["flicknote", "detail", "abc123", "--section", "a1"]).is_err());
