@@ -69,6 +69,8 @@ enum Commands {
     Content(commands::content::ContentArgs),
     /// Get or create a share link for a note
     Share(commands::share::ShareArgs),
+    /// Revoke the share link for a note
+    Unshare(commands::share::UnshareArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
     /// Manage prompts
@@ -255,6 +257,7 @@ async fn dispatch(
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
         Commands::Share(args) => commands::share::run_note(db, config, args).await,
+        Commands::Unshare(args) => commands::share::run_unshare_note(db, config, args).await,
         Commands::Project(args) => commands::project::run(db, config, args).await,
         Commands::Prompt(args) => commands::prompt::run(db, args).await,
         Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
@@ -302,6 +305,24 @@ mod tests {
                 "flicknote",
                 "project",
                 "share",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn note_unshare_command_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "unshare", "123"]).is_ok());
+    }
+
+    #[test]
+    fn project_unshare_command_parses() {
+        assert!(
+            Cli::try_parse_from([
+                "flicknote",
+                "project",
+                "unshare",
                 "550e8400-e29b-41d4-a716-446655440000",
             ])
             .is_ok()

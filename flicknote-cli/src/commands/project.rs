@@ -23,6 +23,8 @@ enum ProjectCommands {
     Detail(DetailArgs),
     /// Get or create a share link for a project
     Share(ShareProjectArgs),
+    /// Revoke the share link for a project
+    Unshare(ShareProjectArgs),
     /// Modify project metadata
     Modify(ModifyProjectArgs),
     /// Delete (archive) a project
@@ -97,6 +99,7 @@ pub(crate) async fn run(
         ProjectCommands::Add(a) => add(db, a).await,
         ProjectCommands::Detail(a) => detail(db, a).await,
         ProjectCommands::Share(a) => super::share::run_project(db, config, &a.id).await,
+        ProjectCommands::Unshare(a) => super::share::run_unshare_project(db, config, &a.id).await,
         ProjectCommands::Modify(a) => modify(db, a).await,
         ProjectCommands::Delete(a) => delete(db, a).await,
     }

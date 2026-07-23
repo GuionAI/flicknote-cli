@@ -14,7 +14,9 @@ Common workflows:
   flicknote detail <id> --tree
   flicknote content <id> --section <section-id>
   flicknote share <id>
+  flicknote unshare <id>
   flicknote project share <project-id>
+  flicknote project unshare <project-id>
   cat edit.md | flicknote modify <id>
   cat note.md | flicknote replace <id>
 
