@@ -8,7 +8,7 @@ pre-commit:
         if git diff --cached -U0 -- ':(glob)**/*.rs' | grep -Eq '^\+.*sqlx::(query!|query_as!|query_scalar!)'; then
           if ! git diff --cached --name-only --diff-filter=ACMR -- '.sqlx/*.json' | grep -q .; then
             echo "sqlx macro changes detected without staged .sqlx metadata."
-            echo "Run: make sqlx-prepare"
+            echo "Run: just sqlx-prepare"
             echo "Then stage the generated .sqlx/*.json files."
             exit 1
           fi
