@@ -13,6 +13,16 @@ pub(crate) struct ProjectArgs {
     command: ProjectCommands,
 }
 
+impl ProjectArgs {
+    pub(crate) fn local_workspace_command_name(&self) -> Option<&'static str> {
+        match &self.command {
+            ProjectCommands::Share(_) => Some("project share"),
+            ProjectCommands::Unshare(_) => Some("project unshare"),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum ProjectCommands {
     /// List projects

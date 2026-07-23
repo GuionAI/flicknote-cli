@@ -126,6 +126,9 @@ impl Commands {
             Self::Skill(_) => Some("skill"),
             Self::Import(_) => Some("import"),
             Self::Open(_) => Some("open"),
+            Self::Share(_) => Some("share"),
+            Self::Unshare(_) => Some("unshare"),
+            Self::Project(args) => args.local_workspace_command_name(),
             _ => None,
         }
     }
@@ -356,6 +359,22 @@ mod tests {
             ["flicknote", "skill", "install"].as_slice(),
             ["flicknote", "import", "notes"].as_slice(),
             ["flicknote", "open", "123"].as_slice(),
+            ["flicknote", "share", "123"].as_slice(),
+            ["flicknote", "unshare", "123"].as_slice(),
+            [
+                "flicknote",
+                "project",
+                "share",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ]
+            .as_slice(),
+            [
+                "flicknote",
+                "project",
+                "unshare",
+                "550e8400-e29b-41d4-a716-446655440000",
+            ]
+            .as_slice(),
         ] {
             let cli = Cli::try_parse_from(argv).unwrap();
             let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();

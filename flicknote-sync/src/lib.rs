@@ -1,4 +1,5 @@
 use std::fmt;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -534,6 +535,18 @@ struct ShareApiError {
     message: Option<String>,
 }
 
+#[derive(Default)]
+struct ShareRequestLock {
+    mutex: tokio::sync::Mutex<()>,
+}
+
+impl ShareRequestLock {
+    async fn run<T>(&self, operation: impl Future<Output = T>) -> T {
+        let _guard = self.mutex.lock().await;
+        operation.await
+    }
+}
+
 impl ShareResource {
     fn path_segment(self) -> &'static str {
         match self {
@@ -1005,6 +1018,7 @@ async fn serve_socket(
     auth: Arc<GoTrueClient>,
     http: reqwest::Client,
     config: Arc<Config>,
+    share_lock: Arc<ShareRequestLock>,
 ) {
     loop {
         let (mut stream, _) = match listener.accept().await {
@@ -1018,6 +1032,7 @@ async fn serve_socket(
         let auth = Arc::clone(&auth);
         let http = http.clone();
         let config = Arc::clone(&config);
+        let share_lock = Arc::clone(&share_lock);
         tokio::spawn(async move {
             let response = match ipc::read_request(&mut stream).await {
                 Ok(DaemonRequest::CreateNote(req)) => {
@@ -1027,13 +1042,19 @@ async fn serve_socket(
                     }
                 }
                 Ok(DaemonRequest::GetOrCreateShare(req)) => {
-                    match get_or_create_share(&http, &auth, &config, &req).await {
+                    match share_lock
+                        .run(get_or_create_share(&http, &auth, &config, &req))
+                        .await
+                    {
                         Ok(url) => DaemonResponse::ShareUrl(ShareUrlResponse { url }),
                         Err(e) => DaemonResponse::Error(e),
                     }
                 }
                 Ok(DaemonRequest::RevokeShare(req)) => {
-                    match revoke_share(&http, &auth, &config, &req).await {
+                    match share_lock
+                        .run(revoke_share(&http, &auth, &config, &req))
+                        .await
+                    {
                         Ok(()) => DaemonResponse::ShareRevoked,
                         Err(e) => DaemonResponse::Error(e),
                     }
@@ -1233,6 +1254,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let socket_db = db.clone();
     let socket_auth = Arc::clone(&auth);
     let socket_http = reqwest::Client::new();
+    let socket_share_lock = Arc::new(ShareRequestLock::default());
     let mut socket_handle = tokio::spawn(async move {
         serve_socket(
             socket_listener,
@@ -1240,6 +1262,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             socket_auth,
             socket_http,
             socket_config_for_task,
+            socket_share_lock,
         )
         .await;
     });
@@ -1288,11 +1311,38 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     use flicknote_core::config::ConfigPaths;
 
     use super::*;
+
+    #[tokio::test]
+    async fn share_request_lock_serializes_operations() {
+        let lock = Arc::new(ShareRequestLock::default());
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+
+        let operation = || {
+            let lock = Arc::clone(&lock);
+            let active = Arc::clone(&active);
+            let max_active = Arc::clone(&max_active);
+            async move {
+                lock.run(async {
+                    let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    max_active.fetch_max(current, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                })
+                .await;
+            }
+        };
+
+        tokio::join!(operation(), operation());
+
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
+    }
 
     fn test_config(api_url: String) -> Config {
         Config {
