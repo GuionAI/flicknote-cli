@@ -7,7 +7,10 @@ use super::util::{
     display_note_id, get_note_content_optional, read_stdin_required, resolve_note_id,
 };
 
+const APPEND_HELP: &str = include_str!("../help/append.md");
+
 #[derive(Args)]
+#[command(after_help = APPEND_HELP)]
 pub(crate) struct AppendArgs {
     /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
     id: String,

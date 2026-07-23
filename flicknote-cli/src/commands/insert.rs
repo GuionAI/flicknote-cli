@@ -7,8 +7,13 @@ use super::util::{
     display_note_id, find_section, get_note_content, read_stdin_required, resolve_note_id,
 };
 
+const INSERT_HELP: &str = include_str!("../help/insert.md");
+
 #[derive(Args)]
-#[command(group(clap::ArgGroup::new("position").required(true)))]
+#[command(
+    group(clap::ArgGroup::new("position").required(true)),
+    after_help = INSERT_HELP
+)]
 pub(crate) struct InsertArgs {
     /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
     id: String,
