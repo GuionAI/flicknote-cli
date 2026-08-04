@@ -349,6 +349,14 @@ mod tests {
     }
 
     #[test]
+    fn note_type_filters_accept_meeting_and_reject_voice() {
+        for command in ["list", "count"] {
+            assert!(Cli::try_parse_from(["flicknote", command, "--type", "meeting"]).is_ok());
+            assert!(Cli::try_parse_from(["flicknote", command, "--type", "voice"]).is_err());
+        }
+    }
+
+    #[test]
     fn managed_workspace_blocks_local_workspace_commands() {
         for argv in [
             ["flicknote", "upload", "file.pdf"].as_slice(),

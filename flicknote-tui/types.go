@@ -9,7 +9,7 @@ import "fmt"
 type Note struct {
 	ID        *int    `json:"id"`
 	UUID      string  `json:"uuid"`
-	Type      string  `json:"type"` // "text", "voice", "link"
+	Type      string  `json:"type"` // "text", "meeting", "link"
 	Status    string  `json:"status"`
 	Title     *string `json:"title"`
 	Content   *string `json:"content"`
