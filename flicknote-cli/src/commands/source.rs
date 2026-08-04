@@ -9,7 +9,7 @@ const SOURCE_HELP: &str = include_str!("../help/source.md");
 pub(crate) struct SourceArgs {
     /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted.
     id: String,
-    /// Optional 1-based range. Voice uses sentence indices; text sources use line numbers.
+    /// Optional 1-based range. Meeting uses sentence indices; text sources use line numbers.
     range: Option<String>,
     /// Print raw source JSON instead of rendered text
     #[arg(long)]
@@ -118,16 +118,16 @@ fn render_source(source: &str, range: Option<&str>) -> Result<String, CliError> 
     }
 
     if let Some(transcripts) = value
-        .get("voice")
-        .and_then(|voice| voice.get("transcripts"))
+        .get("meeting")
+        .and_then(|meeting| meeting.get("transcripts"))
         .and_then(serde_json::Value::as_array)
     {
-        return render_voice_source(transcripts, range);
+        return render_meeting_source(transcripts, range);
     }
 
     if range.is_some() {
         return Err(CliError::Other(
-            "source range is only supported for voice transcripts and text content".into(),
+            "source range is only supported for meeting transcripts and text content".into(),
         ));
     }
 
@@ -151,11 +151,11 @@ fn render_source_info(source: &str) -> Result<String, CliError> {
     }
 
     if let Some(transcripts) = value
-        .get("voice")
-        .and_then(|voice| voice.get("transcripts"))
+        .get("meeting")
+        .and_then(|meeting| meeting.get("transcripts"))
         .and_then(serde_json::Value::as_array)
     {
-        return Ok(source_info("voice", "sentence", transcripts.len()));
+        return Ok(source_info("meeting", "sentence", transcripts.len()));
     }
 
     Ok(source_info("json", "none", 0))
@@ -189,7 +189,7 @@ fn render_text_source(source: &str, range: Option<&str>) -> Result<String, CliEr
     Ok(output)
 }
 
-fn render_voice_source(
+fn render_meeting_source(
     transcripts: &[serde_json::Value],
     range: Option<&str>,
 ) -> Result<String, CliError> {
@@ -307,8 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn render_source_slices_voice_sources_by_sentence_number() {
-        let source = r#"{"voice":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98],[2000,3000,"third",97]]}}"#;
+    fn render_source_slices_meeting_sources_by_sentence_number() {
+        let source = r#"{"meeting":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98],[2000,3000,"third",97]]}}"#;
 
         assert_eq!(
             render_source(source, Some("2")).unwrap(),
@@ -317,20 +317,20 @@ mod tests {
     }
 
     #[test]
-    fn render_source_rejects_range_for_empty_voice_transcripts() {
-        let source = r#"{"voice":{"transcripts":[]}}"#;
+    fn render_source_rejects_range_for_empty_meeting_transcripts() {
+        let source = r#"{"meeting":{"transcripts":[]}}"#;
 
         let err = render_source(source, Some("1")).unwrap_err();
         assert!(err.to_string().contains("outside available range"));
     }
 
     #[test]
-    fn render_source_info_counts_voice_transcripts() {
-        let source = r#"{"voice":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98]]}}"#;
+    fn render_source_info_counts_meeting_transcripts() {
+        let source = r#"{"meeting":{"transcripts":[[0,1000,"first",99],[1000,2000,"second",98]]}}"#;
 
         assert_eq!(
             render_source_info(source).unwrap(),
-            "type: voice\nrange_unit: sentence\ncount: 2\n"
+            "type: meeting\nrange_unit: sentence\ncount: 2\n"
         );
     }
 

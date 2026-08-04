@@ -8,6 +8,6 @@ Examples:
   flicknote source 42 --info
   flicknote source 42 --archived
 
-Prints the stored source in a readable form. Voice ranges use sentence indices.
+Prints the stored source in a readable form. Meeting ranges use sentence indices.
 Text source ranges use line numbers.
 Use --info to print the source type, range unit, and count.

@@ -70,7 +70,7 @@ func (m Model) viewList() string {
 
 func typeIcon(t string) string {
 	switch t {
-	case "voice":
+	case "meeting":
 		return "🎙"
 	case "link":
 		return "🔗"

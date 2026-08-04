@@ -10,7 +10,7 @@ pub(crate) struct CountArgs {
     #[arg(long)]
     project: Option<String>,
     /// Filter by type
-    #[arg(long, value_parser = ["normal", "voice", "link", "file"])]
+    #[arg(long, value_parser = ["normal", "meeting", "link", "file"])]
     r#type: Option<String>,
     /// Count archived (deleted) notes instead of active
     #[arg(long)]

@@ -10,7 +10,7 @@ const LIST_HELP: &str = include_str!("../help/list.md");
 #[command(after_help = LIST_HELP)]
 pub(crate) struct ListArgs {
     /// Filter by type
-    #[arg(long, value_parser = ["normal", "voice", "link"])]
+    #[arg(long, value_parser = ["normal", "meeting", "link"])]
     r#type: Option<String>,
     /// Filter by project name
     #[arg(long)]
