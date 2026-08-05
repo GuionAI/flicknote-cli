@@ -12,10 +12,7 @@ use flicknote_core::error::CliError;
 const ROOT_HELP: &str = include_str!("help/root.md");
 
 mod commands;
-mod editable_document;
-mod frontmatter;
-mod markdown;
-mod utils;
+mod mcp;
 
 #[derive(Parser)]
 #[command(
@@ -27,18 +24,12 @@ mod utils;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Launch interactive TUI
-    #[arg(short = 't', long = "tui")]
-    tui: bool,
-
-    /// Project filter (used with -t)
-    #[arg(long = "project", requires = "tui")]
-    project: Option<String>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run the local MCP server over stdio
+    Mcp,
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
     /// Import or upload a file as a note
@@ -89,7 +80,7 @@ enum Commands {
     Rename(commands::rename::RenameArgs),
     /// Insert content before or after a section
     Insert(commands::insert::InsertArgs),
-    /// Overwrite note content (whole note or section) — for precision edits use modify
+    /// Replace a whole section — for precision edits use modify
     Replace(commands::replace::ReplaceArgs),
     /// Modify note via ===BEFORE===/===AFTER=== blocks and/or update metadata
     Modify(commands::modify::ModifyArgs),
@@ -116,6 +107,7 @@ impl WorkspaceMode {
 impl Commands {
     fn local_workspace_command_name(&self) -> Option<&'static str> {
         match self {
+            Self::Mcp => Some("mcp"),
             Self::Upload(_) => Some("upload"),
             Self::Edit(_) => Some("edit"),
             Self::Login(_) => Some("login"),
@@ -135,10 +127,6 @@ impl Commands {
 fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError> {
     if mode == WorkspaceMode::Local {
         return Ok(());
-    }
-
-    if cli.tui {
-        return Err(local_workspace_required_error("--tui"));
     }
 
     let Some(ref command) = cli.command else {
@@ -184,23 +172,6 @@ async fn run() -> Result<(), CliError> {
         }
     }
 
-    if cli.tui {
-        let mut cmd = std::process::Command::new("flicknote-tui");
-        if let Some(ref project) = cli.project {
-            cmd.arg("--project").arg(project);
-        }
-        let status = cmd.status().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CliError::Other(
-                    "flicknote-tui not found — install it with: just install-tui".into(),
-                )
-            } else {
-                CliError::Other(format!("failed to launch flicknote-tui: {e}"))
-            }
-        })?;
-        std::process::exit(status.code().unwrap_or(1));
-    }
-
     // Backend selection: DATABASE_URL set → pgwire, else → SQLite (powersync)
     #[cfg(feature = "storage-pgwire")]
     if let Ok(database_url) = std::env::var("DATABASE_URL") {
@@ -218,11 +189,16 @@ async fn run() -> Result<(), CliError> {
     {
         let db = Database::open_local(&config).await?;
         let user_id = flicknote_core::session::get_user_id(&config)?;
-        let backend = SqliteBackend { db, user_id };
+        let backend: std::rc::Rc<dyn NoteDb> = std::rc::Rc::new(SqliteBackend { db, user_id });
+        if matches!(cli.command, Some(Commands::Mcp)) {
+            return tokio::task::LocalSet::new()
+                .run_until(mcp::serve(backend, std::rc::Rc::new(config)))
+                .await;
+        }
         dispatch(
             &cli,
             &config,
-            &backend,
+            backend.as_ref(),
             commands::add::AddCreateMode::Daemon,
         )
         .await
@@ -243,6 +219,7 @@ async fn dispatch(
     };
 
     match command {
+        Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
         Commands::Add(args) => commands::add::run(db, config, args, add_mode).await,
         Commands::Upload(args) => commands::upload::run(db, config, args, add_mode).await,
         Commands::Append(args) => commands::append::run(db, config, args).await,
@@ -277,6 +254,319 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "powersync")]
+    async fn call_mcp_tool(
+        writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
+        reader: &mut tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
+        id: u64,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> serde_json::Value {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/call",
+            "params": { "name": name, "arguments": arguments }
+        });
+        writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut response = String::new();
+        reader.read_line(&mut response).await.unwrap();
+        serde_json::from_str(&response).unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[cfg(feature = "powersync")]
+    async fn mcp_server_lists_contract_and_calls_note_list() {
+        use rmcp::ServiceExt;
+        use std::rc::Rc;
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let config = Config {
+                    supabase_url: String::new(),
+                    supabase_anon_key: String::new(),
+                    powersync_url: String::new(),
+                    api_url: String::new(),
+                    web_url: Some("https://app.example".to_string()),
+                    paths: flicknote_core::config::ConfigPaths {
+                        config_dir: directory.path().to_path_buf(),
+                        data_dir: directory.path().to_path_buf(),
+                        config_file: directory.path().join("config.json"),
+                        session_file: directory.path().join("session.json"),
+                        db_file: directory.path().join("test.db"),
+                        log_file: directory.path().join("test.log"),
+                    },
+                };
+                let database = Database::open_local(&config).await.unwrap();
+                let backend = SqliteBackend {
+                    db: database,
+                    user_id: "test-user".to_string(),
+                };
+                let project_id = backend.create_project("MCP Project").await.unwrap();
+                let note_id = uuid::Uuid::new_v4().to_string();
+                backend
+                    .insert_note(&flicknote_core::backend::InsertNoteReq {
+                        id: &note_id,
+                        note_type: "normal",
+                        status: "synced",
+                        title: Some("MCP Note"),
+                        content: Some("## Alpha\n\nOld text.\n\n## Beta\n\nKeep me."),
+                        metadata: None,
+                        project_id: Some(&project_id),
+                        now: "2026-08-05T00:00:00Z",
+                    })
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE notes SET source = ? WHERE id = ?")
+                    .bind(r#"{"link":{"content":"one\ntwo\nthree"}}"#)
+                    .bind(&note_id)
+                    .execute(&backend.db.pool)
+                    .await
+                    .unwrap();
+                let alpha_id = flicknote_core::services::markdown::parse_markdown(
+                    "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me.",
+                )
+                .headings[0]
+                    .id
+                    .clone();
+                let backend: Rc<dyn NoteDb> = Rc::new(backend);
+                let server = mcp::FlickNoteMcp::new(backend, Rc::new(config));
+                let (server_io, client_io) = tokio::io::duplex(8 * 1024);
+                let server = tokio::task::spawn_local(async move {
+                    server.serve(server_io).await.unwrap().waiting().await
+                });
+                let (client_read, mut client_write) = tokio::io::split(client_io);
+                let mut client_read = BufReader::new(client_read);
+
+                client_write
+                    .write_all(concat!(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"flicknote-test","version":"0"}}}"#, "\n").as_bytes())
+                    .await
+                    .unwrap();
+                let mut response = String::new();
+                client_read.read_line(&mut response).await.unwrap();
+                let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+                assert_eq!(parsed["id"], 1);
+                assert_eq!(parsed["result"]["serverInfo"]["name"], "flicknote");
+
+                client_write
+                    .write_all(concat!(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#, "\n", r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#, "\n").as_bytes())
+                    .await
+                    .unwrap();
+                response.clear();
+                client_read.read_line(&mut response).await.unwrap();
+                let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+                assert_eq!(parsed["id"], 2);
+                let tools = parsed["result"]["tools"].as_array().unwrap();
+                let names = tools
+                    .iter()
+                    .map(|tool| tool["name"].as_str().unwrap())
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(names, mcp::EXPECTED_TOOLS.into_iter().collect());
+                assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
+                let list_schema = tools
+                    .iter()
+                    .find(|tool| tool["name"] == "note_list")
+                    .unwrap();
+                assert_eq!(
+                    list_schema["inputSchema"]["$defs"]["NoteType"]["enum"],
+                    serde_json::json!(["normal", "meeting", "link"])
+                );
+                let count_schema = tools
+                    .iter()
+                    .find(|tool| tool["name"] == "note_count")
+                    .unwrap();
+                assert_eq!(
+                    count_schema["inputSchema"]["$defs"]["NoteType"]["enum"],
+                    serde_json::json!(["normal", "meeting", "link", "file"])
+                );
+
+                client_write
+                    .write_all(concat!(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"note_list","arguments":{}}}"#, "\n").as_bytes())
+                    .await
+                    .unwrap();
+                response.clear();
+                client_read.read_line(&mut response).await.unwrap();
+                let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
+                assert_eq!(parsed["id"], 3);
+                assert_eq!(parsed["result"]["isError"], false);
+                assert_eq!(parsed["result"]["structuredContent"].as_array().unwrap().len(), 1);
+
+                let modified = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    4,
+                    "note_modify",
+                    serde_json::json!({
+                        "id": note_id,
+                        "before": "Old text.",
+                        "after": "New text.",
+                        "flagged": true
+                    }),
+                )
+                .await;
+                assert_eq!(modified["result"]["isError"], false);
+                assert_eq!(modified["result"]["structuredContent"]["note"]["flagged"], true);
+
+                let replaced = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    5,
+                    "note_replace_section",
+                    serde_json::json!({
+                        "id": note_id,
+                        "section": alpha_id,
+                        "content": "## Alpha revised\n\nReplacement text."
+                    }),
+                )
+                .await;
+                assert_eq!(replaced["result"]["isError"], false);
+
+                let fetched = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    6,
+                    "note_get",
+                    serde_json::json!({ "id": note_id }),
+                )
+                .await;
+                let content = fetched["result"]["structuredContent"]["content"]
+                    .as_str()
+                    .unwrap();
+                assert!(content.contains("Replacement text."));
+                assert!(content.contains("Keep me."));
+
+                let found = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    13,
+                    "note_find",
+                    serde_json::json!({ "keywords": ["Replacement"] }),
+                )
+                .await;
+                assert_eq!(
+                    found["result"]["structuredContent"].as_array().unwrap().len(),
+                    1
+                );
+
+                let projects = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    14,
+                    "project_list",
+                    serde_json::json!({}),
+                )
+                .await;
+                assert_eq!(
+                    projects["result"]["structuredContent"]
+                        .as_array()
+                        .unwrap()
+                        .len(),
+                    1
+                );
+
+                let project = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    7,
+                    "project_modify",
+                    serde_json::json!({ "id": project_id, "color": "#abcdef" }),
+                )
+                .await;
+                assert_eq!(
+                    project["result"]["structuredContent"]["color"],
+                    "#abcdef"
+                );
+
+                let source_info = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    8,
+                    "note_source",
+                    serde_json::json!({ "id": note_id, "view": "info" }),
+                )
+                .await;
+                assert_eq!(
+                    source_info["result"]["structuredContent"],
+                    serde_json::json!({
+                        "view": "info",
+                        "source_type": "link",
+                        "range_unit": "line",
+                        "count": 3
+                    })
+                );
+
+                let source_range = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    9,
+                    "note_source",
+                    serde_json::json!({
+                        "id": note_id,
+                        "view": "rendered",
+                        "range": "2:3"
+                    }),
+                )
+                .await;
+                assert_eq!(
+                    source_range["result"]["structuredContent"]["content"],
+                    "two\nthree\n"
+                );
+                assert_eq!(
+                    source_range["result"]["structuredContent"]["selected_start"],
+                    2
+                );
+
+                let daemon_error = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    10,
+                    "note_add",
+                    serde_json::json!({ "content": "daemon-backed note" }),
+                )
+                .await;
+                assert_eq!(daemon_error["result"]["isError"], true);
+                assert_eq!(
+                    daemon_error["result"]["structuredContent"]["code"],
+                    "daemon_unavailable"
+                );
+                assert_eq!(
+                    daemon_error["result"]["structuredContent"]["retryable"],
+                    true
+                );
+
+                let archived = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    11,
+                    "note_archive",
+                    serde_json::json!({ "id": note_id }),
+                )
+                .await;
+                assert_eq!(archived["result"]["structuredContent"]["archived"], true);
+                let restored = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    12,
+                    "note_restore",
+                    serde_json::json!({ "id": note_id }),
+                )
+                .await;
+                assert_eq!(restored["result"]["structuredContent"]["archived"], false);
+
+                drop(client_write);
+                drop(client_read);
+                server.await.unwrap().unwrap();
+            })
+            .await;
+    }
 
     #[test]
     fn detail_rejects_section_flag() {
@@ -354,8 +644,31 @@ mod tests {
     }
 
     #[test]
+    fn replace_requires_section() {
+        assert!(Cli::try_parse_from(["flicknote", "replace", "1"]).is_err());
+        assert!(Cli::try_parse_from(["flicknote", "replace", "1", "--section", "a1"]).is_ok());
+    }
+
+    #[test]
+    fn replace_rejects_metadata_flags() {
+        for flag in ["--project", "--flagged", "--unflagged"] {
+            let mut argv = vec!["flicknote", "replace", "1", "--section", "a1", flag];
+            if flag == "--project" {
+                argv.push("work");
+            }
+            assert!(Cli::try_parse_from(argv).is_err(), "accepted {flag}");
+        }
+    }
+
+    #[test]
+    fn mcp_subcommand_parses() {
+        assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_ok());
+    }
+
+    #[test]
     fn managed_workspace_blocks_local_workspace_commands() {
         for argv in [
+            ["flicknote", "mcp"].as_slice(),
             ["flicknote", "upload", "file.pdf"].as_slice(),
             ["flicknote", "edit"].as_slice(),
             ["flicknote", "login"].as_slice(),
@@ -406,21 +719,11 @@ mod tests {
             ["flicknote", "keyterm", "list"].as_slice(),
             ["flicknote", "rename", "--section", "a1", "1", "New"].as_slice(),
             ["flicknote", "insert", "1", "--after", "a1"].as_slice(),
-            ["flicknote", "replace", "1"].as_slice(),
+            ["flicknote", "replace", "1", "--section", "a1"].as_slice(),
             ["flicknote", "modify", "1"].as_slice(),
         ] {
             let cli = Cli::try_parse_from(argv).unwrap();
             enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap();
         }
-    }
-
-    #[test]
-    fn managed_workspace_blocks_tui() {
-        let cli = Cli::try_parse_from(["flicknote", "-t"]).unwrap();
-        let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();
-        let message = format!("{err}");
-
-        assert!(message.contains("`flicknote --tui`"));
-        assert!(message.contains("not available in managed workspaces"));
     }
 }

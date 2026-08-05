@@ -1,7 +1,13 @@
 use std::fmt;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
+use flicknote_core::backend::InsertedNote;
 use flicknote_core::config::Config;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::ports::{
+    CreateNote, NoteCreator, ShareGateway, ShareResource as CoreShareResource,
+};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
@@ -75,6 +81,7 @@ pub struct CreatedNote {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DaemonError {
+    Unavailable { path: String, message: String },
     RemoteCreatedLocalSyncTimeout { short_id: i64, timeout_secs: u64 },
     Other { message: String },
 }
@@ -82,6 +89,9 @@ pub enum DaemonError {
 impl fmt::Display for DaemonError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unavailable { path, message } => {
+                write!(f, "Sync daemon is not available at {path}: {message}")
+            }
             Self::RemoteCreatedLocalSyncTimeout {
                 short_id,
                 timeout_secs,
@@ -105,11 +115,13 @@ pub async fn send_request(
     request: &DaemonRequest,
 ) -> Result<DaemonResponse, DaemonError> {
     let path = socket_path(config);
-    let mut stream = UnixStream::connect(&path)
-        .await
-        .map_err(|e| DaemonError::Other {
-            message: format!("Sync daemon is not available at {}: {e}", path.display()),
-        })?;
+    let mut stream =
+        UnixStream::connect(&path)
+            .await
+            .map_err(|error| DaemonError::Unavailable {
+                path: path.display().to_string(),
+                message: error.to_string(),
+            })?;
     write_json(&mut stream, request).await?;
     let mut buf = Vec::new();
     stream
@@ -121,6 +133,101 @@ pub async fn send_request(
     serde_json::from_slice(&buf).map_err(|e| DaemonError::Other {
         message: format!("Failed to parse daemon response: {e}"),
     })
+}
+
+pub struct DaemonClient<'a> {
+    config: &'a Config,
+}
+
+impl<'a> DaemonClient<'a> {
+    pub fn new(config: &'a Config) -> Self {
+        Self { config }
+    }
+
+    async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
+        send_request(self.config, &request)
+            .await
+            .map_err(|error| match error {
+                DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(format!(
+                    "{error}. Start it with `flicknote sync start`."
+                )),
+                other => ServiceError::Daemon(other.to_string()),
+            })
+    }
+}
+
+#[async_trait(?Send)]
+impl NoteCreator for DaemonClient<'_> {
+    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
+        let response = self
+            .request(DaemonRequest::CreateNote(Box::new(CreateNoteRequest {
+                id: request.id,
+                note_type: request.note_type,
+                status: request.status,
+                title: request.title,
+                content: request.content,
+                metadata: request.metadata,
+                project_id: request.project_id,
+                now: request.now,
+                topics: request.topics,
+                attachment_path: None,
+            })))
+            .await?;
+        match response {
+            DaemonResponse::NoteCreated(note) => Ok(InsertedNote {
+                uuid: note.uuid,
+                short_id: Some(note.short_id),
+            }),
+            DaemonResponse::Error(error) => Err(ServiceError::Daemon(error.to_string())),
+            _ => Err(ServiceError::Internal(
+                "sync daemon returned an unexpected create response".to_string(),
+            )),
+        }
+    }
+}
+
+#[async_trait(?Send)]
+impl ShareGateway for DaemonClient<'_> {
+    async fn share(&self, resource: CoreShareResource, id: &str) -> Result<String, ServiceError> {
+        let response = self
+            .request(DaemonRequest::GetOrCreateShare(ShareRequest {
+                resource: resource.into(),
+                id: id.to_string(),
+            }))
+            .await?;
+        match response {
+            DaemonResponse::ShareUrl(response) => Ok(response.url),
+            DaemonResponse::Error(error) => Err(ServiceError::Daemon(error.to_string())),
+            _ => Err(ServiceError::Internal(
+                "sync daemon returned an unexpected share response".to_string(),
+            )),
+        }
+    }
+
+    async fn unshare(&self, resource: CoreShareResource, id: &str) -> Result<(), ServiceError> {
+        let response = self
+            .request(DaemonRequest::RevokeShare(ShareRequest {
+                resource: resource.into(),
+                id: id.to_string(),
+            }))
+            .await?;
+        match response {
+            DaemonResponse::ShareRevoked => Ok(()),
+            DaemonResponse::Error(error) => Err(ServiceError::Daemon(error.to_string())),
+            _ => Err(ServiceError::Internal(
+                "sync daemon returned an unexpected unshare response".to_string(),
+            )),
+        }
+    }
+}
+
+impl From<CoreShareResource> for ShareResource {
+    fn from(resource: CoreShareResource) -> Self {
+        match resource {
+            CoreShareResource::Note => Self::Note,
+            CoreShareResource::Project => Self::Project,
+        }
+    }
 }
 
 pub async fn read_request(stream: &mut UnixStream) -> Result<DaemonRequest, DaemonError> {
@@ -161,9 +268,44 @@ async fn write_json<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<
 #[cfg(test)]
 mod tests {
     use flicknote_core::config::{Config, ConfigPaths};
+    use flicknote_core::services::ports::{
+        CreateNote, NoteCreator, ShareGateway, ShareResource as CoreShareResource,
+    };
     use serde_json::json;
+    use tokio::net::UnixListener;
 
     use super::*;
+
+    fn test_config(directory: &std::path::Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: directory.to_path_buf(),
+                data_dir: directory.to_path_buf(),
+                config_file: directory.join("config.json"),
+                session_file: directory.join("session.json"),
+                db_file: directory.join("flicknote.db"),
+                log_file: directory.join("sync.log"),
+            },
+        }
+    }
+
+    async fn serve_response(
+        config: &Config,
+        response: DaemonResponse,
+    ) -> tokio::task::JoinHandle<DaemonRequest> {
+        let listener = UnixListener::bind(socket_path(config)).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await.unwrap();
+            write_response(&mut stream, &response).await.unwrap();
+            request
+        })
+    }
 
     #[test]
     fn socket_path_lives_in_data_dir() {
@@ -286,5 +428,118 @@ mod tests {
             err.to_string(),
             "Created note remotely as #123, but PowerSync did not update the local database within 10s.\nDo not create it again. Check `flicknote sync status`; note #123 should appear after sync catches up."
         );
+    }
+
+    #[tokio::test]
+    async fn daemon_client_maps_missing_socket_to_retryable_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+
+        let error = DaemonClient::new(&config)
+            .share(CoreShareResource::Note, "note-id")
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "daemon_unavailable");
+        assert!(error.retryable());
+        assert!(error.to_string().contains("flicknote sync start"));
+    }
+
+    #[tokio::test]
+    async fn daemon_client_maps_create_response_and_unexpected_variant() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::NoteCreated(CreatedNote {
+                uuid: "created-id".to_string(),
+                short_id: 42,
+            }),
+        )
+        .await;
+        let request = CreateNote {
+            id: "request-id".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some("Title".to_string()),
+            content: Some("Body".to_string()),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-05T00:00:00Z".to_string(),
+            topics: Vec::new(),
+        };
+
+        let created = DaemonClient::new(&config)
+            .create(request.clone())
+            .await
+            .unwrap();
+        assert_eq!(created.uuid, "created-id");
+        assert_eq!(created.short_id, Some(42));
+        assert!(matches!(
+            server.await.unwrap(),
+            DaemonRequest::CreateNote(_)
+        ));
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(&config, DaemonResponse::ShareRevoked).await;
+        let error = DaemonClient::new(&config)
+            .create(request)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "internal_error");
+        assert!(error.to_string().contains("unexpected create response"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn daemon_client_maps_share_and_unshare_responses() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::ShareUrl(ShareUrlResponse {
+                url: "https://share.example/note".to_string(),
+            }),
+        )
+        .await;
+        let url = DaemonClient::new(&config)
+            .share(CoreShareResource::Note, "note-id")
+            .await
+            .unwrap();
+        assert_eq!(url, "https://share.example/note");
+        assert!(matches!(
+            server.await.unwrap(),
+            DaemonRequest::GetOrCreateShare(_)
+        ));
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(&config, DaemonResponse::ShareRevoked).await;
+        DaemonClient::new(&config)
+            .unshare(CoreShareResource::Project, "project-id")
+            .await
+            .unwrap();
+        assert!(matches!(
+            server.await.unwrap(),
+            DaemonRequest::RevokeShare(_)
+        ));
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::Error(DaemonError::Other {
+                message: "remote failure".to_string(),
+            }),
+        )
+        .await;
+        let error = DaemonClient::new(&config)
+            .share(CoreShareResource::Note, "note-id")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "daemon_error");
+        assert!(error.to_string().contains("remote failure"));
+        server.await.unwrap();
     }
 }

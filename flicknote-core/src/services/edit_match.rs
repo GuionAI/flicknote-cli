@@ -19,13 +19,15 @@
 //! ## Reference
 //! organon `src edit` source: `/Users/neil/Code/guion-opensource/organon/internal/srcop/edit.go`
 
-use flicknote_core::error::CliError;
+use crate::error::CliError;
+
+use super::error::ServiceError;
 
 const BEFORE_DELIM: &str = "===BEFORE===";
 const AFTER_DELIM: &str = "===AFTER===";
 
 /// Detect edit-mode stdin: first non-whitespace-only line is exactly `===BEFORE===`.
-pub(crate) fn is_edit_mode(stdin: &str) -> bool {
+pub fn is_edit_mode(stdin: &str) -> bool {
     stdin
         .lines()
         .map(str::trim_end)
@@ -44,7 +46,7 @@ pub(crate) fn is_edit_mode(stdin: &str) -> bool {
 /// - identical BEFORE and AFTER (no-op)
 ///
 /// Mirrors organon `parseEditInput` error wording.
-pub(crate) fn parse_edit_input(input: &str) -> Result<(String, String), CliError> {
+pub fn parse_edit_input(input: &str) -> Result<(String, String), CliError> {
     // Normalize CRLF → LF for parsing consistency.
     let text = input.replace("\r\n", "\n");
     let lines: Vec<&str> = text.split('\n').collect();
@@ -134,7 +136,7 @@ pub(crate) fn parse_edit_input(input: &str) -> Result<(String, String), CliError
 
 /// Result of a successful exact match.
 #[derive(Debug, Clone)]
-pub(crate) struct MatchInfo {
+pub struct MatchInfo {
     /// Byte offset where the BEFORE match starts in source.
     pub start: usize,
     /// Byte offset where the BEFORE match ends (exclusive) in source.
@@ -149,7 +151,7 @@ pub(crate) struct MatchInfo {
 ///   and advises adding surrounding context to disambiguate.
 ///
 /// Uses EXACT byte matching only — no fuzzy passes. Mirrors organon's multi-match error format.
-pub(crate) fn find_unique(source: &str, before: &str) -> Result<MatchInfo, CliError> {
+pub fn find_unique(source: &str, before: &str) -> Result<MatchInfo, ServiceError> {
     // Exact match only.
     let first = source.find(before);
 
@@ -190,20 +192,25 @@ pub(crate) fn find_unique(source: &str, before: &str) -> Result<MatchInfo, CliEr
                     msg.push_str(&format!("  line {}: {}\n", line_num, snippet));
                 }
                 msg.push_str("\nadd surrounding context to disambiguate");
-                return Err(CliError::Other(msg));
+                return Err(ServiceError::BeforeAmbiguous {
+                    matches: total,
+                    message: msg,
+                });
             }
 
             Ok(MatchInfo { start, end })
         }
-        None => Err(CliError::Other(format!(
-            "text not found\nClosest region:\n{}",
-            closest_region(source, before)
-        ))),
+        None => Err(ServiceError::BeforeNotFound {
+            message: format!(
+                "text not found\nClosest region:\n{}",
+                closest_region(source, before)
+            ),
+        }),
     }
 }
 
 /// Apply a verified edit to source — splice `after` into the `[start, end)` byte range.
-pub(crate) fn splice(source: &str, m: &MatchInfo, after: &str) -> String {
+pub fn splice(source: &str, m: &MatchInfo, after: &str) -> String {
     let mut out = String::with_capacity(source.len() - (m.end - m.start) + after.len());
     out.push_str(&source[..m.start]);
     out.push_str(after);
@@ -536,9 +543,9 @@ mod tests {
         // The absolute offset adjustment happens in the caller (modify.rs).
         let source = "# Root\n\n## Alpha\n\nfoo bar baz\n\n## Beta\n\nqux";
         // Search within the Alpha section slice [start..end].
-        let doc = crate::markdown::parse_markdown(source);
+        let doc = crate::services::markdown::parse_markdown(source);
         let alpha_bounds =
-            super::super::util::find_section(&doc, &doc.headings[1].id, "test").unwrap();
+            crate::services::sections::find_section(&doc, &doc.headings[1].id, "test").unwrap();
         let slice = &source[alpha_bounds.start..alpha_bounds.end];
         let m = find_unique(slice, "foo bar baz").unwrap();
         // m.start is relative to slice (Alpha section body), not absolute.

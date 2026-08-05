@@ -54,7 +54,8 @@ pub(crate) async fn run(
         if content.is_empty() {
             return Err(CliError::Other("No content provided".into()));
         }
-        let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
+        let (title, stripped_content) =
+            flicknote_core::services::note_content::extract_title_and_strip(&content);
         let title_ref = title.as_deref();
         let req = InsertNoteReq {
             id: &id,

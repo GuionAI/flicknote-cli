@@ -1,8 +1,10 @@
 use clap::Args;
-use flicknote_core::backend::{NoteDb, NoteFilter};
+use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::note::{NoteListInput, NoteService};
 
-use super::util::{note_json, print_notes_table, resolve_project_arg};
+use super::util::{print_summaries_table, resolve_project_arg};
 
 const LIST_HELP: &str = include_str!("../help/list.md");
 
@@ -27,63 +29,38 @@ pub(crate) struct ListArgs {
 }
 
 pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
-    let effective_project = resolve_project_arg(&args.project);
-
+    let project = resolve_project_arg(&args.project);
     if args.project.is_none()
-        && let Some(ref name) = effective_project
+        && let Some(name) = project.as_deref()
     {
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
-
-    let project_id: Option<String> = if let Some(ref name) = effective_project {
-        match db.find_project_by_name(name).await? {
-            Some(id) => Some(id),
-            None => {
-                eprintln!("Warning: no project found with name \"{name}\".");
-                return Ok(());
-            }
-        }
-    } else {
-        None
-    };
-
-    let notes = db
-        .list_notes(&NoteFilter {
-            project_id: project_id.as_deref(),
-            note_type: args.r#type.as_deref(),
+    let notes = match NoteService::new(db)
+        .list(NoteListInput {
+            note_type: args.r#type.clone(),
+            project: project.clone(),
             archived: args.archived,
             limit: args.limit,
         })
-        .await?;
-
+        .await
+    {
+        Ok(notes) => notes,
+        Err(ServiceError::ProjectNotFound(_)) => {
+            eprintln!(
+                "Warning: no project found with name \"{}\".",
+                project.as_deref().unwrap_or_default()
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(error.into()),
+    };
     if args.json {
-        let values: Vec<_> = notes.iter().map(|note| note_json(note, None)).collect();
         println!(
             "{}",
-            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
         );
     } else {
-        // Fetch topics for all notes
-        let note_id_refs: Vec<&str> = notes.iter().map(|n| n.id.as_str()).collect();
-        let topics_map = db.list_note_topics(&note_id_refs).await?;
-
-        // Fetch project names for all notes
-        let mut project_names: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for note in &notes {
-            let Some(ref pid) = note.project_id else {
-                continue;
-            };
-            if project_names.contains_key(pid) {
-                continue;
-            }
-            if let Some(name) = db.find_project_name_by_id(pid).await? {
-                project_names.insert(pid.clone(), name);
-            }
-        }
-
-        print_notes_table(&notes, &topics_map, &project_names);
+        print_summaries_table(&notes);
     }
-
     Ok(())
 }

@@ -1,6 +1,8 @@
 use clap::Args;
-use flicknote_core::backend::{NoteDb, NoteFilter};
+use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::note::{NoteCountInput, NoteService};
 
 use super::util::resolve_project_arg;
 
@@ -20,36 +22,26 @@ pub(crate) struct CountArgs {
 }
 
 pub(crate) async fn run(db: &dyn NoteDb, args: &CountArgs) -> Result<(), CliError> {
-    let effective_project = resolve_project_arg(&args.project);
-
-    let project_id: Option<String> = if let Some(ref name) = effective_project {
-        match db.find_project_by_name(name).await? {
-            Some(id) => Some(id),
-            None => {
-                eprintln!("Warning: no project found with name \"{name}\".");
-                println!("0");
-                return Ok(());
-            }
+    let project = resolve_project_arg(&args.project);
+    let count = match NoteService::new(db)
+        .count(NoteCountInput {
+            keywords: args.keywords.clone(),
+            project: project.clone(),
+            note_type: args.r#type.clone(),
+            archived: args.archived,
+        })
+        .await
+    {
+        Ok(count) => count,
+        Err(ServiceError::ProjectNotFound(_)) => {
+            eprintln!(
+                "Warning: no project found with name \"{}\".",
+                project.as_deref().unwrap_or_default()
+            );
+            0
         }
-    } else {
-        None
+        Err(error) => return Err(error.into()),
     };
-
-    let filter = NoteFilter {
-        project_id: project_id.as_deref(),
-        note_type: args.r#type.as_deref(),
-        archived: args.archived,
-        limit: u32::MAX,
-    };
-
-    let count = if args.keywords.is_empty() {
-        db.count_notes(&filter).await?
-    } else {
-        // Use search_notes and count results
-        let notes = db.search_notes(&args.keywords, &filter).await?;
-        notes.len() as u64
-    };
-
     println!("{count}");
     Ok(())
 }

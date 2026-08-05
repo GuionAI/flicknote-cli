@@ -49,7 +49,8 @@ pub(crate) async fn run(
         }
 
         let id = uuid::Uuid::new_v4().to_string();
-        let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
+        let (title, stripped_content) =
+            flicknote_core::services::note_content::extract_title_and_strip(&content);
         let created_at = file_created_time(file);
 
         let inserted = if mode.uses_daemon() {

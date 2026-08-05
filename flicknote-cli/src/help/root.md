@@ -18,6 +18,7 @@ Common workflows:
   flicknote project share <project-id>
   flicknote project unshare <project-id>
   cat edit.md | flicknote modify <id>
-  cat note.md | flicknote replace <id>
+  cat section.md | flicknote replace <id> --section <section-id>
+  flicknote mcp
 
 Use numeric note IDs from `flicknote list`.

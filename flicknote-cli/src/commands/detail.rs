@@ -2,15 +2,16 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::note::NoteService;
 
-use super::util::{display_note_id, note_json};
+use super::util::{display_summary_id, print_section_tree};
 
 const DETAIL_HELP: &str = include_str!("../help/detail.md");
 
 #[derive(Args)]
 #[command(after_help = DETAIL_HELP)]
 pub(crate) struct DetailArgs {
-    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
+    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted.
     id: String,
     /// Show markdown heading structure
     #[arg(long)]
@@ -18,87 +19,67 @@ pub(crate) struct DetailArgs {
     /// Output as JSON
     #[arg(long)]
     json: bool,
-    /// Read an archived note (looks up from archived notes instead of active)
+    /// Read an archived note
     #[arg(long)]
     archived: bool,
 }
+
 pub(crate) async fn run(
     db: &dyn NoteDb,
     _config: &Config,
     args: &DetailArgs,
 ) -> Result<(), CliError> {
+    let detail = NoteService::new(db).get(&args.id, args.archived).await?;
     if args.tree {
-        let full_id = if args.archived {
-            db.resolve_archived_note_id(&args.id).await?
-        } else {
-            db.resolve_note_id(&args.id).await?
-        };
-        let note = if args.archived {
-            db.find_archived_note(&full_id).await?
-        } else {
-            db.find_note(&full_id).await?
-        };
-        let display_content = crate::editable_document::render_editable_note(db, &note).await?;
-        let doc = crate::markdown::parse_markdown(&display_content);
-        let tree = doc.build_tree();
-        if tree.is_empty() {
+        if detail.sections.is_empty() {
             println!("(no headings found)");
-            return Ok(());
-        }
-        for (i, node) in tree.iter().enumerate() {
-            let is_last = i == tree.len() - 1;
-            print!("{}", node.render_box_tree("", is_last));
+        } else {
+            print_section_tree(&detail.sections);
         }
         return Ok(());
     }
-    let full_id = if args.archived {
-        db.resolve_archived_note_id(&args.id).await?
-    } else {
-        db.resolve_note_id(&args.id).await?
-    };
-    let note = if args.archived {
-        db.find_archived_note(&full_id).await?
-    } else {
-        db.find_note(&full_id).await?
-    };
-    let project_name = if let Some(ref pid) = note.project_id {
-        db.find_project_name_by_id(pid).await?
-    } else {
-        None
-    };
     if args.json {
-        let json_output = note_json(&note, project_name.as_deref());
         println!(
             "{}",
-            serde_json::to_string_pretty(&json_output).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&detail).map_err(CliError::Json)?
         );
-    } else {
-        println!("ID:         {}", display_note_id(&note));
-        println!("Type:       {}", note.r#type);
-        println!(
-            "Title:      {}",
-            note.title.as_deref().unwrap_or("(untitled)")
-        );
-        if let Some(ref summary) = note.summary {
-            println!("Summary:    {summary}");
-        }
-        if note.project_id.is_some() {
-            let name = project_name.as_deref().unwrap_or("(unknown)");
-            println!("Project:    {name}");
-        }
-        if note.is_flagged == Some(1) {
-            println!("Flagged:    yes");
-        }
-        println!("Created:    {}", note.created_at.as_deref().unwrap_or("-"));
-        println!("Updated:    {}", note.updated_at.as_deref().unwrap_or("-"));
-        if let Some(ref _content) = note.content {
-            println!("\nContent:");
-            let display_content = crate::editable_document::render_editable_note(db, &note).await?;
-            println!("{display_content}");
-        }
-        if let Some(url) = note.link_url() {
-            println!("Link:       {url}");
-        }
+        return Ok(());
+    }
+
+    println!("ID:         {}", display_summary_id(&detail.note));
+    println!("Type:       {}", detail.note.note_type);
+    println!(
+        "Title:      {}",
+        detail.note.title.as_deref().unwrap_or("(untitled)")
+    );
+    if let Some(summary) = detail.note.summary.as_deref() {
+        println!("Summary:    {summary}");
+    }
+    if let Some(project) = detail.note.project.as_deref() {
+        println!("Project:    {project}");
+    }
+    if detail.note.flagged {
+        println!("Flagged:    yes");
+    }
+    println!(
+        "Created:    {}",
+        detail.note.created_at.as_deref().unwrap_or("-")
+    );
+    println!(
+        "Updated:    {}",
+        detail.note.updated_at.as_deref().unwrap_or("-")
+    );
+    if !detail.content.is_empty() {
+        println!("\nContent:\n{}", detail.content);
+    }
+    if let Some(url) = detail
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("link"))
+        .and_then(|link| link.get("url"))
+        .and_then(serde_json::Value::as_str)
+    {
+        println!("Link:       {url}");
     }
     Ok(())
 }

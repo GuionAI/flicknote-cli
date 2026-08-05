@@ -1,56 +1,9 @@
 use flicknote_core::backend::InsertedNote;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::{NoteSummary, SectionDto};
 use flicknote_core::types::Note;
 use std::io::{IsTerminal, Read};
-
-use crate::commands::add::resolve_project;
-use crate::markdown::Document;
-
-/// Byte-range boundaries of a matched section in a markdown document.
-pub(crate) struct SectionBounds<'a> {
-    /// The matched heading.
-    pub heading: &'a crate::markdown::Heading,
-    /// Byte offset where the heading line starts.
-    pub start: usize,
-    /// Byte offset where the section ends (next same/higher-level heading, or EOF).
-    pub end: usize,
-}
-
-/// Find a section by 2-3 char section ID (exact match).
-///
-/// Returns an error with a helpful message if the ID is not found.
-pub(crate) fn find_section<'a>(
-    doc: &'a Document,
-    section_id: &str,
-    note_ref: &str,
-) -> Result<SectionBounds<'a>, CliError> {
-    let heading_idx = doc
-        .headings
-        .iter()
-        .position(|h| h.id == section_id)
-        .ok_or_else(|| {
-            CliError::Other(format!(
-                "error: unknown section ID {section_id:?} — run `flicknote detail {note_ref} --tree` to see current IDs"
-            ))
-        })?;
-
-    let heading = &doc.headings[heading_idx];
-    let start = heading.offset;
-    let end = doc
-        .headings
-        .iter()
-        .skip(heading_idx + 1)
-        .find(|h| h.level <= heading.level)
-        .map(|h| h.offset)
-        .unwrap_or(doc.content.len());
-
-    Ok(SectionBounds {
-        heading,
-        start,
-        end,
-    })
-}
 
 pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<String, CliError> {
     db.resolve_note_id(prefix).await
@@ -68,55 +21,41 @@ pub(crate) fn display_inserted_note_id(note: &InsertedNote) -> String {
         .unwrap_or_else(|| note.uuid.clone())
 }
 
-pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
-    serde_json::json!({
-        "id": note.short_id,
-        "uuid": note.id,
-        "type": note.r#type,
-        "status": note.status,
-        "title": note.title,
-        "project": project_name,
-        "project_id": note.project_id,
-        "summary": note.summary,
-        "content": note.content,
-        "is_flagged": note.is_flagged,
-        "created_at": note.created_at,
-        "updated_at": note.updated_at,
-        "deleted_at": note.deleted_at,
-    })
+pub(crate) fn display_summary_id(note: &NoteSummary) -> String {
+    note.short_id
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| note.uuid.clone())
 }
 
-/// Fetch note content from DB, returning `None` for NULL/missing content.
-pub(crate) async fn get_note_content_optional(
-    db: &dyn NoteDb,
-    full_id: &str,
-) -> Result<Option<String>, CliError> {
-    db.find_note_content(full_id).await
+pub(crate) fn print_section_tree(sections: &[SectionDto]) {
+    fn render(node: &SectionDto, prefix: &str, is_last: bool, output: &mut String) {
+        let connector = if is_last { "└─ " } else { "├─ " };
+        let marker = "#".repeat(node.level);
+        let label = if node.level > 1 {
+            format!("[{}] {} {}", node.id, marker, node.title)
+        } else {
+            format!("{} {}", marker, node.title)
+        };
+        output.push_str(&format!("{prefix}{connector}{label}\n"));
+        let child_prefix = format!("{prefix}{}   ", if is_last { " " } else { "│" });
+        for (index, child) in node.children.iter().enumerate() {
+            render(
+                child,
+                &child_prefix,
+                index + 1 == node.children.len(),
+                output,
+            );
+        }
+    }
+
+    let mut output = String::new();
+    for (index, section) in sections.iter().enumerate() {
+        render(section, "", index + 1 == sections.len(), &mut output);
+    }
+    print!("{output}");
 }
 
-/// Fetch note content from DB. Shared by get --tree, get -s, and replace.
-pub(crate) async fn get_note_content(db: &dyn NoteDb, full_id: &str) -> Result<String, CliError> {
-    db.find_note_content(full_id)
-        .await?
-        .ok_or_else(|| CliError::Other("Note has no content".into()))
-}
-
-/// Write updated content to the database.
-pub(crate) async fn write_content(
-    db: &dyn NoteDb,
-    full_id: &str,
-    new_content: &str,
-) -> Result<(), CliError> {
-    db.update_note_content(full_id, new_content, true).await
-}
-
-/// Print notes as a formatted table to stdout.
-/// Columns: ID (short_id or full UUID) | Type | Title | Project | Topics | Flagged | Created
-pub(crate) fn print_notes_table(
-    notes: &[Note],
-    topics_map: &std::collections::HashMap<String, Vec<String>>,
-    project_names: &std::collections::HashMap<String, String>,
-) {
+pub(crate) fn print_summaries_table(notes: &[NoteSummary]) {
     println!(
         "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} Created",
         "ID", "Type", "Title", "Project", "Topics", "Flagged"
@@ -126,50 +65,34 @@ pub(crate) fn print_notes_table(
         let date = note
             .created_at
             .as_deref()
-            .and_then(|d| d.get(..10))
+            .and_then(|date| date.get(..10))
             .unwrap_or("-");
         let title = note.title.as_deref().unwrap_or("(untitled)");
-        let title: String = if title.chars().count() > 28 {
-            let truncated: String = title.chars().take(27).collect();
-            format!("{truncated}…")
+        let title = if title.chars().count() > 28 {
+            format!("{}…", title.chars().take(27).collect::<String>())
         } else {
             title.to_string()
         };
-        let project = note
-            .project_id
-            .as_ref()
-            .and_then(|pid| project_names.get(pid))
-            .map(std::string::String::as_str)
-            .unwrap_or("-");
-        let project: String = if project.chars().count() > 13 {
-            let truncated: String = project.chars().take(12).collect();
-            format!("{truncated}…")
+        let project = note.project.as_deref().unwrap_or("-");
+        let project = if project.chars().count() > 13 {
+            format!("{}…", project.chars().take(12).collect::<String>())
         } else {
             project.to_string()
         };
-        let topics = topics_map
-            .get(&note.id)
-            .map(|v| v.join(", "))
-            .unwrap_or_default();
-        let topics: String = if topics.chars().count() > 18 {
-            let truncated: String = topics.chars().take(17).collect();
-            format!("{truncated}…")
+        let topics = note.topics.join(", ");
+        let topics = if topics.chars().count() > 18 {
+            format!("{}…", topics.chars().take(17).collect::<String>())
         } else {
             topics
         };
-        let flagged = if note.is_flagged == Some(1) {
-            "✓"
-        } else {
-            ""
-        };
         println!(
             "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} {}",
-            display_note_id(note),
-            note.r#type,
+            display_summary_id(note),
+            note.note_type,
             title,
             project,
             topics,
-            flagged,
+            if note.flagged { "✓" } else { "" },
             date
         );
     }
@@ -222,47 +145,9 @@ pub(crate) fn classify_stdin_buf(buf: &str) -> Option<String> {
     }
 }
 
-/// Check whether content starts with a markdown heading (ATX or setext).
-pub(crate) fn content_starts_with_heading(content: &str) -> bool {
-    use pulldown_cmark::{Event, Options, Parser, Tag};
-    Parser::new_ext(content, Options::empty())
-        .next()
-        .is_some_and(|e| matches!(e, Event::Start(Tag::Heading { .. })))
-}
-
-/// Apply project move. Prints confirmation. Returns name of deleted project if any.
-pub(crate) async fn apply_project_move(
-    db: &dyn NoteDb,
-    full_id: &str,
-    project_name: &str,
-) -> Result<Option<String>, CliError> {
-    let old_note = db.find_note(full_id).await?;
-    let display_id = display_note_id(&old_note);
-    let old_project_id = old_note.project_id.clone();
-    let new_project_id = resolve_project(db, project_name).await?;
-
-    if old_project_id.as_deref() == Some(new_project_id.as_str()) {
-        println!(
-            "Note {} is already in project \"{}\".",
-            display_id, project_name
-        );
-        return Ok(None);
-    }
-
-    let deleted_name = db
-        .move_note_to_project(full_id, &new_project_id, old_project_id.as_deref())
-        .await?;
-    println!("Moved note {} to project \"{}\".", display_id, project_name);
-    if let Some(ref name) = deleted_name {
-        println!("Deleted empty project \"{}\".", name);
-    }
-    Ok(deleted_name)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::parse_markdown;
 
     fn note_with_ids(id: &str, short_id: Option<i64>) -> Note {
         Note {
@@ -299,67 +184,5 @@ mod tests {
             display_note_id(&note),
             "550e8400-e29b-41d4-a716-446655440000"
         );
-    }
-
-    #[test]
-    fn test_find_section_by_id_returns_index() {
-        let md = "# Root\n\n## Alpha\n\nContent A.\n\n## Beta\n\nContent B.";
-        let doc = parse_markdown(md);
-        let alpha_id = doc.headings[1].id.clone(); // "## Alpha" is index 1
-        let bounds = find_section(&doc, &alpha_id, "test-id").unwrap();
-        assert_eq!(bounds.heading.text, "Alpha");
-    }
-
-    #[test]
-    fn test_find_section_unknown_id_returns_error() {
-        let md = "# Root\n\n## Alpha\n\nContent.";
-        let doc = parse_markdown(md);
-        let result = find_section(&doc, "zz", "test-id");
-        assert!(result.is_err(), "unknown ID should return error");
-        if let Err(err) = result {
-            let msg = format!("{err}");
-            assert!(
-                msg.contains("zz"),
-                "error message should include the unknown ID"
-            );
-            assert!(
-                msg.contains("flicknote detail test-id --tree"),
-                "error message should suggest the detail tree command"
-            );
-        }
-    }
-
-    #[test]
-    fn test_find_section_name_string_rejected() {
-        // Old-style name selector is now an error, not a fallback
-        let md = "# Root\n\n## Alpha Section\n\nContent.";
-        let doc = parse_markdown(md);
-        let result = find_section(&doc, "Alpha", "test-id");
-        assert!(result.is_err(), "name string should be rejected");
-    }
-
-    // ── content_starts_with_heading ───────────────────────────────────────────
-
-    #[test]
-    fn test_content_starts_with_heading_atx() {
-        assert!(content_starts_with_heading("# Heading"));
-        assert!(content_starts_with_heading("## Heading"));
-        assert!(content_starts_with_heading("### Heading"));
-        assert!(content_starts_with_heading("\n## Heading after blank"));
-    }
-
-    #[test]
-    fn test_content_starts_with_heading_setext() {
-        assert!(content_starts_with_heading("My Section\n=========="));
-        assert!(content_starts_with_heading("My Section\n----------"));
-        assert!(content_starts_with_heading("\nMy Section\n=========="));
-    }
-
-    #[test]
-    fn test_content_starts_with_heading_false() {
-        assert!(!content_starts_with_heading("plain text"));
-        assert!(!content_starts_with_heading("some body\n\nmore text"));
-        assert!(!content_starts_with_heading(""));
-        assert!(!content_starts_with_heading("#NoSpace"));
     }
 }

@@ -2,8 +2,9 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::note::NoteService;
 
-use super::util::{display_note_id, find_section, get_note_content, resolve_note_id};
+use super::util::{display_summary_id, print_section_tree};
 
 #[derive(Args)]
 pub(crate) struct DeleteArgs {
@@ -19,40 +20,22 @@ pub(crate) async fn run(
     _config: &Config,
     args: &DeleteArgs,
 ) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, &args.id).await?;
-    let note = db.find_note(&full_id).await?;
-    let display_id = display_note_id(&note);
-
     if let Some(ref section_id) = args.section {
-        // Section deletion — remove the section from content
-        let content = get_note_content(db, &full_id).await?;
-        let doc = crate::markdown::parse_markdown(&content);
-        let bounds = find_section(&doc, section_id, &full_id)?;
-
-        let before = &content[..bounds.start];
-        let after = &content[bounds.end..];
-        let new_content = format!(
-            "{}{}",
-            before.trim_end_matches('\n'),
-            if after.is_empty() {
-                String::new()
-            } else {
-                format!("\n\n{}", after.trim_start_matches('\n'))
-            }
-        );
-
-        db.update_note_content(&full_id, new_content.trim(), true)
+        let result = NoteService::new(db)
+            .delete_section(&args.id, section_id)
             .await?;
-
         println!(
-            "Removed section '{}' from note {}.\n",
-            bounds.heading.text, display_id
+            "Removed section {} from note {}.\n",
+            section_id,
+            display_summary_id(&result.note)
         );
-        print!("{}", crate::markdown::render_tree(new_content.trim()));
+        print_section_tree(&result.sections);
     } else {
-        // Soft-delete (archive) the note
-        let now = chrono::Utc::now().to_rfc3339();
-        db.set_note_deleted_at(&full_id, Some(&now), &now).await?;
+        let result = NoteService::new(db).archive(&args.id).await?;
+        let display_id = result
+            .short_id
+            .map(|id| id.to_string())
+            .unwrap_or(result.uuid);
         println!("Deleted note {}.", display_id);
     }
 

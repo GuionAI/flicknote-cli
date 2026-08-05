@@ -23,7 +23,7 @@ fn hash_to_base62(input: &str, len: usize) -> String {
 }
 
 /// Compute a stable 2-char base62 section ID from a heading line (e.g. "## Task 1").
-pub(crate) fn section_id(heading_line: &str) -> String {
+pub fn section_id(heading_line: &str) -> String {
     hash_to_base62(heading_line.trim(), 2)
 }
 
@@ -31,7 +31,7 @@ pub(crate) fn section_id(heading_line: &str) -> String {
 ///
 /// On collision (same 2-char ID), a positional disambiguator is included in the
 /// hash input so that two headings with identical text get distinct 3-char IDs.
-pub(crate) fn assign_section_ids(heading_lines: &[String]) -> Vec<String> {
+pub fn assign_section_ids(heading_lines: &[String]) -> Vec<String> {
     let ids_2: Vec<String> = heading_lines.iter().map(|h| section_id(h)).collect();
 
     let mut counts = std::collections::HashMap::new();
@@ -57,14 +57,14 @@ pub(crate) fn assign_section_ids(heading_lines: &[String]) -> Vec<String> {
 
 /// A markdown document with its content and structure.
 #[derive(Debug, Clone)]
-pub(crate) struct Document {
+pub struct Document {
     pub content: String,
     pub headings: Vec<Heading>,
 }
 
 /// A heading in a markdown document.
 #[derive(Debug, Clone)]
-pub(crate) struct Heading {
+pub struct Heading {
     /// Heading level (1 for #, 2 for ##, etc.)
     pub level: usize,
     /// Heading text content
@@ -77,7 +77,7 @@ pub(crate) struct Heading {
 
 /// A node in the heading tree (for box-drawing display).
 #[derive(Debug, Clone)]
-pub(crate) struct HeadingNode {
+pub struct HeadingNode {
     pub heading: Heading,
     pub children: Vec<Self>,
 }
@@ -85,7 +85,7 @@ pub(crate) struct HeadingNode {
 /// Parse markdown content and extract headings with byte offsets.
 ///
 /// Uses pulldown-cmark's OffsetIter to skip headings inside fenced and indented code blocks.
-pub(crate) fn parse_markdown(content: &str) -> Document {
+pub fn parse_markdown(content: &str) -> Document {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
     let mut headings = Vec::new();
@@ -135,7 +135,7 @@ pub(crate) fn parse_markdown(content: &str) -> Document {
 
 impl Document {
     /// Build a hierarchical tree from flat heading list.
-    pub(crate) fn build_tree(&self) -> Vec<HeadingNode> {
+    pub fn build_tree(&self) -> Vec<HeadingNode> {
         let mut roots: Vec<HeadingNode> = Vec::new();
         // Stack of (level, index_path) to track nesting
         let mut stack: Vec<(usize, Vec<usize>)> = Vec::new();
@@ -189,7 +189,7 @@ fn navigate_mut<'a>(roots: &'a mut [HeadingNode], path: &[usize]) -> &'a mut Hea
 
 impl HeadingNode {
     /// Render as tree with box-drawing characters.
-    pub(crate) fn render_box_tree(&self, prefix: &str, is_last: bool) -> String {
+    pub fn render_box_tree(&self, prefix: &str, is_last: bool) -> String {
         let mut result = String::new();
 
         let connector = if is_last { "└─ " } else { "├─ " };
@@ -213,7 +213,7 @@ impl HeadingNode {
 }
 
 /// Counts leading `#` characters on a line if followed by a space (valid heading).
-pub(crate) fn heading_level(line: &str) -> Option<usize> {
+pub fn heading_level(line: &str) -> Option<usize> {
     if !line.starts_with('#') {
         return None;
     }
@@ -233,7 +233,7 @@ pub(crate) fn heading_level(line: &str) -> Option<usize> {
 ///   `## Intro / ### Sub`  →  `### Intro / #### Sub`  (offset +1)
 ///   `#### Deep / ##### Deeper`  →  `### Deep / #### Deeper`  (offset -1)
 ///   `### Right / #### Sub`  →  unchanged  (offset 0)
-pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
+pub fn cap_heading_level(content: &str, target_level: usize) -> String {
     use pulldown_cmark::{Event, Options, Parser, Tag};
 
     debug_assert!(
@@ -312,7 +312,7 @@ pub(crate) fn cap_heading_level(content: &str, target_level: usize) -> String {
 /// Replace an entire section (heading + body) with `new_content`.
 /// `start` = byte offset of section heading line. `end` = byte offset of next sibling (or EOF).
 /// Caller must normalize heading levels in `new_content` before calling.
-pub(crate) fn replace_entire_section(
+pub fn replace_entire_section(
     content: &str,
     start: usize,
     end: usize,
@@ -336,7 +336,7 @@ pub(crate) fn replace_entire_section(
 }
 
 /// Render the full tree for a markdown content string (for post-mutation output).
-pub(crate) fn render_tree(content: &str) -> String {
+pub fn render_tree(content: &str) -> String {
     let doc = parse_markdown(content);
     let tree = doc.build_tree();
     if tree.is_empty() {

@@ -9,7 +9,7 @@ Rules:
   - Unique match required; add surrounding context if the text appears more than once.
   - Single block per call.
   - `--section` scopes the match to the full section, including its heading.
-  - For overwrite, use `flicknote replace <id>`.
+  - For a section overwrite, use `flicknote replace <id> --section <section-id>`.
 
 Examples:
   flicknote modify 123 --project work
