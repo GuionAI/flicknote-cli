@@ -36,19 +36,8 @@ pub struct Project {
     pub user_id: String,
     pub name: String,
     pub color: Option<String>,
-    pub prompt_id: Option<String>,
     pub keyterm_id: Option<String>,
     pub is_archived: Option<i64>,
-    pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Prompt {
-    pub id: String,
-    pub user_id: String,
-    pub title: String,
-    pub description: Option<String>,
-    pub prompt: String,
     pub created_at: Option<String>,
 }
 

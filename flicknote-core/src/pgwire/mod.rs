@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch};
 use crate::error::CliError;
-use crate::types::{Keyterm, Note, Project, Prompt};
+use crate::types::{Keyterm, Note, Project};
 
 const PG_FIND_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
@@ -20,15 +20,12 @@ const PG_FIND_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, c
 const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1";
-const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
      FROM projects WHERE id = $1 LIMIT 1";
-const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
      FROM projects WHERE COALESCE(is_archived, false) = false ORDER BY name";
-const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at \
+const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
      FROM projects WHERE COALESCE(is_archived, false) = true ORDER BY name";
-const PG_FIND_PROMPT: &str =
-    "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE id = $1 LIMIT 1";
-const PG_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts ORDER BY created_at DESC";
 const PG_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
      FROM keyterms WHERE id = $1 LIMIT 1";
 const PG_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
@@ -60,19 +57,8 @@ struct ProjectPgRow {
     pub user_id: Uuid,
     pub name: String,
     pub color: Option<String>,
-    pub prompt_id: Option<Uuid>,
     pub keyterm_id: Option<Uuid>,
     pub is_archived: Option<bool>,
-    pub created_at: Option<DateTime<Utc>>,
-}
-
-#[derive(sqlx::FromRow)]
-struct PromptPgRow {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub title: String,
-    pub description: Option<String>,
-    pub prompt: String,
     pub created_at: Option<DateTime<Utc>>,
 }
 
@@ -116,22 +102,8 @@ impl From<ProjectPgRow> for Project {
             user_id: r.user_id.to_string(),
             name: r.name,
             color: r.color,
-            prompt_id: r.prompt_id.map(|u| u.to_string()),
             keyterm_id: r.keyterm_id.map(|u| u.to_string()),
             is_archived: r.is_archived.map(|b| if b { 1 } else { 0 }),
-            created_at: r.created_at.map(|t| t.to_rfc3339()),
-        }
-    }
-}
-
-impl From<PromptPgRow> for Prompt {
-    fn from(r: PromptPgRow) -> Self {
-        Self {
-            id: r.id.to_string(),
-            user_id: r.user_id.to_string(),
-            title: r.title,
-            description: r.description,
-            prompt: r.prompt,
             created_at: r.created_at.map(|t| t.to_rfc3339()),
         }
     }
@@ -656,32 +628,26 @@ impl NoteDb for PgWireBackend {
     async fn update_project(
         &self,
         id: &str,
-        prompt_id: Option<Option<&str>>,
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError> {
-        let update_prompt = prompt_id.is_some();
         let update_keyterm = keyterm_id.is_some();
         let update_color = color.is_some();
-        if !(update_prompt || update_keyterm || update_color) {
+        if !(update_keyterm || update_color) {
             return Ok(());
         }
 
-        let prompt_value = prompt_id.map(parse_uuid_opt).transpose()?.flatten();
         let keyterm_value = keyterm_id.map(parse_uuid_opt).transpose()?.flatten();
         let project_id = parse_uuid(id)?;
         let color_value = color.flatten();
         let result = sqlx::query!(
             r#"
             UPDATE projects SET
-                prompt_id = CASE WHEN $2::bool THEN $3::uuid ELSE prompt_id END,
-                keyterm_id = CASE WHEN $4::bool THEN $5::uuid ELSE keyterm_id END,
-                color = CASE WHEN $6::bool THEN $7::text ELSE color END
+                keyterm_id = CASE WHEN $2::bool THEN $3::uuid ELSE keyterm_id END,
+                color = CASE WHEN $4::bool THEN $5::text ELSE color END
             WHERE id = $1
             "#,
             project_id,
-            update_prompt,
-            prompt_value,
             update_keyterm,
             keyterm_value,
             update_color,
@@ -844,103 +810,6 @@ impl NoteDb for PgWireBackend {
             .bind(value)
             .execute(&self.pool)
             .await?;
-        }
-        Ok(())
-    }
-
-    async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
-        resolve_pg_uuid_id(
-            &self.pool,
-            "SELECT id::text FROM prompts WHERE id = $1 LIMIT 1",
-            prefix,
-            || CliError::Other(format!("Prompt not found: {prefix}")),
-        )
-        .await
-    }
-
-    async fn insert_prompt(
-        &self,
-        id: &str,
-        title: &str,
-        description: Option<&str>,
-        prompt: &str,
-        now: &str,
-    ) -> Result<(), CliError> {
-        sqlx::query(
-            "INSERT INTO prompts (id, title, description, prompt, created_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(parse_uuid(id)?)
-        .bind(title)
-        .bind(description)
-        .bind(prompt)
-        .bind(parse_iso_utc(now)?)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
-        sqlx::query_as::<_, PromptPgRow>(PG_FIND_PROMPT)
-            .bind(parse_uuid(id)?)
-            .fetch_optional(&self.pool)
-            .await?
-            .map(Prompt::from)
-            .ok_or_else(|| CliError::Other(format!("Prompt not found: {id}")))
-    }
-
-    async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
-        let rows = sqlx::query_as::<_, PromptPgRow>(PG_LIST_PROMPTS)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.into_iter().map(Prompt::from).collect())
-    }
-
-    async fn update_prompt(
-        &self,
-        id: &str,
-        title: Option<&str>,
-        description: Option<&str>,
-        prompt: Option<&str>,
-    ) -> Result<(), CliError> {
-        let update_title = title.is_some();
-        let update_description = description.is_some();
-        let update_prompt = prompt.is_some();
-        if !(update_title || update_description || update_prompt) {
-            return Ok(());
-        }
-
-        let prompt_id = parse_uuid(id)?;
-        let result = sqlx::query!(
-            r#"
-            UPDATE prompts SET
-                title = CASE WHEN $2::bool THEN $3::text ELSE title END,
-                description = CASE WHEN $4::bool THEN $5::text ELSE description END,
-                prompt = CASE WHEN $6::bool THEN $7::text ELSE prompt END
-            WHERE id = $1
-            "#,
-            prompt_id,
-            update_title,
-            title,
-            update_description,
-            description,
-            update_prompt,
-            prompt,
-        )
-        .execute(&self.pool)
-        .await?;
-        if result.rows_affected() == 0 {
-            return Err(CliError::Other(format!("Prompt not found: {id}")));
-        }
-        Ok(())
-    }
-
-    async fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
-        let result = sqlx::query("DELETE FROM prompts WHERE id = $1")
-            .bind(parse_uuid(id)?)
-            .execute(&self.pool)
-            .await?;
-        if result.rows_affected() == 0 {
-            return Err(CliError::Other(format!("Prompt not found: {id}")));
         }
         Ok(())
     }
@@ -1148,7 +1017,6 @@ mod tests {
             user_id: Uuid::nil(),
             name: "My Project".into(),
             color: Some("#ff0000".into()),
-            prompt_id: None,
             keyterm_id: None,
             is_archived: Some(false),
             created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
@@ -1158,24 +1026,6 @@ mod tests {
         assert_eq!(project.name, "My Project");
         assert_eq!(project.is_archived, Some(0));
         assert!(project.created_at.is_some());
-    }
-
-    #[test]
-    fn test_prompt_pg_row_from() {
-        use chrono::TimeZone;
-        let pg_row = PromptPgRow {
-            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap(),
-            user_id: Uuid::nil(),
-            title: "Summarize".into(),
-            description: Some("Give a brief summary".into()),
-            prompt: "Summarize this text: {{text}}".into(),
-            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
-        };
-        let p: Prompt = pg_row.into();
-        assert_eq!(p.id, "550e8400-e29b-41d4-a716-446655440002");
-        assert_eq!(p.title, "Summarize");
-        assert!(p.description.is_some());
-        assert!(p.created_at.is_some());
     }
 
     #[test]

@@ -21,18 +21,8 @@ CREATE TABLE projects (
   user_id TEXT,
   name TEXT,
   color TEXT,
-  prompt_id TEXT,
   keyterm_id TEXT,
   is_archived INTEGER,
-  created_at TEXT
-);
-
-CREATE TABLE prompts (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  title TEXT,
-  description TEXT,
-  prompt TEXT,
   created_at TEXT
 );
 

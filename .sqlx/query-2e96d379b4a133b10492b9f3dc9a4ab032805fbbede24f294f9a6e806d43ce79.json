@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE projects SET\n                keyterm_id = CASE WHEN $2::bool THEN $3::uuid ELSE keyterm_id END,\n                color = CASE WHEN $4::bool THEN $5::text ELSE color END\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Bool",
+        "Uuid",
+        "Bool",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "2e96d379b4a133b10492b9f3dc9a4ab032805fbbede24f294f9a6e806d43ce79"
+}

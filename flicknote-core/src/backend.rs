@@ -7,7 +7,7 @@ use crate::TOPIC_EXTRACTION_KEY;
 #[cfg(feature = "powersync")]
 use crate::db::Database;
 use crate::error::CliError;
-use crate::types::{Keyterm, Note, Project, Prompt};
+use crate::types::{Keyterm, Note, Project};
 
 // ─── Filter / request types ──────────────────────────────────────────────────
 
@@ -142,7 +142,6 @@ pub trait NoteDb {
     async fn update_project(
         &self,
         id: &str,
-        prompt_id: Option<Option<&str>>,
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError>;
@@ -184,27 +183,6 @@ pub trait NoteDb {
         extraction_key: &str,
         values: &[String],
     ) -> Result<(), CliError>;
-
-    // Prompt operations
-    async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError>;
-    async fn insert_prompt(
-        &self,
-        id: &str,
-        title: &str,
-        description: Option<&str>,
-        prompt: &str,
-        now: &str,
-    ) -> Result<(), CliError>;
-    async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError>;
-    async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError>;
-    async fn update_prompt(
-        &self,
-        id: &str,
-        title: Option<&str>,
-        description: Option<&str>,
-        prompt: Option<&str>,
-    ) -> Result<(), CliError>;
-    async fn delete_prompt(&self, id: &str) -> Result<(), CliError>;
 
     // Keyterm operations
     async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError>;
@@ -286,10 +264,10 @@ const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND nam
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_NAME: &str = "SELECT name FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects \
      WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL) ORDER BY name";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects \
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
 #[cfg(feature = "powersync")]
 const SQ_CREATE_PROJECT: &str =
@@ -332,21 +310,11 @@ const SQ_INSERT_EXTRACTION: &str =
     "INSERT INTO note_extractions (id, note_id, user_id, key, value) VALUES (?, ?, ?, ?, ?)";
 
 #[cfg(feature = "powersync")]
-const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, prompt_id, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
+const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
-#[cfg(feature = "powersync")]
-const SQ_RESOLVE_PROMPT: &str = "SELECT id FROM prompts WHERE user_id = ? AND id = ? LIMIT 1";
-#[cfg(feature = "powersync")]
-const SQ_INSERT_PROMPT: &str = "INSERT INTO prompts (id, user_id, title, description, prompt, created_at) VALUES (?, ?, ?, ?, ?, ?)";
-#[cfg(feature = "powersync")]
-const SQ_FIND_PROMPT: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE user_id = ? AND id = ? LIMIT 1";
-#[cfg(feature = "powersync")]
-const SQ_LIST_PROMPTS: &str = "SELECT id, user_id, title, description, prompt, created_at FROM prompts WHERE user_id = ? ORDER BY created_at DESC";
-#[cfg(feature = "powersync")]
-const SQ_DELETE_PROMPT: &str = "DELETE FROM prompts WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
@@ -863,30 +831,24 @@ impl NoteDb for SqliteBackend {
     async fn update_project(
         &self,
         id: &str,
-        prompt_id: Option<Option<&str>>,
         keyterm_id: Option<Option<&str>>,
         color: Option<Option<&str>>,
     ) -> Result<(), CliError> {
-        let update_prompt = prompt_id.is_some();
         let update_keyterm = keyterm_id.is_some();
         let update_color = color.is_some();
-        if !(update_prompt || update_keyterm || update_color) {
+        if !(update_keyterm || update_color) {
             return Ok(());
         }
 
-        let prompt_value = prompt_id.flatten();
         let keyterm_value = keyterm_id.flatten();
         let color_value = color.flatten();
         sqlx::query!(
             r#"
             UPDATE projects SET
-                prompt_id = CASE WHEN ? THEN ? ELSE prompt_id END,
                 keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END,
                 color = CASE WHEN ? THEN ? ELSE color END
             WHERE user_id = ? AND id = ?
             "#,
-            update_prompt,
-            prompt_value,
             update_keyterm,
             keyterm_value,
             update_color,
@@ -1065,98 +1027,6 @@ impl NoteDb for SqliteBackend {
                 .execute(&self.db.pool)
                 .await?;
         }
-        Ok(())
-    }
-
-    async fn resolve_prompt_id(&self, prefix: &str) -> Result<String, CliError> {
-        resolve_sqlite_uuid_id(
-            &self.db.pool,
-            SQ_RESOLVE_PROMPT,
-            &self.user_id,
-            prefix,
-            || CliError::Other(format!("Prompt not found: {prefix}")),
-        )
-        .await
-    }
-
-    async fn insert_prompt(
-        &self,
-        id: &str,
-        title: &str,
-        description: Option<&str>,
-        prompt: &str,
-        now: &str,
-    ) -> Result<(), CliError> {
-        sqlx::query(SQ_INSERT_PROMPT)
-            .bind(id)
-            .bind(&self.user_id)
-            .bind(title)
-            .bind(description)
-            .bind(prompt)
-            .bind(now)
-            .execute(&self.db.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn find_prompt(&self, id: &str) -> Result<Prompt, CliError> {
-        sqlx::query_as::<_, Prompt>(SQ_FIND_PROMPT)
-            .bind(&self.user_id)
-            .bind(id)
-            .fetch_optional(&self.db.pool)
-            .await?
-            .ok_or_else(|| CliError::Other(format!("Prompt not found: {id}")))
-    }
-
-    async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
-        Ok(sqlx::query_as::<_, Prompt>(SQ_LIST_PROMPTS)
-            .bind(&self.user_id)
-            .fetch_all(&self.db.pool)
-            .await?)
-    }
-
-    async fn update_prompt(
-        &self,
-        id: &str,
-        title: Option<&str>,
-        description: Option<&str>,
-        prompt: Option<&str>,
-    ) -> Result<(), CliError> {
-        let update_title = title.is_some();
-        let update_description = description.is_some();
-        let update_prompt = prompt.is_some();
-        if !(update_title || update_description || update_prompt) {
-            return Ok(());
-        }
-
-        sqlx::query!(
-            r#"
-            UPDATE prompts SET
-                title = CASE WHEN ? THEN ? ELSE title END,
-                description = CASE WHEN ? THEN ? ELSE description END,
-                prompt = CASE WHEN ? THEN ? ELSE prompt END
-            WHERE user_id = ? AND id = ?
-            "#,
-            update_title,
-            title,
-            update_description,
-            description,
-            update_prompt,
-            prompt,
-            self.user_id,
-            id,
-        )
-        .execute(&self.db.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn delete_prompt(&self, id: &str) -> Result<(), CliError> {
-        sqlx::query(SQ_DELETE_PROMPT)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
         Ok(())
     }
 
@@ -2082,16 +1952,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_project_prompt_keyterm_resolvers_reject_uuid_prefixes() {
+    async fn test_project_and_keyterm_resolvers_reject_uuid_prefixes() {
         let backend = make_backend().await;
         let now = chrono::Utc::now().to_rfc3339();
 
         let project_id = backend.create_project("Exact Project").await.unwrap();
-        let prompt_id = uuid::Uuid::new_v4().to_string();
-        backend
-            .insert_prompt(&prompt_id, "Prompt", None, "Body", &now)
-            .await
-            .unwrap();
         let keyterm_id = uuid::Uuid::new_v4().to_string();
         backend
             .insert_keyterm(&keyterm_id, "Keyterm", None, None, &now)
@@ -2103,20 +1968,14 @@ mod tests {
             project_id
         );
         assert_eq!(
-            backend.resolve_prompt_id(&prompt_id).await.unwrap(),
-            prompt_id
-        );
-        assert_eq!(
             backend.resolve_keyterm_id(&keyterm_id).await.unwrap(),
             keyterm_id
         );
 
         let project_prefix = &project_id[..8];
-        let prompt_prefix = &prompt_id[..8];
         let keyterm_prefix = &keyterm_id[..8];
 
         assert!(backend.resolve_project_id(project_prefix).await.is_err());
-        assert!(backend.resolve_prompt_id(prompt_prefix).await.is_err());
         assert!(backend.resolve_keyterm_id(keyterm_prefix).await.is_err());
     }
 }
