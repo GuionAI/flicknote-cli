@@ -13,10 +13,6 @@ build:
 build-release:
     cargo build --release
 
-# Build the TUI.
-build-tui:
-    cd flicknote-tui && go build -o ../target/flicknote-tui .
-
 # Run all Rust tests.
 test:
     cargo test
@@ -36,19 +32,15 @@ clippy:
 sqlx-prepare:
     ./scripts/sqlx-prepare.sh
 
-# Install both the Rust CLI and TUI.
-install: install-rust install-tui
+# Install the Rust CLI and sync daemon.
+install: install-rust
 
 # Install the Rust CLI.
 install-rust:
     cargo install --path flicknote-cli
 
-# Install the TUI.
-install-tui:
-    cd flicknote-tui && go install .
-
-# Reinstall both binaries and restart FlickNote launchd services.
-reinstall: reinstall-rust install-tui
+# Reinstall both Rust binaries and restart FlickNote launchd services.
+reinstall: reinstall-rust
     @for label in $(launchctl list 2>/dev/null | awk '/io\.guion\.flicknote/ {print $3}'); do \
         echo "Restarting $label..."; \
         launchctl kickstart -k "gui/$(id -u)/$label"; \

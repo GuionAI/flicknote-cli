@@ -7,7 +7,8 @@ Local-first note management CLI with cloud sync. Captures, queries, and manages 
 - **Add & capture notes** — text, URLs (auto-detected as links), files
 - **List & search notes** — filter by type, project, or keyword (`find`)
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
-- **Edit notes** — replace, append, insert, remove, rename sections by ID
+- **Edit notes** — modify exact text, or replace, append, insert, remove, and rename sections by ID
+- **MCP server** — typed local note, source, and project tools over stdio
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **Background sync** — daemon process with launchd integration (macOS)
@@ -114,10 +115,11 @@ typo here
 fixed here
 EDIT
 
-# Overwrite (full replacement)
-echo "new content" | flicknote replace <note-id>
+# Replace one section, including its heading and child sections
 echo "## Heading
 body" | flicknote replace <note-id> --section <section-id>
+
+# For a whole-note rewrite, archive the old note and create a new note.
 
 # Append
 echo "more content" | flicknote append <note-id>
@@ -134,6 +136,30 @@ flicknote sync stop
 flicknote sync install
 ```
 
+## MCP server
+
+`flicknote mcp` runs a local MCP server over stdio. Configure an MCP client to
+start it as a subprocess:
+
+```json
+{
+  "mcpServers": {
+    "flicknote": {
+      "command": "flicknote",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+The MCP server exposes typed note, note-source, and project tools. Note content
+and exact `before`/`after` edits are JSON fields, so callers do not need shell
+heredocs. It only supports the local PowerSync workspace; if `DATABASE_URL` is
+set, startup fails before MCP protocol output begins. `note_add`, note and
+project sharing, and unsharing use the running sync daemon because those
+operations require an account and network access. Other tools operate directly
+on the local database. The server does not start the daemon automatically.
+
 ## Configuration
 
 Config file: `~/.config/flicknote/config.json`
@@ -147,15 +173,14 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 4 crates + 1 Go binary:
+Rust workspace with 4 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
 | `flicknote-cli` | binary | CLI commands and installable sync daemon binary |
-| `flicknote-core` | library | Database, config, types, schema |
+| `flicknote-core` | library | Database, config, shared services, DTOs, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Background sync daemon implementation |
-| `flicknote-tui` | binary (Go) | Terminal UI (`flicknote tui`) |
 
 ## License
 

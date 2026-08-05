@@ -13,15 +13,15 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): add, find, list, count, detail, content, replace, modify, append, delete, restore, rename, insert, project, keyterm, login, logout, sync, import, tui
-- **flicknote-core** — Shared library (db, config, schema, types, session, errors)
+- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): CLI commands and local stdio MCP server
+- **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Background sync daemon library (PowerSync ↔ Supabase)
 
 ### modify vs replace
 
 - `flicknote modify <id>` — edit-mode: exact-string replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata
-- `flicknote replace <id>` — overwrite: replaces entire note or section (including heading), plus metadata
+- `flicknote replace <id> --section <section-id>` — replaces one complete section subtree, including its heading; it does not change note metadata
 
 ## Build & Test
 
@@ -56,7 +56,7 @@ For short-id work, this means the local database must include the backend
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).
 
 - **pre-commit** runs `cargo fmt --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt` then re-commit.
-- **pre-push** runs clippy, cargo deny, go vet, and golangci-lint. Requires `cargo install cargo-deny` and `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest`
+- **pre-push** runs the SQLx offline check, clippy, and cargo deny. Requires `cargo install cargo-deny`.
 
 Manual usage:
 
@@ -88,7 +88,7 @@ lefthook run pre-push    # run pre-push hooks
 
 This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon).
 
-- **pr.yaml** — Rust check (fmt/clippy/test/deny/build), Go TUI (vet/build)
+- **pr.yaml** — Rust check (fmt/clippy/test/deny/build)
 - **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy)
 - **release.yml** — cargo-dist on version tags → GitHub Releases → GuionAI/homebrew-tap
 
