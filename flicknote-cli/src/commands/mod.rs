@@ -18,7 +18,6 @@ pub(crate) mod logout;
 pub(crate) mod modify;
 pub(crate) mod open;
 pub(crate) mod project;
-pub(crate) mod prompt;
 pub(crate) mod rename;
 pub(crate) mod replace;
 pub(crate) mod restore;

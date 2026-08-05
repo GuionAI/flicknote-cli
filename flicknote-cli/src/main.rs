@@ -73,8 +73,6 @@ enum Commands {
     Unshare(commands::share::UnshareArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
-    /// Manage prompts
-    Prompt(commands::prompt::PromptArgs),
     /// Manage keyterm sets
     Keyterm(commands::keyterm::KeytermArgs),
     /// Authenticate with FlickNote
@@ -262,7 +260,6 @@ async fn dispatch(
         Commands::Share(args) => commands::share::run_note(db, config, args).await,
         Commands::Unshare(args) => commands::share::run_unshare_note(db, config, args).await,
         Commands::Project(args) => commands::project::run(db, config, args).await,
-        Commands::Prompt(args) => commands::prompt::run(db, args).await,
         Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
         Commands::Rename(args) => commands::rename::run(db, config, args).await,
         Commands::Insert(args) => commands::insert::run(db, config, args).await,
@@ -406,7 +403,6 @@ mod tests {
             ["flicknote", "detail", "1"].as_slice(),
             ["flicknote", "content", "1"].as_slice(),
             ["flicknote", "project", "list"].as_slice(),
-            ["flicknote", "prompt", "list"].as_slice(),
             ["flicknote", "keyterm", "list"].as_slice(),
             ["flicknote", "rename", "--section", "a1", "1", "New"].as_slice(),
             ["flicknote", "insert", "1", "--after", "a1"].as_slice(),

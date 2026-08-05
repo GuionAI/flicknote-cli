@@ -45,9 +45,6 @@ enum ProjectCommands {
 struct AddProjectArgs {
     /// Project name
     name: String,
-    /// Associate a prompt by ID
-    #[arg(long)]
-    prompt: Option<String>,
     /// Associate a keyterm set by ID
     #[arg(long)]
     keyterm: Option<String>,
@@ -82,9 +79,6 @@ struct ShareProjectArgs {
 struct ModifyProjectArgs {
     /// Project ID (full UUID)
     id: String,
-    /// Associate a prompt by ID (use "none" to clear)
-    #[arg(long)]
-    prompt: Option<String>,
     /// Associate a keyterm set by ID (use "none" to clear)
     #[arg(long)]
     keyterm: Option<String>,
@@ -123,23 +117,17 @@ async fn add(db: &dyn NoteDb, args: &AddProjectArgs) -> Result<(), CliError> {
     }
     let id = db.create_project(&args.name).await?;
 
-    // Resolve and validate FK IDs before storing.
-    let resolved_prompt = match args.prompt.as_deref() {
-        Some(v) => Some(db.resolve_prompt_id(v).await?),
-        None => None,
-    };
+    // Resolve and validate the FK ID before storing.
     let resolved_keyterm = match args.keyterm.as_deref() {
         Some(v) => Some(db.resolve_keyterm_id(v).await?),
         None => None,
     };
     let color_opt = args.color.as_deref().map(Some);
 
-    let prompt_id_opt = resolved_prompt.as_deref().map(Some);
     let keyterm_id_opt = resolved_keyterm.as_deref().map(Some);
 
-    if prompt_id_opt.is_some() || keyterm_id_opt.is_some() || color_opt.is_some() {
-        db.update_project(&id, prompt_id_opt, keyterm_id_opt, color_opt)
-            .await?;
+    if keyterm_id_opt.is_some() || color_opt.is_some() {
+        db.update_project(&id, keyterm_id_opt, color_opt).await?;
     }
 
     println!("Created project \"{}\" ({}).", args.name, id);
@@ -202,12 +190,6 @@ async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
-    if let Some(ref pid) = project.prompt_id {
-        match db.find_prompt(pid).await {
-            Ok(prompt) => println!("Prompt:  {} ({})", prompt.title, pid),
-            Err(e) => eprintln!("warning: could not look up prompt {pid} ({e})"),
-        }
-    }
     if let Some(ref kid) = project.keyterm_id {
         match db.find_keyterm(kid).await {
             Ok(keyterm) => println!("Keyterm: {} ({})", keyterm.name, kid),
@@ -240,18 +222,13 @@ fn parse_clearable(val: &Option<String>) -> Option<Option<&str>> {
 async fn modify(db: &dyn NoteDb, args: &ModifyProjectArgs) -> Result<(), CliError> {
     let full_id = db.resolve_project_id(&args.id).await?;
 
-    if args.prompt.is_none() && args.keyterm.is_none() && args.color.is_none() {
+    if args.keyterm.is_none() && args.color.is_none() {
         return Err(CliError::Other(
-            "Nothing to modify. Use --prompt, --keyterm, or --color.".into(),
+            "Nothing to modify. Use --keyterm or --color.".into(),
         ));
     }
 
-    // Resolve FK IDs: "none" clears the field, any other value is resolved.
-    let resolved_prompt: Option<Option<String>> = match args.prompt.as_deref() {
-        Some("none") => Some(None),
-        Some(v) => Some(Some(db.resolve_prompt_id(v).await?)),
-        None => None,
-    };
+    // Resolve the FK ID: "none" clears the field, any other value is resolved.
     let resolved_keyterm: Option<Option<String>> = match args.keyterm.as_deref() {
         Some("none") => Some(None),
         Some(v) => Some(Some(db.resolve_keyterm_id(v).await?)),
@@ -259,11 +236,9 @@ async fn modify(db: &dyn NoteDb, args: &ModifyProjectArgs) -> Result<(), CliErro
     };
     let color = parse_clearable(&args.color);
 
-    let prompt_id = resolved_prompt.as_ref().map(|opt| opt.as_deref());
     let keyterm_id = resolved_keyterm.as_ref().map(|opt| opt.as_deref());
 
-    db.update_project(&full_id, prompt_id, keyterm_id, color)
-        .await?;
+    db.update_project(&full_id, keyterm_id, color).await?;
     println!("Updated project {}.", full_id);
     Ok(())
 }

@@ -125,7 +125,7 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 mod tests {
     use super::*;
     use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
-    use flicknote_core::types::{Keyterm, Project, Prompt};
+    use flicknote_core::types::{Keyterm, Project};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
@@ -514,7 +514,6 @@ mod tests {
         async fn update_project(
             &self,
             _id: &str,
-            _prompt_id: Option<Option<&str>>,
             _keyterm_id: Option<Option<&str>>,
             _color: Option<Option<&str>>,
         ) -> Result<(), CliError> {
@@ -593,43 +592,6 @@ mod tests {
                     .map(|value| (extraction_type.to_string(), value.clone())),
             );
             Ok(())
-        }
-
-        async fn resolve_prompt_id(&self, _prefix: &str) -> Result<String, CliError> {
-            unimplemented!()
-        }
-
-        async fn insert_prompt(
-            &self,
-            _id: &str,
-            _title: &str,
-            _description: Option<&str>,
-            _prompt: &str,
-            _now: &str,
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
-        async fn find_prompt(&self, _id: &str) -> Result<Prompt, CliError> {
-            unimplemented!()
-        }
-
-        async fn list_prompts(&self) -> Result<Vec<Prompt>, CliError> {
-            unimplemented!()
-        }
-
-        async fn update_prompt(
-            &self,
-            _id: &str,
-            _title: Option<&str>,
-            _description: Option<&str>,
-            _prompt: Option<&str>,
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
-        async fn delete_prompt(&self, _id: &str) -> Result<(), CliError> {
-            unimplemented!()
         }
 
         async fn resolve_keyterm_id(&self, _prefix: &str) -> Result<String, CliError> {
