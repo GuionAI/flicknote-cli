@@ -77,8 +77,8 @@ if [[ "$current_branch" != "$release_branch" || "$current_head" != "$release_hea
     exit 1
 fi
 
-og git push
-og git tag "$tag"
+og push
+og tag "$tag"
 
 rm -- \
     "$level_file" \

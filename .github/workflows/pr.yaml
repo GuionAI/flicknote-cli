@@ -45,6 +45,9 @@ jobs:
       - name: Run tests
         run: cargo test
 
+      - name: Test release workflow
+        run: bash scripts/test-release.sh
+
       - name: Check for security vulnerabilities
         run: cargo deny check
 
