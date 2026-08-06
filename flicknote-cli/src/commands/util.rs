@@ -27,6 +27,41 @@ pub(crate) fn display_summary_id(note: &NoteSummary) -> String {
         .unwrap_or_else(|| note.uuid.clone())
 }
 
+pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
+    serde_json::json!({
+        "id": note.short_id,
+        "uuid": note.id,
+        "type": note.r#type,
+        "status": note.status,
+        "title": note.title,
+        "project": project_name,
+        "project_id": note.project_id,
+        "summary": note.summary,
+        "content": note.content,
+        "is_flagged": note.is_flagged,
+        "created_at": note.created_at,
+        "updated_at": note.updated_at,
+        "deleted_at": note.deleted_at,
+    })
+}
+
+pub(crate) async fn note_summaries_json(
+    db: &dyn NoteDb,
+    notes: &[NoteSummary],
+    archived: bool,
+) -> Result<Vec<serde_json::Value>, CliError> {
+    let mut values = Vec::with_capacity(notes.len());
+    for summary in notes {
+        let note = if archived {
+            db.find_archived_note(&summary.uuid).await?
+        } else {
+            db.find_note(&summary.uuid).await?
+        };
+        values.push(note_json(&note, None));
+    }
+    Ok(values)
+}
+
 pub(crate) fn print_section_tree(sections: &[SectionDto]) {
     fn render(node: &SectionDto, prefix: &str, is_last: bool, output: &mut String) {
         let connector = if is_last { "└─ " } else { "├─ " };

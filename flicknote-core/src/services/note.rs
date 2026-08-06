@@ -213,17 +213,13 @@ impl<'a> NoteService<'a> {
         let full_id = self.db.resolve_note_id(note_id).await?;
         let note = self.db.find_note(&full_id).await?;
         let content = note.content.as_deref().ok_or(ServiceError::NoTextContent)?;
-        let display = match note.title.as_deref() {
-            Some(title) => format!("# {title}\n\n{content}"),
-            None => content.to_string(),
-        };
-        let document = markdown::parse_markdown(&display);
+        let document = markdown::parse_markdown(content);
         let bounds = find_section(&document, section, &full_id)?;
         Ok(NoteSectionResult {
             id: bounds.heading.id.clone(),
             level: bounds.heading.level,
             title: bounds.heading.text.clone(),
-            content: display[bounds.start..bounds.end].trim().to_string(),
+            content: content[bounds.start..bounds.end].trim().to_string(),
         })
     }
 
@@ -824,6 +820,21 @@ mod tests {
         assert_eq!(result.id, section);
         assert_eq!(result.title, "First");
         assert_eq!(result.content, "## First\none\n\n### Child\nchild");
+    }
+
+    #[tokio::test]
+    async fn get_section_accepts_an_id_returned_by_get_when_title_matches_heading() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "# Test note\nBody", "synced").await;
+        let service = NoteService::new(&backend);
+        let detail = service.get(&id, false).await.unwrap();
+        let section_id = detail.sections[0].id.clone();
+
+        let section = service.get_section(&id, &section_id).await.unwrap();
+
+        assert_eq!(section.id, section_id);
+        assert_eq!(section.title, "Test note");
+        assert_eq!(section.content, "# Test note\nBody");
     }
 
     struct DbCreator<'a> {

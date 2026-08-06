@@ -4,7 +4,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::note::NoteService;
 
-use super::util::{display_summary_id, print_section_tree};
+use super::util::{display_summary_id, note_json, print_section_tree};
 
 const DETAIL_HELP: &str = include_str!("../help/detail.md");
 
@@ -39,9 +39,15 @@ pub(crate) async fn run(
         return Ok(());
     }
     if args.json {
+        let note = if args.archived {
+            db.find_archived_note(&detail.note.uuid).await?
+        } else {
+            db.find_note(&detail.note.uuid).await?
+        };
+        let value = note_json(&note, detail.note.project.as_deref());
         println!(
             "{}",
-            serde_json::to_string_pretty(&detail).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&value).map_err(CliError::Json)?
         );
         return Ok(());
     }

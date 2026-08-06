@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn note_summary_keeps_the_existing_cli_id_field() {
+    fn note_summary_serializes_short_id_as_id() {
         let value = serde_json::to_value(NoteSummary {
             short_id: Some(42),
             uuid: "note-uuid".to_string(),

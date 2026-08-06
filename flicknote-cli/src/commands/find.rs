@@ -3,7 +3,7 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::services::note::{ExtractionFilterDto, NoteFindInput, NoteService};
 
-use super::util::{print_summaries_table, resolve_project_arg};
+use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
 
 const FIND_HELP: &str = include_str!("../help/find.md");
 
@@ -78,9 +78,10 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError
         })
         .await?;
     if args.json {
+        let values = note_summaries_json(db, &notes, args.archived).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
         );
     } else if notes.is_empty() {
         println!("No notes found matching: {}", args.keywords.join(", "));

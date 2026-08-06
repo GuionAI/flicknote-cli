@@ -126,9 +126,13 @@ async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
     let projects = ProjectService::new(db).list(args.include_archived).await?;
 
     if args.json {
+        let mut values = Vec::with_capacity(projects.len());
+        for project in &projects {
+            values.push(db.find_project(&project.id).await?);
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&projects).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
         );
     } else if args.include_archived {
         println!("{:<36} {:<30} {:<10} Created", "ID", "Name", "Status");

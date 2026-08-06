@@ -4,7 +4,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::{NoteListInput, NoteService};
 
-use super::util::{print_summaries_table, resolve_project_arg};
+use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
 
 const LIST_HELP: &str = include_str!("../help/list.md");
 
@@ -55,9 +55,10 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError
         Err(error) => return Err(error.into()),
     };
     if args.json {
+        let values = note_summaries_json(db, &notes, args.archived).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
         );
     } else {
         print_summaries_table(&notes);
