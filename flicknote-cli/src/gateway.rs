@@ -77,6 +77,7 @@ impl GatewayClient {
             ),
             gateway_origin: gateway_origin(&config.api_url)?,
             http: Client::builder()
+                .no_proxy()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .map_err(|_| CliError::Http("Failed to configure Gateway client".into()))?,

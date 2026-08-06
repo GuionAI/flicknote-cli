@@ -48,6 +48,7 @@ async fn request(config: &Config, args: &GatewayRequestArgs) -> Result<(), CliEr
         Some("-") => {
             let body = read_stdin(true)?
                 .ok_or_else(|| CliError::Other("No request body provided on stdin".into()))?;
+            let _: serde_json::Value = serde_json::from_slice(&body).map_err(CliError::Json)?;
             client
                 .request_json_bytes(method, &args.path, &body)
                 .await

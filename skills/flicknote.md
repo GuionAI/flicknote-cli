@@ -81,7 +81,9 @@ require the sync daemon; local reads and edits do not.
 The read-only `gateway_web_search` and `gateway_web_fetch` tools use the current
 FlickNote session to call the configured Gateway's fixed web endpoints. Search
 accepts `query`; fetch accepts `url` and returns only `content` and `wordCount`.
-They do not accept arbitrary Gateway paths, headers, or destination origins.
+They do not accept arbitrary Gateway paths or headers. The `url` passed to fetch
+is validated by the Gateway's Browser Gateway boundary; it does not change the
+configured Gateway origin used by the CLI.
 
 ## Gateway Requests
 

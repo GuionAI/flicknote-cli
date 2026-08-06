@@ -227,6 +227,84 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
 }
 
 #[test]
+fn gateway_request_rejects_invalid_piped_json_before_sending_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args([
+            "gateway",
+            "request",
+            "--method",
+            "POST",
+            "--path",
+            "/web/v1/search",
+            "--json",
+        ])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", "http://127.0.0.1:9/api/v1")
+        .env_remove("DATABASE_URL")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{invalid json}\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("JSON error"));
+}
+
+#[test]
+fn gateway_request_bypasses_system_proxies() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+    let (origin, gateway_server) =
+        spawn_gateway_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+    let (proxy, _proxy_server) = spawn_gateway_server(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(["gateway", "request", "--path", "/healthz"])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("HTTP_PROXY", &proxy)
+        .env("http_proxy", &proxy)
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = gateway_server.join().unwrap();
+    assert!(request.starts_with("GET /healthz HTTP/1.1\r\n"));
+    assert!(request.contains("authorization: Bearer test-token\r\n"));
+}
+
+#[test]
 fn gateway_request_does_not_echo_an_upstream_error_body() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
