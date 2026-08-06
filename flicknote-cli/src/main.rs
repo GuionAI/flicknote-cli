@@ -789,6 +789,11 @@ mod tests {
                     rate_limited["result"]["structuredContent"]["retryable"],
                     true
                 );
+                assert_eq!(
+                    rate_limited["result"]["structuredContent"]["details"]
+                        ["retry_after_seconds"],
+                    5
+                );
                 assert!(
                     !rate_limited["result"]["content"][0]["text"]
                         .as_str()

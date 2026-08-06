@@ -42,10 +42,16 @@ pub(super) fn gateway_tool_error(error: &GatewayRequestError) -> CallToolResult 
         GatewayRequestError::RateLimited { .. } => ("gateway_rate_limited", true),
         _ => ("gateway_request_failed", false),
     };
+    let details = match error {
+        GatewayRequestError::RateLimited {
+            retry_after: Some(seconds),
+        } => serde_json::json!({ "retry_after_seconds": seconds }),
+        _ => serde_json::json!({}),
+    };
     let payload = serde_json::to_value(ToolErrorPayload {
         code: code.to_string(),
         message: message.clone(),
-        details: serde_json::json!({}),
+        details,
         retryable,
     })
     .expect("tool error payload is serializable");

@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::rc::Rc;
 
 use flicknote_core::backend::NoteDb;
@@ -72,6 +73,7 @@ struct CountResult {
 pub(crate) struct FlickNoteMcp {
     db: Rc<dyn NoteDb>,
     config: Rc<Config>,
+    gateway_client: Rc<OnceCell<Result<GatewayClient, CliError>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -80,6 +82,7 @@ impl FlickNoteMcp {
         Self {
             db,
             config,
+            gateway_client: Rc::new(OnceCell::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -90,6 +93,13 @@ impl FlickNoteMcp {
 
     fn project_service(&self) -> ProjectService<'_> {
         ProjectService::new(self.db.as_ref())
+    }
+
+    fn gateway_client(&self) -> Result<&GatewayClient, CallToolResult> {
+        self.gateway_client
+            .get_or_init(|| GatewayClient::new(&self.config))
+            .as_ref()
+            .map_err(gateway_config_error)
     }
 
     fn effective_project(project: Option<String>) -> Option<String> {
@@ -123,8 +133,7 @@ impl FlickNoteMcp {
         &self,
         Parameters(params): Parameters<GatewayWebSearchParams>,
     ) -> Result<Json<GatewayWebSearchResult>, CallToolResult> {
-        let client =
-            GatewayClient::new(&self.config).map_err(|error| gateway_config_error(&error))?;
+        let client = self.gateway_client()?;
         let response = client
             .request_json(
                 reqwest::Method::POST,
@@ -149,8 +158,7 @@ impl FlickNoteMcp {
         &self,
         Parameters(params): Parameters<GatewayWebFetchParams>,
     ) -> Result<Json<GatewayWebFetchResult>, CallToolResult> {
-        let client =
-            GatewayClient::new(&self.config).map_err(|error| gateway_config_error(&error))?;
+        let client = self.gateway_client()?;
         let response = client
             .request_json(
                 reqwest::Method::POST,
