@@ -8,12 +8,16 @@ use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
 
 fn write_session(config_root: &std::path::Path) {
+    write_session_with_expiry(config_root, None);
+}
+
+fn write_session_with_expiry(config_root: &std::path::Path, expires_at: Option<u64>) {
     let directory = config_root.join("flicknote");
     std::fs::create_dir_all(&directory).unwrap();
     let session = serde_json::json!({
         "access_token": "test-token",
         "refresh_token": "test-refresh",
-        "expires_at": null,
+        "expires_at": expires_at,
         "user": { "id": "test-user", "email": null }
     });
     let wrapper = serde_json::json!({
@@ -134,6 +138,26 @@ fn spawn_gateway_server(response: &'static str) -> (String, thread::JoinHandle<S
         let count = stream.read(&mut buffer).unwrap();
         stream.write_all(response.as_bytes()).unwrap();
         String::from_utf8_lossy(&buffer[..count]).into_owned()
+    });
+    (format!("http://{address}"), handle)
+}
+
+fn spawn_gateway_server_sequence(
+    responses: Vec<String>,
+) -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        responses
+            .into_iter()
+            .map(|response| {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0_u8; 4096];
+                let count = stream.read(&mut buffer).unwrap();
+                stream.write_all(response.as_bytes()).unwrap();
+                String::from_utf8_lossy(&buffer[..count]).into_owned()
+            })
+            .collect()
     });
     (format!("http://{address}"), handle)
 }
@@ -302,6 +326,53 @@ fn gateway_request_bypasses_system_proxies() {
     let request = gateway_server.join().unwrap();
     assert!(request.starts_with("GET /healthz HTTP/1.1\r\n"));
     assert!(request.contains("authorization: Bearer test-token\r\n"));
+}
+
+#[test]
+fn gateway_request_refreshes_sessions_without_using_system_proxies() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session_with_expiry(&config_root, Some(0));
+    let refresh_body = r#"{"access_token":"refreshed-token","refresh_token":"refreshed-refresh","expires_at":4102444800,"user":{"id":"test-user","email":null}}"#;
+    let (origin, gateway_server) = spawn_gateway_server_sequence(vec![
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{refresh_body}",
+            refresh_body.len()
+        ),
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_string(),
+    ]);
+    let (proxy, _proxy_server) = spawn_gateway_server(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(["gateway", "request", "--path", "/healthz"])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_SUPABASE_URL", &origin)
+        .env("HTTP_PROXY", &proxy)
+        .env("http_proxy", &proxy)
+        .env_remove("HTTPS_PROXY")
+        .env_remove("https_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("all_proxy")
+        .env_remove("NO_PROXY")
+        .env_remove("no_proxy")
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let requests = gateway_server.join().unwrap();
+    assert!(requests[0].starts_with("POST /auth/v1/token?grant_type=refresh_token HTTP/1.1\r\n"));
+    assert!(requests[1].starts_with("GET /healthz HTTP/1.1\r\n"));
+    assert!(requests[1].contains("authorization: Bearer refreshed-token\r\n"));
 }
 
 #[test]

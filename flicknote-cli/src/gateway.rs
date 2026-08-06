@@ -69,18 +69,20 @@ impl std::error::Error for GatewayRequestError {}
 
 impl GatewayClient {
     pub(crate) fn new(config: &Config) -> Result<Self, CliError> {
+        let http = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| CliError::Http("Failed to configure Gateway client".into()))?;
         Ok(Self {
-            auth: GoTrueClient::new(
+            auth: GoTrueClient::new_no_proxy(
                 &config.supabase_url,
                 &config.supabase_anon_key,
                 &config.paths.session_file,
-            ),
+            )
+            .map_err(|_| CliError::Http("Failed to configure Gateway authentication".into()))?,
             gateway_origin: gateway_origin(&config.api_url)?,
-            http: Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|_| CliError::Http("Failed to configure Gateway client".into()))?,
+            http,
         })
     }
 

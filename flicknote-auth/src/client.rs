@@ -47,8 +47,31 @@ impl GoTrueClient {
         anon_key: &str,
         session_file: impl Into<std::path::PathBuf>,
     ) -> Self {
+        Self::with_http_client(supabase_url, anon_key, session_file, Client::new())
+    }
+
+    pub fn new_no_proxy(
+        supabase_url: &str,
+        anon_key: &str,
+        session_file: impl Into<std::path::PathBuf>,
+    ) -> Result<Self, reqwest::Error> {
+        let http = Client::builder().no_proxy().build()?;
+        Ok(Self::with_http_client(
+            supabase_url,
+            anon_key,
+            session_file,
+            http,
+        ))
+    }
+
+    fn with_http_client(
+        supabase_url: &str,
+        anon_key: &str,
+        session_file: impl Into<std::path::PathBuf>,
+        http: Client,
+    ) -> Self {
         Self {
-            http: Client::new(),
+            http,
             gotrue_url: format!("{supabase_url}/auth/v1"),
             anon_key: anon_key.to_string(),
             session_file: session_file.into(),
