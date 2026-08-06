@@ -1,3 +1,4 @@
+mod dto;
 mod error;
 mod note_tools;
 mod project_tools;

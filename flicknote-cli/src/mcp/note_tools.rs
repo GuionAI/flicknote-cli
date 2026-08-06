@@ -84,19 +84,19 @@ pub(super) struct NoteCountParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteIdParams {
-    pub id: String,
+    pub id: i64,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteGetParams {
-    pub id: String,
+    pub id: i64,
     #[serde(default)]
     pub archived: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteSectionParams {
-    pub id: String,
+    pub id: i64,
     pub section: String,
 }
 
@@ -108,7 +108,7 @@ pub(super) struct NoteAddParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteModifyParams {
-    pub id: String,
+    pub id: i64,
     pub before: Option<String>,
     pub after: Option<String>,
     pub section: Option<String>,
@@ -118,13 +118,13 @@ pub(super) struct NoteModifyParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteContentParams {
-    pub id: String,
+    pub id: i64,
     pub content: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteInsertParams {
-    pub id: String,
+    pub id: i64,
     pub section: String,
     pub position: flicknote_core::services::dto::InsertPosition,
     pub content: String,
@@ -132,21 +132,21 @@ pub(super) struct NoteInsertParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteSectionContentParams {
-    pub id: String,
+    pub id: i64,
     pub section: String,
     pub content: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteRenameSectionParams {
-    pub id: String,
+    pub id: i64,
     pub section: String,
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteSourceParams {
-    pub id: String,
+    pub id: i64,
     #[serde(default)]
     pub archived: bool,
     pub range: Option<String>,
