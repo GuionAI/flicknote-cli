@@ -41,7 +41,8 @@ Use the numeric short ID shown by `flicknote list`.
 
 ## Editing Rules
 
-Prefer `modify` for precise edits and `replace` for overwrite.
+Use `modify` for precise edits or note metadata. Use `replace` only to replace
+one complete section subtree.
 
 ```bash
 cat <<'EDIT' | flicknote modify <id>
@@ -51,17 +52,28 @@ old text exactly as it appears
 new text
 EDIT
 
-cat note.md | flicknote replace <id>
+cat section.md | flicknote replace <id> --section <section-id>
 ```
 
 `modify` requires one exact, whitespace-sensitive `===BEFORE===` /
 `===AFTER===` block. The match must be unique. Add surrounding context if the
 text appears more than once.
 
-`replace` overwrites the whole note or section. With `--section`, stdin must
-start with a heading. For section IDs, run `flicknote detail <id> --tree`.
+`replace` requires `--section`, and stdin must start with a heading. It cannot
+replace a whole note or change its project/flagged state. To replace a whole
+note, archive the old note and create a new one. For section IDs, run
+`flicknote detail <id> --tree`.
 
 Mutating section commands print the updated tree after the change.
+
+## MCP Server
+
+`flicknote mcp` serves typed note, source, and project tools over local stdio.
+Configure an MCP client to run `flicknote` with `args: ["mcp"]`. Content and
+exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
+heredocs or edit-mode delimiters. The server supports only the local PowerSync
+workspace. Note creation and note/project share or unshare require the sync
+daemon; local reads and edits do not.
 
 ## More Help
 

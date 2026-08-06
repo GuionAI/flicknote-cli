@@ -48,18 +48,19 @@ flicknote detail abc12345 --tree
 flicknote content abc12345 --section 3K
 ```
 
-## Replace (overwrite)
+## Replace a section
 
-> `flicknote replace <id>` overwrites the whole note or a whole section including its heading. Prefer `modify` for precision edits.
+> `flicknote replace <id> --section <section-id>` overwrites one complete section subtree, including its heading. Prefer `modify` for precision edits and metadata.
 
 ```bash
-echo "new note content" | flicknote replace <id>                       # replace entire note body
 echo "## New Heading
 new body" | flicknote replace <id> --section <s> # replace whole section incl. heading
-flicknote replace <id> --project <name>                                # metadata works here too
 ```
 
-`--section` requires stdin to start with an ATX or setext heading. The heading level is capped at the original section's level so outlines don't skew.
+`--section` is required and stdin must start with an ATX or setext heading. The
+heading level is capped at the original section's level so outlines don't
+skew. Use `modify` for project/flagged changes. To replace a whole note,
+archive the old note and create a new one.
 
 ## Modify (edit-mode + metadata)
 
@@ -99,7 +100,7 @@ Mutating commands (`modify`, `delete`, `rename`, `insert`) print the updated `--
 
 | Old                                                           | New                                                 |
 |---------------------------------------------------------------|-----------------------------------------------------|
-| `cat x.md | flicknote modify <id>`                            | `cat x.md | flicknote replace <id>`                 |
+| Whole-note replacement                                      | Archive the old note, then create a new note       |
 | `echo body | flicknote modify <id> --section <s>`             | `echo "## Heading
 body" | flicknote replace <id> --section <s>`   |
 | `cat "## X

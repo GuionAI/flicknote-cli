@@ -2,13 +2,22 @@ use clap::Args;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-
-use super::util::display_note_id;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::note::NoteService;
+use flicknote_core::services::ports::BrowserOpener;
 
 #[derive(Args)]
 pub(crate) struct OpenArgs {
-    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted for compatibility.
+    /// Note ID. Use the numeric short ID shown in list/detail. Full UUIDs are also accepted.
     id: String,
+}
+
+pub(crate) struct SystemBrowserOpener;
+
+impl BrowserOpener for SystemBrowserOpener {
+    fn open(&self, url: &str) -> Result<(), ServiceError> {
+        open::that(url).map_err(ServiceError::Io)
+    }
 }
 
 pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Result<(), CliError> {
@@ -18,15 +27,9 @@ pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Re
                 .into(),
         )
     })?;
-    let full_id = db.resolve_note_id(&args.id).await?;
-    let note = db.find_note(&full_id).await?;
-    let display_id = display_note_id(&note);
-    let url_id = note
-        .short_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| full_id.clone());
-    let url = format!("{}/notes/{}", web_url.trim_end_matches('/'), url_id);
-    open::that(&url).map_err(CliError::Io)?;
-    println!("Opened {} — {}", display_id, url);
+    let result = NoteService::new(db)
+        .open(&SystemBrowserOpener, web_url, &args.id)
+        .await?;
+    println!("Opened {}", result.url);
     Ok(())
 }

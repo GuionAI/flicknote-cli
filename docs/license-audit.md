@@ -1,6 +1,6 @@
 # License Audit
 
-Last updated: 2026-03-02
+Last updated: 2026-08-05
 
 ## Allowed Licenses
 
@@ -40,10 +40,9 @@ brings problematic transitive dependencies:
 | bincode | — | RUSTSEC-2025-0141 (unmaintained) |
 | yaml-rust | — | RUSTSEC-2024-0320 (unmaintained) |
 
-**Resolution:** Vendored the heading parser logic (~180 lines) into
-`flicknote-cli/src/markdown.rs` with zero external dependencies. This provides
-`parse_markdown`, `Document`, `Heading`, `HeadingNode`, `filter_headings`,
-`extract_section`, `build_tree`, and `render_box_tree` — everything we need
-without the syntect/TUI dependency chain.
+**Resolution:** Vendored the heading parser logic into
+`flicknote-core/src/services/markdown.rs` and use `pulldown-cmark` for
+CommonMark-aware offsets. This provides the note section operations we need
+without the old `treemd`/`syntect` dependency chain.
 
 The vendored code is derived from treemd's `parser/document.rs` (MIT licensed).

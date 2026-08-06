@@ -2,10 +2,14 @@ use clap::Args;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteDb};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::NoteAddInput;
+use flicknote_core::services::note::NoteService;
+use flicknote_core::services::ports::{DirectNoteCreator, NoteCreator};
+use flicknote_sync::ipc::DaemonClient;
 use flicknote_sync::ipc::{CreateNoteRequest, DaemonRequest, DaemonResponse};
 use std::io::{IsTerminal, Read};
 
-use super::util::{display_inserted_note_id, resolve_project_arg};
+use super::util::{display_summary_id, resolve_project_arg};
 
 const ADD_HELP: &str = include_str!("../help/add.md");
 
@@ -37,9 +41,6 @@ pub(crate) async fn run(
     args: &AddArgs,
     mode: AddCreateMode,
 ) -> Result<(), CliError> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-
     let content = match &args.value {
         Some(v) => v.to_owned(),
         None => {
@@ -58,86 +59,26 @@ pub(crate) async fn run(
         }
     };
 
-    let from_arg = args.value.is_some();
-    let is_url_arg = content.starts_with("http://") || content.starts_with("https://");
-    let is_url = from_arg && is_url_arg;
-
-    let effective_project = resolve_project_arg(&args.project);
-    let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name).await?)
-    } else {
-        None
-    };
-
-    let inserted = if is_url {
-        let metadata = serde_json::json!({ "link": { "url": &content } }).to_string();
-        if mode.uses_daemon() {
-            create_note_with_daemon(
-                config,
-                daemon_create_request(&InsertNoteReq {
-                    id: &id,
-                    note_type: "link",
-                    status: "source_queued",
-                    title: None,
-                    content: None,
-                    metadata: Some(&metadata),
-                    project_id: project_id.as_deref(),
-                    now: &now,
-                }),
-            )
-            .await?
-        } else {
-            db.insert_note(&InsertNoteReq {
-                id: &id,
-                note_type: "link",
-                status: "source_queued",
-                title: None,
-                content: None,
-                metadata: Some(&metadata),
-                project_id: project_id.as_deref(),
-                now: &now,
-            })
-            .await?
-        }
-    } else {
-        let (title, stripped_content) = crate::utils::extract_title_and_strip(&content);
-        let title_ref = title.as_deref();
-        if mode.uses_daemon() {
-            create_note_with_daemon(
-                config,
-                daemon_create_request(&InsertNoteReq {
-                    id: &id,
-                    note_type: "normal",
-                    status: "ai_queued",
-                    title: title_ref,
-                    content: Some(&stripped_content),
-                    metadata: None,
-                    project_id: project_id.as_deref(),
-                    now: &now,
-                }),
-            )
-            .await?
-        } else {
-            db.insert_note(&InsertNoteReq {
-                id: &id,
-                note_type: "normal",
-                status: "ai_queued",
-                title: title_ref,
-                content: Some(&stripped_content),
-                metadata: None,
-                project_id: project_id.as_deref(),
-                now: &now,
-            })
-            .await?
-        }
-    };
-
-    match effective_project.as_deref() {
+    let project = resolve_project_arg(&args.project);
+    let direct = DirectNoteCreator::new(db);
+    let daemon = DaemonClient::new(config);
+    let creator: &dyn NoteCreator = if mode.uses_daemon() { &daemon } else { &direct };
+    let note = NoteService::new(db)
+        .add(
+            creator,
+            NoteAddInput {
+                content,
+                project: project.clone(),
+                interpret_as_url: args.value.is_some(),
+            },
+        )
+        .await?;
+    match project.as_deref() {
         Some(name) => println!(
             "Created note {} in project \"{name}\".",
-            display_inserted_note_id(&inserted)
+            display_summary_id(&note)
         ),
-        None => println!("Created note {}.", display_inserted_note_id(&inserted)),
+        None => println!("Created note {}.", display_summary_id(&note)),
     }
     Ok(())
 }

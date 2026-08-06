@@ -7,6 +7,7 @@ pub mod error;
 pub mod pgwire;
 #[cfg(feature = "powersync")]
 pub mod schema;
+pub mod services;
 pub mod session;
 pub mod types;
 

@@ -26,7 +26,7 @@
 //! - JSON output stays structured and must not use synthetic Markdown.
 /// Result of parsing a full editable Markdown document.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct EditableDoc {
+pub struct EditableDoc {
     /// Title extracted from frontmatter.
     pub title: Option<String>,
     /// Body content without managed frontmatter.
@@ -42,7 +42,7 @@ pub(crate) struct EditableDoc {
 /// Returns `(frontmatter_body, rest_of_doc)` when document starts with `---`
 /// at byte 0 and is closed by a subsequent `---` delimiter on its own line.
 /// Returns `(None, original)` if no valid frontmatter block is found.
-pub(crate) fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
+pub fn split_frontmatter(content: &str) -> (Option<&str>, &str) {
     let trimmed = content;
     if !trimmed.starts_with("---\n") && trimmed != "---" {
         return (None, content);
@@ -214,7 +214,7 @@ fn take_yaml_list(value: &mut yaml_serde::Value, key: &str) -> Vec<String> {
 /// Merges managed `topics` into the user frontmatter (or creates frontmatter
 /// if only managed values exist). Returns the full frontmatter block including `---`
 /// delimiters, or None if there is nothing to render.
-pub(crate) fn render_frontmatter(
+pub fn render_frontmatter(
     title: Option<&str>,
     topics: &[String],
     user_frontmatter: Option<&str>,
@@ -329,7 +329,7 @@ fn frontmatter_body(fm: &str) -> &str {
 /// - body content
 /// - managed extraction values for `topics`
 /// - unmanaged frontmatter preserved in stored content when unknown keys remain
-pub(crate) fn parse_editable_doc(content: &str) -> EditableDoc {
+pub fn parse_editable_doc(content: &str) -> EditableDoc {
     let (fm_opt, after_fm) = split_frontmatter(content);
     let (unmanaged_fm, title, topics) = if let Some(fm) = fm_opt {
         let fm_body = fm
@@ -354,7 +354,7 @@ pub(crate) fn parse_editable_doc(content: &str) -> EditableDoc {
 ///
 /// Takes a title, body content, DB extraction rows, and optional stored unmanaged
 /// frontmatter. Returns the full Markdown with frontmatter + body.
-pub(crate) fn build_editable_content(
+pub fn build_editable_content(
     title: Option<&str>,
     body: &str,
     topics: &[String],

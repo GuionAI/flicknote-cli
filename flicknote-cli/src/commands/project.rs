@@ -2,7 +2,8 @@ use clap::{Args, Subcommand};
 use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::types::Project;
+use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectModifyInput};
+use flicknote_core::services::project::ProjectService;
 
 const PROJECT_HELP: &str = include_str!("../help/project.md");
 
@@ -110,44 +111,28 @@ pub(crate) async fn run(
 }
 
 async fn add(db: &dyn NoteDb, args: &AddProjectArgs) -> Result<(), CliError> {
-    if db.find_project_by_name(&args.name).await?.is_some() {
-        return Err(CliError::ProjectAlreadyExists {
+    let project = ProjectService::new(db)
+        .add(ProjectAddInput {
             name: args.name.clone(),
-        });
-    }
-    let id = db.create_project(&args.name).await?;
-
-    // Resolve and validate the FK ID before storing.
-    let resolved_keyterm = match args.keyterm.as_deref() {
-        Some(v) => Some(db.resolve_keyterm_id(v).await?),
-        None => None,
-    };
-    let color_opt = args.color.as_deref().map(Some);
-
-    let keyterm_id_opt = resolved_keyterm.as_deref().map(Some);
-
-    if keyterm_id_opt.is_some() || color_opt.is_some() {
-        db.update_project(&id, keyterm_id_opt, color_opt).await?;
-    }
-
-    println!("Created project \"{}\" ({}).", args.name, id);
+            keyterm: args.keyterm.clone(),
+            color: args.color.clone(),
+        })
+        .await?;
+    println!("Created project \"{}\" ({}).", project.name, project.id);
     Ok(())
 }
 
 async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
-    let projects: Vec<Project> = if args.include_archived {
-        let mut all = db.list_projects(false).await?;
-        all.extend(db.list_projects(true).await?);
-        all.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        all
-    } else {
-        db.list_projects(false).await?
-    };
+    let projects = ProjectService::new(db).list(args.include_archived).await?;
 
     if args.json {
+        let mut values = Vec::with_capacity(projects.len());
+        for project in &projects {
+            values.push(db.find_project(&project.id).await?);
+        }
         println!(
             "{}",
-            serde_json::to_string_pretty(&projects).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
         );
     } else if args.include_archived {
         println!("{:<36} {:<30} {:<10} Created", "ID", "Name", "Status");
@@ -158,11 +143,7 @@ async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
                 .as_deref()
                 .and_then(|d| d.get(..10))
                 .unwrap_or("-");
-            let status = if p.is_archived.unwrap_or(0) != 0 {
-                "archived"
-            } else {
-                "active"
-            };
+            let status = if p.archived { "archived" } else { "active" };
             println!("{:<36} {:<30} {:<10} {}", p.id, p.name, status, date);
         }
     } else {
@@ -182,21 +163,22 @@ async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
 }
 
 async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_project_id(&args.id).await?;
-    let project = db.find_project(&full_id).await?;
+    let project = ProjectService::new(db).get(&args.id).await?;
 
     println!("ID:      {}", project.id);
     println!("Name:    {}", project.name);
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
-    if let Some(ref kid) = project.keyterm_id {
-        match db.find_keyterm(kid).await {
-            Ok(keyterm) => println!("Keyterm: {} ({})", keyterm.name, kid),
-            Err(e) => eprintln!("warning: could not look up keyterm {kid} ({e})"),
+    if let Some(ref keyterm_id) = project.keyterm_id {
+        match db.find_keyterm(keyterm_id).await {
+            Ok(keyterm) => println!("Keyterm: {} ({keyterm_id})", keyterm.name),
+            Err(error) => {
+                eprintln!("warning: could not look up keyterm {keyterm_id} ({error})")
+            }
         }
     }
-    let status = if project.is_archived.unwrap_or(0) != 0 {
+    let status = if project.archived {
         "archived"
     } else {
         "active"
@@ -214,38 +196,25 @@ async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-fn parse_clearable(val: &Option<String>) -> Option<Option<&str>> {
-    val.as_deref()
-        .map(|v| if v == "none" { None } else { Some(v) })
-}
-
 async fn modify(db: &dyn NoteDb, args: &ModifyProjectArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_project_id(&args.id).await?;
-
-    if args.keyterm.is_none() && args.color.is_none() {
-        return Err(CliError::Other(
-            "Nothing to modify. Use --keyterm or --color.".into(),
-        ));
-    }
-
-    // Resolve the FK ID: "none" clears the field, any other value is resolved.
-    let resolved_keyterm: Option<Option<String>> = match args.keyterm.as_deref() {
-        Some("none") => Some(None),
-        Some(v) => Some(Some(db.resolve_keyterm_id(v).await?)),
-        None => None,
+    let patch = |value: &Option<String>| match value.as_deref() {
+        None => Patch::Missing,
+        Some("none") => Patch::Null,
+        Some(value) => Patch::Value(value.to_string()),
     };
-    let color = parse_clearable(&args.color);
-
-    let keyterm_id = resolved_keyterm.as_ref().map(|opt| opt.as_deref());
-
-    db.update_project(&full_id, keyterm_id, color).await?;
-    println!("Updated project {}.", full_id);
+    let project = ProjectService::new(db)
+        .modify(ProjectModifyInput {
+            id: args.id.clone(),
+            keyterm: patch(&args.keyterm),
+            color: patch(&args.color),
+        })
+        .await?;
+    println!("Updated project {}.", project.id);
     Ok(())
 }
 
 async fn delete(db: &dyn NoteDb, args: &DeleteProjectArgs) -> Result<(), CliError> {
-    let full_id = db.resolve_project_id(&args.id).await?;
-    db.delete_project(&full_id).await?;
-    println!("Deleted project {}.", full_id);
+    let project = ProjectService::new(db).archive(&args.id).await?;
+    println!("Deleted project {}.", project.id);
     Ok(())
 }

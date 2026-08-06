@@ -2,7 +2,7 @@
 /// and the content with the H1 line stripped (plus any immediately following blank lines).
 /// Only treats the H1 as the title if all lines before it are blank (leading H1 convention).
 /// If no H1 is found, returns `(None, original_content)`. Trailing content is preserved as-is.
-pub(crate) fn extract_title_and_strip(content: &str) -> (Option<String>, String) {
+pub fn extract_title_and_strip(content: &str) -> (Option<String>, String) {
     let mut title: Option<String> = None;
     let mut h1_line_idx: Option<usize> = None;
 

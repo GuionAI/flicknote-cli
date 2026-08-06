@@ -32,7 +32,6 @@ uuid = { workspace = true }
 chrono = "0.4"
 url = "2"
 serde_json = { workspace = true }
-yaml_serde = "0.10"
 tokio = { workspace = true }
 libc = "0.2"
 dirs = { workspace = true }
@@ -40,15 +39,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 mime_guess = "2"
 futures-util = "0.3"
 serde = { workspace = true }
-pulldown-cmark = { version = "0.13.1", default-features = false }
-sha2 = "0.10"
 open = "5"
 tempfile = "3"
 env_logger = "0.11"
 log = "0.4"
+rmcp = { version = "3.1.0", default-features = false, features = ["server", "transport-io", "local", "macros"] }
+schemars = "1"
 
 [dev-dependencies]
 async-trait = { workspace = true }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 
 [lints]
 workspace = true

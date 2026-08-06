@@ -72,7 +72,8 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
 /// Edit an existing note.
 async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
     let full_id = resolve_note_id(db, id).await?;
-    let display_content = crate::editable_document::load_editable_note(db, &full_id).await?;
+    let display_content =
+        flicknote_core::services::editable_document::load_editable_note(db, &full_id).await?;
     let edited = open_in_editor(&display_content)?;
     if edited == display_content.trim_end() {
         println!("No changes.");
@@ -83,7 +84,9 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
             "Edited content is empty — aborting. Use `flicknote delete` to remove a note.".into(),
         ));
     }
-    let result = crate::editable_document::save_editable_note(db, &full_id, &edited).await?;
+    let result =
+        flicknote_core::services::editable_document::save_editable_note(db, &full_id, &edited)
+            .await?;
     if result.title_changed {
         let note = db.find_note(&full_id).await?;
         println!("Updated title for note {}.", display_note_id(&note));
@@ -108,7 +111,7 @@ async fn create_from_editor(
     }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339();
-    let parsed = crate::editable_document::parse_editable_note(&edited)?;
+    let parsed = flicknote_core::services::editable_document::parse_editable_note(&edited)?;
     let effective_project = resolve_project_arg(project_arg);
     let project_id = if let Some(ref name) = effective_project {
         Some(resolve_project(db, name).await?)
@@ -124,7 +127,9 @@ async fn create_from_editor(
                     note_type: "normal",
                     status: "ai_queued",
                     title: Some(parsed.title.as_str()),
-                    content: crate::editable_document::normal_note_content_ref(&parsed),
+                    content: flicknote_core::services::editable_document::normal_note_content_ref(
+                        &parsed,
+                    ),
                     metadata: None,
                     project_id: project_id.as_deref(),
                     now: &now,
@@ -139,7 +144,7 @@ async fn create_from_editor(
             note_type: "normal",
             status: "ai_queued",
             title: Some(parsed.title.as_str()),
-            content: crate::editable_document::normal_note_content_ref(&parsed),
+            content: flicknote_core::services::editable_document::normal_note_content_ref(&parsed),
             metadata: None,
             project_id: project_id.as_deref(),
             now: &now,

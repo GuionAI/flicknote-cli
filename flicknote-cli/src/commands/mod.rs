@@ -6,7 +6,6 @@ pub(crate) mod daemon;
 pub(crate) mod delete;
 pub(crate) mod detail;
 pub(crate) mod edit;
-pub(crate) mod edit_match;
 pub(crate) mod entity;
 pub(crate) mod find;
 pub(crate) mod import;

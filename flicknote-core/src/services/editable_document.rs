@@ -1,31 +1,32 @@
 //! Service boundary for the editable full-note Markdown contract.
 
-use crate::frontmatter::{self, EditableDoc};
-use flicknote_core::TOPIC_EXTRACTION_KEY;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::error::CliError;
-use flicknote_core::types::Note;
+use crate::TOPIC_EXTRACTION_KEY;
+use crate::backend::NoteDb;
+use crate::error::CliError;
+use crate::types::Note;
+
+use super::frontmatter::{self, EditableDoc};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParsedEditableNote {
+pub struct ParsedEditableNote {
     pub title: String,
     pub stored_content: String,
     pub topics: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EditableSaveResult {
+pub struct EditableSaveResult {
     pub title_changed: bool,
     pub content_changed: bool,
     pub stored_content: String,
 }
 
-pub(crate) async fn load_editable_note(db: &dyn NoteDb, note_id: &str) -> Result<String, CliError> {
+pub async fn load_editable_note(db: &dyn NoteDb, note_id: &str) -> Result<String, CliError> {
     let note = db.find_note(note_id).await?;
     render_editable_note(db, &note).await
 }
 
-pub(crate) async fn render_editable_note(db: &dyn NoteDb, note: &Note) -> Result<String, CliError> {
+pub async fn render_editable_note(db: &dyn NoteDb, note: &Note) -> Result<String, CliError> {
     let topics = load_managed_topics(db, &note.id).await?;
     let content = note.content.as_deref().unwrap_or("");
     let (stored_frontmatter, body_without_fm) = frontmatter::split_frontmatter(content);
@@ -37,7 +38,7 @@ pub(crate) async fn render_editable_note(db: &dyn NoteDb, note: &Note) -> Result
     ))
 }
 
-pub(crate) async fn save_editable_note(
+pub async fn save_editable_note(
     db: &dyn NoteDb,
     note_id: &str,
     markdown: &str,
@@ -78,7 +79,7 @@ pub(crate) async fn save_editable_note(
     })
 }
 
-pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, CliError> {
+pub fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, CliError> {
     let doc = frontmatter::parse_editable_doc(markdown);
     let stored_content = stored_content_from_doc(&doc);
 
@@ -89,7 +90,7 @@ pub(crate) fn parse_editable_note(markdown: &str) -> Result<ParsedEditableNote, 
     })
 }
 
-pub(crate) fn normal_note_content_ref(parsed: &ParsedEditableNote) -> Option<&str> {
+pub fn normal_note_content_ref(parsed: &ParsedEditableNote) -> Option<&str> {
     Some(parsed.stored_content.as_str())
 }
 
@@ -124,8 +125,8 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
-    use flicknote_core::types::{Keyterm, Project};
+    use crate::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
+    use crate::types::{Keyterm, Project};
     use std::cell::RefCell;
     use std::collections::HashMap;
 
