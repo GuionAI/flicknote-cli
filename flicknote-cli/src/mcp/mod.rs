@@ -1,5 +1,6 @@
 mod dto;
 mod error;
+mod gateway_tools;
 mod note_tools;
 mod project_tools;
 mod server;

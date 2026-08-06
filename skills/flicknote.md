@@ -35,6 +35,7 @@ flicknote project share <project-id>
 flicknote project unshare <project-id>
 flicknote content <id>
 flicknote content <id> --section <section-id>
+flicknote gateway request --method POST --path /web/v1/search --json '{"query":"rust"}'
 ```
 
 Use the numeric short ID shown by `flicknote list`.
@@ -76,6 +77,27 @@ internal UUIDs; project tools use project names. Use `note_get` for editable
 content and `note_source` only for stored source data. The server supports only
 the local PowerSync workspace. Note creation and note/project share or unshare
 require the sync daemon; local reads and edits do not.
+
+The read-only `gateway_web_search` and `gateway_web_fetch` tools use the current
+FlickNote session to call the configured Gateway's fixed web endpoints. Search
+accepts `query`; fetch accepts `url` and returns only `content` and `wordCount`.
+They do not accept arbitrary Gateway paths, headers, or destination origins.
+
+## Gateway Requests
+
+`flicknote gateway request` makes an authenticated request only to an absolute
+path on the Gateway origin configured by FlickNote. It refreshes the local
+session when needed and keeps credentials inside the process. Do not extract a
+JWT from `session.json`.
+
+```bash
+flicknote gateway request --method POST --path /web/v1/search --json '{"query":"rust"}'
+cat request.json | flicknote gateway request --method POST --path /llm/v1/chat/completions
+```
+
+The response body, including SSE, is forwarded to stdout. Status and errors go
+to stderr. Full URLs, redirects, caller-supplied headers, and token output are
+not supported.
 
 ## More Help
 

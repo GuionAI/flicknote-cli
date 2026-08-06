@@ -12,6 +12,7 @@ use flicknote_core::error::CliError;
 const ROOT_HELP: &str = include_str!("help/root.md");
 
 mod commands;
+mod gateway;
 mod mcp;
 
 #[derive(Parser)]
@@ -52,6 +53,8 @@ enum Commands {
     Topic(commands::topic::TopicArgs),
     /// Discover entities
     Entity(commands::entity::EntityArgs),
+    /// Make a safe authenticated request to the configured Gateway
+    Gateway(commands::gateway::GatewayArgs),
     /// Inspect raw note sources
     Source(commands::source::SourceArgs),
     /// Show note details with full metadata
@@ -108,6 +111,7 @@ impl Commands {
     fn local_workspace_command_name(&self) -> Option<&'static str> {
         match self {
             Self::Mcp => Some("mcp"),
+            Self::Gateway(_) => Some("gateway"),
             Self::Upload(_) => Some("upload"),
             Self::Edit(_) => Some("edit"),
             Self::Login(_) => Some("login"),
@@ -143,7 +147,7 @@ fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError
 fn local_workspace_required_error(command: &str) -> CliError {
     CliError::Other(format!(
         "`flicknote {command}` is not available in managed workspaces.\n\
-         Use a local workspace for file, editor, browser, sharing, sync, sign-in, and skill commands."
+         Use a local workspace for file, editor, browser, Gateway, sharing, sync, sign-in, and skill commands."
     ))
 }
 
@@ -168,6 +172,7 @@ async fn run() -> Result<(), CliError> {
             Commands::Logout => return commands::logout::run(&config),
             Commands::Sync(args) => return commands::sync::run(&config, args),
             Commands::Skill(args) => return commands::skill::run(args),
+            Commands::Gateway(args) => return commands::gateway::run(&config, args).await,
             _ => {}
         }
     }
@@ -231,6 +236,7 @@ async fn dispatch(
         Commands::Find(args) => commands::find::run(db, args).await,
         Commands::Topic(args) => commands::topic::run(db, args).await,
         Commands::Entity(args) => commands::entity::run(db, args).await,
+        Commands::Gateway(_) => unreachable!("Gateway is dispatched before database setup"),
         Commands::Source(args) => commands::source::run(db, args).await,
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
@@ -254,6 +260,44 @@ async fn dispatch(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "powersync")]
+    fn spawn_gateway_server(
+        responses: Vec<&'static str>,
+    ) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            responses
+                .into_iter()
+                .map(|response| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut buffer = [0_u8; 4096];
+                    let count = stream.read(&mut buffer).unwrap();
+                    stream.write_all(response.as_bytes()).unwrap();
+                    String::from_utf8_lossy(&buffer[..count]).into_owned()
+                })
+                .collect()
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[cfg(feature = "powersync")]
+    fn write_session(path: &std::path::Path) {
+        let session = serde_json::json!({
+            "access_token": "test-token",
+            "refresh_token": "test-refresh",
+            "expires_at": null,
+            "user": { "id": "test-user", "email": null }
+        });
+        let wrapper = serde_json::json!({
+            "sb-test-auth-token": serde_json::to_string(&session).unwrap()
+        });
+        std::fs::write(path, serde_json::to_vec(&wrapper).unwrap()).unwrap();
+    }
 
     #[cfg(feature = "powersync")]
     async fn call_mcp_tool(
@@ -290,11 +334,18 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(async {
                 let directory = tempfile::tempdir().unwrap();
+                let (gateway_origin, gateway_server) = spawn_gateway_server(vec![
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 87\r\nConnection: close\r\n\r\n{\"results\":[{\"title\":\"Rust\",\"url\":\"https://www.rust-lang.org\",\"snippet\":\"A language\"}]}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 40\r\nConnection: close\r\n\r\n{\"content\":\"Article body\",\"wordCount\":2}",
+                    "HTTP/1.1 429 Too Many Requests\r\nRetry-After: 5\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntest-token",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                    "HTTP/1.1 401 Unauthorized\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntest-token",
+                ]);
                 let config = Config {
-                    supabase_url: String::new(),
-                    supabase_anon_key: String::new(),
+                    supabase_url: "https://auth.example.test".to_string(),
+                    supabase_anon_key: "anon-key".to_string(),
                     powersync_url: String::new(),
-                    api_url: String::new(),
+                    api_url: format!("{gateway_origin}/api/v1"),
                     web_url: Some("https://app.example".to_string()),
                     paths: flicknote_core::config::ConfigPaths {
                         config_dir: directory.path().to_path_buf(),
@@ -305,6 +356,7 @@ mod tests {
                         log_file: directory.path().join("test.log"),
                     },
                 };
+                write_session(&config.paths.session_file);
                 let database = Database::open_local(&config).await.unwrap();
                 let backend = SqliteBackend {
                     db: database,
@@ -394,6 +446,8 @@ mod tests {
                     .map(|tool| tool["name"].as_str().unwrap())
                     .collect::<std::collections::BTreeSet<_>>();
                 assert_eq!(names, mcp::EXPECTED_TOOLS.into_iter().collect());
+                assert!(names.contains("gateway_web_search"));
+                assert!(names.contains("gateway_web_fetch"));
                 assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
                 let list_schema = tools
                     .iter()
@@ -684,6 +738,106 @@ mod tests {
                 .await;
                 assert_eq!(restored["result"]["structuredContent"]["archived"], false);
 
+                let search = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    17,
+                    "gateway_web_search",
+                    serde_json::json!({ "query": "Rust" }),
+                )
+                .await;
+                assert_eq!(search["result"]["isError"], false);
+                assert_eq!(
+                    search["result"]["structuredContent"],
+                    serde_json::json!({
+                        "results": [{
+                            "title": "Rust",
+                            "url": "https://www.rust-lang.org",
+                            "snippet": "A language"
+                        }]
+                    })
+                );
+
+                let fetch = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    18,
+                    "gateway_web_fetch",
+                    serde_json::json!({ "url": "https://example.com/article" }),
+                )
+                .await;
+                assert_eq!(fetch["result"]["isError"], false);
+                assert_eq!(
+                    fetch["result"]["structuredContent"],
+                    serde_json::json!({ "content": "Article body", "wordCount": 2 })
+                );
+
+                let rate_limited = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    19,
+                    "gateway_web_search",
+                    serde_json::json!({ "query": "again" }),
+                )
+                .await;
+                assert_eq!(rate_limited["result"]["isError"], true);
+                assert_eq!(
+                    rate_limited["result"]["structuredContent"]["code"],
+                    "gateway_rate_limited"
+                );
+                assert_eq!(
+                    rate_limited["result"]["structuredContent"]["retryable"],
+                    true
+                );
+                assert!(
+                    !rate_limited["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("test-token")
+                );
+
+                let invalid_response = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    20,
+                    "gateway_web_fetch",
+                    serde_json::json!({ "url": "https://example.com/invalid" }),
+                )
+                .await;
+                assert_eq!(invalid_response["result"]["isError"], true);
+                assert_eq!(
+                    invalid_response["result"]["structuredContent"]["code"],
+                    "gateway_invalid_response"
+                );
+
+                let authentication_error = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    21,
+                    "gateway_web_search",
+                    serde_json::json!({ "query": "private" }),
+                )
+                .await;
+                assert_eq!(authentication_error["result"]["isError"], true);
+                assert_eq!(
+                    authentication_error["result"]["structuredContent"]["code"],
+                    "not_authenticated"
+                );
+                assert!(
+                    !authentication_error["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("test-token")
+                );
+                let requests = gateway_server.join().unwrap();
+                assert!(requests[0].starts_with("POST /web/v1/search HTTP/1.1\r\n"));
+                assert!(requests[0].contains("authorization: Bearer test-token\r\n"));
+                assert!(requests[1].starts_with("POST /web/v1/fetch HTTP/1.1\r\n"));
+                assert!(requests[1].contains("authorization: Bearer test-token\r\n"));
+                assert!(requests[2].starts_with("POST /web/v1/search HTTP/1.1\r\n"));
+                assert!(requests[3].starts_with("POST /web/v1/fetch HTTP/1.1\r\n"));
+                assert!(requests[4].starts_with("POST /web/v1/search HTTP/1.1\r\n"));
+
                 drop(client_write);
                 drop(client_read);
                 server.await.unwrap().unwrap();
@@ -792,6 +946,14 @@ mod tests {
     fn managed_workspace_blocks_local_workspace_commands() {
         for argv in [
             ["flicknote", "mcp"].as_slice(),
+            [
+                "flicknote",
+                "gateway",
+                "request",
+                "--path",
+                "/web/v1/search",
+            ]
+            .as_slice(),
             ["flicknote", "upload", "file.pdf"].as_slice(),
             ["flicknote", "edit"].as_slice(),
             ["flicknote", "login"].as_slice(),

@@ -1,5 +1,7 @@
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::process::{Command, Stdio};
+use std::thread;
 
 use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
@@ -121,6 +123,140 @@ fn assert_legacy_note_shape(note: &serde_json::Value, project: &serde_json::Valu
     assert_eq!(note["content"], "stored body");
     assert_eq!(note["is_flagged"], 1);
     assert_eq!(&note["project"], project);
+}
+
+fn spawn_gateway_server(response: &'static str) -> (String, thread::JoinHandle<String>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buffer = [0_u8; 4096];
+        let count = stream.read(&mut buffer).unwrap();
+        stream.write_all(response.as_bytes()).unwrap();
+        String::from_utf8_lossy(&buffer[..count]).into_owned()
+    });
+    (format!("http://{address}"), handle)
+}
+
+#[test]
+fn gateway_request_writes_a_chunked_sse_response_to_stdout_without_exposing_its_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+    let (origin, server) = spawn_gateway_server(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nD\r\ndata: first\n\n\r\nE\r\ndata: second\n\n\r\n0\r\n\r\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args([
+            "gateway",
+            "request",
+            "--method",
+            "POST",
+            "--path",
+            "/llm/v1/chat/completions",
+            "--json",
+            r#"{"model":"deepseek-v4-pro"}"#,
+        ])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = server.join().unwrap();
+    assert_eq!(output.stdout, b"data: first\n\ndata: second\n\n");
+    assert!(request.starts_with("POST /llm/v1/chat/completions HTTP/1.1\r\n"));
+    assert!(request.contains("authorization: Bearer test-token\r\n"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("test-token"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("test-token"));
+}
+
+#[test]
+fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+    let (origin, server) =
+        spawn_gateway_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args([
+            "gateway",
+            "request",
+            "--method",
+            "POST",
+            "--path",
+            "/llm/v1/chat/completions",
+        ])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env_remove("DATABASE_URL")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"{\"model\":\"deepseek-v4-pro\"}\n")
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"{}");
+    let request = server.join().unwrap();
+    assert!(request.contains("{\"model\":\"deepseek-v4-pro\"}\n"));
+}
+
+#[test]
+fn gateway_request_does_not_echo_an_upstream_error_body() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+    let (origin, server) = spawn_gateway_server(
+        "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntest-token",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args([
+            "gateway",
+            "request",
+            "--method",
+            "POST",
+            "--path",
+            "/web/v1/search",
+            "--json",
+            r#"{"query":"rust"}"#,
+        ])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("502"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("test-token"));
+    server.join().unwrap();
 }
 
 #[tokio::test]

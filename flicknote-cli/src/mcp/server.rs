@@ -20,16 +20,22 @@ use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use crate::commands::open::SystemBrowserOpener;
+use crate::gateway::GatewayClient;
 
 use super::dto::{
     McpNoteArchiveResult, McpNoteDetail, McpNoteMutationResult, McpNoteSummary, McpProjectDto,
 };
-use super::error::tool_error;
+use super::error::{
+    gateway_config_error, gateway_invalid_response_error, gateway_tool_error, tool_error,
+};
+use super::gateway_tools::*;
 use super::note_tools::*;
 use super::project_tools::*;
 
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 25] = [
+pub(crate) const EXPECTED_TOOLS: [&str; 27] = [
+    "gateway_web_fetch",
+    "gateway_web_search",
     "note_add",
     "note_append",
     "note_archive",
@@ -108,6 +114,58 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
 
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
+    #[tool(
+        name = "gateway_web_search",
+        description = "Search the web through the configured FlickNote Gateway.",
+        annotations(read_only_hint = true)
+    )]
+    async fn gateway_web_search(
+        &self,
+        Parameters(params): Parameters<GatewayWebSearchParams>,
+    ) -> Result<Json<GatewayWebSearchResult>, CallToolResult> {
+        let client =
+            GatewayClient::new(&self.config).map_err(|error| gateway_config_error(&error))?;
+        let response = client
+            .request_json(
+                reqwest::Method::POST,
+                "/web/v1/search",
+                &serde_json::json!({ "query": params.query }),
+            )
+            .await
+            .map_err(|error| gateway_tool_error(&error))?;
+        let response = response
+            .json()
+            .await
+            .map_err(|_| gateway_invalid_response_error())?;
+        Ok(Json(response))
+    }
+
+    #[tool(
+        name = "gateway_web_fetch",
+        description = "Fetch readable page content through the configured FlickNote Gateway.",
+        annotations(read_only_hint = true)
+    )]
+    async fn gateway_web_fetch(
+        &self,
+        Parameters(params): Parameters<GatewayWebFetchParams>,
+    ) -> Result<Json<GatewayWebFetchResult>, CallToolResult> {
+        let client =
+            GatewayClient::new(&self.config).map_err(|error| gateway_config_error(&error))?;
+        let response = client
+            .request_json(
+                reqwest::Method::POST,
+                "/web/v1/fetch",
+                &serde_json::json!({ "url": params.url }),
+            )
+            .await
+            .map_err(|error| gateway_tool_error(&error))?;
+        let response = response
+            .json()
+            .await
+            .map_err(|_| gateway_invalid_response_error())?;
+        Ok(Json(response))
+    }
+
     #[tool(
         name = "note_list",
         description = "List active or archived notes with optional type and project filters.",

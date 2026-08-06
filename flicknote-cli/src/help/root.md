@@ -17,6 +17,7 @@ Common workflows:
   flicknote unshare <id>
   flicknote project share <project-id>
   flicknote project unshare <project-id>
+  flicknote gateway request --method POST --path /web/v1/search --json '{"query":"rust"}'
   cat edit.md | flicknote modify <id>
   cat section.md | flicknote replace <id> --section <section-id>
   flicknote mcp
