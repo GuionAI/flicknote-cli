@@ -26,8 +26,8 @@ struct GatewayRequestArgs {
     /// Absolute path on the configured Gateway origin (for example /web/v1/search)
     #[arg(long)]
     path: String,
-    /// JSON request body. When omitted, a piped stdin body is forwarded unchanged.
-    #[arg(long, conflicts_with = "stdin")]
+    /// JSON request body. Use without a value to read JSON from stdin.
+    #[arg(long, num_args = 0..=1, default_missing_value = "-", conflicts_with = "stdin")]
     json: Option<String>,
     /// Read the request body from stdin even when stdin is a terminal.
     #[arg(long)]
@@ -45,6 +45,14 @@ async fn request(config: &Config, args: &GatewayRequestArgs) -> Result<(), CliEr
         .map_err(|_| CliError::Other("--method must be a valid HTTP method".into()))?;
     let client = GatewayClient::new(config)?;
     let mut response = match args.json.as_deref() {
+        Some("-") => {
+            let body = read_stdin(true)?
+                .ok_or_else(|| CliError::Other("No request body provided on stdin".into()))?;
+            client
+                .request_json_bytes(method, &args.path, &body)
+                .await
+                .map_err(GatewayRequestError::into_cli_error)?
+        }
         Some(body) => {
             let body = serde_json::from_str(body).map_err(CliError::Json)?;
             client

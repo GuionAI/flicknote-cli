@@ -100,7 +100,16 @@ impl GatewayClient {
         body: &serde_json::Value,
     ) -> Result<Response, GatewayRequestError> {
         let body = serde_json::to_vec(body).map_err(|_| GatewayRequestError::Network)?;
-        self.request_with_content_type(method, path, Some(&body), Some("application/json"))
+        self.request_json_bytes(method, path, &body).await
+    }
+
+    pub(crate) async fn request_json_bytes(
+        &self,
+        method: Method,
+        path: &str,
+        body: &[u8],
+    ) -> Result<Response, GatewayRequestError> {
+        self.request_with_content_type(method, path, Some(body), Some("application/json"))
             .await
     }
 

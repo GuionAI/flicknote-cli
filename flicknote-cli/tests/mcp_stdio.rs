@@ -196,6 +196,7 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
             "POST",
             "--path",
             "/llm/v1/chat/completions",
+            "--json",
         ])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
@@ -222,6 +223,7 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
     assert_eq!(output.stdout, b"{}");
     let request = server.join().unwrap();
     assert!(request.contains("{\"model\":\"deepseek-v4-pro\"}\n"));
+    assert!(request.contains("content-type: application/json\r\n"));
 }
 
 #[test]

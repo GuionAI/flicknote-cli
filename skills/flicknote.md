@@ -92,7 +92,7 @@ JWT from `session.json`.
 
 ```bash
 flicknote gateway request --method POST --path /web/v1/search --json '{"query":"rust"}'
-cat request.json | flicknote gateway request --method POST --path /llm/v1/chat/completions
+cat request.json | flicknote gateway request --method POST --path /llm/v1/chat/completions --json
 ```
 
 The response body, including SSE, is forwarded to stdout. Status and errors go
