@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
@@ -158,6 +159,37 @@ fn spawn_gateway_server_sequence(
                 String::from_utf8_lossy(&buffer[..count]).into_owned()
             })
             .collect()
+    });
+    (format!("http://{address}"), handle)
+}
+
+fn spawn_redirect_target() -> (String, thread::JoinHandle<Option<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = [0_u8; 4096];
+                    let count = stream.read(&mut buffer).unwrap();
+                    stream
+                        .write_all(
+                            b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        )
+                        .unwrap();
+                    return Some(String::from_utf8_lossy(&buffer[..count]).into_owned());
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("failed to accept redirect target connection: {error}"),
+            }
+        }
     });
     (format!("http://{address}"), handle)
 }
@@ -373,6 +405,36 @@ fn gateway_request_refreshes_sessions_without_using_system_proxies() {
     assert!(requests[0].starts_with("POST /auth/v1/token?grant_type=refresh_token HTTP/1.1\r\n"));
     assert!(requests[1].starts_with("GET /healthz HTTP/1.1\r\n"));
     assert!(requests[1].contains("authorization: Bearer refreshed-token\r\n"));
+}
+
+#[test]
+fn gateway_request_does_not_forward_session_refresh_to_redirect_target() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session_with_expiry(&config_root, Some(0));
+    let (redirect_target, redirect_server) = spawn_redirect_target();
+    let (origin, auth_server) = spawn_gateway_server_sequence(vec![format!(
+        "HTTP/1.1 307 Temporary Redirect\r\nLocation: {redirect_target}/capture\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    )]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(["gateway", "request", "--path", "/healthz"])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_SUPABASE_URL", &origin)
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let requests = auth_server.join().unwrap();
+    assert!(requests[0].starts_with("POST /auth/v1/token?grant_type=refresh_token HTTP/1.1\r\n"));
+    assert!(
+        redirect_server.join().unwrap().is_none(),
+        "the refresh token request reached the redirect target"
+    );
 }
 
 #[test]

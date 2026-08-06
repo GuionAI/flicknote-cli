@@ -55,7 +55,10 @@ impl GoTrueClient {
         anon_key: &str,
         session_file: impl Into<std::path::PathBuf>,
     ) -> Result<Self, reqwest::Error> {
-        let http = Client::builder().no_proxy().build()?;
+        let http = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()?;
         Ok(Self::with_http_client(
             supabase_url,
             anon_key,
