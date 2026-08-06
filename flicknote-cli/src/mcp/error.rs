@@ -1,5 +1,5 @@
 use flicknote_core::services::error::ServiceError;
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::schemars::JsonSchema;
 use serde::Serialize;
 
@@ -18,13 +18,14 @@ pub(super) fn tool_error(error: &ServiceError) -> CallToolResult {
         }
         _ => serde_json::json!({}),
     };
-    CallToolResult::structured_error(
-        serde_json::to_value(ToolErrorPayload {
-            code: error.code().to_string(),
-            message: error.to_string(),
-            details,
-            retryable: error.retryable(),
-        })
-        .expect("tool error payload is serializable"),
-    )
+    let payload = serde_json::to_value(ToolErrorPayload {
+        code: error.code().to_string(),
+        message: error.to_string(),
+        details,
+        retryable: error.retryable(),
+    })
+    .expect("tool error payload is serializable");
+    let mut result = CallToolResult::error(vec![ContentBlock::text(error.to_string())]);
+    result.structured_content = Some(payload);
+    result
 }

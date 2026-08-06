@@ -325,9 +325,33 @@ mod tests {
                     })
                     .await
                     .unwrap();
+                sqlx::query("UPDATE notes SET short_id = 42 WHERE id = ?")
+                    .bind(&note_id)
+                    .execute(&backend.db.pool)
+                    .await
+                    .unwrap();
                 sqlx::query("UPDATE notes SET source = ? WHERE id = ?")
                     .bind(r#"{"link":{"content":"one\ntwo\nthree"}}"#)
                     .bind(&note_id)
+                    .execute(&backend.db.pool)
+                    .await
+                    .unwrap();
+                let no_source_note_id = uuid::Uuid::new_v4().to_string();
+                backend
+                    .insert_note(&flicknote_core::backend::InsertNoteReq {
+                        id: &no_source_note_id,
+                        note_type: "normal",
+                        status: "synced",
+                        title: Some("No source note"),
+                        content: Some("Editable content"),
+                        metadata: None,
+                        project_id: None,
+                        now: "2026-08-05T00:00:00Z",
+                    })
+                    .await
+                    .unwrap();
+                sqlx::query("UPDATE notes SET short_id = 43 WHERE id = ?")
+                    .bind(&no_source_note_id)
                     .execute(&backend.db.pool)
                     .await
                     .unwrap();
@@ -387,6 +411,52 @@ mod tests {
                     count_schema["inputSchema"]["$defs"]["NoteType"]["enum"],
                     serde_json::json!(["normal", "meeting", "link", "file"])
                 );
+                for tool in tools.iter().filter(|tool| {
+                    tool["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("note_"))
+                }) {
+                    let schema = &tool["inputSchema"];
+                    if schema["properties"].get("id").is_some() {
+                        assert_eq!(
+                            schema["properties"]["id"]["type"],
+                            "integer",
+                            "{} must accept only numeric short IDs",
+                            tool["name"]
+                        );
+                    }
+                    assert!(
+                        !tool["outputSchema"].to_string().contains("uuid"),
+                        "{} output schema must not expose UUID fields",
+                        tool["name"]
+                    );
+                }
+                for tool in tools.iter().filter(|tool| {
+                    tool["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("project_"))
+                }) {
+                    assert!(
+                        !tool["inputSchema"].to_string().contains("keyterm")
+                            && !tool["outputSchema"].to_string().contains("keyterm"),
+                        "{} must not expose keyterm functionality",
+                        tool["name"]
+                    );
+                }
+                let project_get_schema = tools
+                    .iter()
+                    .find(|tool| tool["name"] == "project_get")
+                    .unwrap();
+                assert!(
+                    project_get_schema["inputSchema"]["properties"]
+                        .get("project")
+                        .is_some()
+                );
+                assert!(
+                    project_get_schema["inputSchema"]["properties"]
+                        .get("id")
+                        .is_none()
+                );
 
                 client_write
                     .write_all(concat!(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"note_list","arguments":{}}}"#, "\n").as_bytes())
@@ -397,7 +467,7 @@ mod tests {
                 let parsed: serde_json::Value = serde_json::from_str(&response).unwrap();
                 assert_eq!(parsed["id"], 3);
                 assert_eq!(parsed["result"]["isError"], false);
-                assert_eq!(parsed["result"]["structuredContent"].as_array().unwrap().len(), 1);
+                assert_eq!(parsed["result"]["structuredContent"].as_array().unwrap().len(), 2);
 
                 let modified = call_mcp_tool(
                     &mut client_write,
@@ -405,7 +475,7 @@ mod tests {
                     4,
                     "note_modify",
                     serde_json::json!({
-                        "id": note_id,
+                        "id": 42,
                         "before": "Old text.",
                         "after": "New text.",
                         "flagged": true
@@ -421,7 +491,7 @@ mod tests {
                     5,
                     "note_replace_section",
                     serde_json::json!({
-                        "id": note_id,
+                        "id": 42,
                         "section": alpha_id,
                         "content": "## Alpha revised\n\nReplacement text."
                     }),
@@ -434,7 +504,7 @@ mod tests {
                     &mut client_read,
                     6,
                     "note_get",
-                    serde_json::json!({ "id": note_id }),
+                    serde_json::json!({ "id": 42 }),
                 )
                 .await;
                 let content = fetched["result"]["structuredContent"]["content"]
@@ -442,6 +512,28 @@ mod tests {
                     .unwrap();
                 assert!(content.contains("Replacement text."));
                 assert!(content.contains("Keep me."));
+                assert!(fetched["result"]["structuredContent"].get("uuid").is_none());
+                assert!(
+                    fetched["result"]["structuredContent"]
+                        .get("project_id")
+                        .is_none()
+                );
+
+                let uuid_rejected = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    15,
+                    "note_get",
+                    serde_json::json!({ "id": note_id }),
+                )
+                .await;
+                assert_eq!(uuid_rejected["result"]["isError"], true);
+                assert!(
+                    uuid_rejected["result"]["content"][0]["text"]
+                        .as_str()
+                        .unwrap()
+                        .contains("expected i64")
+                );
 
                 let found = call_mcp_tool(
                     &mut client_write,
@@ -471,13 +563,26 @@ mod tests {
                         .len(),
                     1
                 );
+                assert!(
+                    projects["result"]["structuredContent"][0]
+                        .get("id")
+                        .is_none()
+                );
+                assert!(
+                    projects["result"]["structuredContent"][0]
+                        .get("keyterm_id")
+                        .is_none()
+                );
 
                 let project = call_mcp_tool(
                     &mut client_write,
                     &mut client_read,
                     7,
                     "project_modify",
-                    serde_json::json!({ "id": project_id, "color": "#abcdef" }),
+                    serde_json::json!({
+                        "project": "MCP Project",
+                        "color": "#abcdef"
+                    }),
                 )
                 .await;
                 assert_eq!(
@@ -490,7 +595,7 @@ mod tests {
                     &mut client_read,
                     8,
                     "note_source",
-                    serde_json::json!({ "id": note_id, "view": "info" }),
+                    serde_json::json!({ "id": 42, "view": "info" }),
                 )
                 .await;
                 assert_eq!(
@@ -509,7 +614,7 @@ mod tests {
                     9,
                     "note_source",
                     serde_json::json!({
-                        "id": note_id,
+                        "id": 42,
                         "view": "rendered",
                         "range": "2:3"
                     }),
@@ -522,6 +627,24 @@ mod tests {
                 assert_eq!(
                     source_range["result"]["structuredContent"]["selected_start"],
                     2
+                );
+
+                let no_source = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    16,
+                    "note_source",
+                    serde_json::json!({ "id": 43, "view": "info" }),
+                )
+                .await;
+                assert_eq!(no_source["result"]["isError"], true);
+                assert_eq!(
+                    no_source["result"]["structuredContent"]["code"],
+                    "no_source"
+                );
+                assert_eq!(
+                    no_source["result"]["content"][0]["text"],
+                    "Note has no source data"
                 );
 
                 let daemon_error = call_mcp_tool(
@@ -547,7 +670,7 @@ mod tests {
                     &mut client_read,
                     11,
                     "note_archive",
-                    serde_json::json!({ "id": note_id }),
+                    serde_json::json!({ "id": 42 }),
                 )
                 .await;
                 assert_eq!(archived["result"]["structuredContent"]["archived"], true);
@@ -556,7 +679,7 @@ mod tests {
                     &mut client_read,
                     12,
                     "note_restore",
-                    serde_json::json!({ "id": note_id }),
+                    serde_json::json!({ "id": 42 }),
                 )
                 .await;
                 assert_eq!(restored["result"]["structuredContent"]["archived"], false);

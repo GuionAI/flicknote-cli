@@ -154,8 +154,11 @@ start it as a subprocess:
 
 The MCP server exposes typed note, note-source, and project tools. Note content
 and exact `before`/`after` edits are JSON fields, so callers do not need shell
-heredocs. It only supports the local PowerSync workspace; if `DATABASE_URL` is
-set, startup fails before MCP protocol output begins. `note_add`, note and
+heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
+project tools use project names. `note_source` reads stored source data, while
+`note_get` reads editable note content. It only supports the local PowerSync
+workspace; if `DATABASE_URL` is set, startup fails before MCP protocol output
+begins. `note_add`, note and
 project sharing, and unsharing use the running sync daemon because those
 operations require an account and network access. Other tools operate directly
 on the local database. The server does not start the daemon automatically.

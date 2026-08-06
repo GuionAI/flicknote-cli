@@ -71,9 +71,11 @@ Mutating section commands print the updated tree after the change.
 `flicknote mcp` serves typed note, source, and project tools over local stdio.
 Configure an MCP client to run `flicknote` with `args: ["mcp"]`. Content and
 exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
-heredocs or edit-mode delimiters. The server supports only the local PowerSync
-workspace. Note creation and note/project share or unshare require the sync
-daemon; local reads and edits do not.
+heredocs or edit-mode delimiters. Note tools use numeric short IDs and hide
+internal UUIDs; project tools use project names. Use `note_get` for editable
+content and `note_source` only for stored source data. The server supports only
+the local PowerSync workspace. Note creation and note/project share or unshare
+require the sync daemon; local reads and edits do not.
 
 ## More Help
 

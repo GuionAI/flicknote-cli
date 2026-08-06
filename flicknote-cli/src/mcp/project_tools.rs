@@ -10,22 +10,18 @@ pub(super) struct ProjectListParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct ProjectIdParams {
-    pub id: String,
+    pub project: String,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct ProjectAddParams {
     pub name: String,
-    pub keyterm: Option<String>,
     pub color: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct ProjectModifyParams {
-    pub id: String,
-    #[serde(default)]
-    #[schemars(with = "Option<String>")]
-    pub keyterm: Patch<String>,
+    pub project: String,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub color: Patch<String>,
