@@ -19,14 +19,13 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
-use crate::commands::open::SystemBrowserOpener;
-
 use super::dto::{
     McpNoteArchiveResult, McpNoteDetail, McpNoteMutationResult, McpNoteSummary, McpProjectDto,
 };
 use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
+use crate::commands::open::SystemBrowserOpener;
 
 #[cfg(test)]
 pub(crate) const EXPECTED_TOOLS: [&str; 25] = [

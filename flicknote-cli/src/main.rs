@@ -12,6 +12,7 @@ use flicknote_core::error::CliError;
 const ROOT_HELP: &str = include_str!("help/root.md");
 
 mod commands;
+mod gateway;
 mod mcp;
 
 #[derive(Parser)]
@@ -52,6 +53,8 @@ enum Commands {
     Topic(commands::topic::TopicArgs),
     /// Discover entities
     Entity(commands::entity::EntityArgs),
+    /// Make a safe authenticated request to the configured Gateway
+    Gateway(commands::gateway::GatewayArgs),
     /// Inspect raw note sources
     Source(commands::source::SourceArgs),
     /// Show note details with full metadata
@@ -108,6 +111,7 @@ impl Commands {
     fn local_workspace_command_name(&self) -> Option<&'static str> {
         match self {
             Self::Mcp => Some("mcp"),
+            Self::Gateway(_) => Some("gateway"),
             Self::Upload(_) => Some("upload"),
             Self::Edit(_) => Some("edit"),
             Self::Login(_) => Some("login"),
@@ -143,7 +147,7 @@ fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError
 fn local_workspace_required_error(command: &str) -> CliError {
     CliError::Other(format!(
         "`flicknote {command}` is not available in managed workspaces.\n\
-         Use a local workspace for file, editor, browser, sharing, sync, sign-in, and skill commands."
+         Use a local workspace for file, editor, browser, Gateway, sharing, sync, sign-in, and skill commands."
     ))
 }
 
@@ -168,6 +172,7 @@ async fn run() -> Result<(), CliError> {
             Commands::Logout => return commands::logout::run(&config),
             Commands::Sync(args) => return commands::sync::run(&config, args),
             Commands::Skill(args) => return commands::skill::run(args),
+            Commands::Gateway(args) => return commands::gateway::run(&config, args).await,
             _ => {}
         }
     }
@@ -231,6 +236,7 @@ async fn dispatch(
         Commands::Find(args) => commands::find::run(db, args).await,
         Commands::Topic(args) => commands::topic::run(db, args).await,
         Commands::Entity(args) => commands::entity::run(db, args).await,
+        Commands::Gateway(_) => unreachable!("Gateway is dispatched before database setup"),
         Commands::Source(args) => commands::source::run(db, args).await,
         Commands::Detail(args) => commands::detail::run(db, config, args).await,
         Commands::Content(args) => commands::content::run(db, args).await,
@@ -291,10 +297,10 @@ mod tests {
             .run_until(async {
                 let directory = tempfile::tempdir().unwrap();
                 let config = Config {
-                    supabase_url: String::new(),
-                    supabase_anon_key: String::new(),
+                    supabase_url: "https://auth.example.test".to_string(),
+                    supabase_anon_key: "anon-key".to_string(),
                     powersync_url: String::new(),
-                    api_url: String::new(),
+                    api_url: "https://gateway.example.test/api/v1".to_string(),
                     web_url: Some("https://app.example".to_string()),
                     paths: flicknote_core::config::ConfigPaths {
                         config_dir: directory.path().to_path_buf(),
@@ -394,6 +400,8 @@ mod tests {
                     .map(|tool| tool["name"].as_str().unwrap())
                     .collect::<std::collections::BTreeSet<_>>();
                 assert_eq!(names, mcp::EXPECTED_TOOLS.into_iter().collect());
+                assert!(!names.contains("gateway_web_search"));
+                assert!(!names.contains("gateway_web_fetch"));
                 assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
                 let list_schema = tools
                     .iter()
@@ -792,6 +800,14 @@ mod tests {
     fn managed_workspace_blocks_local_workspace_commands() {
         for argv in [
             ["flicknote", "mcp"].as_slice(),
+            [
+                "flicknote",
+                "gateway",
+                "request",
+                "--path",
+                "/web/v1/search",
+            ]
+            .as_slice(),
             ["flicknote", "upload", "file.pdf"].as_slice(),
             ["flicknote", "edit"].as_slice(),
             ["flicknote", "login"].as_slice(),

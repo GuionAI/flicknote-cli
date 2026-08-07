@@ -8,6 +8,7 @@ pub(crate) mod detail;
 pub(crate) mod edit;
 pub(crate) mod entity;
 pub(crate) mod find;
+pub(crate) mod gateway;
 pub(crate) mod import;
 pub(crate) mod insert;
 pub(crate) mod keyterm;
