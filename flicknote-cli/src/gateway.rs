@@ -4,6 +4,7 @@ use flicknote_core::error::CliError;
 use reqwest::header::{CONTENT_TYPE, RETRY_AFTER};
 use reqwest::{Client, Method, Response};
 use std::fmt;
+use std::time::SystemTime;
 use url::Url;
 
 pub(crate) struct GatewayClient {
@@ -174,8 +175,17 @@ fn gateway_response_error(response: &Response) -> GatewayRequestError {
 }
 
 fn valid_retry_after(value: &str) -> Option<u64> {
-    let seconds = value.trim().parse::<u64>().ok()?;
-    Some(seconds)
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(seconds);
+    }
+    let retry_at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        retry_at
+            .duration_since(SystemTime::now())
+            .unwrap_or_default()
+            .as_secs(),
+    )
 }
 
 #[cfg(test)]
@@ -310,6 +320,13 @@ mod tests {
         ] {
             assert!(gateway_url(api_url, path).is_err(), "accepted {path}");
         }
+    }
+
+    #[test]
+    fn retry_after_accepts_delta_seconds_and_clamps_past_dates() {
+        assert_eq!(valid_retry_after("5"), Some(5));
+        assert_eq!(valid_retry_after("Wed, 21 Oct 2015 07:28:00 GMT"), Some(0));
+        assert_eq!(valid_retry_after("not a retry delay"), None);
     }
 
     #[tokio::test]

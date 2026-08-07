@@ -472,6 +472,40 @@ fn gateway_request_does_not_echo_an_upstream_error_body() {
     server.join().unwrap();
 }
 
+#[test]
+fn gateway_request_reports_http_date_retry_after() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    write_session(&config_root);
+    let retry_after =
+        httpdate::fmt_http_date(std::time::SystemTime::now() + std::time::Duration::from_secs(60));
+    let (origin, server) = spawn_gateway_server_sequence(vec![format!(
+        "HTTP/1.1 429 Too Many Requests\r\nRetry-After: {retry_after}\r\nContent-Length: 10\r\nConnection: close\r\n\r\ntest-token"
+    )]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(["gateway", "request", "--path", "/healthz"])
+        .env("XDG_CONFIG_HOME", &config_root)
+        .env("XDG_DATA_HOME", &data_root)
+        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("HTTP 429"));
+    assert!(!stderr.contains("test-token"));
+    let seconds = stderr
+        .split_once("retry after ")
+        .and_then(|(_, value)| value.split_whitespace().next())
+        .and_then(|value| value.parse::<u64>().ok());
+    assert!(seconds.is_some_and(|seconds| seconds > 0));
+    server.join().unwrap();
+}
+
 #[tokio::test]
 async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     let directory = tempfile::tempdir().unwrap();
