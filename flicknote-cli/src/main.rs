@@ -286,6 +286,25 @@ mod tests {
         serde_json::from_str(&response).unwrap()
     }
 
+    #[cfg(feature = "powersync")]
+    fn assert_json_does_not_contain_string(value: &serde_json::Value, excluded: &str) {
+        match value {
+            serde_json::Value::String(actual) => assert_ne!(actual, excluded),
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    assert_json_does_not_contain_string(value, excluded);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                for value in values.values() {
+                    assert_json_does_not_contain_string(value, excluded);
+                }
+            }
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            }
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     #[cfg(feature = "powersync")]
     async fn mcp_server_lists_contract_and_calls_note_list() {
@@ -476,6 +495,10 @@ mod tests {
                 assert_eq!(parsed["id"], 3);
                 assert_eq!(parsed["result"]["isError"], false);
                 assert_eq!(parsed["result"]["structuredContent"].as_array().unwrap().len(), 2);
+                assert_json_does_not_contain_string(
+                    &parsed["result"]["structuredContent"],
+                    &note_id,
+                );
 
                 let modified = call_mcp_tool(
                     &mut client_write,
@@ -492,6 +515,10 @@ mod tests {
                 .await;
                 assert_eq!(modified["result"]["isError"], false);
                 assert_eq!(modified["result"]["structuredContent"]["note"]["flagged"], true);
+                assert_json_does_not_contain_string(
+                    &modified["result"]["structuredContent"],
+                    &note_id,
+                );
 
                 let replaced = call_mcp_tool(
                     &mut client_write,
@@ -526,6 +553,21 @@ mod tests {
                         .get("project_id")
                         .is_none()
                 );
+                assert_json_does_not_contain_string(
+                    &fetched["result"]["structuredContent"],
+                    &note_id,
+                );
+
+                let string_id_fetched = call_mcp_tool(
+                    &mut client_write,
+                    &mut client_read,
+                    17,
+                    "note_get",
+                    serde_json::json!({ "id": "42" }),
+                )
+                .await;
+                assert_eq!(string_id_fetched["result"]["isError"], false);
+                assert_eq!(string_id_fetched["result"]["structuredContent"]["id"], 42);
 
                 let uuid_rejected = call_mcp_tool(
                     &mut client_write,
@@ -540,7 +582,7 @@ mod tests {
                     uuid_rejected["result"]["content"][0]["text"]
                         .as_str()
                         .unwrap()
-                        .contains("expected i64")
+                        .contains("invalid note ID")
                 );
 
                 let found = call_mcp_tool(
@@ -682,6 +724,10 @@ mod tests {
                 )
                 .await;
                 assert_eq!(archived["result"]["structuredContent"]["archived"], true);
+                assert_json_does_not_contain_string(
+                    &archived["result"]["structuredContent"],
+                    &note_id,
+                );
                 let restored = call_mcp_tool(
                     &mut client_write,
                     &mut client_read,
