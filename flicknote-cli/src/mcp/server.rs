@@ -1,4 +1,3 @@
-use std::cell::OnceCell;
 use std::rc::Rc;
 
 use flicknote_core::backend::NoteDb;
@@ -20,23 +19,16 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
-use crate::commands::open::SystemBrowserOpener;
-use crate::gateway::GatewayClient;
-
 use super::dto::{
     McpNoteArchiveResult, McpNoteDetail, McpNoteMutationResult, McpNoteSummary, McpProjectDto,
 };
-use super::error::{
-    gateway_config_error, gateway_invalid_response_error, gateway_tool_error, tool_error,
-};
-use super::gateway_tools::*;
+use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
+use crate::commands::open::SystemBrowserOpener;
 
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 27] = [
-    "gateway_web_fetch",
-    "gateway_web_search",
+pub(crate) const EXPECTED_TOOLS: [&str; 25] = [
     "note_add",
     "note_append",
     "note_archive",
@@ -73,7 +65,6 @@ struct CountResult {
 pub(crate) struct FlickNoteMcp {
     db: Rc<dyn NoteDb>,
     config: Rc<Config>,
-    gateway_client: Rc<OnceCell<Result<GatewayClient, CliError>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -82,7 +73,6 @@ impl FlickNoteMcp {
         Self {
             db,
             config,
-            gateway_client: Rc::new(OnceCell::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -93,13 +83,6 @@ impl FlickNoteMcp {
 
     fn project_service(&self) -> ProjectService<'_> {
         ProjectService::new(self.db.as_ref())
-    }
-
-    fn gateway_client(&self) -> Result<&GatewayClient, CallToolResult> {
-        self.gateway_client
-            .get_or_init(|| GatewayClient::new(&self.config))
-            .as_ref()
-            .map_err(gateway_config_error)
     }
 
     fn effective_project(project: Option<String>) -> Option<String> {
@@ -124,56 +107,6 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
 
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
-    #[tool(
-        name = "gateway_web_search",
-        description = "Search the web through the configured FlickNote Gateway.",
-        annotations(read_only_hint = true)
-    )]
-    async fn gateway_web_search(
-        &self,
-        Parameters(params): Parameters<GatewayWebSearchParams>,
-    ) -> Result<Json<GatewayWebSearchResult>, CallToolResult> {
-        let client = self.gateway_client()?;
-        let response = client
-            .request_json(
-                reqwest::Method::POST,
-                "/web/v1/search",
-                &serde_json::json!({ "query": params.query }),
-            )
-            .await
-            .map_err(|error| gateway_tool_error(&error))?;
-        let response = response
-            .json()
-            .await
-            .map_err(|_| gateway_invalid_response_error())?;
-        Ok(Json(response))
-    }
-
-    #[tool(
-        name = "gateway_web_fetch",
-        description = "Fetch readable page content through the configured FlickNote Gateway.",
-        annotations(read_only_hint = true)
-    )]
-    async fn gateway_web_fetch(
-        &self,
-        Parameters(params): Parameters<GatewayWebFetchParams>,
-    ) -> Result<Json<GatewayWebFetchResult>, CallToolResult> {
-        let client = self.gateway_client()?;
-        let response = client
-            .request_json(
-                reqwest::Method::POST,
-                "/web/v1/fetch",
-                &serde_json::json!({ "url": params.url }),
-            )
-            .await
-            .map_err(|error| gateway_tool_error(&error))?;
-        let response = response
-            .json()
-            .await
-            .map_err(|_| gateway_invalid_response_error())?;
-        Ok(Json(response))
-    }
-
     #[tool(
         name = "note_list",
         description = "List active or archived notes with optional type and project filters.",
