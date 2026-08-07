@@ -979,6 +979,11 @@ mod tests {
     async fn share_and_open_resolve_note_identity_before_side_effects() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "body", "synced").await;
+        sqlx::query("UPDATE notes SET short_id = 42 WHERE id = ?")
+            .bind(&id)
+            .execute(&backend.db.pool)
+            .await
+            .unwrap();
         let side_effects = FakeSideEffects::default();
         let service = NoteService::new(&backend);
 
@@ -993,10 +998,11 @@ mod tests {
         assert!(unshared.revoked);
 
         let opened = service
-            .open(&side_effects, "https://app.example/", &id)
+            .open(&side_effects, "https://app.example/", "42")
             .await
             .unwrap();
-        assert_eq!(opened.url, format!("https://app.example/notes/{id}"));
+        assert_eq!(opened.url, "https://app.example/notes/42");
+        assert!(!opened.url.contains(&id));
         assert!(opened.opened);
         assert_eq!(side_effects.opened.borrow().as_slice(), &[opened.url]);
     }
