@@ -31,6 +31,14 @@ pub enum BackendMode {
     Managed,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClientSurface {
+    #[default]
+    Cli,
+    Mcp,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -348,16 +356,16 @@ pub struct EditableDocument {
 }
 
 pub trait AppResult: Sized {
-    fn from_response(response: AppResponse) -> Result<Self, ServiceError>;
+    fn from_response(response: AppResponse) -> Option<Self>;
 }
 
 macro_rules! app_result {
     ($type:ty, $variant:path) => {
         impl AppResult for $type {
-            fn from_response(response: AppResponse) -> Result<Self, ServiceError> {
+            fn from_response(response: AppResponse) -> Option<Self> {
                 match response {
-                    $variant(value) => Ok(value),
-                    _ => Err(unexpected_app_response()),
+                    $variant(value) => Some(value),
+                    _ => None,
                 }
             }
         }
@@ -385,34 +393,30 @@ app_result!(Keyterm, AppResponse::Keyterm);
 app_result!(Vec<String>, AppResponse::Values);
 
 impl AppResult for u64 {
-    fn from_response(response: AppResponse) -> Result<Self, ServiceError> {
+    fn from_response(response: AppResponse) -> Option<Self> {
         match response {
-            AppResponse::NoteCount { count } => Ok(count),
-            _ => Err(unexpected_app_response()),
+            AppResponse::NoteCount { count } => Some(count),
+            _ => None,
         }
     }
 }
 
 impl AppResult for String {
-    fn from_response(response: AppResponse) -> Result<Self, ServiceError> {
+    fn from_response(response: AppResponse) -> Option<Self> {
         match response {
-            AppResponse::Id { id } => Ok(id),
-            _ => Err(unexpected_app_response()),
+            AppResponse::Id { id } => Some(id),
+            _ => None,
         }
     }
 }
 
 impl AppResult for () {
-    fn from_response(response: AppResponse) -> Result<Self, ServiceError> {
+    fn from_response(response: AppResponse) -> Option<Self> {
         match response {
-            AppResponse::Unit => Ok(()),
-            _ => Err(unexpected_app_response()),
+            AppResponse::Unit => Some(()),
+            _ => None,
         }
     }
-}
-
-fn unexpected_app_response() -> ServiceError {
-    ServiceError::Internal("daemon returned an unexpected application response".to_string())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -456,6 +460,8 @@ pub enum DaemonRequest {
     },
     App {
         protocol: u16,
+        #[serde(default)]
+        surface: ClientSurface,
         request: Box<AppRequest>,
     },
 }
@@ -493,6 +499,12 @@ pub enum DaemonError {
     IncompleteResponse {
         message: String,
     },
+    MalformedResponse {
+        message: String,
+    },
+    PostConnectTransport {
+        message: String,
+    },
     Other {
         message: String,
     },
@@ -508,6 +520,8 @@ impl fmt::Display for DaemonError {
             | Self::AmbiguousCreate { message, .. }
             | Self::InvalidResponse { message }
             | Self::IncompleteResponse { message }
+            | Self::MalformedResponse { message }
+            | Self::PostConnectTransport { message }
             | Self::Other { message } => f.write_str(message),
         }
     }
@@ -562,6 +576,9 @@ pub async fn send_request(
     request: &DaemonRequest,
 ) -> Result<DaemonResponse, DaemonError> {
     let path = socket_path(config);
+    let request_bytes = serde_json::to_vec(request).map_err(|e| DaemonError::Other {
+        message: format!("Failed to serialize daemon request: {e}"),
+    })?;
     let mut stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(&path))
         .await
         .map_err(|_| unavailable(&path, "connecting"))?
@@ -569,12 +586,23 @@ pub async fn send_request(
             path: path.display().to_string(),
             message: error.to_string(),
         })?;
+    let write_request = async {
+        stream.write_all(&request_bytes).await?;
+        stream.shutdown().await
+    };
     if is_mutating_app_request(request) {
-        write_json(&mut stream, request).await?;
-    } else {
-        tokio::time::timeout(IPC_WRITE_TIMEOUT, write_json(&mut stream, request))
+        write_request
             .await
-            .map_err(|_| request_timeout_error(request, &path, "sending a request"))??;
+            .map_err(|error| DaemonError::PostConnectTransport {
+                message: format!("Failed to send daemon request: {error}"),
+            })?;
+    } else {
+        tokio::time::timeout(IPC_WRITE_TIMEOUT, write_request)
+            .await
+            .map_err(|_| request_timeout_error(request, &path, "sending a request"))?
+            .map_err(|error| DaemonError::PostConnectTransport {
+                message: format!("Failed to send daemon request: {error}"),
+            })?;
     }
     let mut buf = Vec::new();
     match response_timeout_for(request) {
@@ -585,16 +613,8 @@ pub async fn send_request(
         }
         None => stream.read_to_end(&mut buf).await,
     }
-    .map_err(|e| {
-        if matches!(request, DaemonRequest::Health { .. }) {
-            return DaemonError::Unavailable {
-                path: path.display().to_string(),
-                message: format!("daemon closed the health connection: {e}"),
-            };
-        }
-        DaemonError::Other {
-            message: format!("Failed to read daemon response: {e}"),
-        }
+    .map_err(|e| DaemonError::PostConnectTransport {
+        message: format!("Failed to read daemon response: {e}"),
     })?;
     serde_json::from_slice(&buf).map_err(|e| {
         if e.is_eof() {
@@ -602,23 +622,38 @@ pub async fn send_request(
                 message: format!("Daemon closed the connection before a complete response: {e}"),
             };
         }
-        DaemonError::InvalidResponse {
-            message: format!("Failed to parse daemon response: {e}"),
+        match serde_json::from_slice::<serde_json::Value>(&buf) {
+            Ok(_) => DaemonError::InvalidResponse {
+                message: format!("Daemon returned an incompatible response: {e}"),
+            },
+            Err(raw_error) => DaemonError::MalformedResponse {
+                message: format!("Daemon returned a malformed response: {raw_error}"),
+            },
         }
     })
 }
 
 pub struct DaemonClient<'a> {
     config: &'a Config,
+    surface: ClientSurface,
 }
 
 impl<'a> DaemonClient<'a> {
     pub fn new(config: &'a Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            surface: ClientSurface::Cli,
+        }
+    }
+
+    pub fn for_mcp(config: &'a Config) -> Self {
+        Self {
+            config,
+            surface: ClientSurface::Mcp,
+        }
     }
 
     async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
-        let is_health = matches!(request, DaemonRequest::Health { .. });
         let is_mutating = is_mutating_app_request(&request);
         send_request(self.config, &request)
             .await
@@ -626,18 +661,22 @@ impl<'a> DaemonClient<'a> {
                 DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(format!(
                     "{error}. Start it with `flicknote sync start`."
                 )),
-                DaemonError::IncompleteResponse { .. } if is_health => {
+                DaemonError::IncompleteResponse { .. }
+                | DaemonError::MalformedResponse { .. }
+                | DaemonError::PostConnectTransport { .. }
+                    if !is_mutating =>
+                {
                     ServiceError::DaemonUnavailable(format!(
                         "Sync daemon is not ready: {error}. Start it with `flicknote sync start`."
                     ))
                 }
-                DaemonError::IncompleteResponse { message } if is_mutating => {
-                    ServiceError::Remote {
-                        code: "daemon_request_outcome_unknown".to_string(),
-                        message,
-                        retryable: false,
-                        details: None,
-                    }
+                DaemonError::IncompleteResponse { message }
+                | DaemonError::MalformedResponse { message }
+                | DaemonError::PostConnectTransport { message }
+                | DaemonError::InvalidResponse { message }
+                    if is_mutating =>
+                {
+                    Self::outcome_unknown(message)
                 }
                 DaemonError::InvalidResponse { .. } => Self::protocol_mismatch(),
                 other => ServiceError::Daemon(other.to_string()),
@@ -661,6 +700,7 @@ impl<'a> DaemonClient<'a> {
         match self
             .request(DaemonRequest::App {
                 protocol: PROTOCOL_VERSION,
+                surface: self.surface,
                 request: Box::new(request),
             })
             .await?
@@ -672,7 +712,17 @@ impl<'a> DaemonClient<'a> {
     }
 
     pub async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
-        T::from_response(self.app(request).await?)
+        let may_write = request.may_write();
+        let response = self.app(request).await?;
+        T::from_response(response).ok_or_else(|| {
+            if may_write {
+                Self::outcome_unknown(
+                    "The daemon returned an unexpected response after a mutating request; the operation outcome is unknown.".to_string(),
+                )
+            } else {
+                Self::protocol_mismatch()
+            }
+        })
     }
 
     fn remote_error(error: WireError) -> ServiceError {
@@ -688,6 +738,15 @@ impl<'a> DaemonClient<'a> {
         ServiceError::Remote {
             code: "daemon_protocol_mismatch".to_string(),
             message: "The running sync daemon uses an incompatible protocol. Restart it with `flicknote sync stop && flicknote sync start`.".to_string(),
+            retryable: false,
+            details: None,
+        }
+    }
+
+    fn outcome_unknown(message: String) -> ServiceError {
+        ServiceError::Remote {
+            code: "daemon_request_outcome_unknown".to_string(),
+            message,
             retryable: false,
             details: None,
         }
@@ -759,10 +818,22 @@ async fn serve_app_stream(
         DaemonRequest::Health { protocol } if protocol == PROTOCOL_VERSION => {
             DaemonResponse::ServerInfo(info.clone())
         }
-        DaemonRequest::App { protocol, request } if protocol == PROTOCOL_VERSION => {
-            match app.handle(*request).await {
-                Ok(response) => DaemonResponse::App(Box::new(response)),
-                Err(error) => DaemonResponse::AppError(error),
+        DaemonRequest::App {
+            protocol,
+            surface,
+            request,
+        } if protocol == PROTOCOL_VERSION => {
+            if surface == ClientSurface::Mcp && !info.backend.supports(Capability::Mcp) {
+                DaemonResponse::AppError(WireError::from_service(unsupported_capability(
+                    info.backend,
+                    Capability::Mcp,
+                    "mcp",
+                )))
+            } else {
+                match app.handle(*request).await {
+                    Ok(response) => DaemonResponse::App(Box::new(response)),
+                    Err(error) => DaemonResponse::AppError(error),
+                }
             }
         }
         DaemonRequest::Health { protocol } | DaemonRequest::App { protocol, .. } => {
@@ -877,6 +948,7 @@ mod tests {
 
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,
+            surface: ClientSurface::Cli,
             request: Box::new(AppRequest::NoteList(NoteListInput {
                 note_type: None,
                 project: None,
@@ -887,6 +959,7 @@ mod tests {
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["type"], "app");
         assert_eq!(value["payload"]["protocol"], PROTOCOL_VERSION);
+        assert_eq!(value["payload"]["surface"], "cli");
         assert_eq!(value["payload"]["request"]["type"], "note_list");
     }
 
@@ -967,6 +1040,7 @@ mod tests {
     fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,
+            surface: ClientSurface::Cli,
             request: Box::new(AppRequest::NoteArchive {
                 id: "note-1".to_string(),
             }),
@@ -1084,6 +1158,77 @@ mod tests {
 
         assert_eq!(error.code(), "daemon_request_outcome_unknown");
         assert!(!error.retryable());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_transport_responses_are_classified_by_mutation_safety() {
+        for (request, expected_code, retryable) in [
+            (
+                AppRequest::NoteArchive {
+                    id: "note-1".to_string(),
+                },
+                "daemon_request_outcome_unknown",
+                false,
+            ),
+            (
+                AppRequest::NoteCount(NoteCountInput {
+                    keywords: Vec::new(),
+                    project: None,
+                    note_type: None,
+                    archived: false,
+                }),
+                "daemon_unavailable",
+                true,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let config = test_config(directory.path());
+            let listener = UnixListener::bind(socket_path(&config)).unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let _request = read_request(&mut stream).await.unwrap();
+                stream.write_all(b"not-json").await.unwrap();
+                stream.shutdown().await.unwrap();
+            });
+
+            let error = DaemonClient::new(&config).app(request).await.unwrap_err();
+
+            assert_eq!(error.code(), expected_code);
+            assert_eq!(error.retryable(), retryable);
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server =
+            serve_response(&config, DaemonResponse::App(Box::new(AppResponse::Unit))).await;
+        let error = DaemonClient::new(&config)
+            .call::<u64>(AppRequest::NoteCount(NoteCountInput {
+                keywords: Vec::new(),
+                project: None,
+                note_type: None,
+                archived: false,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "daemon_protocol_mismatch");
+        server.await.unwrap();
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server =
+            serve_response(&config, DaemonResponse::App(Box::new(AppResponse::Unit))).await;
+        let error = DaemonClient::new(&config)
+            .call::<NoteArchiveResult>(AppRequest::NoteArchive {
+                id: "note-1".to_string(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "daemon_request_outcome_unknown");
         server.await.unwrap();
     }
 

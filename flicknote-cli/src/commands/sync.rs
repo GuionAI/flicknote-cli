@@ -63,7 +63,8 @@ async fn start_with_binary_and_timeout(
         .open(&config.paths.log_file)?;
     let log2 = log.try_clone()?;
 
-    let mut child = std::process::Command::new(daemon_binary)
+    let mut command = std::process::Command::new(daemon_binary);
+    command
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG")
@@ -71,8 +72,24 @@ async fn start_with_binary_and_timeout(
         )
         .stdin(std::process::Stdio::null())
         .stdout(log)
-        .stderr(log2)
-        .spawn()?;
+        .stderr(log2);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // Manual background start must survive the invoking terminal/session.
+        // launchd already owns this responsibility for installed macOS services.
+        #[allow(unsafe_code)]
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let mut child = command.spawn()?;
 
     let pid = child.id();
     if let Err(error) = wait_for_daemon_ready(config, timeout, HEALTH_POLL_INTERVAL).await {
@@ -96,6 +113,19 @@ pub(super) async fn wait_for_daemon_ready(
     interval: std::time::Duration,
 ) -> Result<(), CliError> {
     wait_for_daemon_ready_matching(config, timeout, interval, None).await
+}
+
+pub(super) async fn running_server_info(
+    config: &Config,
+) -> Result<Option<flicknote_sync::ipc::ServerInfo>, CliError> {
+    match flicknote_sync::ipc::DaemonClient::new(config)
+        .health()
+        .await
+    {
+        Ok(info) => Ok(Some(info)),
+        Err(error) if error.code() == "daemon_unavailable" => Ok(None),
+        Err(error) => Err(CliError::from(error)),
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]

@@ -109,7 +109,7 @@ async fn run() -> Result<(), CliError> {
     if let Some(ref cmd) = cli.command {
         match cmd {
             Commands::Login(args) => return commands::login::run(&config, args).await,
-            Commands::Logout => return commands::logout::run(&config),
+            Commands::Logout => return commands::logout::run(&config).await,
             Commands::Sync(args) => return commands::sync::run(&config, args).await,
             Commands::Skill(args) => return commands::skill::run(args),
             Commands::Gateway(args) => return commands::gateway::run(&config, args).await,

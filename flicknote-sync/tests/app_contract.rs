@@ -9,7 +9,7 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{
-    AppRequest, AppResponse, BackendMode, DaemonClient, ServerInfo, serve_app_once,
+    AppRequest, AppResponse, BackendMode, DaemonClient, ServerInfo, serve_app_once, socket_path,
 };
 
 fn test_config(directory: &std::path::Path) -> Config {
@@ -34,6 +34,34 @@ fn test_config(directory: &std::path::Path) -> Config {
 fn application_is_safe_to_share_between_daemon_request_tasks() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Application>();
+}
+
+#[tokio::test]
+async fn mcp_surface_is_enforced_on_every_daemon_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let backend = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await.unwrap(),
+        user_id: "user-1".to_string(),
+    });
+    let app = Arc::new(Application::new(backend, BackendMode::Managed));
+    let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::managed()));
+
+    let error = DaemonClient::for_mcp(&config)
+        .call::<Vec<flicknote_core::services::dto::NoteSummary>>(AppRequest::NoteList(
+            NoteListInput {
+                note_type: None,
+                project: None,
+                archived: false,
+                limit: 20,
+            },
+        ))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.code(), "unsupported_capability");
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test]

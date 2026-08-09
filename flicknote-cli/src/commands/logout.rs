@@ -2,17 +2,18 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use std::fs;
 
-pub(crate) fn run(config: &Config) -> Result<(), CliError> {
+pub(crate) async fn run(config: &Config) -> Result<(), CliError> {
     if !config.paths.session_file.exists() {
         println!("Already logged out");
         return Ok(());
     }
 
-    // 1. Stop the sync daemon (silently succeeds if not running)
-    super::daemon::stop(config)?;
-
-    // 2. Uninstall the launchd service
-    super::daemon::uninstall()?;
+    let running = super::sync::running_server_info(config).await?;
+    let manages_local_daemon = manages_local_daemon_for(running.as_ref().map(|info| info.backend));
+    if manages_local_daemon {
+        super::daemon::stop(config)?;
+        super::daemon::uninstall()?;
+    }
 
     // 3. Delete local DB files — collect errors so session is always cleared
     let db_base = config.paths.db_file.with_extension("");
@@ -36,6 +37,31 @@ pub(crate) fn run(config: &Config) -> Result<(), CliError> {
         )));
     }
 
-    println!("Logged out (session, daemon, and local data cleared)");
+    if manages_local_daemon {
+        println!("Logged out (session, daemon, and local data cleared)");
+    } else {
+        println!("Logged out (local session and data cleared; managed daemon left running)");
+    }
     Ok(())
+}
+
+const fn manages_local_daemon_for(
+    running_backend: Option<flicknote_sync::ipc::BackendMode>,
+) -> bool {
+    !matches!(
+        running_backend,
+        Some(flicknote_sync::ipc::BackendMode::Managed)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use flicknote_sync::ipc::BackendMode;
+
+    #[test]
+    fn logout_never_manages_a_live_managed_daemon() {
+        assert!(!super::manages_local_daemon_for(Some(BackendMode::Managed)));
+        assert!(super::manages_local_daemon_for(Some(BackendMode::Local)));
+        assert!(super::manages_local_daemon_for(None));
+    }
 }

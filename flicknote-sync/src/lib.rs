@@ -1838,6 +1838,16 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         log::error!("Startup WAL checkpoint task panicked: {e}");
     }
 
+    // Finish schema replacement through the application pool before PowerSync
+    // starts its download/upload actors. Replacing tracking views after connect
+    // races the actor-held SQLite connections and can fail with SQLITE_BUSY on
+    // an existing database.
+    let user_id = flicknote_core::session::get_user_id(&config)?;
+    let backend: Arc<dyn NoteDb> = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await?,
+        user_id,
+    });
+
     log::info!("Sync daemon connecting (pid {})", std::process::id());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
@@ -1921,11 +1931,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let user_id = flicknote_core::session::get_user_id(&config)?;
-    let backend: Arc<dyn NoteDb> = Arc::new(SqliteBackend {
-        db: Database::open_local(&config).await?,
-        user_id,
-    });
     let socket_config = Arc::clone(&config);
     let socket_http = reqwest::Client::new();
     let socket_share_lock = Arc::new(ShareRequestLock::default());
