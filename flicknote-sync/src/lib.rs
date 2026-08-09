@@ -1145,21 +1145,45 @@ async fn create_note_with_token(
     {
         Ok(resp) => resp,
         Err(e) => {
-            if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, &req.id).await {
-                return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
+            match reconcile_ambiguous_remote_create(http, config, access_token, &req.id).await {
+                AmbiguousCreateReconciliation::Found(row) => {
+                    return finish_remote_create(
+                        db,
+                        http,
+                        config,
+                        access_token,
+                        *row,
+                        &extraction_rows,
+                    )
                     .await;
+                }
+                AmbiguousCreateReconciliation::Absent => {
+                    if attachment_path.is_some()
+                        && let Err(cleanup_error) =
+                            delete_attachment(http, config, access_token, &req.id).await
+                    {
+                        log::warn!(
+                            "Failed to clean up uploaded attachment after confirming note absence: {cleanup_error}"
+                        );
+                    }
+                    return Err(DaemonError::Other {
+                        message: format!(
+                            "Remote note create failed and note {} was confirmed absent: {e}",
+                            req.id
+                        ),
+                    });
+                }
+                AmbiguousCreateReconciliation::Unknown(reconciliation_error) => {
+                    return Err(ambiguous_create_error(
+                        format!(
+                            "Remote note create outcome is unknown for note {} after a transport failure ({e}); reconciliation could not confirm creation or absence: {reconciliation_error}. Do not create it again.",
+                            req.id
+                        ),
+                        req.id,
+                        &extraction_rows,
+                    ));
+                }
             }
-            if attachment_path.is_some()
-                && let Err(cleanup_err) =
-                    delete_attachment(http, config, access_token, &req.id).await
-            {
-                log::warn!(
-                    "Failed to clean up uploaded attachment after note create request failure: {cleanup_err}"
-                );
-            }
-            return Err(DaemonError::Other {
-                message: format!("Remote note create failed: {e}"),
-            });
         }
     };
 
@@ -1210,6 +1234,42 @@ async fn create_note_with_token(
     finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
 }
 
+enum AmbiguousCreateReconciliation {
+    Found(Box<RemoteNoteRow>),
+    Absent,
+    Unknown(String),
+}
+
+async fn reconcile_ambiguous_remote_create(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+) -> AmbiguousCreateReconciliation {
+    const ATTEMPTS: usize = 3;
+    let mut confirmed_absent = 0;
+    let mut last_error = None;
+
+    for attempt in 0..ATTEMPTS {
+        match lookup_remote_note(http, config, access_token, note_id).await {
+            Ok(Some(row)) => return AmbiguousCreateReconciliation::Found(Box::new(row)),
+            Ok(None) => confirmed_absent += 1,
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if attempt + 1 < ATTEMPTS {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    if confirmed_absent == ATTEMPTS {
+        AmbiguousCreateReconciliation::Absent
+    } else {
+        AmbiguousCreateReconciliation::Unknown(
+            last_error.unwrap_or_else(|| "inconsistent reconciliation responses".to_string()),
+        )
+    }
+}
+
 fn confirmed_create_error(
     message: String,
     note_id: String,
@@ -1220,6 +1280,18 @@ fn confirmed_create_error(
         message,
         note_id,
         short_id,
+        pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
+    }
+}
+
+fn ambiguous_create_error(
+    message: String,
+    note_id: String,
+    extraction_rows: &[RemoteExtractionRow],
+) -> DaemonError {
+    DaemonError::AmbiguousCreate {
+        message,
+        note_id,
         pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
     }
 }
@@ -1468,6 +1540,21 @@ fn remote_create_service_error(
                 "created": true,
                 "note_id": note_id,
                 "short_id": short_id,
+                "pending_extraction_ids": pending_extraction_ids,
+            })),
+        },
+        DaemonError::AmbiguousCreate {
+            message,
+            note_id,
+            pending_extraction_ids,
+        } => flicknote_core::services::error::ServiceError::Remote {
+            code: "note_create_unknown".to_string(),
+            message,
+            retryable: false,
+            details: Some(serde_json::json!({
+                "created": serde_json::Value::Null,
+                "note_id": note_id,
+                "short_id": serde_json::Value::Null,
                 "pending_extraction_ids": pending_extraction_ids,
             })),
         },
@@ -2132,11 +2219,34 @@ mod tests {
         status: &'static str,
         body: &'static str,
     ) -> (String, thread::JoinHandle<Vec<String>>) {
+        spawn_disconnected_then_retry_responses(vec![(status, body)])
+    }
+
+    fn spawn_disconnected_then_retry_responses(
+        responses: Vec<(&'static str, &'static str)>,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let handle = thread::spawn(move || {
-            let mut requests = Vec::new();
             let (mut first, _) = listener.accept().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let accept = || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                loop {
+                    match listener.accept() {
+                        Ok(pair) => return Some(pair),
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            if std::time::Instant::now() >= deadline {
+                                return None;
+                            }
+                            thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("accept failed: {error}"),
+                    }
+                }
+            };
+
+            let mut requests = Vec::new();
             let mut buffer = [0_u8; 4096];
             let count = first.read(&mut buffer).unwrap();
             requests.push(
@@ -2148,21 +2258,25 @@ mod tests {
             );
             drop(first);
 
-            let (mut second, _) = listener.accept().unwrap();
-            let count = second.read(&mut buffer).unwrap();
-            requests.push(
-                String::from_utf8_lossy(&buffer[..count])
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_string(),
-            );
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            second.write_all(response.as_bytes()).unwrap();
+            for (status, body) in responses {
+                let Some((mut stream, _)) = accept() else {
+                    break;
+                };
+                let count = stream.read(&mut buffer).unwrap();
+                requests.push(
+                    String::from_utf8_lossy(&buffer[..count])
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
             requests
         });
         (format!("http://{address}"), handle)
@@ -2507,6 +2621,91 @@ mod tests {
 
         assert_eq!(created.short_id, 79);
         assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_transport_failure_reports_stable_unknown_outcome() {
+        let (origin, server) = spawn_disconnected_response_then_server(
+            "503 Service Unavailable",
+            r#"{"message":"try later"}"#,
+        );
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let error = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-unknown".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let service_error = remote_create_service_error(error);
+
+        assert_eq!(service_error.code(), "note_create_unknown");
+        assert!(!service_error.retryable());
+        let flicknote_core::services::error::ServiceError::Remote { details, .. } = service_error
+        else {
+            panic!("expected structured remote error")
+        };
+        let details = details.unwrap();
+        assert!(details["created"].is_null());
+        assert_eq!(details["note_id"], "note-unknown");
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_transport_failure_retries_reconciliation_before_returning() {
+        let body = r#"[{"id":"note-recovered-after-retry","short_id":83,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_disconnected_then_retry_responses(vec![
+            ("503 Service Unavailable", r#"{"message":"try later"}"#),
+            ("200 OK", body),
+        ]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let result = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-recovered-after-retry".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await;
+        let requests = server.join().unwrap();
+
+        let created = result.unwrap();
+        assert_eq!(created.short_id, 83);
+        assert_eq!(requests.len(), 3);
     }
 
     #[tokio::test]

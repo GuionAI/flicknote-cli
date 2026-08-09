@@ -110,7 +110,7 @@ async fn run() -> Result<(), CliError> {
         match cmd {
             Commands::Login(args) => return commands::login::run(&config, args).await,
             Commands::Logout => return commands::logout::run(&config),
-            Commands::Sync(args) => return commands::sync::run(&config, args),
+            Commands::Sync(args) => return commands::sync::run(&config, args).await,
             Commands::Skill(args) => return commands::skill::run(args),
             Commands::Gateway(args) => return commands::gateway::run(&config, args).await,
             _ => {}

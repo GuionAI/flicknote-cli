@@ -19,6 +19,10 @@ use tokio::net::UnixStream;
 use crate::app::Application;
 
 pub const PROTOCOL_VERSION: u16 = 1;
+const IPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const IPC_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const IPC_HEALTH_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const IPC_APP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -386,6 +390,11 @@ pub enum DaemonError {
         short_id: Option<i64>,
         pending_extraction_ids: Vec<String>,
     },
+    AmbiguousCreate {
+        message: String,
+        note_id: String,
+        pending_extraction_ids: Vec<String>,
+    },
     InvalidResponse {
         message: String,
     },
@@ -401,6 +410,7 @@ impl fmt::Display for DaemonError {
                 write!(f, "Sync daemon is not available at {path}: {message}")
             }
             Self::PartialCreate { message, .. }
+            | Self::AmbiguousCreate { message, .. }
             | Self::InvalidResponse { message }
             | Self::Other { message } => f.write_str(message),
         }
@@ -413,23 +423,53 @@ pub fn socket_path(config: &Config) -> PathBuf {
     config.paths.data_dir.join("sync.sock")
 }
 
+fn unavailable(path: &std::path::Path, stage: &str) -> DaemonError {
+    DaemonError::Unavailable {
+        path: path.display().to_string(),
+        message: format!("timed out while {stage}"),
+    }
+}
+
+fn request_timeout_error(
+    request: &DaemonRequest,
+    path: &std::path::Path,
+    stage: &str,
+) -> DaemonError {
+    if matches!(request, DaemonRequest::Health { .. }) {
+        return unavailable(path, stage);
+    }
+    DaemonError::Other {
+        message: format!(
+            "Timed out while {stage} from the sync daemon at {}; the application request outcome is unknown. Do not retry it automatically.",
+            path.display()
+        ),
+    }
+}
+
 pub async fn send_request(
     config: &Config,
     request: &DaemonRequest,
 ) -> Result<DaemonResponse, DaemonError> {
     let path = socket_path(config);
-    let mut stream =
-        UnixStream::connect(&path)
-            .await
-            .map_err(|error| DaemonError::Unavailable {
-                path: path.display().to_string(),
-                message: error.to_string(),
-            })?;
-    write_json(&mut stream, request).await?;
-    let mut buf = Vec::new();
-    stream
-        .read_to_end(&mut buf)
+    let mut stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(&path))
         .await
+        .map_err(|_| unavailable(&path, "connecting"))?
+        .map_err(|error| DaemonError::Unavailable {
+            path: path.display().to_string(),
+            message: error.to_string(),
+        })?;
+    tokio::time::timeout(IPC_WRITE_TIMEOUT, write_json(&mut stream, request))
+        .await
+        .map_err(|_| request_timeout_error(request, &path, "sending a request"))??;
+    let mut buf = Vec::new();
+    let response_timeout = if matches!(request, DaemonRequest::Health { .. }) {
+        IPC_HEALTH_RESPONSE_TIMEOUT
+    } else {
+        IPC_APP_RESPONSE_TIMEOUT
+    };
+    tokio::time::timeout(response_timeout, stream.read_to_end(&mut buf))
+        .await
+        .map_err(|_| request_timeout_error(request, &path, "waiting for a response"))?
         .map_err(|e| DaemonError::Other {
             message: format!("Failed to read daemon response: {e}"),
         })?;
@@ -739,6 +779,54 @@ mod tests {
         assert_eq!(error.code(), "daemon_unavailable");
         assert!(error.retryable());
         assert!(error.to_string().contains("flicknote sync start"));
+    }
+
+    #[tokio::test]
+    async fn health_request_has_a_bounded_response_wait() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        });
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(1_200),
+            send_request(
+                &config,
+                &DaemonRequest::Health {
+                    protocol: PROTOCOL_VERSION,
+                },
+            ),
+        )
+        .await;
+        server.abort();
+
+        let response = result.expect("IPC must enforce its own response timeout");
+        assert!(matches!(response, Err(DaemonError::Unavailable { .. })));
+    }
+
+    #[test]
+    fn application_timeout_is_non_retryable_because_its_outcome_is_unknown() {
+        let request = DaemonRequest::App {
+            protocol: PROTOCOL_VERSION,
+            request: Box::new(AppRequest::NoteCount(NoteCountInput {
+                keywords: Vec::new(),
+                project: None,
+                note_type: None,
+                archived: false,
+            })),
+        };
+
+        let error = request_timeout_error(
+            &request,
+            std::path::Path::new("/tmp/flicknote.sock"),
+            "waiting for a response",
+        );
+
+        assert!(matches!(error, DaemonError::Other { .. }));
+        assert!(error.to_string().contains("outcome is unknown"));
     }
 
     #[tokio::test]

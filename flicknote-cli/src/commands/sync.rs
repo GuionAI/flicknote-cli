@@ -4,6 +4,9 @@ use flicknote_core::error::CliError;
 use std::fs;
 use std::path::Path;
 
+const DAEMON_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const HEALTH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
 #[derive(Args)]
 pub(crate) struct SyncArgs {
     #[command(subcommand)]
@@ -24,9 +27,9 @@ enum SyncCommand {
     Uninstall,
 }
 
-pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
+pub(crate) async fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
     match &args.command {
-        SyncCommand::Start => start(config),
+        SyncCommand::Start => start(config).await,
         SyncCommand::Stop => stop(config),
         SyncCommand::Status => status(config),
         SyncCommand::Install => install(config),
@@ -34,24 +37,33 @@ pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
     }
 }
 
-fn start(config: &Config) -> Result<(), CliError> {
+async fn start(config: &Config) -> Result<(), CliError> {
     if let Some(pid) = super::daemon::read_pid(config) {
+        wait_for_daemon_ready(config, DAEMON_START_TIMEOUT, HEALTH_POLL_INTERVAL).await?;
         println!("FlickNote daemon already running (pid {pid})");
         return Ok(());
     }
 
     let daemon_binary = super::daemon::daemon_binary()?;
-    start_with_binary(config, &daemon_binary)
+    start_with_binary(config, &daemon_binary).await
 }
 
-fn start_with_binary(config: &Config, daemon_binary: &Path) -> Result<(), CliError> {
+async fn start_with_binary(config: &Config, daemon_binary: &Path) -> Result<(), CliError> {
+    start_with_binary_and_timeout(config, daemon_binary, DAEMON_START_TIMEOUT).await
+}
+
+async fn start_with_binary_and_timeout(
+    config: &Config,
+    daemon_binary: &Path,
+    timeout: std::time::Duration,
+) -> Result<(), CliError> {
     let log = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&config.paths.log_file)?;
     let log2 = log.try_clone()?;
 
-    let child = std::process::Command::new(daemon_binary)
+    let mut child = std::process::Command::new(daemon_binary)
         .env(
             "RUST_LOG",
             std::env::var("RUST_LOG")
@@ -63,8 +75,44 @@ fn start_with_binary(config: &Config, daemon_binary: &Path) -> Result<(), CliErr
         .spawn()?;
 
     let pid = child.id();
+    if let Err(error) = wait_for_daemon_ready(config, timeout, HEALTH_POLL_INTERVAL).await {
+        if let Err(kill_error) = child.kill()
+            && kill_error.kind() != std::io::ErrorKind::InvalidInput
+        {
+            log::warn!("Failed to stop unready daemon process {pid}: {kill_error}");
+        }
+        if let Err(wait_error) = child.wait() {
+            log::warn!("Failed to reap unready daemon process {pid}: {wait_error}");
+        }
+        return Err(error);
+    }
     println!("FlickNote daemon started (pid {pid})");
     Ok(())
+}
+
+async fn wait_for_daemon_ready(
+    config: &Config,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+) -> Result<(), CliError> {
+    let wait = async {
+        loop {
+            match flicknote_sync::ipc::DaemonClient::new(config)
+                .health()
+                .await
+            {
+                Ok(_) => return Ok(()),
+                Err(error) if !error.retryable() => return Err(CliError::from(error)),
+                Err(_) => tokio::time::sleep(interval).await,
+            }
+        }
+    };
+    tokio::time::timeout(timeout, wait).await.map_err(|_| {
+        CliError::Other(format!(
+            "Sync daemon did not become ready within {timeout:?}; check {}",
+            config.paths.log_file.display()
+        ))
+    })?
 }
 
 fn stop(config: &Config) -> Result<(), CliError> {
@@ -134,8 +182,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn parent_process_does_not_write_daemon_pid_file() {
+    #[tokio::test]
+    async fn start_does_not_report_success_before_daemon_health_is_ready() {
         let dir = tempfile::tempdir().expect("temp dir");
         let config = test_config(dir.path());
         let daemon = dir.path().join("fake-daemon");
@@ -143,9 +191,13 @@ mod tests {
         #[cfg(unix)]
         fs::set_permissions(&daemon, fs::Permissions::from_mode(0o700)).expect("chmod fake daemon");
 
-        start_with_binary(&config, &daemon).expect("start fake daemon");
+        let error =
+            start_with_binary_and_timeout(&config, &daemon, std::time::Duration::from_millis(50))
+                .await
+                .expect_err("a process that exits without serving health is not ready");
 
         assert!(!super::super::daemon::pid_file(&config).exists());
+        assert!(error.to_string().contains("did not become ready"));
     }
 
     #[test]
