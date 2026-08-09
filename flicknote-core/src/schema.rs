@@ -22,6 +22,7 @@ pub fn app_schema() -> Schema {
             Column::text("deleted_at"),
         ],
         |t| {
+            t.options.track_metadata = true;
             t.indexes = vec![
                 Index {
                     name: "notes_user_short_id_idx".into(),
@@ -134,6 +135,7 @@ pub fn app_schema() -> Schema {
             Column::text("value"),
         ],
         |t| {
+            t.options.track_metadata = true;
             t.indexes = vec![
                 Index {
                     name: "note_extractions_note_id_idx".into(),
@@ -238,4 +240,23 @@ pub fn app_schema() -> Schema {
     ));
 
     schema
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_committed_tables_track_crud_metadata() {
+        let schema = app_schema();
+
+        for name in ["notes", "note_extractions"] {
+            let table = schema
+                .tables
+                .iter()
+                .find(|table| table.name == name)
+                .unwrap_or_else(|| panic!("missing {name} table"));
+            assert!(table.options.track_metadata, "{name} must track metadata");
+        }
+    }
 }

@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flicknote_auth::client::GoTrueClient;
-use flicknote_core::{TOPIC_EXTRACTION_KEY, config::Config, schema::app_schema};
+use flicknote_core::{
+    REMOTE_COMMITTED_INSERT_METADATA, TOPIC_EXTRACTION_KEY, config::Config, schema::app_schema,
+};
 use futures_lite::StreamExt;
 use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use powersync::{
@@ -152,6 +154,22 @@ async fn run_upload(
         let mut transient_msg: Option<String> = None;
 
         for crud in std::mem::take(&mut tx.crud) {
+            if crud.metadata.as_deref() == Some(REMOTE_COMMITTED_INSERT_METADATA) {
+                let allowed_table = matches!(crud.table.as_str(), "notes" | "note_extractions");
+                let is_put = matches!(&crud.update_type, UpdateType::Put);
+                if !allowed_table || !is_put {
+                    let operation = match &crud.update_type {
+                        UpdateType::Put => "PUT",
+                        UpdateType::Patch => "PATCH",
+                        UpdateType::Delete => "DELETE",
+                    };
+                    return Err(ps_err(format!(
+                        "invalid remote-committed marker on {operation} operation for table {}",
+                        crud.table,
+                    )));
+                }
+                continue;
+            }
             let table = &crud.table;
             let id = &crud.id;
 
@@ -508,10 +526,168 @@ async fn shutdown_daemon(
     log::info!("Sync daemon stopped");
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct RemoteNoteRow {
     id: String,
     short_id: Option<i64>,
+    user_id: String,
+    #[serde(rename = "type")]
+    note_type: String,
+    status: String,
+    title: Option<String>,
+    content: Option<String>,
+    summary: Option<String>,
+    #[serde(default)]
+    is_flagged: bool,
+    project_id: Option<String>,
+    metadata: Option<serde_json::Value>,
+    source: Option<serde_json::Value>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    deleted_at: Option<String>,
+}
+
+fn json_column(value: &Option<serde_json::Value>) -> Result<Option<String>, DaemonError> {
+    value
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to serialize canonical remote JSON: {error}"),
+        })
+}
+
+async fn commit_remote_note(
+    db: &PowerSyncDatabase,
+    note: &RemoteNoteRow,
+) -> Result<bool, DaemonError> {
+    let metadata = json_column(&note.metadata)?;
+    let source = json_column(&note.source)?;
+    let mut writer = db.writer().await.map_err(|error| DaemonError::Other {
+        message: format!("Failed to open local PowerSync writer: {error}"),
+    })?;
+    let tx = writer
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to begin local note transaction: {error}"),
+        })?;
+    let exists = tx
+        .query_row(
+            "SELECT 1 FROM notes WHERE id = ? LIMIT 1",
+            params![note.id],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to check local note {}: {error}", note.id),
+        })?
+        .is_some();
+    if exists {
+        tx.commit().map_err(|error| DaemonError::Other {
+            message: format!("Failed to finish local note transaction: {error}"),
+        })?;
+        return Ok(false);
+    }
+
+    tx.execute(
+        r#"INSERT INTO notes (
+            id, short_id, user_id, type, status, title, content, summary,
+            is_flagged, project_id, metadata, source, created_at, updated_at,
+            deleted_at, _metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        params![
+            note.id,
+            note.short_id,
+            note.user_id,
+            note.note_type,
+            note.status,
+            note.title,
+            note.content,
+            note.summary,
+            note.is_flagged,
+            note.project_id,
+            metadata,
+            source,
+            note.created_at,
+            note.updated_at,
+            note.deleted_at,
+            REMOTE_COMMITTED_INSERT_METADATA,
+        ],
+    )
+    .map_err(|error| DaemonError::Other {
+        message: format!("Failed to commit remote note {} locally: {error}", note.id),
+    })?;
+    tx.commit().map_err(|error| DaemonError::Other {
+        message: format!("Failed to finish local note transaction: {error}"),
+    })?;
+    Ok(true)
+}
+
+#[derive(Debug, Clone, serde::Serialize, Deserialize)]
+struct RemoteExtractionRow {
+    id: String,
+    note_id: String,
+    user_id: String,
+    key: String,
+    value: String,
+}
+
+async fn commit_remote_extractions(
+    db: &PowerSyncDatabase,
+    rows: &[RemoteExtractionRow],
+) -> Result<usize, DaemonError> {
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut writer = db.writer().await.map_err(|error| DaemonError::Other {
+        message: format!("Failed to open local PowerSync writer: {error}"),
+    })?;
+    let tx = writer
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to begin local extraction transaction: {error}"),
+        })?;
+    let mut inserted = 0;
+    for row in rows {
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM note_extractions WHERE id = ? LIMIT 1",
+                params![row.id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| DaemonError::Other {
+                message: format!("Failed to check local extraction {}: {error}", row.id),
+            })?
+            .is_some();
+        if exists {
+            continue;
+        }
+        tx.execute(
+            r#"INSERT INTO note_extractions (
+                id, note_id, user_id, key, value, _metadata
+            ) VALUES (?, ?, ?, ?, ?, ?)"#,
+            params![
+                row.id,
+                row.note_id,
+                row.user_id,
+                row.key,
+                row.value,
+                REMOTE_COMMITTED_INSERT_METADATA,
+            ],
+        )
+        .map_err(|error| DaemonError::Other {
+            message: format!(
+                "Failed to commit remote extraction {} locally: {error}",
+                row.id
+            ),
+        })?;
+        inserted += 1;
+    }
+    tx.commit().map_err(|error| DaemonError::Other {
+        message: format!("Failed to finish local extraction transaction: {error}"),
+    })?;
+    Ok(inserted)
 }
 
 fn attachment_endpoint(base_url: &str, path: &str) -> String {
@@ -800,7 +976,7 @@ async fn delete_attachment(
     })
 }
 
-async fn create_note_remotely_and_wait(
+async fn create_note_remotely(
     db: &PowerSyncDatabase,
     http: &reqwest::Client,
     auth: &GoTrueClient,
@@ -811,6 +987,36 @@ async fn create_note_remotely_and_wait(
         message: format!("Auth error: {e}"),
     })?;
 
+    create_note_with_token(
+        db,
+        http,
+        config,
+        &session.access_token,
+        &session.user.id,
+        req,
+    )
+    .await
+}
+
+async fn create_note_with_token(
+    db: &PowerSyncDatabase,
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    user_id: &str,
+    req: CreateNoteRequest,
+) -> Result<CreatedNote, DaemonError> {
+    let extraction_rows = req
+        .topics
+        .iter()
+        .map(|value| RemoteExtractionRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            note_id: req.id.clone(),
+            user_id: user_id.to_string(),
+            key: TOPIC_EXTRACTION_KEY.to_string(),
+            value: value.clone(),
+        })
+        .collect::<Vec<_>>();
     let metadata = match req.metadata.as_deref() {
         Some(raw) => {
             serde_json::from_str::<serde_json::Value>(raw).map_err(|e| DaemonError::Other {
@@ -822,12 +1028,12 @@ async fn create_note_remotely_and_wait(
 
     let attachment_path = req.attachment_path.as_deref().map(Path::new);
     if let Some(path) = attachment_path {
-        upload_attachment(http, config, &session.access_token, &req.id, path).await?;
+        upload_attachment(http, config, access_token, &req.id, path).await?;
     }
 
     let payload = serde_json::json!({
         "id": req.id,
-        "user_id": session.user.id,
+        "user_id": user_id,
         "type": req.note_type,
         "status": req.status,
         "title": req.title,
@@ -839,19 +1045,29 @@ async fn create_note_remotely_and_wait(
     });
 
     let resp = match http
-        .post(format!("{}/rest/v1/notes", config.supabase_url))
+        .post(format!(
+            "{}/rest/v1/notes?on_conflict=id",
+            config.supabase_url
+        ))
         .header("apikey", &config.supabase_anon_key)
-        .bearer_auth(&session.access_token)
-        .header("Prefer", "return=representation")
+        .bearer_auth(access_token)
+        .header(
+            "Prefer",
+            "resolution=ignore-duplicates,return=representation",
+        )
         .json(&payload)
         .send()
         .await
     {
         Ok(resp) => resp,
         Err(e) => {
+            if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, &req.id).await {
+                return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
+                    .await;
+            }
             if attachment_path.is_some()
                 && let Err(cleanup_err) =
-                    delete_attachment(http, config, &session.access_token, &req.id).await
+                    delete_attachment(http, config, access_token, &req.id).await
             {
                 log::warn!(
                     "Failed to clean up uploaded attachment after note create request failure: {cleanup_err}"
@@ -866,8 +1082,12 @@ async fn create_note_remotely_and_wait(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, &req.id).await {
+            return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
+                .await;
+        }
         if attachment_path.is_some()
-            && let Err(e) = delete_attachment(http, config, &session.access_token, &req.id).await
+            && let Err(e) = delete_attachment(http, config, access_token, &req.id).await
         {
             log::warn!("Failed to clean up uploaded attachment after note create failure: {e}");
         }
@@ -882,134 +1102,178 @@ async fn create_note_remotely_and_wait(
         .map_err(|e| DaemonError::Other {
             message: format!("Failed to parse remote note create response: {e}"),
         })?;
-    let row = rows.pop().ok_or_else(|| DaemonError::Other {
-        message: "Remote note create returned no row".to_string(),
-    })?;
+    let row = match rows.pop() {
+        Some(row) => row,
+        None => lookup_remote_note(http, config, access_token, &req.id)
+            .await?
+            .ok_or_else(|| DaemonError::Other {
+                message: format!(
+                    "Remote note create returned no row and note {} was not found",
+                    req.id
+                ),
+            })?,
+    };
+    finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
+}
+
+async fn finish_remote_create(
+    db: &PowerSyncDatabase,
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    row: RemoteNoteRow,
+    extraction_rows: &[RemoteExtractionRow],
+) -> Result<CreatedNote, DaemonError> {
     let short_id = row.short_id.ok_or_else(|| DaemonError::Other {
         message: "Remote note create returned no short id".to_string(),
     })?;
-
-    create_extractions_remotely(
-        http,
-        config,
-        &session.access_token,
-        &session.user.id,
-        &row.id,
-        &req,
-    )
-    .await?;
-    wait_for_local_note(db, &row.id, short_id, &req, ipc::LOCAL_SYNC_TIMEOUT_SECS).await?;
+    commit_remote_note(db, &row).await?;
+    create_extractions_with_token(db, http, config, access_token, extraction_rows).await?;
     Ok(CreatedNote {
         uuid: row.id,
         short_id,
     })
 }
 
-async fn create_extractions_remotely(
+async fn lookup_remote_note(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
-    user_id: &str,
-    note_id: &str,
-    req: &CreateNoteRequest,
-) -> Result<(), DaemonError> {
-    let mut rows = Vec::new();
-    for value in &req.topics {
-        rows.push(serde_json::json!({
-            "id": uuid::Uuid::new_v4().to_string(),
-            "note_id": note_id,
-            "user_id": user_id,
-            "key": TOPIC_EXTRACTION_KEY,
-            "value": value,
-        }));
+    id: &str,
+) -> Result<Option<RemoteNoteRow>, DaemonError> {
+    let response = http
+        .get(format!(
+            "{}/rest/v1/notes?id=eq.{id}&select=*",
+            config.supabase_url
+        ))
+        .header("apikey", &config.supabase_anon_key)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to reconcile remote note {id}: {error}"),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!("Failed to reconcile remote note {id} ({status}): {body}"),
+        });
     }
-    if rows.is_empty() {
-        return Ok(());
+    let mut rows = response
+        .json::<Vec<RemoteNoteRow>>()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to parse remote note reconciliation response: {error}"),
+        })?;
+    Ok(rows.pop())
+}
+
+async fn create_extractions_with_token(
+    db: &PowerSyncDatabase,
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    requested: &[RemoteExtractionRow],
+) -> Result<Vec<RemoteExtractionRow>, DaemonError> {
+    if requested.is_empty() {
+        return Ok(Vec::new());
     }
 
     let resp = http
-        .post(format!("{}/rest/v1/note_extractions", config.supabase_url))
+        .post(format!(
+            "{}/rest/v1/note_extractions?on_conflict=id",
+            config.supabase_url
+        ))
         .header("apikey", &config.supabase_anon_key)
         .bearer_auth(access_token)
-        .json(&rows)
+        .header(
+            "Prefer",
+            "resolution=ignore-duplicates,return=representation",
+        )
+        .json(requested)
         .send()
         .await
         .map_err(|e| DaemonError::Other {
             message: format!("Remote note extraction create failed: {e}"),
         })?;
 
-    if resp.status().is_success() {
-        return Ok(());
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!(
+                "Created note remotely, but failed to create note extractions ({status}): {body}\nDo not create it again; retry with the same note UUID."
+            ),
+        });
     }
 
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    Err(DaemonError::Other {
-        message: format!(
-            "Created note remotely, but failed to create note extractions ({status}): {body}\nDo not create it again. Check `flicknote sync status`; the note should appear after sync catches up."
-        ),
-    })
+    let mut rows = resp
+        .json::<Vec<RemoteExtractionRow>>()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to parse remote extraction create response: {error}"),
+        })?;
+    let mut confirmed_ids = rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for expected in requested {
+        if confirmed_ids.contains(&expected.id) {
+            continue;
+        }
+        if let Some(row) =
+            lookup_remote_extraction(http, config, access_token, &expected.id).await?
+        {
+            rows.push(row);
+            confirmed_ids.insert(expected.id.clone());
+        }
+    }
+    if rows.len() != requested.len() {
+        return Err(DaemonError::Other {
+            message: format!(
+                "Created note remotely, but only {} of {} extraction rows were confirmed",
+                rows.len(),
+                requested.len()
+            ),
+        });
+    }
+    commit_remote_extractions(db, &rows).await?;
+    Ok(rows)
 }
 
-async fn wait_for_local_note(
-    db: &PowerSyncDatabase,
+async fn lookup_remote_extraction(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
     id: &str,
-    short_id: i64,
-    req: &CreateNoteRequest,
-    timeout_secs: u64,
-) -> Result<(), DaemonError> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-    loop {
-        let found = {
-            let reader = db.reader().await.map_err(|e| DaemonError::Other {
-                message: format!("Failed to read local PowerSync database: {e}"),
-            })?;
-            let mut stmt = reader
-                .prepare_cached("SELECT short_id FROM notes WHERE id = ? LIMIT 1")
-                .map_err(|e| DaemonError::Other {
-                    message: format!("Failed to prepare local sync check: {e}"),
-                })?;
-            stmt.query_row(params![id], |row| row.get::<_, Option<i64>>(0))
-                .optional()
-                .map_err(|e| DaemonError::Other {
-                    message: format!("Failed to query local sync check: {e}"),
-                })?
-                .flatten()
-        };
-        let topics_synced =
-            local_extraction_count(db, id, TOPIC_EXTRACTION_KEY).await? >= req.topics.len();
-        if found == Some(short_id) && topics_synced {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(DaemonError::RemoteCreatedLocalSyncTimeout {
-                short_id,
-                timeout_secs,
-            });
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+) -> Result<Option<RemoteExtractionRow>, DaemonError> {
+    let response = http
+        .get(format!(
+            "{}/rest/v1/note_extractions?id=eq.{id}&select=*",
+            config.supabase_url
+        ))
+        .header("apikey", &config.supabase_anon_key)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to reconcile remote extraction {id}: {error}"),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(DaemonError::Other {
+            message: format!("Failed to reconcile remote extraction {id} ({status}): {body}"),
+        });
     }
-}
-
-async fn local_extraction_count(
-    db: &PowerSyncDatabase,
-    note_id: &str,
-    extraction_key: &str,
-) -> Result<usize, DaemonError> {
-    let reader = db.reader().await.map_err(|e| DaemonError::Other {
-        message: format!("Failed to read local PowerSync database: {e}"),
-    })?;
-    let mut stmt = reader
-        .prepare_cached("SELECT COUNT(*) FROM note_extractions WHERE note_id = ? AND key = ?")
-        .map_err(|e| DaemonError::Other {
-            message: format!("Failed to prepare local extraction sync check: {e}"),
+    let mut rows = response
+        .json::<Vec<RemoteExtractionRow>>()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to parse extraction reconciliation response: {error}"),
         })?;
-    let count = stmt
-        .query_row(params![note_id, extraction_key], |row| row.get::<_, i64>(0))
-        .map_err(|e| DaemonError::Other {
-            message: format!("Failed to query local extraction sync check: {e}"),
-        })?;
-    Ok(count as usize)
+    Ok(rows.pop())
 }
 
 async fn serve_socket(
@@ -1036,7 +1300,7 @@ async fn serve_socket(
         tokio::spawn(async move {
             let response = match ipc::read_request(&mut stream).await {
                 Ok(DaemonRequest::CreateNote(req)) => {
-                    match create_note_remotely_and_wait(&db, &http, &auth, &config, *req).await {
+                    match create_note_remotely(&db, &http, &auth, &config, *req).await {
                         Ok(note) => DaemonResponse::NoteCreated(note),
                         Err(e) => DaemonResponse::Error(e),
                     }
@@ -1318,6 +1582,239 @@ mod tests {
 
     use super::*;
 
+    async fn test_powersync_db() -> (tempfile::TempDir, PowerSyncDatabase) {
+        PowerSyncEnvironment::powersync_auto_extension().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let pool = ConnectionPool::open(directory.path().join("test.db")).unwrap();
+        let env = PowerSyncEnvironment::custom(
+            reqwest::Client::new(),
+            pool,
+            PowerSyncEnvironment::tokio_timer(),
+        );
+        let db = PowerSyncDatabase::new(env, app_schema());
+        db.writer().await.unwrap();
+        (directory, db)
+    }
+
+    async fn insert_marked_note(db: &PowerSyncDatabase) {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                r#"INSERT INTO notes (
+                    id, short_id, user_id, type, status, title, content,
+                    is_flagged, created_at, updated_at, _metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                params![
+                    "note-1",
+                    42,
+                    "user-1",
+                    "normal",
+                    "ai_queued",
+                    "Title",
+                    "Body",
+                    0,
+                    "2026-08-09T00:00:00Z",
+                    "2026-08-09T00:00:00Z",
+                    r#"{"flicknote":"remote_committed_insert_v1"}"#,
+                ],
+            )
+            .unwrap();
+    }
+
+    fn remote_note(id: &str, title: &str) -> RemoteNoteRow {
+        RemoteNoteRow {
+            id: id.to_string(),
+            short_id: Some(42),
+            user_id: "user-1".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some(title.to_string()),
+            content: Some("Canonical body".to_string()),
+            summary: Some("Canonical summary".to_string()),
+            is_flagged: false,
+            project_id: Some("project-1".to_string()),
+            metadata: Some(serde_json::json!({"source": "remote"})),
+            source: Some(serde_json::json!({"kind": "plain"})),
+            created_at: Some("2026-08-09T00:00:00Z".to_string()),
+            updated_at: Some("2026-08-09T00:00:01Z".to_string()),
+            deleted_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_committed_note_is_fully_visible_before_return() {
+        let (_directory, db) = test_powersync_db().await;
+        let inserted = commit_remote_note(&db, &remote_note("note-full", "Remote title"))
+            .await
+            .unwrap();
+
+        assert!(inserted);
+        let reader = db.reader().await.unwrap();
+        let row = reader
+            .query_row(
+                "SELECT short_id, title, summary, metadata, source FROM notes WHERE id = ?",
+                params!["note-full"],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(row.0, 42);
+        assert_eq!(row.1, "Remote title");
+        assert_eq!(row.2, "Canonical summary");
+        assert_eq!(row.3, r#"{"source":"remote"}"#);
+        assert_eq!(row.4, r#"{"kind":"plain"}"#);
+
+        let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+        assert_eq!(
+            transaction.crud[0].metadata.as_deref(),
+            Some(REMOTE_COMMITTED_INSERT_METADATA)
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_committed_note_does_not_replace_row_downloaded_first() {
+        let (_directory, db) = test_powersync_db().await;
+        {
+            let writer = db.writer().await.unwrap();
+            writer
+                .execute(
+                    "INSERT INTO notes (id, short_id, user_id, type, status, title) VALUES (?, ?, ?, ?, ?, ?)",
+                    params!["note-race", 42, "user-1", "normal", "ready", "Newer title"],
+                )
+                .unwrap();
+            writer.execute("DELETE FROM ps_crud", []).unwrap();
+        }
+
+        let inserted = commit_remote_note(&db, &remote_note("note-race", "Older title"))
+            .await
+            .unwrap();
+
+        assert!(!inserted);
+        let reader = db.reader().await.unwrap();
+        let title: String = reader
+            .query_row(
+                "SELECT title FROM notes WHERE id = ?",
+                params!["note-race"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Newer title");
+        assert!(db.next_crud_transaction().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_committed_insert_records_marker_in_crud() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_marked_note(&db).await;
+
+        let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+        assert_eq!(transaction.crud.len(), 1);
+        assert_eq!(transaction.crud[0].table, "notes");
+        assert!(matches!(
+            transaction.crud.first().map(|entry| &entry.update_type),
+            Some(UpdateType::Put)
+        ));
+        assert_eq!(
+            transaction.crud[0].metadata.as_deref(),
+            Some(r#"{"flicknote":"remote_committed_insert_v1"}"#)
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_committed_put_completes_without_http_request() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_marked_note(&db).await;
+
+        let uploaded = run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon-key",
+        )
+        .await
+        .unwrap();
+
+        assert!(uploaded);
+        assert!(db.next_crud_transaction().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_committed_marker_on_patch_is_rejected_and_retained() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_marked_note(&db).await;
+        db.next_crud_transaction()
+            .await
+            .unwrap()
+            .unwrap()
+            .complete()
+            .await
+            .unwrap();
+        {
+            let writer = db.writer().await.unwrap();
+            writer
+                .execute(
+                    "UPDATE notes SET title = ?, _metadata = ? WHERE id = ?",
+                    params!["Changed", REMOTE_COMMITTED_INSERT_METADATA, "note-1"],
+                )
+                .unwrap();
+        }
+
+        let error = run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon-key",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid remote-committed marker")
+        );
+        assert!(db.next_crud_transaction().await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn remote_committed_extractions_are_visible_before_return() {
+        let (_directory, db) = test_powersync_db().await;
+        let rows = vec![RemoteExtractionRow {
+            id: "extraction-1".to_string(),
+            note_id: "note-1".to_string(),
+            user_id: "user-1".to_string(),
+            key: TOPIC_EXTRACTION_KEY.to_string(),
+            value: "rust".to_string(),
+        }];
+
+        let inserted = commit_remote_extractions(&db, &rows).await.unwrap();
+
+        assert_eq!(inserted, 1);
+        let reader = db.reader().await.unwrap();
+        let value: String = reader
+            .query_row(
+                "SELECT value FROM note_extractions WHERE id = ?",
+                params!["extraction-1"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "rust");
+        let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+        assert_eq!(
+            transaction.crud[0].metadata.as_deref(),
+            Some(REMOTE_COMMITTED_INSERT_METADATA)
+        );
+    }
+
     #[tokio::test]
     async fn share_request_lock_serializes_operations() {
         let lock = Arc::new(ShareRequestLock::default());
@@ -1385,6 +1882,251 @@ mod tests {
             requests
         });
         (format!("http://{address}"), handle)
+    }
+
+    fn spawn_disconnected_response_then_server(
+        status: &'static str,
+        body: &'static str,
+    ) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            let (mut first, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let count = first.read(&mut buffer).unwrap();
+            requests.push(
+                String::from_utf8_lossy(&buffer[..count])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            drop(first);
+
+            let (mut second, _) = listener.accept().unwrap();
+            let count = second.read(&mut buffer).unwrap();
+            requests.push(
+                String::from_utf8_lossy(&buffer[..count])
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            second.write_all(response.as_bytes()).unwrap();
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    #[tokio::test]
+    async fn remote_create_returns_after_canonical_note_is_committed_locally() {
+        let body = r#"[{"id":"note-create","short_id":77,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![("201 Created", body)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let request = CreateNoteRequest {
+            id: "note-create".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some("Requested title".to_string()),
+            content: Some("Body".to_string()),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-09T00:00:00Z".to_string(),
+            topics: Vec::new(),
+            attachment_path: None,
+        };
+
+        let created = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.uuid, "note-create");
+        assert_eq!(created.short_id, 77);
+        let reader = db.reader().await.unwrap();
+        let title: String = reader
+            .query_row(
+                "SELECT title FROM notes WHERE id = ?",
+                params!["note-create"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(title, "Remote title");
+        assert_eq!(
+            server.join().unwrap(),
+            ["POST /rest/v1/notes?on_conflict=id HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_create_recovers_empty_idempotent_response_by_stable_uuid() {
+        let body = r#"[{"id":"note-retry","short_id":78,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![("200 OK", "[]"), ("200 OK", body)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let request = CreateNoteRequest {
+            id: "note-retry".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some("Requested".to_string()),
+            content: Some("Body".to_string()),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-09T00:00:00Z".to_string(),
+            topics: Vec::new(),
+            attachment_path: None,
+        };
+
+        let created = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.short_id, 78);
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "POST /rest/v1/notes?on_conflict=id HTTP/1.1",
+                "GET /rest/v1/notes?id=eq.note-retry&select=* HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_create_recovers_lost_response_by_stable_uuid() {
+        let body = r#"[{"id":"note-lost","short_id":79,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_disconnected_response_then_server("200 OK", body);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let request = CreateNoteRequest {
+            id: "note-lost".to_string(),
+            note_type: "normal".to_string(),
+            status: "ai_queued".to_string(),
+            title: Some("Requested".to_string()),
+            content: Some("Body".to_string()),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-09T00:00:00Z".to_string(),
+            topics: Vec::new(),
+            attachment_path: None,
+        };
+
+        let created = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            request,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.short_id, 79);
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn remote_extraction_create_commits_confirmed_rows_locally() {
+        let body = r#"[{"id":"extraction-create","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
+        let (origin, server) = spawn_server(vec![("201 Created", body)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let requested = vec![RemoteExtractionRow {
+            id: "extraction-create".to_string(),
+            note_id: "note-create".to_string(),
+            user_id: "user-1".to_string(),
+            key: TOPIC_EXTRACTION_KEY.to_string(),
+            value: "rust".to_string(),
+        }];
+
+        let confirmed = create_extractions_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            &requested,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(confirmed.len(), 1);
+        let reader = db.reader().await.unwrap();
+        let count: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM note_extractions WHERE id = ?",
+                params!["extraction-create"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(
+            server.join().unwrap(),
+            ["POST /rest/v1/note_extractions?on_conflict=id HTTP/1.1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_extraction_create_recovers_by_stable_uuid() {
+        let body = r#"[{"id":"extraction-retry","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
+        let (origin, server) = spawn_server(vec![("200 OK", "[]"), ("200 OK", body)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let requested = vec![RemoteExtractionRow {
+            id: "extraction-retry".to_string(),
+            note_id: "note-create".to_string(),
+            user_id: "user-1".to_string(),
+            key: TOPIC_EXTRACTION_KEY.to_string(),
+            value: "rust".to_string(),
+        }];
+
+        let confirmed = create_extractions_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            &requested,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(confirmed.len(), 1);
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "POST /rest/v1/note_extractions?on_conflict=id HTTP/1.1",
+                "GET /rest/v1/note_extractions?id=eq.extraction-retry&select=* HTTP/1.1",
+            ]
+        );
     }
 
     #[tokio::test]

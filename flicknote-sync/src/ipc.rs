@@ -12,8 +12,6 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixStream;
 
-pub const LOCAL_SYNC_TIMEOUT_SECS: u64 = 10;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonRequest {
@@ -82,7 +80,6 @@ pub struct CreatedNote {
 #[serde(tag = "code", rename_all = "snake_case")]
 pub enum DaemonError {
     Unavailable { path: String, message: String },
-    RemoteCreatedLocalSyncTimeout { short_id: i64, timeout_secs: u64 },
     Other { message: String },
 }
 
@@ -92,13 +89,6 @@ impl fmt::Display for DaemonError {
             Self::Unavailable { path, message } => {
                 write!(f, "Sync daemon is not available at {path}: {message}")
             }
-            Self::RemoteCreatedLocalSyncTimeout {
-                short_id,
-                timeout_secs,
-            } => write!(
-                f,
-                "Created note remotely as #{short_id}, but PowerSync did not update the local database within {timeout_secs}s.\nDo not create it again. Check `flicknote sync status`; note #{short_id} should appear after sync catches up."
-            ),
             Self::Other { message } => f.write_str(message),
         }
     }
@@ -415,19 +405,6 @@ mod tests {
         });
 
         assert!(serde_json::from_value::<DaemonRequest>(value).is_ok());
-    }
-
-    #[test]
-    fn local_sync_timeout_message_warns_not_to_create_again() {
-        let err = DaemonError::RemoteCreatedLocalSyncTimeout {
-            short_id: 123,
-            timeout_secs: 10,
-        };
-
-        assert_eq!(
-            err.to_string(),
-            "Created note remotely as #123, but PowerSync did not update the local database within 10s.\nDo not create it again. Check `flicknote sync status`; note #123 should appear after sync catches up."
-        );
     }
 
     #[tokio::test]
