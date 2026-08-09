@@ -3,7 +3,7 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_sync::ipc::{Capability, DaemonClient};
+use flicknote_sync::ipc::DaemonClient;
 
 const ROOT_HELP: &str = include_str!("help/root.md");
 
@@ -116,39 +116,22 @@ async fn run() -> Result<(), CliError> {
     }
 
     let daemon = DaemonClient::new(&config);
-    let server_info = daemon.health().await?;
+    daemon.health().await?;
     if matches!(cli.command, Some(Commands::Mcp)) {
-        server_info.require(Capability::Mcp, "mcp")?;
         return tokio::task::LocalSet::new()
             .run_until(mcp::serve(std::rc::Rc::new(config)))
             .await;
     }
-    dispatch(&cli, &daemon, &server_info).await
+    dispatch(&cli, &daemon).await
 }
 
-fn preflight_command(
-    command: &Commands,
-    server_info: &flicknote_sync::ipc::ServerInfo,
-) -> Result<(), CliError> {
-    if matches!(command, Commands::Edit(_)) {
-        server_info.require(Capability::Editor, "note_edit")?;
-    }
-    Ok(())
-}
-
-async fn dispatch(
-    cli: &Cli,
-    daemon: &DaemonClient<'_>,
-    server_info: &flicknote_sync::ipc::ServerInfo,
-) -> Result<(), CliError> {
+async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()
             .map_err(|e| CliError::Other(e.to_string()))?;
         return Ok(());
     };
-    preflight_command(command, server_info)?;
-
     match command {
         Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
         Commands::Add(args) => commands::add::run(daemon, args).await,
@@ -184,7 +167,41 @@ async fn dispatch(
 
 #[cfg(test)]
 mod tests {
+    use async_trait::async_trait;
+    use flicknote_core::services::error::ServiceError;
+    use flicknote_core::services::ports::{
+        CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+    };
+
     use super::*;
+
+    struct PersistingCreator {
+        db: std::sync::Arc<dyn flicknote_core::backend::NoteDb>,
+    }
+
+    #[async_trait]
+    impl NoteCreator for PersistingCreator {
+        async fn create(&self, request: CreateNote) -> Result<CreatedNote, ServiceError> {
+            let inserted = self.db.insert_note(&request.as_insert_request()).await?;
+            Ok(CreatedNote {
+                inserted,
+                confirmed_extraction_ids: Vec::new(),
+            })
+        }
+    }
+
+    struct UnusedShareGateway;
+
+    #[async_trait]
+    impl ShareGateway for UnusedShareGateway {
+        async fn share(&self, _resource: ShareResource, _id: &str) -> Result<String, ServiceError> {
+            Err(ServiceError::Daemon("unexpected share".to_string()))
+        }
+
+        async fn unshare(&self, _resource: ShareResource, _id: &str) -> Result<(), ServiceError> {
+            Err(ServiceError::Daemon("unexpected unshare".to_string()))
+        }
+    }
 
     async fn call_mcp_tool(
         writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
@@ -233,7 +250,7 @@ mod tests {
         use flicknote_core::backend::{NoteDb, SqliteBackend};
         use flicknote_core::db::Database;
         use flicknote_sync::app::Application;
-        use flicknote_sync::ipc::{BackendMode, ServerInfo, serve_app, socket_path};
+        use flicknote_sync::ipc::{ServerInfo, serve_app, socket_path};
         use rmcp::ServiceExt;
         use std::rc::Rc;
         use std::sync::Arc;
@@ -313,15 +330,22 @@ mod tests {
                 .headings[0]
                     .id
                     .clone();
+                let creator: Arc<dyn NoteCreator> = Arc::new(PersistingCreator {
+                    db: backend.clone(),
+                });
                 let app = Arc::new(
-                    Application::new(backend, BackendMode::Managed)
+                    Application::new(
+                        backend,
+                        creator,
+                        Arc::new(UnusedShareGateway),
+                    )
                         .with_web_url(config.web_url.clone()),
                 );
                 let daemon_listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
                 let daemon_server = tokio::spawn(serve_app(
                     daemon_listener,
                     app,
-                    ServerInfo::local(),
+                    ServerInfo::current(),
                 ));
                 let server = mcp::FlickNoteMcp::new(Rc::new(config));
                 let (server_io, client_io) = tokio::io::duplex(8 * 1024);
@@ -711,21 +735,6 @@ mod tests {
     #[test]
     fn upload_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
-    }
-
-    #[test]
-    fn managed_edit_is_rejected_before_dispatching_to_the_editor() {
-        let cli = Cli::try_parse_from(["flicknote", "edit"]).unwrap();
-        let command = cli.command.as_ref().unwrap();
-
-        let error =
-            preflight_command(command, &flicknote_sync::ipc::ServerInfo::managed()).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("not available in managed daemon mode")
-        );
     }
 
     #[test]

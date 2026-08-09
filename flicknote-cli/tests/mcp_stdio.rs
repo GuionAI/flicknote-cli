@@ -1,17 +1,44 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::ports::{
+    CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+};
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{
-    AppRequest, AppResponse, BackendMode, ClientSurface, DaemonRequest, DaemonResponse, ServerInfo,
-    WireError, read_request, serve_app, socket_path, write_response,
+    AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo, read_request, serve_app,
+    socket_path, write_response,
 };
+
+struct UnusedCreator;
+
+#[async_trait]
+impl NoteCreator for UnusedCreator {
+    async fn create(&self, _request: CreateNote) -> Result<CreatedNote, ServiceError> {
+        Err(ServiceError::Daemon("unexpected create".to_string()))
+    }
+}
+
+struct UnusedShareGateway;
+
+#[async_trait]
+impl ShareGateway for UnusedShareGateway {
+    async fn share(&self, _resource: ShareResource, _id: &str) -> Result<String, ServiceError> {
+        Err(ServiceError::Daemon("unexpected share".to_string()))
+    }
+
+    async fn unshare(&self, _resource: ShareResource, _id: &str) -> Result<(), ServiceError> {
+        Err(ServiceError::Daemon("unexpected unshare".to_string()))
+    }
+}
 
 fn test_config(config_root: &std::path::Path, data_root: &std::path::Path) -> Config {
     let config_dir = config_root.join("flicknote");
@@ -67,7 +94,7 @@ fn spawn_scripted_daemon(
     config_root: &std::path::Path,
     data_root: &std::path::Path,
     info: ServerInfo,
-    responder: impl Fn(ClientSurface, &AppRequest) -> DaemonResponse + Send + Sync + 'static,
+    responder: impl Fn(&AppRequest) -> DaemonResponse + Send + Sync + 'static,
 ) -> ScriptedDaemonGuard {
     let config = test_config(config_root, data_root);
     std::fs::create_dir_all(&config.paths.data_dir).unwrap();
@@ -94,11 +121,9 @@ fn spawn_scripted_daemon(
                     let request = read_request(&mut stream).await.unwrap();
                     let response = match request {
                         DaemonRequest::Health { .. } => DaemonResponse::ServerInfo(info.clone()),
-                        DaemonRequest::App {
-                            surface, request, ..
-                        } => {
+                        DaemonRequest::App { request, .. } => {
                             recorded.lock().unwrap().push((*request).clone());
-                            responder(surface, &request)
+                            responder(&request)
                         }
                     };
                     write_response(&mut stream, &response).await.unwrap();
@@ -140,12 +165,16 @@ fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path)
                     db: Database::open_local(&config).await.unwrap(),
                     user_id: "test-user".to_string(),
                 });
-                let app = std::sync::Arc::new(Application::new(backend, BackendMode::Local));
+                let app = std::sync::Arc::new(Application::new(
+                    backend,
+                    std::sync::Arc::new(UnusedCreator),
+                    std::sync::Arc::new(UnusedShareGateway),
+                ));
                 let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
                 ready_tx.send(()).unwrap();
                 tokio::select! {
                     _ = shutdown_rx => {}
-                    result = serve_app(listener, app, ServerInfo::local()) => result.unwrap(),
+                    result = serve_app(listener, app, ServerInfo::current()) => result.unwrap(),
                 }
             });
     });
@@ -220,7 +249,6 @@ fn run_cli_json(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
     assert!(
@@ -241,7 +269,6 @@ fn run_cli_with_input(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -393,7 +420,6 @@ fn gateway_request_writes_a_chunked_sse_response_to_stdout_without_exposing_its_
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -432,7 +458,6 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -477,7 +502,6 @@ fn gateway_request_rejects_invalid_piped_json_before_sending_it() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", "http://127.0.0.1:9/api/v1")
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -521,7 +545,6 @@ fn gateway_request_bypasses_system_proxies() {
         .env_remove("all_proxy")
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -567,7 +590,6 @@ fn gateway_request_refreshes_sessions_without_using_system_proxies() {
         .env_remove("all_proxy")
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -599,7 +621,6 @@ fn gateway_request_does_not_forward_session_refresh_to_redirect_target() {
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
         .env("FLICKNOTE_SUPABASE_URL", &origin)
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -636,7 +657,6 @@ fn gateway_request_does_not_echo_an_upstream_error_body() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -664,7 +684,6 @@ fn gateway_request_reports_http_date_retry_after() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -713,7 +732,7 @@ fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let daemon = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::local(), |_, _| {
+    let daemon = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |_| {
         DaemonResponse::App(Box::new(AppResponse::NoteMutation(
             flicknote_core::services::dto::NoteMutationResult {
                 note: fake_note_summary(),
@@ -743,135 +762,6 @@ fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
 }
 
 #[test]
-fn managed_file_and_editor_boundaries_fail_without_losing_local_input() {
-    let directory = tempfile::tempdir().unwrap();
-    let config_root = directory.path().join("config");
-    let data_root = directory.path().join("data");
-    let uploaded = directory.path().join("draft.md");
-    std::fs::write(&uploaded, "draft body").unwrap();
-    let editor_marker = directory.path().join("editor-ran");
-    let editor = directory.path().join("editor.sh");
-    std::fs::write(
-        &editor,
-        format!("#!/bin/sh\ntouch '{}'\n", editor_marker.display()),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let daemon = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::managed(), |_, _| {
-        DaemonResponse::AppError(WireError {
-            code: "unsupported_capability".to_string(),
-            message: "operation unavailable".to_string(),
-            retryable: false,
-            details: None,
-        })
-    });
-
-    let edit = Command::new(env!("CARGO_BIN_EXE_flicknote"))
-        .arg("edit")
-        .env("XDG_CONFIG_HOME", &config_root)
-        .env("XDG_DATA_HOME", &data_root)
-        .env("EDITOR", &editor)
-        .env_remove("DATABASE_URL")
-        .output()
-        .unwrap();
-    assert!(!edit.status.success());
-    assert!(!editor_marker.exists());
-
-    let upload = Command::new(env!("CARGO_BIN_EXE_flicknote"))
-        .args(["upload", uploaded.to_str().unwrap()])
-        .env("XDG_CONFIG_HOME", &config_root)
-        .env("XDG_DATA_HOME", &data_root)
-        .env_remove("DATABASE_URL")
-        .output()
-        .unwrap();
-    assert!(!upload.status.success());
-    assert_eq!(std::fs::read_to_string(&uploaded).unwrap(), "draft body");
-    assert!(matches!(
-        daemon.requests().as_slice(),
-        [AppRequest::NoteUpload { .. }]
-    ));
-}
-
-#[test]
-fn long_lived_mcp_rechecks_surface_after_daemon_mode_changes() {
-    let directory = tempfile::tempdir().unwrap();
-    let config_root = directory.path().join("config");
-    let data_root = directory.path().join("data");
-    let local = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::local(), |_, _| {
-        DaemonResponse::App(Box::new(AppResponse::NoteSummaries(Vec::new())))
-    });
-    let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
-        .arg("mcp")
-        .env("XDG_CONFIG_HOME", &config_root)
-        .env("XDG_DATA_HOME", &data_root)
-        .env_remove("DATABASE_URL")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut input = child.stdin.take().unwrap();
-    let mut output = std::io::BufReader::new(child.stdout.take().unwrap());
-    writeln!(
-        input,
-        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-11-25","capabilities":{{}},"clientInfo":{{"name":"integration-test","version":"0"}}}}}}"#
-    )
-    .unwrap();
-    input.flush().unwrap();
-    let mut frame = String::new();
-    output.read_line(&mut frame).unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&frame).unwrap()["id"],
-        1
-    );
-    writeln!(
-        input,
-        r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
-    )
-    .unwrap();
-    input.flush().unwrap();
-
-    drop(local);
-    let managed = spawn_scripted_daemon(
-        &config_root,
-        &data_root,
-        ServerInfo::managed(),
-        |surface, _| {
-            assert_eq!(surface, ClientSurface::Mcp);
-            DaemonResponse::AppError(WireError {
-                code: "unsupported_capability".to_string(),
-                message: "MCP is not available in managed mode".to_string(),
-                retryable: false,
-                details: None,
-            })
-        },
-    );
-    writeln!(
-        input,
-        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{{"name":"note_list","arguments":{{}}}}}}"#
-    )
-    .unwrap();
-    input.flush().unwrap();
-    frame.clear();
-    output.read_line(&mut frame).unwrap();
-    let response: serde_json::Value = serde_json::from_str(&frame).unwrap();
-    assert_eq!(response["id"], 2);
-    assert_eq!(response["result"]["isError"], true);
-    assert!(matches!(
-        managed.requests().as_slice(),
-        [AppRequest::NoteList(_)]
-    ));
-
-    drop(input);
-    let result = child.wait().unwrap();
-    assert!(result.success());
-}
-
-#[test]
 fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
@@ -883,7 +773,6 @@ fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
         .arg("mcp")
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -932,7 +821,6 @@ fn mcp_requires_daemon_before_protocol_output() {
         .arg("mcp")
         .env("XDG_CONFIG_HOME", directory.path().join("config"))
         .env("XDG_DATA_HOME", directory.path().join("data"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -948,7 +836,6 @@ fn data_commands_require_the_daemon() {
         .arg("list")
         .env("XDG_CONFIG_HOME", directory.path().join("config"))
         .env("XDG_DATA_HOME", directory.path().join("data"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -963,7 +850,6 @@ fn root_help_does_not_require_the_daemon() {
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .env("XDG_CONFIG_HOME", directory.path().join("config"))
         .env("XDG_DATA_HOME", directory.path().join("data"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 

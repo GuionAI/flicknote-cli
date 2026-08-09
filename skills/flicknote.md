@@ -70,8 +70,7 @@ Mutating section commands print the updated tree after the change.
 ## MCP Server
 
 `flicknote mcp` serves typed note, source, and project tools over local stdio
-and requires a daemon running in local PowerSync mode. Managed daemons reject
-MCP startup with `unsupported_capability` before protocol output.
+and requires the local PowerSync daemon.
 Configure an MCP client to run `flicknote` with `args: ["mcp"]`. Content and
 exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
 heredocs or edit-mode delimiters. Note tools use numeric short IDs and hide

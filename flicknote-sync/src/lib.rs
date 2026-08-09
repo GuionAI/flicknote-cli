@@ -1800,10 +1800,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _pid_guard = check_and_write_pid(&pid_file)?;
     let (socket_listener, _socket_guard) = bind_socket(&config)?;
 
-    if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        return run_managed(socket_listener, database_url).await;
-    }
-
     config.validate()?;
 
     PowerSyncEnvironment::powersync_auto_extension()?;
@@ -1963,14 +1959,12 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         lock: socket_share_lock,
     });
     let app = Arc::new(
-        Application::new(backend, ipc::BackendMode::Local)
-            .with_creator(creator)
-            .with_share_gateway(gateway)
+        Application::new(backend, creator, gateway)
             .with_web_url(config.web_url.clone())
             .with_write_signal(trigger_tx),
     );
     let mut socket_handle = tokio::spawn(async move {
-        if let Err(error) = ipc::serve_app(socket_listener, app, ipc::ServerInfo::local()).await {
+        if let Err(error) = ipc::serve_app(socket_listener, app, ipc::ServerInfo::current()).await {
             log::error!("Application socket server failed: {error}");
         }
     });
@@ -2013,22 +2007,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     Ok(())
-}
-
-async fn run_managed(
-    listener: UnixListener,
-    database_url: String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let backend: Arc<dyn NoteDb> =
-        Arc::new(flicknote_core::pgwire::PgWireBackend::connect(&database_url).await?);
-    let app = Arc::new(Application::new(backend, ipc::BackendMode::Managed));
-    log::info!("Managed daemon ready (pid {})", std::process::id());
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => Ok(()),
-        result = ipc::serve_app(listener, app, ipc::ServerInfo::managed()) => {
-            result.map_err(Into::into)
-        }
-    }
 }
 
 #[cfg(test)]

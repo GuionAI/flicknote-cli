@@ -47,12 +47,6 @@ pub struct InsertedNote {
     pub short_id: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InsertedNoteWithExtractions {
-    pub note: InsertedNote,
-    pub extraction_ids: Vec<String>,
-}
-
 pub(crate) enum NoteLookup<'a> {
     ShortId(i64),
     Uuid(&'a str),
@@ -103,20 +97,6 @@ pub trait NoteDb: Send + Sync {
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
-    async fn insert_note_with_extractions(
-        &self,
-        req: &InsertNoteReq<'_>,
-        extraction_key: &str,
-        values: &[String],
-    ) -> Result<InsertedNoteWithExtractions, CliError> {
-        let inserted = self.insert_note(req).await?;
-        self.set_note_extractions(&inserted.uuid, extraction_key, values)
-            .await?;
-        Ok(InsertedNoteWithExtractions {
-            note: inserted,
-            extraction_ids: Vec::new(),
-        })
-    }
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
     async fn update_note_content(
         &self,
@@ -635,55 +615,6 @@ impl NoteDb for SqliteBackend {
         Ok(InsertedNote {
             uuid: req.id.to_string(),
             short_id: None,
-        })
-    }
-
-    async fn insert_note_with_extractions(
-        &self,
-        req: &InsertNoteReq<'_>,
-        extraction_key: &str,
-        values: &[String],
-    ) -> Result<InsertedNoteWithExtractions, CliError> {
-        let mut transaction = self.db.pool.begin().await?;
-        sqlx::query(SQ_INSERT)
-            .bind(req.id)
-            .bind(&self.user_id)
-            .bind(req.note_type)
-            .bind(req.status)
-            .bind(req.title)
-            .bind(req.content)
-            .bind(req.metadata)
-            .bind(req.project_id)
-            .bind(req.now)
-            .bind(req.now)
-            .execute(&mut *transaction)
-            .await?;
-        sqlx::query(SQ_CLEAR_EXTRACTIONS)
-            .bind(&self.user_id)
-            .bind(req.id)
-            .bind(extraction_key)
-            .execute(&mut *transaction)
-            .await?;
-        let mut extraction_ids = Vec::with_capacity(values.len());
-        for value in values {
-            let extraction_id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(SQ_INSERT_EXTRACTION)
-                .bind(&extraction_id)
-                .bind(req.id)
-                .bind(&self.user_id)
-                .bind(extraction_key)
-                .bind(value)
-                .execute(&mut *transaction)
-                .await?;
-            extraction_ids.push(extraction_id);
-        }
-        transaction.commit().await?;
-        Ok(InsertedNoteWithExtractions {
-            note: InsertedNote {
-                uuid: req.id.to_string(),
-                short_id: None,
-            },
-            extraction_ids,
         })
     }
 

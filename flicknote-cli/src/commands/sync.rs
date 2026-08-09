@@ -112,56 +112,13 @@ pub(super) async fn wait_for_daemon_ready(
     timeout: std::time::Duration,
     interval: std::time::Duration,
 ) -> Result<(), CliError> {
-    wait_for_daemon_ready_matching(config, timeout, interval, None).await
-}
-
-pub(super) async fn running_server_info(
-    config: &Config,
-) -> Result<Option<flicknote_sync::ipc::ServerInfo>, CliError> {
-    match flicknote_sync::ipc::DaemonClient::new(config)
-        .health()
-        .await
-    {
-        Ok(info) => Ok(Some(info)),
-        Err(error) if error.code() == "daemon_unavailable" => Ok(None),
-        Err(error) => Err(CliError::from(error)),
-    }
-}
-
-#[cfg(any(target_os = "macos", test))]
-async fn wait_for_daemon_ready_for_mode(
-    config: &Config,
-    timeout: std::time::Duration,
-    interval: std::time::Duration,
-    expected_mode: flicknote_sync::ipc::BackendMode,
-) -> Result<(), CliError> {
-    wait_for_daemon_ready_matching(config, timeout, interval, Some(expected_mode)).await
-}
-
-async fn wait_for_daemon_ready_matching(
-    config: &Config,
-    timeout: std::time::Duration,
-    interval: std::time::Duration,
-    expected_mode: Option<flicknote_sync::ipc::BackendMode>,
-) -> Result<(), CliError> {
     let wait = async {
         loop {
             match flicknote_sync::ipc::DaemonClient::new(config)
                 .health()
                 .await
             {
-                Ok(info) => {
-                    if let Some(expected) = expected_mode
-                        && info.backend != expected
-                    {
-                        return Err(CliError::Other(format!(
-                            "Expected a {} daemon, but the endpoint is owned by a {} daemon; stop it and retry",
-                            expected.as_str(),
-                            info.backend.as_str(),
-                        )));
-                    }
-                    return Ok(());
-                }
+                Ok(_) => return Ok(()),
                 Err(error) if !error.retryable() => return Err(CliError::from(error)),
                 Err(_) => tokio::time::sleep(interval).await,
             }
@@ -230,28 +187,20 @@ async fn status(config: &Config) -> Result<(), CliError> {
 }
 
 fn format_running_status(pid: u32, info: &flicknote_sync::ipc::ServerInfo) -> String {
-    let backend = info.backend.as_str();
     format!(
-        "FlickNote daemon: running (pid {pid}, version {}, backend {backend}, protocol {})",
+        "FlickNote daemon: running (pid {pid}, version {}, protocol {})",
         info.version, info.protocol
     )
 }
 
 async fn install(config: &Config) -> Result<(), CliError> {
-    install_with_timeout(
-        config,
-        std::env::var("DATABASE_URL").ok().as_deref(),
-        DAEMON_START_TIMEOUT,
-    )
-    .await
+    install_with_timeout(config, DAEMON_START_TIMEOUT).await
 }
 
 async fn install_with_timeout(
     config: &Config,
-    database_url: Option<&str>,
     timeout: std::time::Duration,
 ) -> Result<(), CliError> {
-    validate_install_mode(database_url)?;
     install_local_daemon(config, timeout).await?;
     println!("Installed and started: io.guion.flicknote.sync");
     Ok(())
@@ -270,46 +219,13 @@ pub(super) async fn install_local_daemon(
     #[cfg(target_os = "macos")]
     {
         validate_launchd_platform()?;
-        // This probe must sit immediately before the destructive stop. Login may
-        // spend minutes in interactive authentication, and another shell may have
-        // started a managed daemon since its initial lifecycle decision.
-        let running = running_server_info(config).await?;
-        validate_local_install_endpoint(running.as_ref().map(|info| info.backend))?;
         // Prove that the shared endpoint is no longer owned by an old launchd or
         // standalone daemon before starting the new local LaunchAgent.
         super::daemon::stop(config)?;
         wait_for_daemon_stopped(config, timeout, HEALTH_POLL_INTERVAL).await?;
         super::daemon::install(config)?;
-        wait_for_daemon_ready_for_mode(
-            config,
-            timeout,
-            HEALTH_POLL_INTERVAL,
-            flicknote_sync::ipc::BackendMode::Local,
-        )
-        .await
+        wait_for_daemon_ready(config, timeout, HEALTH_POLL_INTERVAL).await
     }
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn validate_local_install_endpoint(
-    running_backend: Option<flicknote_sync::ipc::BackendMode>,
-) -> Result<(), CliError> {
-    if running_backend == Some(flicknote_sync::ipc::BackendMode::Managed) {
-        return Err(CliError::Other(
-            "A managed daemon is running. Stop it explicitly before installing the local PowerSync daemon."
-                .to_string(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_install_mode(database_url: Option<&str>) -> Result<(), CliError> {
-    if database_url.is_some() {
-        return Err(CliError::Other(
-            "`flicknote sync install` only installs the local PowerSync daemon; start a managed daemon explicitly with `flicknote sync start`.".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 fn validate_launchd_platform() -> Result<(), CliError> {
@@ -373,73 +289,17 @@ mod tests {
         assert!(error.to_string().contains("did not become ready"));
     }
 
-    #[test]
-    fn launchd_install_is_local_only() {
-        validate_install_mode(None).unwrap();
-        let error = validate_install_mode(Some("postgres://managed")).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("only installs the local PowerSync daemon")
-        );
-    }
-
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn install_rejects_unsupported_platform_without_waiting() {
         let dir = tempfile::tempdir().expect("temp dir");
         let config = test_config(dir.path());
 
-        let error = install_with_timeout(&config, None, std::time::Duration::from_millis(20))
+        let error = install_with_timeout(&config, std::time::Duration::from_millis(20))
             .await
             .expect_err("non-macOS install must be rejected immediately");
 
         assert!(error.to_string().contains("only supported on macOS"));
-    }
-
-    #[tokio::test]
-    async fn local_install_readiness_rejects_a_managed_daemon() {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-
-        let dir = tempfile::tempdir().expect("temp dir");
-        let config = test_config(dir.path());
-        let listener = tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config))
-            .expect("bind socket");
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
-            let (reader, mut writer) = stream.into_split();
-            let mut reader = tokio::io::BufReader::new(reader);
-            let mut request = String::new();
-            reader.read_line(&mut request).await.unwrap();
-            let response = serde_json::to_vec(&flicknote_sync::ipc::DaemonResponse::ServerInfo(
-                flicknote_sync::ipc::ServerInfo::managed(),
-            ))
-            .unwrap();
-            writer.write_all(&response).await.unwrap();
-        });
-
-        let error = wait_for_daemon_ready_for_mode(
-            &config,
-            std::time::Duration::from_millis(500),
-            std::time::Duration::from_millis(10),
-            flicknote_sync::ipc::BackendMode::Local,
-        )
-        .await
-        .expect_err("a pre-existing managed daemon is not local install readiness");
-
-        assert!(error.to_string().contains("managed daemon"));
-        server.await.unwrap();
-    }
-
-    #[test]
-    fn managed_daemon_started_during_auth_blocks_local_install() {
-        let error =
-            validate_local_install_endpoint(Some(flicknote_sync::ipc::BackendMode::Managed))
-                .unwrap_err();
-
-        assert!(error.to_string().contains("managed daemon"));
-        validate_local_install_endpoint(Some(flicknote_sync::ipc::BackendMode::Local)).unwrap();
-        validate_local_install_endpoint(None).unwrap();
     }
 
     #[tokio::test]
@@ -457,7 +317,7 @@ mod tests {
             let mut request = String::new();
             reader.read_line(&mut request).await.unwrap();
             let response = serde_json::to_vec(&flicknote_sync::ipc::DaemonResponse::ServerInfo(
-                flicknote_sync::ipc::ServerInfo::local(),
+                flicknote_sync::ipc::ServerInfo::current(),
             ))
             .unwrap();
             writer.write_all(&response).await.unwrap();
@@ -474,11 +334,11 @@ mod tests {
     }
 
     #[test]
-    fn status_line_reports_runtime_version_and_backend() {
-        let line = format_running_status(42, &flicknote_sync::ipc::ServerInfo::managed());
+    fn status_line_reports_runtime_version_and_protocol() {
+        let line = format_running_status(42, &flicknote_sync::ipc::ServerInfo::current());
 
         assert!(line.contains("pid 42"));
         assert!(line.contains(env!("CARGO_PKG_VERSION")));
-        assert!(line.contains("managed"));
+        assert!(line.contains("protocol 2"));
     }
 }

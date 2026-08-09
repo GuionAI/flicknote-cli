@@ -1,6 +1,6 @@
 # flicknote-cli
 
-Daemon-backed note management CLI with local-first sync. The CLI and MCP server use a typed Unix-socket API; the daemon owns SQLite/PowerSync or the configured managed Postgres backend.
+Daemon-backed note management CLI with local-first sync. The CLI and MCP server use a typed Unix-socket API; the daemon owns SQLite and PowerSync.
 
 ## Features
 
@@ -38,9 +38,7 @@ just install
 CI sets `SQLX_OFFLINE=true`. After adding or changing `sqlx::query!`,
 `query_as!`, or `query_scalar!` macros, run `just sqlx-prepare` and commit
 the generated `.sqlx` metadata. The prepare script checks SQLite against a
-local fixture DB and pgwire against the local Supabase Postgres used by
-`flicknote-services` sqlc (`localhost:30432/supabase` by default), then merges
-both metadata sets.
+local fixture database.
 
 Runtime-built `sqlx::query` calls are checked at build time for Rust types, but
 sqlx does not emit offline metadata for them.
@@ -153,9 +151,8 @@ start it as a subprocess:
 }
 ```
 
-The MCP server is available with a local daemon; managed daemons return an
-`unsupported_capability` error before stdio protocol output. It exposes typed
-note, note-source, and project tools. Note content
+The MCP server requires the local daemon. It exposes typed note, note-source,
+and project tools. Note content
 and exact `before`/`after` edits are JSON fields, so callers do not need shell
 heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
 project tools use project names. `note_source` reads stored source data, while
@@ -171,7 +168,6 @@ Environment variables:
 - `FLICKNOTE_SUPABASE_URL`
 - `FLICKNOTE_SUPABASE_KEY`
 - `FLICKNOTE_POWERSYNC_URL`
-- `DATABASE_URL` (daemon-only managed backend selection)
 
 Data directory: `~/.local/share/flicknote/`
 

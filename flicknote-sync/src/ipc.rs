@@ -18,124 +18,24 @@ use tokio::net::UnixStream;
 
 use crate::app::Application;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 const IPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_HEALTH_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_APP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BackendMode {
-    Local,
-    Managed,
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ClientSurface {
-    #[default]
-    Cli,
-    Mcp,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Capability {
-    Data,
-    NoteAdd,
-    Attachment,
-    Editor,
-    Browser,
-    Mcp,
-    Share,
-    LocalSync,
-}
-
-const LOCAL_CAPABILITIES: &[Capability] = &[
-    Capability::Data,
-    Capability::NoteAdd,
-    Capability::Attachment,
-    Capability::Editor,
-    Capability::Browser,
-    Capability::Mcp,
-    Capability::Share,
-    Capability::LocalSync,
-];
-const MANAGED_CAPABILITIES: &[Capability] = &[Capability::Data, Capability::NoteAdd];
-
-impl BackendMode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Managed => "managed",
-        }
-    }
-
-    pub const fn capabilities(self) -> &'static [Capability] {
-        match self {
-            Self::Local => LOCAL_CAPABILITIES,
-            Self::Managed => MANAGED_CAPABILITIES,
-        }
-    }
-
-    pub fn supports(self, capability: Capability) -> bool {
-        self.capabilities().contains(&capability)
-    }
-}
-
-pub fn unsupported_capability(
-    mode: BackendMode,
-    capability: Capability,
-    operation: &str,
-) -> ServiceError {
-    ServiceError::Remote {
-        code: "unsupported_capability".to_string(),
-        message: format!(
-            "{operation} is not available in {} daemon mode",
-            mode.as_str()
-        ),
-        retryable: false,
-        details: Some(serde_json::json!({
-            "operation": operation,
-            "backend": mode,
-            "required_capability": capability,
-        })),
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub protocol: u16,
     pub version: String,
-    pub backend: BackendMode,
-    pub capabilities: Vec<Capability>,
 }
 
 impl ServerInfo {
-    pub fn local() -> Self {
+    pub fn current() -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
             version: env!("CARGO_PKG_VERSION").to_string(),
-            backend: BackendMode::Local,
-            capabilities: BackendMode::Local.capabilities().to_vec(),
         }
-    }
-
-    pub fn managed() -> Self {
-        Self {
-            protocol: PROTOCOL_VERSION,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            backend: BackendMode::Managed,
-            capabilities: BackendMode::Managed.capabilities().to_vec(),
-        }
-    }
-
-    pub fn require(&self, capability: Capability, operation: &str) -> Result<(), ServiceError> {
-        if self.capabilities.contains(&capability) {
-            return Ok(());
-        }
-        Err(unsupported_capability(self.backend, capability, operation))
     }
 }
 
@@ -268,38 +168,6 @@ impl AppRequest {
                 | Self::ProjectGetByName { .. }
                 | Self::ExtractionValues { .. }
         )
-    }
-
-    pub fn required_capability(&self) -> Capability {
-        match self {
-            Self::NoteAdd(_) => Capability::NoteAdd,
-            Self::NoteAddEditable { .. }
-            | Self::NoteLoadEditable { .. }
-            | Self::NoteSaveEditable { .. } => Capability::Editor,
-            Self::NoteUpload { .. } => Capability::Attachment,
-            Self::NoteOpen { .. } => Capability::Browser,
-            Self::NoteShare { .. }
-            | Self::NoteUnshare { .. }
-            | Self::ProjectShare { .. }
-            | Self::ProjectUnshare { .. } => Capability::Share,
-            _ => Capability::Data,
-        }
-    }
-
-    pub fn operation_name(&self) -> &'static str {
-        match self {
-            Self::NoteAdd(_) => "note_add",
-            Self::NoteAddEditable { .. } => "note_add_editable",
-            Self::NoteUpload { .. } => "note_upload",
-            Self::NoteLoadEditable { .. } => "note_load_editable",
-            Self::NoteSaveEditable { .. } => "note_save_editable",
-            Self::NoteOpen { .. } => "note_open",
-            Self::NoteShare { .. } => "note_share",
-            Self::NoteUnshare { .. } => "note_unshare",
-            Self::ProjectShare { .. } => "project_share",
-            Self::ProjectUnshare { .. } => "project_unshare",
-            _ => "data",
-        }
     }
 }
 
@@ -436,8 +304,6 @@ pub enum DaemonRequest {
     },
     App {
         protocol: u16,
-        #[serde(default)]
-        surface: ClientSurface,
         request: Box<AppRequest>,
     },
 }
@@ -611,22 +477,11 @@ pub async fn send_request(
 
 pub struct DaemonClient<'a> {
     config: &'a Config,
-    surface: ClientSurface,
 }
 
 impl<'a> DaemonClient<'a> {
     pub fn new(config: &'a Config) -> Self {
-        Self {
-            config,
-            surface: ClientSurface::Cli,
-        }
-    }
-
-    pub fn for_mcp(config: &'a Config) -> Self {
-        Self {
-            config,
-            surface: ClientSurface::Mcp,
-        }
+        Self { config }
     }
 
     async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
@@ -677,7 +532,6 @@ impl<'a> DaemonClient<'a> {
         match self
             .request(DaemonRequest::App {
                 protocol: PROTOCOL_VERSION,
-                surface: self.surface,
                 request: Box::new(request),
             })
             .await?
@@ -799,22 +653,10 @@ async fn serve_app_stream(
         DaemonRequest::Health { protocol } if protocol == PROTOCOL_VERSION => {
             DaemonResponse::ServerInfo(info.clone())
         }
-        DaemonRequest::App {
-            protocol,
-            surface,
-            request,
-        } if protocol == PROTOCOL_VERSION => {
-            if surface == ClientSurface::Mcp && !info.backend.supports(Capability::Mcp) {
-                DaemonResponse::AppError(WireError::from_service(unsupported_capability(
-                    info.backend,
-                    Capability::Mcp,
-                    "mcp",
-                )))
-            } else {
-                match app.handle(*request).await {
-                    Ok(response) => DaemonResponse::App(Box::new(response)),
-                    Err(error) => DaemonResponse::AppError(error),
-                }
+        DaemonRequest::App { protocol, request } if protocol == PROTOCOL_VERSION => {
+            match app.handle(*request).await {
+                Ok(response) => DaemonResponse::App(Box::new(response)),
+                Err(error) => DaemonResponse::AppError(error),
             }
         }
         DaemonRequest::Health { protocol } | DaemonRequest::App { protocol, .. } => {
@@ -916,6 +758,7 @@ mod tests {
 
     #[test]
     fn versioned_health_and_app_requests_have_stable_contracts() {
+        assert_eq!(PROTOCOL_VERSION, 2);
         let health = DaemonRequest::Health {
             protocol: PROTOCOL_VERSION,
         };
@@ -929,7 +772,6 @@ mod tests {
 
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,
-            surface: ClientSurface::Cli,
             request: Box::new(AppRequest::NoteList(NoteListInput {
                 note_type: None,
                 project: None,
@@ -940,29 +782,22 @@ mod tests {
         let value = serde_json::to_value(request).unwrap();
         assert_eq!(value["type"], "app");
         assert_eq!(value["payload"]["protocol"], PROTOCOL_VERSION);
-        assert_eq!(value["payload"]["surface"], "cli");
+        assert!(value["payload"].get("surface").is_none());
         assert_eq!(value["payload"]["request"]["type"], "note_list");
     }
 
     #[test]
-    fn server_info_reports_backend_mode_and_capabilities() {
-        let info = ServerInfo::local();
+    fn server_info_only_reports_protocol_and_version() {
+        let info = ServerInfo::current();
         assert_eq!(info.protocol, PROTOCOL_VERSION);
         assert!(!info.version.is_empty());
-        assert_eq!(info.backend, BackendMode::Local);
-        assert!(info.capabilities.contains(&Capability::NoteAdd));
-        assert!(info.capabilities.contains(&Capability::Share));
-        assert!(
-            serde_json::to_value(&info).unwrap()["capabilities"]
-                .as_array()
-                .unwrap()
-                .contains(&json!("mcp"))
+        assert_eq!(
+            serde_json::to_value(&info).unwrap(),
+            json!({
+                "protocol": PROTOCOL_VERSION,
+                "version": env!("CARGO_PKG_VERSION"),
+            })
         );
-
-        let error = ServerInfo::managed()
-            .require(Capability::Mcp, "mcp")
-            .unwrap_err();
-        assert_eq!(error.code(), "unsupported_capability");
     }
 
     #[test]
@@ -1021,7 +856,6 @@ mod tests {
     fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,
-            surface: ClientSurface::Cli,
             request: Box::new(AppRequest::NoteArchive {
                 id: "note-1".to_string(),
             }),
@@ -1085,6 +919,26 @@ mod tests {
         )
         .await;
         let error = DaemonClient::new(&config).health().await.unwrap_err();
+        assert_eq!(error.code(), "daemon_protocol_mismatch");
+        assert!(error.to_string().contains("sync stop"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn protocol_v2_client_rejects_protocol_v1_server_info() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::ServerInfo(ServerInfo {
+                protocol: 1,
+                version: "legacy".to_string(),
+            }),
+        )
+        .await;
+
+        let error = DaemonClient::new(&config).health().await.unwrap_err();
+
         assert_eq!(error.code(), "daemon_protocol_mismatch");
         assert!(error.to_string().contains("sync stop"));
         server.await.unwrap();
@@ -1217,7 +1071,8 @@ mod tests {
     async fn unexpected_outer_responses_are_classified_by_mutation_safety() {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
-        let server = serve_response(&config, DaemonResponse::ServerInfo(ServerInfo::local())).await;
+        let server =
+            serve_response(&config, DaemonResponse::ServerInfo(ServerInfo::current())).await;
 
         let error = DaemonClient::new(&config)
             .app(AppRequest::NoteArchive {

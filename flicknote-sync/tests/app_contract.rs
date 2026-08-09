@@ -4,14 +4,15 @@ use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
-use flicknote_core::services::dto::{
-    NoteAddInput, NoteListInput, Patch, ProjectAddInput, ProjectModifyInput,
-};
+use flicknote_core::services::dto::{NoteListInput, Patch, ProjectAddInput, ProjectModifyInput};
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
+use flicknote_core::services::ports::{
+    CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+};
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{
-    AppRequest, AppResponse, BackendMode, DaemonClient, ServerInfo, serve_app_once, socket_path,
+    AppRequest, AppResponse, DaemonClient, DaemonRequest, DaemonResponse, ServerInfo,
+    serve_app_once, socket_path,
 };
 
 fn test_config(directory: &std::path::Path) -> Config {
@@ -39,34 +40,6 @@ fn application_is_safe_to_share_between_daemon_request_tasks() {
 }
 
 #[tokio::test]
-async fn mcp_surface_is_enforced_on_every_daemon_request() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let backend = Arc::new(SqliteBackend {
-        db: Database::open_local(&config).await.unwrap(),
-        user_id: "user-1".to_string(),
-    });
-    let app = Arc::new(Application::new(backend, BackendMode::Managed));
-    let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::managed()));
-
-    let error = DaemonClient::for_mcp(&config)
-        .call::<Vec<flicknote_core::services::dto::NoteSummary>>(AppRequest::NoteList(
-            NoteListInput {
-                note_type: None,
-                project: None,
-                archived: false,
-                limit: 20,
-            },
-        ))
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.code(), "unsupported_capability");
-    server.await.unwrap().unwrap();
-}
-
-#[tokio::test]
 async fn application_signals_every_may_write_request_even_when_it_fails() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
@@ -75,7 +48,7 @@ async fn application_signals_every_may_write_request_even_when_it_fails() {
         user_id: "user-1".to_string(),
     });
     let (signal, mut receiver) = tokio::sync::mpsc::channel(4);
-    let app = Application::new(backend, BackendMode::Local).with_write_signal(signal);
+    let app = test_app(backend).with_write_signal(signal);
 
     app.handle(AppRequest::NoteList(NoteListInput {
         note_type: None,
@@ -130,6 +103,27 @@ impl NoteCreator for DetachedCreator {
     }
 }
 
+struct TestShareGateway;
+
+#[async_trait]
+impl ShareGateway for TestShareGateway {
+    async fn share(&self, _resource: ShareResource, id: &str) -> Result<String, ServiceError> {
+        Ok(format!("https://share.example/{id}"))
+    }
+
+    async fn unshare(&self, _resource: ShareResource, _id: &str) -> Result<(), ServiceError> {
+        Ok(())
+    }
+}
+
+fn app_with_creator(db: Arc<dyn NoteDb>, creator: Arc<dyn NoteCreator>) -> Application {
+    Application::new(db, creator, Arc::new(TestShareGateway))
+}
+
+fn test_app(db: Arc<dyn NoteDb>) -> Application {
+    app_with_creator(db, Arc::new(DetachedCreator))
+}
+
 #[tokio::test]
 async fn app_preserves_created_identity_when_editor_or_attachment_summary_fails() {
     let directory = tempfile::tempdir().unwrap();
@@ -140,7 +134,7 @@ async fn app_preserves_created_identity_when_editor_or_attachment_summary_fails(
         db: Database::open_local(&config).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Application::new(backend, BackendMode::Local).with_creator(Arc::new(DetachedCreator));
+    let app = app_with_creator(backend, Arc::new(DetachedCreator));
 
     for request in [
         AppRequest::NoteAddEditable {
@@ -184,7 +178,7 @@ async fn app_routes_note_list_and_append_through_services() {
         })
         .await
         .unwrap();
-    let app = Application::new(backend.clone(), BackendMode::Local);
+    let app = test_app(backend.clone());
 
     let listed = app
         .handle(AppRequest::NoteList(NoteListInput {
@@ -238,7 +232,7 @@ async fn app_owns_project_and_catalog_domain_operations() {
         db: Database::open_local(&config).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Application::new(backend, BackendMode::Local);
+    let app = test_app(backend);
 
     let project = app
         .handle(AppRequest::ProjectAdd(ProjectAddInput {
@@ -274,14 +268,14 @@ async fn versioned_socket_routes_client_requests_through_application() {
         db: Database::open_local(&config).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Arc::new(Application::new(backend, BackendMode::Local));
+    let app = Arc::new(test_app(backend));
     let listener =
         tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config)).unwrap();
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::local()));
+    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
 
     let client = DaemonClient::new(&config);
     let info = client.health().await.unwrap();
-    assert_eq!(info.backend, BackendMode::Local);
+    assert_eq!(info.protocol, flicknote_sync::ipc::PROTOCOL_VERSION);
     server.await.unwrap().unwrap();
 
     std::fs::remove_file(flicknote_sync::ipc::socket_path(&config)).unwrap();
@@ -293,8 +287,8 @@ async fn versioned_socket_routes_client_requests_through_application() {
         db: Database::open_local(&config2).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Arc::new(Application::new(backend, BackendMode::Local));
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::local()));
+    let app = Arc::new(test_app(backend));
+    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
     let response = client
         .app(AppRequest::NoteList(NoteListInput {
             note_type: None,
@@ -309,77 +303,44 @@ async fn versioned_socket_routes_client_requests_through_application() {
 }
 
 #[tokio::test]
-async fn managed_app_adds_note_and_topics_through_the_backend() {
+async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let backend = Arc::new(SqliteBackend {
         db: Database::open_local(&config).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Application::new(backend.clone(), BackendMode::Managed);
+    let (signal, mut receiver) = tokio::sync::mpsc::channel(1);
+    let app = Arc::new(test_app(backend).with_write_signal(signal));
+    let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
 
-    let response = app
-        .handle(AppRequest::NoteAdd(NoteAddInput {
-            content: "# Title\n\nBody".to_string(),
-            project: None,
-            interpret_as_url: false,
-            topics: vec!["rust".to_string()],
-            created_at: Some("2026-01-02T03:04:05Z".to_string()),
-        }))
+    let mut stream = tokio::net::UnixStream::connect(socket_path(&config))
         .await
         .unwrap();
-    let AppResponse::NoteSummary(note) = response else {
-        panic!("unexpected add response")
+    let request = DaemonRequest::App {
+        protocol: 1,
+        request: Box::new(AppRequest::ProjectArchive {
+            id: "project-1".to_string(),
+        }),
     };
-    assert_eq!(note.title.as_deref(), Some("Title"));
-    assert_eq!(note.created_at.as_deref(), Some("2026-01-02T03:04:05Z"));
-    assert_eq!(
-        backend
-            .list_note_topics(&[note.uuid.as_str()])
-            .await
-            .unwrap()
-            .get(&note.uuid)
-            .cloned()
-            .unwrap_or_default(),
-        vec!["rust".to_string()]
-    );
-}
+    stream
+        .write_all(&serde_json::to_vec(&request).unwrap())
+        .await
+        .unwrap();
+    stream.shutdown().await.unwrap();
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).await.unwrap();
+    let response: DaemonResponse = serde_json::from_slice(&response).unwrap();
 
-#[tokio::test]
-async fn managed_app_rejects_local_only_workflows() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let upload = directory.path().join("note.md");
-    std::fs::write(&upload, "# imported").unwrap();
-    let backend = Arc::new(SqliteBackend {
-        db: Database::open_local(&config).await.unwrap(),
-        user_id: "user-1".to_string(),
-    });
-    let app = Application::new(backend, BackendMode::Managed);
-
-    for request in [
-        AppRequest::NoteAddEditable {
-            document: "# editor-created".to_string(),
-            project: None,
-        },
-        AppRequest::NoteUpload {
-            path: upload.to_string_lossy().into_owned(),
-            project: None,
-            created_at: None,
-        },
-        AppRequest::NoteLoadEditable {
-            id: "missing".to_string(),
-        },
-        AppRequest::NoteOpen {
-            id: "missing".to_string(),
-        },
-        AppRequest::NoteShare {
-            id: "missing".to_string(),
-        },
-    ] {
-        let error = app.handle(request).await.unwrap_err();
-        assert_eq!(error.code, "unsupported_capability");
-    }
+    let DaemonResponse::AppError(error) = response else {
+        panic!("expected protocol mismatch")
+    };
+    assert_eq!(error.code, "daemon_protocol_mismatch");
+    assert!(receiver.try_recv().is_err());
+    server.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -396,7 +357,7 @@ async fn local_app_owns_attachment_normalization_and_creator_call() {
         db: backend.clone(),
         request: std::sync::Mutex::new(None),
     });
-    let app = Application::new(backend, BackendMode::Local).with_creator(creator.clone());
+    let app = app_with_creator(backend, creator.clone());
 
     let response = app
         .handle(AppRequest::NoteUpload {
@@ -426,7 +387,7 @@ async fn app_owns_editable_document_parsing_and_persistence() {
         db: backend.clone(),
         request: std::sync::Mutex::new(None),
     });
-    let app = Application::new(backend.clone(), BackendMode::Local).with_creator(creator);
+    let app = app_with_creator(backend.clone(), creator);
 
     let created = app
         .handle(AppRequest::NoteAddEditable {

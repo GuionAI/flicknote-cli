@@ -8,12 +8,8 @@ pub(crate) async fn run(config: &Config) -> Result<(), CliError> {
         return Ok(());
     }
 
-    let running = super::sync::running_server_info(config).await?;
-    let manages_local_daemon = manages_local_daemon_for(running.as_ref().map(|info| info.backend));
-    if manages_local_daemon {
-        super::daemon::stop(config)?;
-        super::daemon::uninstall()?;
-    }
+    super::daemon::stop(config)?;
+    super::daemon::uninstall()?;
 
     // 3. Delete local DB files — collect errors so session is always cleared
     let db_base = config.paths.db_file.with_extension("");
@@ -37,31 +33,6 @@ pub(crate) async fn run(config: &Config) -> Result<(), CliError> {
         )));
     }
 
-    if manages_local_daemon {
-        println!("Logged out (session, daemon, and local data cleared)");
-    } else {
-        println!("Logged out (local session and data cleared; managed daemon left running)");
-    }
+    println!("Logged out (session, daemon, and local data cleared)");
     Ok(())
-}
-
-const fn manages_local_daemon_for(
-    running_backend: Option<flicknote_sync::ipc::BackendMode>,
-) -> bool {
-    !matches!(
-        running_backend,
-        Some(flicknote_sync::ipc::BackendMode::Managed)
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use flicknote_sync::ipc::BackendMode;
-
-    #[test]
-    fn logout_never_manages_a_live_managed_daemon() {
-        assert!(!super::manages_local_daemon_for(Some(BackendMode::Managed)));
-        assert!(super::manages_local_daemon_for(Some(BackendMode::Local)));
-        assert!(super::manages_local_daemon_for(None));
-    }
 }

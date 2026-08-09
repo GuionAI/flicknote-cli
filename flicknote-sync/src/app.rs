@@ -4,41 +4,33 @@ use flicknote_core::backend::NoteDb;
 use flicknote_core::services::dto::NoteAddInput;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
-use flicknote_core::services::ports::{CreateNote, DirectNoteCreator, NoteCreator, ShareGateway};
+use flicknote_core::services::ports::{CreateNote, NoteCreator, ShareGateway};
 use flicknote_core::services::project::ProjectService;
 use flicknote_core::services::upload::{self, UploadKind};
 
-use crate::ipc::{AppRequest, AppResponse, BackendMode, WireError};
+use crate::ipc::{AppRequest, AppResponse, WireError};
 
 pub struct Application {
     db: Arc<dyn NoteDb>,
-    mode: BackendMode,
-    creator: Option<Arc<dyn NoteCreator>>,
-    share_gateway: Option<Arc<dyn ShareGateway>>,
+    creator: Arc<dyn NoteCreator>,
+    share_gateway: Arc<dyn ShareGateway>,
     web_url: Option<String>,
     write_signal: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl Application {
-    pub fn new(db: Arc<dyn NoteDb>, mode: BackendMode) -> Self {
+    pub fn new(
+        db: Arc<dyn NoteDb>,
+        creator: Arc<dyn NoteCreator>,
+        share_gateway: Arc<dyn ShareGateway>,
+    ) -> Self {
         Self {
             db,
-            mode,
-            creator: None,
-            share_gateway: None,
+            creator,
+            share_gateway,
             web_url: None,
             write_signal: None,
         }
-    }
-
-    pub fn with_creator(mut self, creator: Arc<dyn NoteCreator>) -> Self {
-        self.creator = Some(creator);
-        self
-    }
-
-    pub fn with_share_gateway(mut self, gateway: Arc<dyn ShareGateway>) -> Self {
-        self.share_gateway = Some(gateway);
-        self
     }
 
     pub fn with_web_url(mut self, web_url: Option<String>) -> Self {
@@ -51,19 +43,7 @@ impl Application {
         self
     }
 
-    pub fn mode(&self) -> BackendMode {
-        self.mode
-    }
-
     pub async fn handle(&self, request: AppRequest) -> Result<AppResponse, WireError> {
-        let required = request.required_capability();
-        if !self.mode.supports(required) {
-            return Err(Self::unsupported(
-                request.operation_name(),
-                required,
-                self.mode,
-            ));
-        }
         let may_write = request.may_write();
         let result = self.handle_inner(request).await;
         if may_write
@@ -81,27 +61,11 @@ impl Application {
         let notes = NoteService::new(self.db.as_ref());
         let projects = ProjectService::new(self.db.as_ref());
         match request {
-            AppRequest::NoteAdd(input) => {
-                if let Some(creator) = self.creator.as_deref() {
-                    return notes
-                        .add(creator, input)
-                        .await
-                        .map(AppResponse::NoteSummary)
-                        .map_err(WireError::from_service);
-                }
-                if self.mode == BackendMode::Managed {
-                    return notes
-                        .add(&DirectNoteCreator::new(self.db.as_ref()), input)
-                        .await
-                        .map(AppResponse::NoteSummary)
-                        .map_err(WireError::from_service);
-                }
-                Err(Self::unsupported(
-                    "note_add",
-                    crate::ipc::Capability::NoteAdd,
-                    self.mode,
-                ))
-            }
+            AppRequest::NoteAdd(input) => notes
+                .add(self.creator.as_ref(), input)
+                .await
+                .map(AppResponse::NoteSummary)
+                .map_err(WireError::from_service),
             AppRequest::NoteAddEditable { document, project } => {
                 let parsed =
                     flicknote_core::services::editable_document::parse_editable_note(&document)
@@ -132,20 +96,11 @@ impl Application {
                     topics: parsed.topics,
                     attachment_path: None,
                 };
-                let created = if let Some(creator) = self.creator.as_deref() {
-                    creator.create(request).await
-                } else if self.mode == BackendMode::Managed {
-                    DirectNoteCreator::new(self.db.as_ref())
-                        .create(request)
-                        .await
-                } else {
-                    return Err(Self::unsupported(
-                        "note_add_editable",
-                        crate::ipc::Capability::Editor,
-                        self.mode,
-                    ));
-                }
-                .map_err(WireError::from_service)?;
+                let created = self
+                    .creator
+                    .create(request)
+                    .await
+                    .map_err(WireError::from_service)?;
                 notes
                     .get(&created.inserted.uuid, false)
                     .await
@@ -176,33 +131,16 @@ impl Application {
                             topics: Vec::new(),
                             created_at,
                         };
-                        if let Some(creator) = self.creator.as_deref() {
-                            notes.add(creator, input).await
-                        } else if self.mode == BackendMode::Managed {
-                            notes
-                                .add(&DirectNoteCreator::new(self.db.as_ref()), input)
-                                .await
-                        } else {
-                            return Err(Self::unsupported(
-                                "note_upload",
-                                crate::ipc::Capability::Attachment,
-                                self.mode,
-                            ));
-                        }
-                        .map(AppResponse::NoteSummary)
-                        .map_err(WireError::from_service)
+                        notes
+                            .add(self.creator.as_ref(), input)
+                            .await
+                            .map(AppResponse::NoteSummary)
+                            .map_err(WireError::from_service)
                     }
                     UploadKind::Attachment {
                         note_type,
                         metadata,
                     } => {
-                        let creator = self.creator.as_deref().ok_or_else(|| {
-                            Self::unsupported(
-                                "attachment",
-                                crate::ipc::Capability::Attachment,
-                                self.mode,
-                            )
-                        })?;
                         let project_id = match project.as_deref() {
                             Some(name) => Some(
                                 self.db
@@ -217,7 +155,8 @@ impl Application {
                             ),
                             None => None,
                         };
-                        let created = creator
+                        let created = self
+                            .creator
                             .create(CreateNote {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 note_type: note_type.to_string(),
@@ -366,26 +305,16 @@ impl Application {
                 .await
                 .map(AppResponse::NoteArchive)
                 .map_err(WireError::from_service),
-            AppRequest::NoteShare { id } => {
-                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
-                    Self::unsupported("note_share", crate::ipc::Capability::Share, self.mode)
-                })?;
-                notes
-                    .share(gateway, &id)
-                    .await
-                    .map(AppResponse::Share)
-                    .map_err(WireError::from_service)
-            }
-            AppRequest::NoteUnshare { id } => {
-                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
-                    Self::unsupported("note_unshare", crate::ipc::Capability::Share, self.mode)
-                })?;
-                notes
-                    .unshare(gateway, &id)
-                    .await
-                    .map(AppResponse::Unshare)
-                    .map_err(WireError::from_service)
-            }
+            AppRequest::NoteShare { id } => notes
+                .share(self.share_gateway.as_ref(), &id)
+                .await
+                .map(AppResponse::Share)
+                .map_err(WireError::from_service),
+            AppRequest::NoteUnshare { id } => notes
+                .unshare(self.share_gateway.as_ref(), &id)
+                .await
+                .map(AppResponse::Unshare)
+                .map_err(WireError::from_service),
             AppRequest::NoteOpen { id } => {
                 let web_url = self.web_url.as_deref().ok_or_else(|| {
                     WireError::from_service(ServiceError::ConfigMissing("webUrl".to_string()))
@@ -448,26 +377,16 @@ impl Application {
                 .await
                 .map(AppResponse::Project)
                 .map_err(WireError::from_service),
-            AppRequest::ProjectShare { id } => {
-                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
-                    Self::unsupported("project_share", crate::ipc::Capability::Share, self.mode)
-                })?;
-                projects
-                    .share(gateway, &id)
-                    .await
-                    .map(AppResponse::Share)
-                    .map_err(WireError::from_service)
-            }
-            AppRequest::ProjectUnshare { id } => {
-                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
-                    Self::unsupported("project_unshare", crate::ipc::Capability::Share, self.mode)
-                })?;
-                projects
-                    .unshare(gateway, &id)
-                    .await
-                    .map(AppResponse::Unshare)
-                    .map_err(WireError::from_service)
-            }
+            AppRequest::ProjectShare { id } => projects
+                .share(self.share_gateway.as_ref(), &id)
+                .await
+                .map(AppResponse::Share)
+                .map_err(WireError::from_service),
+            AppRequest::ProjectUnshare { id } => projects
+                .unshare(self.share_gateway.as_ref(), &id)
+                .await
+                .map(AppResponse::Unshare)
+                .map_err(WireError::from_service),
             AppRequest::ExtractionValues { keys, archived } => {
                 let refs = keys.iter().map(String::as_str).collect::<Vec<_>>();
                 self.db
@@ -477,16 +396,6 @@ impl Application {
                     .map_err(Self::db_error)
             }
         }
-    }
-
-    fn unsupported(
-        operation: &str,
-        capability: crate::ipc::Capability,
-        mode: BackendMode,
-    ) -> WireError {
-        WireError::from_service(crate::ipc::unsupported_capability(
-            mode, capability, operation,
-        ))
     }
 
     fn db_error(error: flicknote_core::error::CliError) -> WireError {

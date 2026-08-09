@@ -75,7 +75,7 @@ impl FlickNoteMcp {
     }
 
     async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
-        DaemonClient::for_mcp(&self.config).call(request).await
+        DaemonClient::new(&self.config).call(request).await
     }
 
     fn effective_project(project: Option<String>) -> Option<String> {

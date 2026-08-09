@@ -11,7 +11,7 @@ license = "MIT"
 dist = false
 
 [dependencies]
-flicknote-core = { path = "../flicknote-core", features = ["storage-pgwire"] }
+flicknote-core = { path = "../flicknote-core" }
 flicknote-auth = { path = "../flicknote-auth" }
 powersync = { workspace = true }
 rusqlite = { workspace = true }

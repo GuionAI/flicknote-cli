@@ -40,16 +40,9 @@ After changing any `sqlx::query!`, `query_as!`, or `query_scalar!` macro, run
 `just sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
 files.
 
-For pgwire metadata, `just sqlx-prepare` must run against a local Postgres
-schema that already has the matching FlickNote backend migrations applied. If
-prepare reports a missing column or relation, update the local prepare DB from
-the backend migrations first, then rerun prepare. Keep
-`scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected columns.
-
-When the CLI depends on a fresh backend schema change, confirm the local prepare
-database has that backend migration applied before trusting generated metadata.
-For short-id work, this means the local database must include the backend
-`add_user_short_ids` migration before regenerating pgwire metadata.
+`just sqlx-prepare` validates SQLite macros against the local fixture schema.
+Keep `scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected
+columns.
 
 ## Git Hooks (lefthook)
 
@@ -73,8 +66,7 @@ lefthook run pre-push    # run pre-push hooks
 - **tokio** — async runtime
 - **reqwest** — HTTP client (auth + PostgREST backend)
 - **serde/serde_json** — serialization
-- **postgres** — sync Postgres client for pgwire backend
-- **sea-query** — SQL query builder (1.0.0-rc.32 + sea-query-postgres 0.6.0-rc.3 for pgwire)
+- **sqlx** — typed local SQLite access pending migration to the shared PowerSync pool
 
 ## Project Conventions
 
