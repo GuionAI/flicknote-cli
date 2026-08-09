@@ -229,7 +229,23 @@ async fn run_upload(
         let mut fatal_msg: Option<String> = None;
         let mut transient_msg: Option<String> = None;
 
-        for crud in std::mem::take(&mut tx.crud) {
+        for mut crud in std::mem::take(&mut tx.crud) {
+            // The backend retired the keyterm domain. Old offline databases may still
+            // have queued writes for the removed table or the removed project column.
+            // Consume those retired fields locally so they cannot block the FIFO or
+            // cause an otherwise valid project mutation to be discarded by PostgREST.
+            if crud.table == "keyterms" {
+                log::info!(
+                    "Discarding queued CRUD for retired keyterms row {}",
+                    crud.id
+                );
+                continue;
+            }
+            if crud.table == "projects"
+                && let Some(data) = crud.data.as_mut()
+            {
+                data.remove("keyterm_id");
+            }
             if parse_flicknote_crud_marker(crud.metadata.as_deref())?
                 == Some(FlickNoteCrudMarker::RemoteCommittedInsert)
             {
@@ -2316,35 +2332,57 @@ mod tests {
                     ],
                 )
                 .unwrap();
-            writer.execute("DELETE FROM ps_crud", []).unwrap();
         }
 
         let upgraded_db = test_powersync_db_at(&path, app_schema());
-        let writer = upgraded_db.writer().await.unwrap();
-        let project_name: String = writer
-            .query_row(
-                "SELECT name FROM projects WHERE id = ?",
-                params!["preserved-project"],
-                |row| row.get(0),
+        {
+            let writer = upgraded_db.writer().await.unwrap();
+            let project_name: String = writer
+                .query_row(
+                    "SELECT name FROM projects WHERE id = ?",
+                    params!["preserved-project"],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(project_name, "Preserved");
+            let retired_view_count: i64 = writer
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'keyterms'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(retired_view_count, 0);
+            let retired_column_count: i64 = writer
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'keyterm_id'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(retired_column_count, 0);
+        }
+
+        let (server_url, server) = spawn_capture_server(1);
+        assert!(
+            run_upload(
+                &upgraded_db,
+                &reqwest::Client::new(),
+                "token",
+                &server_url,
+                "anon-key",
             )
-            .unwrap();
-        assert_eq!(project_name, "Preserved");
-        let retired_view_count: i64 = writer
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'keyterms'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(retired_view_count, 0);
-        let retired_column_count: i64 = writer
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'keyterm_id'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(retired_column_count, 0);
+            .await
+            .unwrap()
+        );
+        assert!(upgraded_db.next_crud_transaction().await.unwrap().is_none());
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with("POST /rest/v1/projects "));
+        let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
+        let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+        assert_eq!(payload["name"], "Preserved");
+        assert!(payload.get("keyterm_id").is_none());
     }
 
     #[tokio::test]
@@ -2585,6 +2623,56 @@ mod tests {
                     body
                 );
                 stream.write_all(response.as_bytes()).unwrap();
+            }
+            requests
+        });
+        (format!("http://{address}"), handle)
+    }
+
+    fn read_complete_http_request(stream: &mut std::net::TcpStream) -> String {
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let mut request = Vec::new();
+        loop {
+            let mut buffer = [0_u8; 4096];
+            let count = stream.read(&mut buffer).unwrap();
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..count]);
+            let Some(headers_end) = request.windows(4).position(|part| part == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&request[..headers_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap_or(0);
+            if request.len() >= headers_end + 4 + content_length {
+                break;
+            }
+        }
+        String::from_utf8(request).unwrap()
+    }
+
+    fn spawn_capture_server(expected_requests: usize) -> (String, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..expected_requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                requests.push(read_complete_http_request(&mut stream));
+                stream
+                    .write_all(
+                        b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
             }
             requests
         });

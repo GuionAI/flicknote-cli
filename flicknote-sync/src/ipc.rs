@@ -673,6 +673,7 @@ impl<'a> DaemonClient<'a> {
     }
 
     pub async fn app(&self, request: AppRequest) -> Result<AppResponse, ServiceError> {
+        let may_write = request.may_write();
         match self
             .request(DaemonRequest::App {
                 protocol: PROTOCOL_VERSION,
@@ -683,6 +684,10 @@ impl<'a> DaemonClient<'a> {
         {
             DaemonResponse::App(response) => Ok(*response),
             DaemonResponse::AppError(error) => Err(Self::remote_error(error)),
+            _ if may_write => Err(Self::outcome_unknown(
+                "The daemon returned an unexpected envelope after a mutating request; the operation outcome is unknown."
+                    .to_string(),
+            )),
             _ => Err(Self::protocol_mismatch()),
         }
     }
@@ -1205,6 +1210,24 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), "daemon_request_outcome_unknown");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unexpected_outer_responses_are_classified_by_mutation_safety() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(&config, DaemonResponse::ServerInfo(ServerInfo::local())).await;
+
+        let error = DaemonClient::new(&config)
+            .app(AppRequest::NoteArchive {
+                id: "note-1".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "daemon_request_outcome_unknown");
+        assert!(!error.retryable());
         server.await.unwrap();
     }
 

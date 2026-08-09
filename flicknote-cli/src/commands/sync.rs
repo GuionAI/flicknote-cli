@@ -270,6 +270,11 @@ pub(super) async fn install_local_daemon(
     #[cfg(target_os = "macos")]
     {
         validate_launchd_platform()?;
+        // This probe must sit immediately before the destructive stop. Login may
+        // spend minutes in interactive authentication, and another shell may have
+        // started a managed daemon since its initial lifecycle decision.
+        let running = running_server_info(config).await?;
+        validate_local_install_endpoint(running.as_ref().map(|info| info.backend))?;
         // Prove that the shared endpoint is no longer owned by an old launchd or
         // standalone daemon before starting the new local LaunchAgent.
         super::daemon::stop(config)?;
@@ -283,6 +288,19 @@ pub(super) async fn install_local_daemon(
         )
         .await
     }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn validate_local_install_endpoint(
+    running_backend: Option<flicknote_sync::ipc::BackendMode>,
+) -> Result<(), CliError> {
+    if running_backend == Some(flicknote_sync::ipc::BackendMode::Managed) {
+        return Err(CliError::Other(
+            "A managed daemon is running. Stop it explicitly before installing the local PowerSync daemon."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_install_mode(database_url: Option<&str>) -> Result<(), CliError> {
@@ -411,6 +429,17 @@ mod tests {
 
         assert!(error.to_string().contains("managed daemon"));
         server.await.unwrap();
+    }
+
+    #[test]
+    fn managed_daemon_started_during_auth_blocks_local_install() {
+        let error =
+            validate_local_install_endpoint(Some(flicknote_sync::ipc::BackendMode::Managed))
+                .unwrap_err();
+
+        assert!(error.to_string().contains("managed daemon"));
+        validate_local_install_endpoint(Some(flicknote_sync::ipc::BackendMode::Local)).unwrap();
+        validate_local_install_endpoint(None).unwrap();
     }
 
     #[tokio::test]

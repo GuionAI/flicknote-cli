@@ -90,6 +90,9 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
 
     if manage_local_daemon {
         // The macOS login flow owns the per-user LaunchAgent lifecycle.
+        // install_local_daemon re-checks the live backend immediately before stop,
+        // because authentication may have left enough time for another shell to
+        // start a managed daemon.
         super::sync::install_local_daemon(config, std::time::Duration::from_secs(10)).await?;
         println!("Sync daemon installed and started");
     }
