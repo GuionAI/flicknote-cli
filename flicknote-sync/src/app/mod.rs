@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use flicknote_core::backend::NoteDb;
-use flicknote_core::services::dto::NoteAddInput;
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
-use flicknote_core::services::ports::{CreateNote, NoteCreator, ShareGateway};
-use flicknote_core::services::project::ProjectService;
-use flicknote_core::services::upload::{self, UploadKind};
+use flicknote_core::services::ports::{NoteCreator, ShareGateway};
 
-use crate::ipc::{AppRequest, AppResponse, WireError};
+use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
+
+mod note;
+mod project;
 
 pub struct Application {
     db: Arc<dyn NoteDb>,
@@ -58,344 +57,25 @@ impl Application {
     }
 
     async fn handle_inner(&self, request: AppRequest) -> Result<AppResponse, WireError> {
-        let notes = NoteService::new(self.db.as_ref());
-        let projects = ProjectService::new(self.db.as_ref());
-        match request {
-            AppRequest::NoteAdd(input) => notes
-                .add(self.creator.as_ref(), input)
-                .await
-                .map(AppResponse::NoteSummary)
-                .map_err(WireError::from_service),
-            AppRequest::NoteAddEditable { document, project } => {
-                let parsed =
-                    flicknote_core::services::editable_document::parse_editable_note(&document)
-                        .map_err(Self::db_error)?;
-                let project_id = match project.as_deref() {
-                    Some(name) => Some(
-                        self.db
-                            .find_project_by_name(name)
-                            .await
-                            .map_err(Self::db_error)?
-                            .ok_or_else(|| {
-                                WireError::from_service(ServiceError::ProjectNotFound(
-                                    name.to_string(),
-                                ))
-                            })?,
-                    ),
-                    None => None,
-                };
-                let request = CreateNote {
-                    id: uuid::Uuid::new_v4().to_string(),
-                    note_type: "normal".to_string(),
-                    status: "ai_queued".to_string(),
-                    title: Some(parsed.title),
-                    content: Some(parsed.stored_content),
-                    metadata: None,
-                    project_id,
-                    now: chrono::Utc::now().to_rfc3339(),
-                    topics: parsed.topics,
-                    attachment_path: None,
-                };
-                let created = self
-                    .creator
-                    .create(request)
-                    .await
-                    .map_err(WireError::from_service)?;
-                notes
-                    .get(&created.inserted.uuid, false)
-                    .await
-                    .map(|detail| AppResponse::NoteSummary(detail.note))
-                    .map_err(|error| {
-                        WireError::from_service(confirmed_create_followup_error(&created, &error))
-                    })
-            }
-            AppRequest::NoteUpload {
-                path,
-                project,
-                created_at,
-            } => {
-                let path = std::path::PathBuf::from(path);
-                match upload::classify(&path).map_err(Self::db_error)? {
-                    UploadKind::Text => {
-                        let content = std::fs::read_to_string(&path)
-                            .map_err(|error| WireError::from_service(ServiceError::Io(error)))?;
-                        if content.trim().is_empty() {
-                            return Err(WireError::from_service(ServiceError::InvalidArgument(
-                                "content must not be empty".to_string(),
-                            )));
-                        }
-                        let input = NoteAddInput {
-                            content: content.trim_end().to_string(),
-                            project,
-                            interpret_as_url: false,
-                            topics: Vec::new(),
-                            created_at,
-                        };
-                        notes
-                            .add(self.creator.as_ref(), input)
-                            .await
-                            .map(AppResponse::NoteSummary)
-                            .map_err(WireError::from_service)
-                    }
-                    UploadKind::Attachment {
-                        note_type,
-                        metadata,
-                    } => {
-                        let project_id = match project.as_deref() {
-                            Some(name) => Some(
-                                self.db
-                                    .find_project_by_name(name)
-                                    .await
-                                    .map_err(Self::db_error)?
-                                    .ok_or_else(|| {
-                                        WireError::from_service(ServiceError::ProjectNotFound(
-                                            name.to_string(),
-                                        ))
-                                    })?,
-                            ),
-                            None => None,
-                        };
-                        let created = self
-                            .creator
-                            .create(CreateNote {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                note_type: note_type.to_string(),
-                                status: "source_queued".to_string(),
-                                title: None,
-                                content: None,
-                                metadata: Some(metadata),
-                                project_id,
-                                now: created_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-                                topics: Vec::new(),
-                                attachment_path: Some(path.to_string_lossy().into_owned()),
-                            })
-                            .await
-                            .map_err(WireError::from_service)?;
-                        notes
-                            .get(&created.inserted.uuid, false)
-                            .await
-                            .map(|detail| AppResponse::NoteSummary(detail.note))
-                            .map_err(|error| {
-                                WireError::from_service(confirmed_create_followup_error(
-                                    &created, &error,
-                                ))
-                            })
-                    }
-                }
-            }
-            AppRequest::NoteList(input) => notes
-                .list(input)
-                .await
-                .map(AppResponse::NoteSummaries)
-                .map_err(WireError::from_service),
-            AppRequest::NoteAppend { id, content } => notes
-                .append(&id, &content)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteSaveEditable { id, document } => {
-                let id = self.db.resolve_note_id(&id).await.map_err(Self::db_error)?;
-                flicknote_core::services::editable_document::save_editable_note(
-                    self.db.as_ref(),
-                    &id,
-                    &document,
-                )
-                .await
-                .map(AppResponse::EditableSave)
-                .map_err(Self::db_error)
-            }
-            AppRequest::NoteFind(input) => notes
-                .find(input)
-                .await
-                .map(AppResponse::NoteSummaries)
-                .map_err(WireError::from_service),
-            AppRequest::NoteCount(input) => notes
-                .count(input)
-                .await
-                .map(|count| AppResponse::NoteCount { count })
-                .map_err(WireError::from_service),
-            AppRequest::NoteGet { id, archived } => notes
-                .get(&id, archived)
-                .await
-                .map(AppResponse::NoteDetail)
-                .map_err(WireError::from_service),
-            AppRequest::NoteLoadEditable { id } => {
-                let id = self.db.resolve_note_id(&id).await.map_err(Self::db_error)?;
-                flicknote_core::services::editable_document::load_editable_note(
-                    self.db.as_ref(),
-                    &id,
-                )
-                .await
-                .map(|document| {
-                    AppResponse::EditableDocument(crate::ipc::EditableDocument { document })
-                })
-                .map_err(Self::db_error)
-            }
-            AppRequest::NoteRecord { id, archived } => {
-                let id = if archived {
-                    self.db.resolve_archived_note_id(&id).await
-                } else {
-                    self.db.resolve_note_id(&id).await
-                }
-                .map_err(Self::db_error)?;
-                let note = if archived {
-                    self.db.find_archived_note(&id).await
-                } else {
-                    self.db.find_note(&id).await
-                }
-                .map_err(Self::db_error)?;
-                Ok(AppResponse::NoteRecord(note))
-            }
-            AppRequest::NoteGetSection { id, section } => notes
-                .get_section(&id, &section)
-                .await
-                .map(AppResponse::NoteSection)
-                .map_err(WireError::from_service),
-            AppRequest::NoteSource {
-                id,
-                archived,
-                view,
-                range,
-            } => notes
-                .source(&id, archived, view, range.as_deref())
-                .await
-                .map(AppResponse::Source)
-                .map_err(WireError::from_service),
-            AppRequest::NoteReplaceSection {
-                id,
-                section,
-                content,
-            } => notes
-                .replace_section(&id, &section, &content)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteRenameSection { id, section, name } => notes
-                .rename_section(&id, &section, &name)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteInsert {
-                id,
-                section,
-                position,
-                content,
-            } => notes
-                .insert(&id, &section, position, &content)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteDeleteSection { id, section } => notes
-                .delete_section(&id, &section)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteModify(input) => notes
-                .modify(input)
-                .await
-                .map(AppResponse::NoteMutation)
-                .map_err(WireError::from_service),
-            AppRequest::NoteArchive { id } => notes
-                .archive(&id)
-                .await
-                .map(AppResponse::NoteArchive)
-                .map_err(WireError::from_service),
-            AppRequest::NoteRestore { id } => notes
-                .restore(&id)
-                .await
-                .map(AppResponse::NoteArchive)
-                .map_err(WireError::from_service),
-            AppRequest::NoteShare { id } => notes
-                .share(self.share_gateway.as_ref(), &id)
-                .await
-                .map(AppResponse::Share)
-                .map_err(WireError::from_service),
-            AppRequest::NoteUnshare { id } => notes
-                .unshare(self.share_gateway.as_ref(), &id)
-                .await
-                .map(AppResponse::Unshare)
-                .map_err(WireError::from_service),
-            AppRequest::NoteOpen { id } => {
-                let web_url = self.web_url.as_deref().ok_or_else(|| {
-                    WireError::from_service(ServiceError::ConfigMissing("webUrl".to_string()))
-                })?;
-                let full_id = self.db.resolve_note_id(&id).await.map_err(Self::db_error)?;
-                let note = self.db.find_note(&full_id).await.map_err(Self::db_error)?;
-                let url_id = note.short_id.map_or(full_id, |value| value.to_string());
-                Ok(AppResponse::Open(
-                    flicknote_core::services::dto::OpenResult {
-                        url: format!("{}/notes/{url_id}", web_url.trim_end_matches('/')),
-                        opened: false,
-                    },
-                ))
-            }
-            AppRequest::ProjectList { include_archived } => projects
-                .list(include_archived)
-                .await
-                .map(AppResponse::Projects)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectRecords { include_archived } => {
-                let mut records = self.db.list_projects(false).await.map_err(Self::db_error)?;
-                if include_archived {
-                    records.extend(self.db.list_projects(true).await.map_err(Self::db_error)?);
-                    records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-                }
-                Ok(AppResponse::ProjectRecords(records))
-            }
-            AppRequest::ProjectGet { id } => projects
-                .get(&id)
-                .await
-                .map(AppResponse::Project)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectGetByName { name } => {
-                let id = self
-                    .db
-                    .find_project_by_name(&name)
-                    .await
-                    .map_err(Self::db_error)?
-                    .ok_or_else(|| {
-                        WireError::from_service(ServiceError::ProjectNotFound(name.clone()))
-                    })?;
-                projects
-                    .get(&id)
-                    .await
-                    .map(AppResponse::Project)
-                    .map_err(WireError::from_service)
-            }
-            AppRequest::ProjectAdd(input) => projects
-                .add(input)
-                .await
-                .map(AppResponse::Project)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectModify(input) => projects
-                .modify(input)
-                .await
-                .map(AppResponse::Project)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectArchive { id } => projects
-                .archive(&id)
-                .await
-                .map(AppResponse::Project)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectShare { id } => projects
-                .share(self.share_gateway.as_ref(), &id)
-                .await
-                .map(AppResponse::Share)
-                .map_err(WireError::from_service),
-            AppRequest::ProjectUnshare { id } => projects
-                .unshare(self.share_gateway.as_ref(), &id)
-                .await
-                .map(AppResponse::Unshare)
-                .map_err(WireError::from_service),
-            AppRequest::ExtractionValues { keys, archived } => {
-                let refs = keys.iter().map(String::as_str).collect::<Vec<_>>();
-                self.db
-                    .list_extraction_values(&refs, archived)
-                    .await
-                    .map(AppResponse::Values)
-                    .map_err(Self::db_error)
-            }
+        match request.kind() {
+            AppRequestKind::NoteRead => note::handle_read(self, request).await,
+            AppRequestKind::NoteWrite => note::handle_write(self, request).await,
+            AppRequestKind::ProjectRead => project::handle_read(self, request).await,
+            AppRequestKind::ProjectWrite => project::handle_write(self, request).await,
+            AppRequestKind::ExtractionRead => self.handle_extraction(request).await,
         }
+    }
+
+    async fn handle_extraction(&self, request: AppRequest) -> Result<AppResponse, WireError> {
+        let AppRequest::ExtractionValues { keys, archived } = request else {
+            unreachable!("request kind guarantees an extraction request")
+        };
+        let refs = keys.iter().map(String::as_str).collect::<Vec<_>>();
+        self.db
+            .list_extraction_values(&refs, archived)
+            .await
+            .map(AppResponse::Values)
+            .map_err(Self::db_error)
     }
 
     fn db_error(error: flicknote_core::error::CliError) -> WireError {

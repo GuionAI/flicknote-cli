@@ -1,4 +1,7 @@
-use crate::*;
+use async_trait::async_trait;
+use powersync::{BackendConnector, PowerSyncCredentials, error::PowerSyncError};
+
+use crate::upload::{FlickNoteConnector, ps_err, run_upload};
 
 #[async_trait]
 impl BackendConnector for FlickNoteConnector {

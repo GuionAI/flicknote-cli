@@ -1,6 +1,11 @@
-use crate::*;
+use std::path::Path;
 
-pub(crate) fn attachment_endpoint(base_url: &str, path: &str) -> String {
+use flicknote_core::config::Config;
+use serde::Deserialize;
+
+use crate::ipc::DaemonError;
+
+fn attachment_endpoint(base_url: &str, path: &str) -> String {
     let versioned_base = base_url
         .trim_end_matches('/')
         .trim_end_matches("/api/v1")
@@ -11,12 +16,12 @@ pub(crate) fn attachment_endpoint(base_url: &str, path: &str) -> String {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct UploadUrlResponse {
-    pub(crate) upload_url: String,
-    pub(crate) content_type: String,
+struct UploadUrlResponse {
+    upload_url: String,
+    content_type: String,
 }
 
-pub(crate) fn validate_api_url(config: &Config) -> Result<(), DaemonError> {
+pub(super) fn validate_api_url(config: &Config) -> Result<(), DaemonError> {
     if config.api_url.is_empty() {
         return Err(DaemonError::Other {
             message: "apiUrl is not configured — set it in config.json or FLICKNOTE_API_URL"
@@ -26,7 +31,7 @@ pub(crate) fn validate_api_url(config: &Config) -> Result<(), DaemonError> {
     Ok(())
 }
 
-pub(crate) async fn upload_attachment(
+pub(super) async fn upload_attachment(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -63,9 +68,11 @@ pub(crate) async fn upload_attachment(
         message: format!("Failed to parse upload URL response: {e}"),
     })?;
 
-    let file_bytes = std::fs::read(file_path).map_err(|e| DaemonError::Other {
-        message: format!("Failed to read {}: {e}", file_path.display()),
-    })?;
+    let file_bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|e| DaemonError::Other {
+            message: format!("Failed to read {}: {e}", file_path.display()),
+        })?;
     let put_resp = http
         .put(&upload_resp.upload_url)
         .header("Content-Type", &upload_resp.content_type)
@@ -86,7 +93,7 @@ pub(crate) async fn upload_attachment(
     Ok(())
 }
 
-pub(crate) async fn delete_attachment(
+pub(super) async fn delete_attachment(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,

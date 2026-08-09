@@ -1,32 +1,48 @@
-use crate::*;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-pub(crate) fn pid_path(config: &Config) -> PathBuf {
+use flicknote_auth::client::GoTrueClient;
+use flicknote_core::{
+    backend::{NoteDb, SqliteBackend},
+    config::Config,
+    db::Database,
+    schema::app_schema,
+    services::ports::{NoteCreator, ShareGateway},
+};
+use powersync::{ConnectionPool, PowerSyncDatabase, SyncOptions, env::PowerSyncEnvironment};
+use tokio::{net::UnixListener, sync::mpsc};
+
+use crate::app::Application;
+use crate::ipc;
+use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
+use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone};
+use crate::upload::{FlickNoteConnector, retry_upload_until_success};
+
+fn pid_path(config: &Config) -> PathBuf {
     PathBuf::from(&config.paths.data_dir).join("sync.pid")
 }
 
-pub(crate) struct PidGuard(PathBuf);
+struct PidGuard(PathBuf);
 
 impl Drop for PidGuard {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(&self.0) {
-            log::warn!("Failed to remove PID file: {}", e);
+        if let Err(error) = std::fs::remove_file(&self.0) {
+            log::warn!("Failed to remove PID file: {error}");
         }
     }
 }
 
-pub(crate) struct SocketGuard(PathBuf);
+struct SocketGuard(PathBuf);
 
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        if let Err(e) = std::fs::remove_file(&self.0) {
-            log::warn!("Failed to remove socket file: {}", e);
+        if let Err(error) = std::fs::remove_file(&self.0) {
+            log::warn!("Failed to remove socket file: {error}");
         }
     }
 }
 
-pub(crate) fn bind_socket(
-    config: &Config,
-) -> Result<(UnixListener, SocketGuard), Box<dyn std::error::Error>> {
+fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn std::error::Error>> {
     let path = ipc::socket_path(config);
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -45,12 +61,10 @@ pub(crate) fn bind_socket(
 
 /// Check for an existing sync daemon and write our PID file.
 ///
-/// Note: there is a small TOCTOU window between the `kill(pid, 0)` liveness
-/// check and writing the new PID file. Two daemons launched simultaneously
-/// could both pass. For a CLI daemon this is acceptable; use `flock` or
-/// `O_CREAT|O_EXCL` if stronger guarantees are ever needed.
+/// Note: there is a small TOCTOU window between the liveness check and writing
+/// the new PID file. Two daemons launched simultaneously could both pass.
 #[allow(unsafe_code)]
-pub(crate) fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::error::Error>> {
+fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::error::Error>> {
     if let Ok(contents) = std::fs::read_to_string(path)
         && let Ok(pid) = contents.trim().parse::<i32>()
     {
@@ -59,260 +73,252 @@ pub(crate) fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::
             || (result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
         {
             return Err(format!(
-                "Sync daemon already running (pid={}). Kill it first or delete {}",
-                pid,
+                "Sync daemon already running (pid={pid}). Kill it first or delete {}",
                 path.display()
             )
             .into());
         }
-        log::info!("Removing stale PID file (pid={} no longer running)", pid);
+        log::info!("Removing stale PID file (pid={pid} no longer running)");
     }
 
     std::fs::write(path, std::process::id().to_string())
-        .map_err(|e| format!("Failed to write PID file {}: {}", path.display(), e))?;
+        .map_err(|error| format!("Failed to write PID file {}: {error}", path.display()))?;
     Ok(PidGuard(path.to_path_buf()))
 }
 
-/// Tear down all async actors, disconnect the database, and run a final TRUNCATE
-/// checkpoint.
-///
-/// Called from every shutdown path (ctrl-c, task panic, normal exit). The pool
-/// is fully gone after `db.disconnect().await`, so TRUNCATE succeeds without
-/// contention. Uses `spawn_blocking` to keep the blocking rusqlite I/O off the
-/// async executor thread per [`checkpoint_wal_standalone`]'s contract.
-pub(crate) async fn shutdown_daemon(
-    upload_handle: &mut tokio::task::JoinHandle<()>,
-    checkpoint_handle: &mut tokio::task::JoinHandle<()>,
-    socket_handle: &mut tokio::task::JoinHandle<()>,
-    db: &PowerSyncDatabase,
-    db_path: PathBuf,
-) {
-    upload_handle.abort();
-    checkpoint_handle.abort();
-    socket_handle.abort();
-    db.disconnect().await;
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        checkpoint_wal_standalone(&db_path, "shutdown", WalCheckpointMode::Truncate)
-    })
-    .await
-    {
-        log::error!("Shutdown WAL checkpoint task panicked: {e}");
-    }
-    log::info!("Sync daemon stopped");
+struct ActorHandles {
+    upload: tokio::task::JoinHandle<()>,
+    checkpoint: tokio::task::JoinHandle<()>,
+    socket: tokio::task::JoinHandle<()>,
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Arc::new(Config::load()?);
-
-    let pid_file = pid_path(&config);
-    let _pid_guard = check_and_write_pid(&pid_file)?;
+    let _pid_guard = check_and_write_pid(&pid_path(&config))?;
     let (socket_listener, _socket_guard) = bind_socket(&config)?;
-
     config.validate()?;
 
-    PowerSyncEnvironment::powersync_auto_extension()?;
-
-    let pool = ConnectionPool::open(&config.paths.db_file)?;
-    let env = PowerSyncEnvironment::custom(
-        reqwest::Client::new(),
-        pool,
-        PowerSyncEnvironment::tokio_timer(),
-    );
-
-    let db = PowerSyncDatabase::new(env, app_schema());
-    db.async_tasks().spawn_with_tokio();
-
+    let db = open_powersync_database(&config)?;
     let auth = Arc::new(GoTrueClient::new(
         &config.supabase_url,
         &config.supabase_anon_key,
         &config.paths.session_file,
     ));
-
     let upload_guard = Arc::new(tokio::sync::Mutex::new(()));
-    let http_client = reqwest::Client::new();
-    let upload_client = http_client.clone();
+    let connector = build_connector(&db, &auth, &upload_guard, &config);
 
-    let connector = FlickNoteConnector {
-        db: db.clone(),
-        auth: Arc::clone(&auth),
-        upload_guard: Arc::clone(&upload_guard),
-        http_client,
-        powersync_url: config.powersync_url.clone(),
-        supabase_url: config.supabase_url.clone(),
-        supabase_anon_key: config.supabase_anon_key.clone(),
-    };
-
-    // Reclaim leftover WAL from previous sessions BEFORE connecting sync actors.
-    // TRUNCATE is safe here because no pool connections exist yet — db.connect()
-    // hasn't started the download actor. A bloated WAL inherited from a crashed
-    // session is reset to zero so incremental PASSIVE checkpoints start from a
-    // clean baseline.
-    // spawn_blocking keeps blocking rusqlite I/O off the async executor thread.
-    log::info!("Running startup WAL checkpoint");
-    let startup_db_path = config.paths.db_file.clone();
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        checkpoint_wal_standalone(&startup_db_path, "startup", WalCheckpointMode::Truncate)
-    })
-    .await
-    {
-        log::error!("Startup WAL checkpoint task panicked: {e}");
-    }
-
-    // Finish schema replacement through the application pool before PowerSync
-    // starts its download/upload actors. Replacing tracking views after connect
-    // races the actor-held SQLite connections and can fail with SQLITE_BUSY on
-    // an existing database.
-    let user_id = flicknote_core::session::get_user_id(&config)?;
-    let backend: Arc<dyn NoteDb> = Arc::new(SqliteBackend {
-        db: Database::open_local(&config).await?,
-        user_id,
-    });
+    startup_checkpoint(config.paths.db_file.clone()).await;
+    let backend = open_local_backend(&config).await?;
 
     log::info!("Sync daemon connecting (pid {})", std::process::id());
+    let (trigger_tx, trigger_rx) = mpsc::channel::<()>(16);
+    let upload_worker = upload_worker(&connector, trigger_rx, config.paths.db_file.clone());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
 
-    // Application writes happen in this process. Each may-write request sends a
-    // best-effort trigger; the startup drain recovers committed writes whose signal
-    // was lost because of a crash or a full channel.
-    let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(16);
+    let mut actors = ActorHandles {
+        upload: tokio::spawn(upload_worker),
+        checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
+        socket: spawn_socket_server(socket_listener, backend, &db, &auth, &config, trigger_tx),
+    };
+    let result = wait_for_shutdown(&mut actors).await;
+    shutdown_daemon(&mut actors, &db, config.paths.db_file.clone()).await;
+    result.map_err(Into::into)
+}
 
-    let upload_db = db.clone();
-    let upload_supabase_url = config.supabase_url.clone();
-    let upload_anon_key = config.supabase_anon_key.clone();
-    let upload_guard_clone = Arc::clone(&upload_guard);
-    let upload_auth_clone = Arc::clone(&auth);
-    let upload_db_path = config.paths.db_file.clone();
+fn open_powersync_database(
+    config: &Config,
+) -> Result<PowerSyncDatabase, Box<dyn std::error::Error>> {
+    PowerSyncEnvironment::powersync_auto_extension()?;
+    let pool = ConnectionPool::open(&config.paths.db_file)?;
+    let environment = PowerSyncEnvironment::custom(
+        reqwest::Client::new(),
+        pool,
+        PowerSyncEnvironment::tokio_timer(),
+    );
+    let db = PowerSyncDatabase::new(environment, app_schema());
+    db.async_tasks().spawn_with_tokio();
+    Ok(db)
+}
 
-    let mut upload_handle = tokio::spawn(async move {
-        // Initial upload on startup recovers committed CRUD left by a crash,
-        // a lost in-process signal, or a pre-upgrade CLI writer.
+fn build_connector(
+    db: &PowerSyncDatabase,
+    auth: &Arc<GoTrueClient>,
+    upload_guard: &Arc<tokio::sync::Mutex<()>>,
+    config: &Config,
+) -> FlickNoteConnector {
+    FlickNoteConnector {
+        db: db.clone(),
+        auth: Arc::clone(auth),
+        upload_guard: Arc::clone(upload_guard),
+        http_client: reqwest::Client::new(),
+        powersync_url: config.powersync_url.clone(),
+        supabase_url: config.supabase_url.clone(),
+        supabase_anon_key: config.supabase_anon_key.clone(),
+    }
+}
+
+async fn startup_checkpoint(db_path: PathBuf) {
+    log::info!("Running startup WAL checkpoint");
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        checkpoint_wal_standalone(&db_path, "startup", WalCheckpointMode::Truncate)
+    })
+    .await
+    {
+        log::error!("Startup WAL checkpoint task panicked: {error}");
+    }
+}
+
+async fn open_local_backend(
+    config: &Config,
+) -> Result<Arc<dyn NoteDb>, Box<dyn std::error::Error>> {
+    let user_id = flicknote_core::session::get_user_id(config)?;
+    Ok(Arc::new(SqliteBackend {
+        db: Database::open_local(config).await?,
+        user_id,
+    }))
+}
+
+fn upload_worker(
+    connector: &FlickNoteConnector,
+    mut trigger_rx: mpsc::Receiver<()>,
+    db_path: PathBuf,
+) -> impl std::future::Future<Output = ()> + Send + 'static {
+    let db = connector.db.clone();
+    let client = connector.http_client.clone();
+    let auth = Arc::clone(&connector.auth);
+    let guard = Arc::clone(&connector.upload_guard);
+    let supabase_url = connector.supabase_url.clone();
+    let anon_key = connector.supabase_anon_key.clone();
+    async move {
         retry_upload_until_success(
-            &upload_db,
-            &upload_client,
-            &upload_auth_clone,
-            &upload_guard_clone,
-            &upload_supabase_url,
-            &upload_anon_key,
+            &db,
+            &client,
+            &auth,
+            &guard,
+            &supabase_url,
+            &anon_key,
             "Startup upload",
-            &upload_db_path,
+            &db_path,
         )
         .await;
 
-        loop {
-            // Block until the application host reports a may-write request.
-            if trigger_rx.recv().await.is_none() {
-                break;
-            }
-
-            // Trailing debounce: collapse burst writes (e.g. bulk import) into a
-            // single upload attempt. Fire only after 200ms of silence.
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => break,
-                    v = trigger_rx.recv() => {
-                        if v.is_none() { return; } // channel closed
-                        // more events arrived — reset the silence window
-                    }
-                }
-            }
-
+        while wait_for_upload_trigger(&mut trigger_rx).await {
             retry_upload_until_success(
-                &upload_db,
-                &upload_client,
-                &upload_auth_clone,
-                &upload_guard_clone,
-                &upload_supabase_url,
-                &upload_anon_key,
+                &db,
+                &client,
+                &auth,
+                &guard,
+                &supabase_url,
+                &anon_key,
                 "Upload",
-                &upload_db_path,
+                &db_path,
             )
             .await;
         }
-    });
+    }
+}
 
-    // Periodic PASSIVE checkpoint every 30s — independent of upload success or
-    // download actor state. Makes incremental progress draining the WAL without
-    // acquiring PENDING/EXCLUSIVE locks, so it never contends with pool writers.
-    let checkpoint_db_path = config.paths.db_file.clone();
-    let mut checkpoint_handle = tokio::spawn(async move {
+async fn wait_for_upload_trigger(trigger_rx: &mut mpsc::Receiver<()>) -> bool {
+    if trigger_rx.recv().await.is_none() {
+        return false;
+    }
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => return true,
+            value = trigger_rx.recv() => {
+                if value.is_none() {
+                    return false;
+                }
+            }
+        }
+    }
+}
+
+fn spawn_checkpoint_worker(db_path: PathBuf) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
-        interval.tick().await; // skip the immediate first tick
+        interval.tick().await;
         loop {
             interval.tick().await;
-            let path = checkpoint_db_path.clone();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
+            let path = db_path.clone();
+            if let Err(error) = tokio::task::spawn_blocking(move || {
                 checkpoint_wal_standalone(&path, "periodic", WalCheckpointMode::Passive)
             })
             .await
             {
-                log::error!("Periodic WAL checkpoint task panicked: {e}");
+                log::error!("Periodic WAL checkpoint task panicked: {error}");
             }
         }
-    });
+    })
+}
 
-    let socket_config = Arc::clone(&config);
-    let socket_http = reqwest::Client::new();
-    let socket_share_lock = Arc::new(ShareRequestLock::default());
-    let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator {
-        db: db.clone(),
-        auth: Arc::clone(&auth),
-        http: socket_http.clone(),
-        config: Arc::clone(&config),
-    });
-    let gateway: Arc<dyn ShareGateway> = Arc::new(RemoteShareGateway {
-        http: socket_http.clone(),
-        auth: Arc::clone(&auth),
-        config: Arc::clone(&config),
-        lock: socket_share_lock,
-    });
+fn spawn_socket_server(
+    listener: UnixListener,
+    backend: Arc<dyn NoteDb>,
+    db: &PowerSyncDatabase,
+    auth: &Arc<GoTrueClient>,
+    config: &Arc<Config>,
+    trigger_tx: mpsc::Sender<()>,
+) -> tokio::task::JoinHandle<()> {
+    let http = reqwest::Client::new();
+    let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator::new(
+        db.clone(),
+        Arc::clone(auth),
+        http.clone(),
+        Arc::clone(config),
+    ));
+    let gateway: Arc<dyn ShareGateway> = Arc::new(RemoteShareGateway::new(
+        http,
+        Arc::clone(auth),
+        Arc::clone(config),
+    ));
     let app = Arc::new(
         Application::new(backend, creator, gateway)
             .with_web_url(config.web_url.clone())
             .with_write_signal(trigger_tx),
     );
-    let mut socket_handle = tokio::spawn(async move {
-        if let Err(error) = ipc::serve_app(socket_listener, app, ipc::ServerInfo::current()).await {
+    tokio::spawn(async move {
+        if let Err(error) = ipc::serve_app(listener, app, ipc::ServerInfo::current()).await {
             log::error!("Application socket server failed: {error}");
         }
-    });
+    })
+}
 
+async fn wait_for_shutdown(actors: &mut ActorHandles) -> Result<(), String> {
     tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        res = &mut upload_handle => {
-            if let Err(e) = res {
-                log::error!("Upload task panicked: {e}");
-                shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
-                return Err(e.into());
+        _ = tokio::signal::ctrl_c() => Ok(()),
+        result = &mut actors.upload => result.map_err(|error| error.to_string()),
+        result = &mut actors.checkpoint => {
+            if let Err(error) = &result {
+                log::error!("Checkpoint task panicked: {error}");
+            } else {
+                log::error!("Checkpoint task exited unexpectedly");
             }
+            Err(format!("Checkpoint task exited: {result:?}"))
         }
-        res = &mut checkpoint_handle => {
-            match res {
-                Ok(_) => log::error!("Checkpoint task exited unexpectedly"),
-                Err(ref e) => log::error!("Checkpoint task panicked: {e}"),
+        result = &mut actors.socket => {
+            if let Err(error) = &result {
+                log::error!("Socket task panicked: {error}");
+            } else {
+                log::error!("Socket task exited unexpectedly");
             }
-            let err_msg = format!("Checkpoint task exited: {res:?}");
-            shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
-            return Err(err_msg.into());
-        }
-        res = &mut socket_handle => {
-            match res {
-                Ok(_) => log::error!("Socket task exited unexpectedly"),
-                Err(ref e) => log::error!("Socket task panicked: {e}"),
-            }
-            let err_msg = format!("Socket task exited: {res:?}");
-            shutdown_daemon(&mut upload_handle, &mut checkpoint_handle, &mut socket_handle, &db, socket_config.paths.db_file.clone()).await;
-            return Err(err_msg.into());
+            Err(format!("Socket task exited: {result:?}"))
         }
     }
-    shutdown_daemon(
-        &mut upload_handle,
-        &mut checkpoint_handle,
-        &mut socket_handle,
-        &db,
-        socket_config.paths.db_file.clone(),
-    )
-    .await;
+}
 
-    Ok(())
+async fn shutdown_daemon(actors: &mut ActorHandles, db: &PowerSyncDatabase, db_path: PathBuf) {
+    actors.upload.abort();
+    actors.checkpoint.abort();
+    actors.socket.abort();
+    db.disconnect().await;
+    if let Err(error) = tokio::task::spawn_blocking(move || {
+        checkpoint_wal_standalone(&db_path, "shutdown", WalCheckpointMode::Truncate)
+    })
+    .await
+    {
+        log::error!("Shutdown WAL checkpoint task panicked: {error}");
+    }
+    log::info!("Sync daemon stopped");
 }

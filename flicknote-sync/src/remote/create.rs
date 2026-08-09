@@ -1,61 +1,54 @@
-use crate::*;
+use std::path::Path;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use flicknote_auth::client::GoTrueClient;
+use flicknote_core::{
+    REMOTE_COMMITTED_INSERT_METADATA, TOPIC_EXTRACTION_KEY,
+    backend::InsertedNote,
+    config::Config,
+    services::ports::{CreateNote, CreatedNote, NoteCreator},
+};
+use powersync::PowerSyncDatabase;
+use rusqlite::{OptionalExtension, params};
+use serde::Deserialize;
+
+use crate::ipc::DaemonError;
+use crate::remote::attachment::{delete_attachment, upload_attachment};
 
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CreateNoteRequest {
-    pub(crate) id: String,
-    pub(crate) note_type: String,
-    pub(crate) status: String,
-    pub(crate) title: Option<String>,
-    pub(crate) content: Option<String>,
-    pub(crate) metadata: Option<String>,
-    pub(crate) project_id: Option<String>,
-    pub(crate) now: String,
-    pub(crate) topics: Vec<String>,
-    pub(crate) attachment_path: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RemoteCreatedNote {
-    pub(crate) uuid: String,
-    pub(crate) short_id: i64,
-    pub(crate) confirmed_extraction_ids: Vec<String>,
-}
-
 #[derive(Debug, Default, PartialEq, Eq)]
-pub(crate) struct ExtractionCreateOutcome {
-    pub(crate) confirmed_ids: Vec<String>,
-    pub(crate) pending_ids: Vec<String>,
-    pub(crate) diagnostic: Option<String>,
-    pub(crate) local_commit_error: Option<String>,
+struct ExtractionCreateOutcome {
+    confirmed_ids: Vec<String>,
+    pending_ids: Vec<String>,
+    diagnostic: Option<String>,
+    local_commit_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct RemoteNoteRow {
-    pub(crate) id: String,
-    pub(crate) short_id: Option<i64>,
-    pub(crate) user_id: String,
+struct RemoteNoteRow {
+    id: String,
+    short_id: Option<i64>,
+    user_id: String,
     #[serde(rename = "type")]
-    pub(crate) note_type: String,
-    pub(crate) status: String,
-    pub(crate) title: Option<String>,
-    pub(crate) content: Option<String>,
-    pub(crate) summary: Option<String>,
+    note_type: String,
+    status: String,
+    title: Option<String>,
+    content: Option<String>,
+    summary: Option<String>,
     #[serde(default)]
-    pub(crate) is_flagged: bool,
-    pub(crate) project_id: Option<String>,
-    pub(crate) metadata: Option<serde_json::Value>,
-    pub(crate) source: Option<serde_json::Value>,
-    pub(crate) created_at: Option<String>,
-    pub(crate) updated_at: Option<String>,
-    pub(crate) deleted_at: Option<String>,
+    is_flagged: bool,
+    project_id: Option<String>,
+    metadata: Option<serde_json::Value>,
+    source: Option<serde_json::Value>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    deleted_at: Option<String>,
 }
 
-pub(crate) fn json_column(
-    value: &Option<serde_json::Value>,
-) -> Result<Option<String>, DaemonError> {
+fn json_column(value: &Option<serde_json::Value>) -> Result<Option<String>, DaemonError> {
     value
         .as_ref()
         .map(serde_json::to_string)
@@ -65,7 +58,7 @@ pub(crate) fn json_column(
         })
 }
 
-pub(crate) async fn commit_remote_note(
+async fn commit_remote_note(
     db: &PowerSyncDatabase,
     note: &RemoteNoteRow,
 ) -> Result<bool, DaemonError> {
@@ -132,15 +125,15 @@ pub(crate) async fn commit_remote_note(
 }
 
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
-pub(crate) struct RemoteExtractionRow {
-    pub(crate) id: String,
-    pub(crate) note_id: String,
-    pub(crate) user_id: String,
-    pub(crate) key: String,
-    pub(crate) value: String,
+struct RemoteExtractionRow {
+    id: String,
+    note_id: String,
+    user_id: String,
+    key: String,
+    value: String,
 }
 
-pub(crate) async fn commit_remote_extractions(
+async fn commit_remote_extractions(
     db: &PowerSyncDatabase,
     rows: &[RemoteExtractionRow],
 ) -> Result<usize, DaemonError> {
@@ -198,13 +191,13 @@ pub(crate) async fn commit_remote_extractions(
     Ok(inserted)
 }
 
-pub(crate) async fn create_note_remotely(
+async fn create_note_remotely(
     db: &PowerSyncDatabase,
     http: &reqwest::Client,
     auth: &GoTrueClient,
     config: &Config,
-    req: CreateNoteRequest,
-) -> Result<RemoteCreatedNote, DaemonError> {
+    req: CreateNote,
+) -> Result<CreatedNote, DaemonError> {
     let session = auth.get_session().await.map_err(|e| DaemonError::Other {
         message: format!("Auth error: {e}"),
     })?;
@@ -220,198 +213,211 @@ pub(crate) async fn create_note_remotely(
     .await
 }
 
-pub(crate) async fn create_note_with_token(
-    db: &PowerSyncDatabase,
-    http: &reqwest::Client,
-    config: &Config,
-    access_token: &str,
-    user_id: &str,
-    req: CreateNoteRequest,
-) -> Result<RemoteCreatedNote, DaemonError> {
-    let extraction_rows = req
+enum NoteCreateAttempt {
+    Response(NoteCreateResponse),
+    Recovered(RemoteNoteRow),
+}
+
+struct NoteCreateResponse {
+    response: reqwest::Response,
+    initial_error: Option<String>,
+}
+
+fn extraction_rows(request: &CreateNote, user_id: &str) -> Vec<RemoteExtractionRow> {
+    request
         .topics
         .iter()
         .map(|value| RemoteExtractionRow {
             id: uuid::Uuid::new_v4().to_string(),
-            note_id: req.id.clone(),
+            note_id: request.id.clone(),
             user_id: user_id.to_string(),
             key: TOPIC_EXTRACTION_KEY.to_string(),
             value: value.clone(),
         })
-        .collect::<Vec<_>>();
-    let metadata = match req.metadata.as_deref() {
-        Some(raw) => {
-            serde_json::from_str::<serde_json::Value>(raw).map_err(|e| DaemonError::Other {
-                message: format!("Invalid note metadata JSON: {e}"),
-            })?
-        }
-        None => serde_json::Value::Null,
-    };
+        .collect()
+}
 
-    let attachment_path = req.attachment_path.as_deref().map(Path::new);
-    if let Some(path) = attachment_path {
-        upload_attachment(http, config, access_token, &req.id, path).await?;
-    }
-
-    let payload = serde_json::json!({
-        "id": req.id,
+fn note_payload(request: &CreateNote, user_id: &str) -> Result<serde_json::Value, DaemonError> {
+    let metadata = request
+        .metadata
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .transpose()
+        .map_err(|error| DaemonError::Other {
+            message: format!("Invalid note metadata JSON: {error}"),
+        })?
+        .unwrap_or(serde_json::Value::Null);
+    Ok(serde_json::json!({
+        "id": request.id,
         "user_id": user_id,
-        "type": req.note_type,
-        "status": req.status,
-        "title": req.title,
-        "content": req.content,
+        "type": request.note_type,
+        "status": request.status,
+        "title": request.title,
+        "content": request.content,
         "metadata": metadata,
-        "project_id": req.project_id,
-        "created_at": req.now,
-        "updated_at": req.now,
-    });
+        "project_id": request.project_id,
+        "created_at": request.now,
+        "updated_at": request.now,
+    }))
+}
 
-    let send_create = || {
-        http.post(format!(
-            "{}/rest/v1/notes?on_conflict=id",
-            config.supabase_url
-        ))
-        .header("apikey", &config.supabase_anon_key)
-        .bearer_auth(access_token)
-        .header(
-            "Prefer",
-            "resolution=ignore-duplicates,return=representation",
-        )
-        .json(&payload)
+fn note_create_request(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    payload: &serde_json::Value,
+) -> reqwest::RequestBuilder {
+    http.post(format!(
+        "{}/rest/v1/notes?on_conflict=id",
+        config.supabase_url
+    ))
+    .header("apikey", &config.supabase_anon_key)
+    .bearer_auth(access_token)
+    .header(
+        "Prefer",
+        "resolution=ignore-duplicates,return=representation",
+    )
+    .json(payload)
+}
+
+async fn recover_ambiguous_create(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+    extraction_rows: &[RemoteExtractionRow],
+    initial_error: &str,
+    retry_error: &str,
+) -> Result<NoteCreateAttempt, DaemonError> {
+    if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, note_id).await {
+        return Ok(NoteCreateAttempt::Recovered(row));
+    }
+    Err(ambiguous_create_error(
+        format!(
+            "Remote note create outcome is unknown for note {note_id} after retrying the same stable UUID ({initial_error}; retry: {retry_error}). The attachment was retained. Do not create it again."
+        ),
+        note_id.to_string(),
+        extraction_rows,
+    ))
+}
+
+async fn send_note_create(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+    extraction_rows: &[RemoteExtractionRow],
+    payload: &serde_json::Value,
+) -> Result<NoteCreateAttempt, DaemonError> {
+    let first = note_create_request(http, config, access_token, payload)
         .send()
-    };
-    let (resp, initial_ambiguous_error) = match send_create().await {
-        Ok(resp) if !is_ambiguous_create_status(resp.status()) => (resp, None),
-        Ok(resp) => {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            let initial_error = format!("the first attempt returned {status}: {body}");
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            match send_create().await {
-                Ok(resp) if !is_ambiguous_create_status(resp.status()) => {
-                    (resp, Some(initial_error))
-                }
-                Ok(resp) => {
-                    let status = resp.status();
-                    let body = resp.text().await.unwrap_or_default();
-                    if let Ok(Some(row)) =
-                        lookup_remote_note(http, config, access_token, &req.id).await
-                    {
-                        return finish_remote_create(
-                            db,
-                            http,
-                            config,
-                            access_token,
-                            row,
-                            &extraction_rows,
-                        )
-                        .await;
-                    }
-                    return Err(ambiguous_create_error(
-                        format!(
-                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry returned {status}: {body}). The attachment was retained. Do not create it again.",
-                            req.id
-                        ),
-                        req.id,
-                        &extraction_rows,
-                    ));
-                }
-                Err(retry_error) => {
-                    if let Ok(Some(row)) =
-                        lookup_remote_note(http, config, access_token, &req.id).await
-                    {
-                        return finish_remote_create(
-                            db,
-                            http,
-                            config,
-                            access_token,
-                            row,
-                            &extraction_rows,
-                        )
-                        .await;
-                    }
-                    return Err(ambiguous_create_error(
-                        format!(
-                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry: {retry_error}). The attachment was retained. Do not create it again.",
-                            req.id
-                        ),
-                        req.id,
-                        &extraction_rows,
-                    ));
-                }
-            }
+        .await;
+    let (initial_error, initial_was_status) = match first {
+        Ok(response) if !is_ambiguous_create_status(response.status()) => {
+            return Ok(NoteCreateAttempt::Response(NoteCreateResponse {
+                response,
+                initial_error: None,
+            }));
         }
-        Err(initial_error) => {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            match send_create().await {
-                Ok(resp) => (resp, Some(initial_error.to_string())),
-                Err(retry_error) => {
-                    if let Ok(Some(row)) =
-                        lookup_remote_note(http, config, access_token, &req.id).await
-                    {
-                        return finish_remote_create(
-                            db,
-                            http,
-                            config,
-                            access_token,
-                            row,
-                            &extraction_rows,
-                        )
-                        .await;
-                    }
-                    return Err(ambiguous_create_error(
-                        format!(
-                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry: {retry_error}). The attachment was retained. Do not create it again.",
-                            req.id
-                        ),
-                        req.id,
-                        &extraction_rows,
-                    ));
-                }
-            }
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            (format!("the first attempt returned {status}: {body}"), true)
         }
+        Err(error) => (error.to_string(), false),
     };
 
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, &req.id).await {
-            return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
-                .await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    match note_create_request(http, config, access_token, payload)
+        .send()
+        .await
+    {
+        Ok(response) if !initial_was_status || !is_ambiguous_create_status(response.status()) => {
+            Ok(NoteCreateAttempt::Response(NoteCreateResponse {
+                response,
+                initial_error: Some(initial_error),
+            }))
         }
-        if let Some(initial_error) = initial_ambiguous_error {
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            recover_ambiguous_create(
+                http,
+                config,
+                access_token,
+                note_id,
+                extraction_rows,
+                &initial_error,
+                &format!("returned {status}: {body}"),
+            )
+            .await
+        }
+        Err(error) => {
+            recover_ambiguous_create(
+                http,
+                config,
+                access_token,
+                note_id,
+                extraction_rows,
+                &initial_error,
+                &error.to_string(),
+            )
+            .await
+        }
+    }
+}
+
+async fn canonical_note_row(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+    extraction_rows: &[RemoteExtractionRow],
+    attachment_uploaded: bool,
+    create_response: NoteCreateResponse,
+) -> Result<RemoteNoteRow, DaemonError> {
+    let NoteCreateResponse {
+        response,
+        initial_error,
+    } = create_response;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, note_id).await {
+            return Ok(row);
+        }
+        if let Some(initial_error) = initial_error {
             return Err(ambiguous_create_error(
                 format!(
-                    "Remote note create outcome is unknown for note {} after retrying the same stable UUID: {initial_error}; the retry returned {status}: {body}. The attachment was retained. Do not create it again.",
-                    req.id
+                    "Remote note create outcome is unknown for note {note_id} after retrying the same stable UUID: {initial_error}; the retry returned {status}: {body}. The attachment was retained. Do not create it again."
                 ),
-                req.id,
-                &extraction_rows,
+                note_id.to_string(),
+                extraction_rows,
             ));
         }
-        if attachment_path.is_some()
-            && let Err(e) = delete_attachment(http, config, access_token, &req.id).await
+        if attachment_uploaded
+            && let Err(error) = delete_attachment(http, config, access_token, note_id).await
         {
-            log::warn!("Failed to clean up uploaded attachment after note create failure: {e}");
+            log::warn!("Failed to clean up uploaded attachment after note create failure: {error}");
         }
         return Err(DaemonError::Other {
             message: format!("Remote note create failed ({status}): {body}"),
         });
     }
 
-    let row = match resp.json::<Vec<RemoteNoteRow>>().await {
+    match response.json::<Vec<RemoteNoteRow>>().await {
         Ok(mut rows) => match rows.pop() {
-            Some(row) => row,
+            Some(row) => Ok(row),
             None => {
                 reconcile_confirmed_remote_note(
                     http,
                     config,
                     access_token,
-                    &req.id,
-                    &extraction_rows,
-                    format!("Remote note create returned no row for note {}", req.id),
+                    note_id,
+                    extraction_rows,
+                    format!("Remote note create returned no row for note {note_id}"),
                 )
-                .await?
+                .await
             }
         },
         Err(error) => {
@@ -419,9 +425,49 @@ pub(crate) async fn create_note_with_token(
                 http,
                 config,
                 access_token,
+                note_id,
+                extraction_rows,
+                format!("Failed to parse remote note create response: {error}"),
+            )
+            .await
+        }
+    }
+}
+
+async fn create_note_with_token(
+    db: &PowerSyncDatabase,
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    user_id: &str,
+    req: CreateNote,
+) -> Result<CreatedNote, DaemonError> {
+    let extraction_rows = extraction_rows(&req, user_id);
+    let payload = note_payload(&req, user_id)?;
+    let attachment_path = req.attachment_path.as_deref().map(Path::new);
+    if let Some(path) = attachment_path {
+        upload_attachment(http, config, access_token, &req.id, path).await?;
+    }
+    let row = match send_note_create(
+        http,
+        config,
+        access_token,
+        &req.id,
+        &extraction_rows,
+        &payload,
+    )
+    .await?
+    {
+        NoteCreateAttempt::Recovered(row) => row,
+        NoteCreateAttempt::Response(response) => {
+            canonical_note_row(
+                http,
+                config,
+                access_token,
                 &req.id,
                 &extraction_rows,
-                format!("Failed to parse remote note create response: {error}"),
+                attachment_path.is_some(),
+                response,
             )
             .await?
         }
@@ -429,13 +475,13 @@ pub(crate) async fn create_note_with_token(
     finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
 }
 
-pub(crate) fn is_ambiguous_create_status(status: reqwest::StatusCode) -> bool {
+fn is_ambiguous_create_status(status: reqwest::StatusCode) -> bool {
     status.is_server_error()
         || status == reqwest::StatusCode::REQUEST_TIMEOUT
         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
 }
 
-pub(crate) fn confirmed_create_error(
+fn confirmed_create_error(
     message: String,
     note_id: String,
     short_id: Option<i64>,
@@ -450,7 +496,7 @@ pub(crate) fn confirmed_create_error(
     }
 }
 
-pub(crate) fn partial_create_error(
+fn partial_create_error(
     message: String,
     note_id: String,
     short_id: Option<i64>,
@@ -466,7 +512,7 @@ pub(crate) fn partial_create_error(
     }
 }
 
-pub(crate) fn ambiguous_create_error(
+fn ambiguous_create_error(
     message: String,
     note_id: String,
     extraction_rows: &[RemoteExtractionRow],
@@ -478,7 +524,7 @@ pub(crate) fn ambiguous_create_error(
     }
 }
 
-pub(crate) async fn reconcile_confirmed_remote_note(
+async fn reconcile_confirmed_remote_note(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -507,14 +553,14 @@ pub(crate) async fn reconcile_confirmed_remote_note(
     }
 }
 
-pub(crate) async fn finish_remote_create(
+async fn finish_remote_create(
     db: &PowerSyncDatabase,
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
     row: RemoteNoteRow,
     extraction_rows: &[RemoteExtractionRow],
-) -> Result<RemoteCreatedNote, DaemonError> {
+) -> Result<CreatedNote, DaemonError> {
     let short_id = match row.short_id {
         Some(short_id) => short_id,
         None => {
@@ -558,14 +604,16 @@ pub(crate) async fn finish_remote_create(
             extraction_outcome.pending_ids,
         ));
     }
-    Ok(RemoteCreatedNote {
-        uuid: row.id,
-        short_id,
+    Ok(CreatedNote {
+        inserted: InsertedNote {
+            uuid: row.id,
+            short_id: Some(short_id),
+        },
         confirmed_extraction_ids: extraction_outcome.confirmed_ids,
     })
 }
 
-pub(crate) async fn lookup_remote_note(
+async fn lookup_remote_note(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -599,7 +647,7 @@ pub(crate) async fn lookup_remote_note(
     Ok(rows.pop())
 }
 
-pub(crate) async fn create_extractions_with_token(
+async fn create_extractions_with_token(
     db: &PowerSyncDatabase,
     http: &reqwest::Client,
     config: &Config,
@@ -696,7 +744,7 @@ pub(crate) async fn create_extractions_with_token(
     }
 }
 
-pub(crate) async fn lookup_remote_extraction(
+async fn lookup_remote_extraction(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -731,13 +779,29 @@ pub(crate) async fn lookup_remote_extraction(
 }
 
 pub(crate) struct RemoteNoteCreator {
-    pub(crate) db: PowerSyncDatabase,
-    pub(crate) auth: Arc<GoTrueClient>,
-    pub(crate) http: reqwest::Client,
-    pub(crate) config: Arc<Config>,
+    db: PowerSyncDatabase,
+    auth: Arc<GoTrueClient>,
+    http: reqwest::Client,
+    config: Arc<Config>,
 }
 
-pub(crate) fn remote_create_service_error(
+impl RemoteNoteCreator {
+    pub(crate) fn new(
+        db: PowerSyncDatabase,
+        auth: Arc<GoTrueClient>,
+        http: reqwest::Client,
+        config: Arc<Config>,
+    ) -> Self {
+        Self {
+            db,
+            auth,
+            http,
+            config,
+        }
+    }
+}
+
+fn remote_create_service_error(
     error: DaemonError,
 ) -> flicknote_core::services::error::ServiceError {
     match error {
@@ -787,32 +851,8 @@ impl NoteCreator for RemoteNoteCreator {
         flicknote_core::services::ports::CreatedNote,
         flicknote_core::services::error::ServiceError,
     > {
-        let created = create_note_remotely(
-            &self.db,
-            &self.http,
-            &self.auth,
-            &self.config,
-            CreateNoteRequest {
-                id: request.id,
-                note_type: request.note_type,
-                status: request.status,
-                title: request.title,
-                content: request.content,
-                metadata: request.metadata,
-                project_id: request.project_id,
-                now: request.now,
-                topics: request.topics,
-                attachment_path: request.attachment_path,
-            },
-        )
-        .await
-        .map_err(remote_create_service_error)?;
-        Ok(flicknote_core::services::ports::CreatedNote {
-            inserted: flicknote_core::backend::InsertedNote {
-                uuid: created.uuid,
-                short_id: Some(created.short_id),
-            },
-            confirmed_extraction_ids: created.confirmed_extraction_ids,
-        })
+        create_note_remotely(&self.db, &self.http, &self.auth, &self.config, request)
+            .await
+            .map_err(remote_create_service_error)
     }
 }

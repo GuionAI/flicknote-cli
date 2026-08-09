@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
@@ -62,12 +62,12 @@ struct CountResult {
 
 #[derive(Clone)]
 pub(crate) struct FlickNoteMcp {
-    config: Rc<Config>,
+    config: Arc<Config>,
     tool_router: ToolRouter<Self>,
 }
 
 impl FlickNoteMcp {
-    pub(crate) fn new(config: Rc<Config>) -> Self {
+    pub(crate) fn new(config: Arc<Config>) -> Self {
         Self {
             config,
             tool_router: Self::tool_router(),
@@ -595,7 +595,7 @@ impl ServerHandler for FlickNoteMcp {
     }
 }
 
-pub(crate) async fn serve(config: Rc<Config>) -> Result<(), CliError> {
+pub(crate) async fn serve(config: Arc<Config>) -> Result<(), CliError> {
     FlickNoteMcp::new(config)
         .serve(rmcp::transport::stdio())
         .await
@@ -608,7 +608,24 @@ pub(crate) async fn serve(config: Rc<Config>) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use flicknote_core::config::Config;
+
     use super::FlickNoteMcp;
+
+    fn assert_send<T: Send>(_: T) {}
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[allow(dead_code)]
+    fn assert_serve_future_is_send(config: Arc<Config>) {
+        assert_send(super::serve(config));
+    }
+
+    #[test]
+    fn mcp_service_is_send_and_sync() {
+        assert_send_sync::<FlickNoteMcp>();
+    }
 
     #[test]
     fn explicit_project_wins_then_falls_back_to_non_empty_environment_value() {

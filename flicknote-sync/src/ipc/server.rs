@@ -85,7 +85,7 @@ pub(crate) async fn serve_app_stream(
     write_response(stream, &response).await
 }
 
-pub(crate) async fn write_json<T: Serialize>(
+pub(crate) async fn write_json<T: Serialize + Sync>(
     stream: &mut UnixStream,
     value: &T,
 ) -> Result<(), DaemonError> {

@@ -1,6 +1,26 @@
 use super::*;
 use crate::test_support::*;
 
+fn remote_note(id: &str, title: &str) -> RemoteNoteRow {
+    RemoteNoteRow {
+        id: id.to_string(),
+        short_id: Some(42),
+        user_id: "user-1".to_string(),
+        note_type: "normal".to_string(),
+        status: "ai_queued".to_string(),
+        title: Some(title.to_string()),
+        content: Some("Canonical body".to_string()),
+        summary: Some("Canonical summary".to_string()),
+        is_flagged: false,
+        project_id: Some("project-1".to_string()),
+        metadata: Some(serde_json::json!({"source": "remote"})),
+        source: Some(serde_json::json!({"kind": "plain"})),
+        created_at: Some("2026-08-09T00:00:00Z".to_string()),
+        updated_at: Some("2026-08-09T00:00:01Z".to_string()),
+        deleted_at: None,
+    }
+}
+
 #[tokio::test]
 async fn remote_committed_note_is_fully_visible_before_return() {
     let (_directory, db) = test_powersync_db().await;
@@ -130,7 +150,7 @@ async fn remote_create_returns_after_canonical_note_is_committed_locally() {
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
-    let request = CreateNoteRequest {
+    let request = CreateNote {
         id: "note-create".to_string(),
         note_type: "normal".to_string(),
         status: "ai_queued".to_string(),
@@ -154,8 +174,8 @@ async fn remote_create_returns_after_canonical_note_is_committed_locally() {
     .await
     .unwrap();
 
-    assert_eq!(created.uuid, "note-create");
-    assert_eq!(created.short_id, 77);
+    assert_eq!(created.inserted.uuid, "note-create");
+    assert_eq!(created.inserted.short_id, Some(77));
     let reader = db.reader().await.unwrap();
     let title: String = reader
         .query_row(
@@ -192,7 +212,7 @@ async fn remote_create_reports_typed_partial_success_after_note_commit() {
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-partial".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -240,7 +260,7 @@ async fn remote_create_recovers_empty_idempotent_response_by_stable_uuid() {
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
-    let request = CreateNoteRequest {
+    let request = CreateNote {
         id: "note-retry".to_string(),
         note_type: "normal".to_string(),
         status: "ai_queued".to_string(),
@@ -264,7 +284,7 @@ async fn remote_create_recovers_empty_idempotent_response_by_stable_uuid() {
     .await
     .unwrap();
 
-    assert_eq!(created.short_id, 78);
+    assert_eq!(created.inserted.short_id, Some(78));
     assert_eq!(
         server.join().unwrap(),
         [
@@ -289,7 +309,7 @@ async fn remote_create_recovers_malformed_success_response_by_stable_uuid() {
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-malformed".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -305,7 +325,7 @@ async fn remote_create_recovers_malformed_success_response_by_stable_uuid() {
     .await
     .unwrap();
 
-    assert_eq!(created.short_id, 81);
+    assert_eq!(created.inserted.short_id, Some(81));
     assert_eq!(
         server.join().unwrap(),
         [
@@ -332,7 +352,7 @@ async fn malformed_success_with_failed_reconciliation_reports_confirmed_create()
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-confirmed".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -381,7 +401,7 @@ async fn local_commit_failure_after_remote_create_reports_partial_success() {
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-local-failure".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -418,7 +438,7 @@ async fn remote_create_recovers_lost_response_by_stable_uuid() {
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
-    let request = CreateNoteRequest {
+    let request = CreateNote {
         id: "note-lost".to_string(),
         note_type: "normal".to_string(),
         status: "ai_queued".to_string(),
@@ -442,7 +462,7 @@ async fn remote_create_recovers_lost_response_by_stable_uuid() {
     .await
     .unwrap();
 
-    assert_eq!(created.short_id, 79);
+    assert_eq!(created.inserted.short_id, Some(79));
     assert_eq!(server.join().unwrap().len(), 2);
 }
 
@@ -463,7 +483,7 @@ async fn ambiguous_transport_failure_reports_stable_unknown_outcome() {
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-unknown".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -507,7 +527,7 @@ async fn ambiguous_transport_failure_retries_create_with_the_same_stable_uuid() 
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-recovered-after-retry".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -524,7 +544,7 @@ async fn ambiguous_transport_failure_retries_create_with_the_same_stable_uuid() 
     let requests = server.join().unwrap();
 
     let created = result.unwrap();
-    assert_eq!(created.short_id, 83);
+    assert_eq!(created.inserted.short_id, Some(83));
     assert_eq!(requests.len(), 2);
     assert!(requests[0].starts_with("POST /rest/v1/notes"));
     assert!(requests[1].starts_with("POST /rest/v1/notes"));
@@ -548,7 +568,7 @@ async fn retryable_status_retries_create_with_the_same_stable_uuid() {
         &config,
         "access-token",
         "user-1",
-        CreateNoteRequest {
+        CreateNote {
             id: "note-retryable-status".to_string(),
             note_type: "normal".to_string(),
             status: "ai_queued".to_string(),
@@ -565,7 +585,7 @@ async fn retryable_status_retries_create_with_the_same_stable_uuid() {
     .unwrap();
     let requests = server.join().unwrap();
 
-    assert_eq!(created.short_id, 84);
+    assert_eq!(created.inserted.short_id, Some(84));
     assert_eq!(requests.len(), 2);
     assert!(
         requests

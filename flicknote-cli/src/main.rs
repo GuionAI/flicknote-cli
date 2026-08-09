@@ -118,9 +118,7 @@ async fn run() -> Result<(), CliError> {
     let daemon = DaemonClient::new(&config);
     daemon.health().await?;
     if matches!(cli.command, Some(Commands::Mcp)) {
-        return tokio::task::LocalSet::new()
-            .run_until(mcp::serve(std::rc::Rc::new(config)))
-            .await;
+        return mcp::serve(std::sync::Arc::new(config)).await;
     }
     dispatch(&cli, &daemon).await
 }

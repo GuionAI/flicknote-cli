@@ -1,10 +1,15 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::thread;
 
-use flicknote_core::config::ConfigPaths;
-
-use crate::*;
+use flicknote_core::{
+    REMOTE_COMMITTED_INSERT_METADATA,
+    config::{Config, ConfigPaths},
+    schema::app_schema,
+};
+use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
+use rusqlite::params;
 
 pub(crate) async fn test_powersync_db() -> (tempfile::TempDir, PowerSyncDatabase) {
     PowerSyncEnvironment::powersync_auto_extension().unwrap();
@@ -55,26 +60,6 @@ pub(crate) async fn insert_note_with_metadata(db: &PowerSyncDatabase, metadata: 
 
 pub(crate) async fn insert_marked_note(db: &PowerSyncDatabase) {
     insert_note_with_metadata(db, REMOTE_COMMITTED_INSERT_METADATA).await;
-}
-
-pub(crate) fn remote_note(id: &str, title: &str) -> RemoteNoteRow {
-    RemoteNoteRow {
-        id: id.to_string(),
-        short_id: Some(42),
-        user_id: "user-1".to_string(),
-        note_type: "normal".to_string(),
-        status: "ai_queued".to_string(),
-        title: Some(title.to_string()),
-        content: Some("Canonical body".to_string()),
-        summary: Some("Canonical summary".to_string()),
-        is_flagged: false,
-        project_id: Some("project-1".to_string()),
-        metadata: Some(serde_json::json!({"source": "remote"})),
-        source: Some(serde_json::json!({"kind": "plain"})),
-        created_at: Some("2026-08-09T00:00:00Z".to_string()),
-        updated_at: Some("2026-08-09T00:00:01Z".to_string()),
-        deleted_at: None,
-    }
 }
 
 pub(crate) fn test_config(api_url: String) -> Config {

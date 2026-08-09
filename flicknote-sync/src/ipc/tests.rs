@@ -346,7 +346,11 @@ async fn malformed_transport_responses_are_classified_by_mutation_safety() {
 async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
-    let server = serve_response(&config, DaemonResponse::App(Box::new(AppResponse::Unit))).await;
+    let server = serve_response(
+        &config,
+        DaemonResponse::App(Box::new(AppResponse::Values(Vec::new()))),
+    )
+    .await;
     let error = DaemonClient::new(&config)
         .call::<u64>(AppRequest::NoteCount(NoteCountInput {
             keywords: Vec::new(),
@@ -361,7 +365,11 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
 
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
-    let server = serve_response(&config, DaemonResponse::App(Box::new(AppResponse::Unit))).await;
+    let server = serve_response(
+        &config,
+        DaemonResponse::App(Box::new(AppResponse::Values(Vec::new()))),
+    )
+    .await;
     let error = DaemonClient::new(&config)
         .call::<NoteArchiveResult>(AppRequest::NoteArchive {
             id: "note-1".to_string(),

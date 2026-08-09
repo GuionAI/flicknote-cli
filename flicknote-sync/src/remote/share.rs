@@ -1,39 +1,51 @@
-use crate::*;
+use std::future::Future;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use flicknote_auth::client::GoTrueClient;
+use flicknote_core::{
+    config::Config,
+    services::ports::{ShareGateway, ShareResource as CoreShareResource},
+};
+use serde::Deserialize;
+
+use crate::ipc::DaemonError;
+use crate::remote::attachment::validate_api_url;
 
 #[cfg(test)]
 mod tests;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ShareResource {
+enum ShareResource {
     Note,
     Project,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ShareRequest {
-    pub(crate) resource: ShareResource,
-    pub(crate) id: String,
+struct ShareRequest {
+    resource: ShareResource,
+    id: String,
 }
 
 #[derive(Deserialize)]
-pub(crate) struct ShareResponse {
-    pub(crate) url: String,
+struct ShareResponse {
+    url: String,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ShareApiError {
-    pub(crate) error_code: Option<String>,
-    pub(crate) message: Option<String>,
+struct ShareApiError {
+    error_code: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Default)]
-pub(crate) struct ShareRequestLock {
-    pub(crate) mutex: tokio::sync::Mutex<()>,
+struct ShareRequestLock {
+    mutex: tokio::sync::Mutex<()>,
 }
 
 impl ShareRequestLock {
-    pub(crate) async fn run<T>(&self, operation: impl Future<Output = T>) -> T {
+    async fn run<T>(&self, operation: impl Future<Output = T>) -> T {
         let _guard = self.mutex.lock().await;
         operation.await
     }
@@ -55,7 +67,7 @@ impl ShareResource {
     }
 }
 
-pub(crate) fn share_endpoint(api_url: &str, request: &ShareRequest) -> String {
+fn share_endpoint(api_url: &str, request: &ShareRequest) -> String {
     let versioned_base = api_url
         .trim_end_matches('/')
         .trim_end_matches("/api/v1")
@@ -67,7 +79,7 @@ pub(crate) fn share_endpoint(api_url: &str, request: &ShareRequest) -> String {
     )
 }
 
-pub(crate) fn share_api_error(status: reqwest::StatusCode, body: String) -> DaemonError {
+fn share_api_error(status: reqwest::StatusCode, body: String) -> DaemonError {
     let message = serde_json::from_str::<ShareApiError>(&body)
         .ok()
         .and_then(|error| error.message)
@@ -77,7 +89,7 @@ pub(crate) fn share_api_error(status: reqwest::StatusCode, body: String) -> Daem
     }
 }
 
-pub(crate) async fn parse_share_url(response: reqwest::Response) -> Result<String, DaemonError> {
+async fn parse_share_url(response: reqwest::Response) -> Result<String, DaemonError> {
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
@@ -92,7 +104,7 @@ pub(crate) async fn parse_share_url(response: reqwest::Response) -> Result<Strin
         })
 }
 
-pub(crate) async fn get_or_create_share_with_token(
+async fn get_or_create_share_with_token(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -136,7 +148,7 @@ pub(crate) async fn get_or_create_share_with_token(
     parse_share_url(response).await
 }
 
-pub(crate) async fn revoke_share_with_token(
+async fn revoke_share_with_token(
     http: &reqwest::Client,
     config: &Config,
     access_token: &str,
@@ -159,7 +171,7 @@ pub(crate) async fn revoke_share_with_token(
     Err(share_api_error(status, body))
 }
 
-pub(crate) async fn get_or_create_share(
+async fn get_or_create_share(
     http: &reqwest::Client,
     auth: &GoTrueClient,
     config: &Config,
@@ -174,7 +186,7 @@ pub(crate) async fn get_or_create_share(
     get_or_create_share_with_token(http, config, &session.access_token, request).await
 }
 
-pub(crate) async fn revoke_share(
+async fn revoke_share(
     http: &reqwest::Client,
     auth: &GoTrueClient,
     config: &Config,
@@ -190,10 +202,21 @@ pub(crate) async fn revoke_share(
 }
 
 pub(crate) struct RemoteShareGateway {
-    pub(crate) http: reqwest::Client,
-    pub(crate) auth: Arc<GoTrueClient>,
-    pub(crate) config: Arc<Config>,
-    pub(crate) lock: Arc<ShareRequestLock>,
+    http: reqwest::Client,
+    auth: Arc<GoTrueClient>,
+    config: Arc<Config>,
+    lock: ShareRequestLock,
+}
+
+impl RemoteShareGateway {
+    pub(crate) fn new(http: reqwest::Client, auth: Arc<GoTrueClient>, config: Arc<Config>) -> Self {
+        Self {
+            http,
+            auth,
+            config,
+            lock: ShareRequestLock::default(),
+        }
+    }
 }
 
 #[async_trait]

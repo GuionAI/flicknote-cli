@@ -71,13 +71,13 @@ async fn request(config: &Config, args: &GatewayRequestArgs) -> Result<(), CliEr
     };
 
     eprintln!("Gateway response: {}", response.status());
-    let stdout = std::io::stdout();
-    let mut stdout = stdout.lock();
     while let Some(chunk) = response
         .chunk()
         .await
         .map_err(|_| CliError::Http("Gateway response interrupted".into()))?
     {
+        let stdout = std::io::stdout();
+        let mut stdout = stdout.lock();
         stdout.write_all(&chunk)?;
         stdout.flush()?;
     }

@@ -58,6 +58,18 @@ pub trait ShareGateway: Send + Sync {
     async fn unshare(&self, resource: ShareResource, id: &str) -> Result<(), ServiceError>;
 }
 
-pub trait BrowserOpener {
+pub trait BrowserOpener: Send + Sync {
     fn open(&self, url: &str) -> Result<(), ServiceError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrowserOpener;
+
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+
+    #[test]
+    fn browser_opener_port_is_send_and_sync() {
+        assert_send_sync::<dyn BrowserOpener>();
+    }
 }

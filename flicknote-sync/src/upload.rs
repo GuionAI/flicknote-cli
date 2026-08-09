@@ -1,4 +1,12 @@
-use crate::*;
+use std::future::Future;
+use std::path::Path;
+use std::sync::Arc;
+
+use flicknote_auth::client::GoTrueClient;
+use futures_lite::StreamExt;
+use powersync::{CrudEntry, PowerSyncDatabase, UpdateType, error::PowerSyncError};
+
+use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone};
 
 #[cfg(test)]
 mod tests;
@@ -10,12 +18,12 @@ pub(crate) fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
 
 /// Postgres/PostgREST error codes that will never succeed on retry.
 /// Mirrors the iOS PostgresFatalCodes pattern (PowerSyncService.swift).
-pub(crate) const FATAL_PG_PREFIXES: &[&str] = &[
+const FATAL_PG_PREFIXES: &[&str] = &[
     "22", // Class 22 — Data Exception
     "23", // Class 23 — Integrity Constraint Violation (FK, unique, not-null)
 ];
 
-pub(crate) const FATAL_PG_CODES: &[&str] = &[
+const FATAL_PG_CODES: &[&str] = &[
     "42501",    // INSUFFICIENT PRIVILEGE (RLS violation)
     "42703",    // undefined column
     "42P01",    // undefined table
@@ -27,7 +35,7 @@ pub(crate) const FATAL_PG_CODES: &[&str] = &[
 /// Returns `Some(code)` if the error is fatal (will never succeed on retry),
 /// or `None` if the code is unrecognised, missing, or the body is not JSON.
 /// `None` does not mean the error is confirmed transient — it means unknown.
-pub(crate) fn extract_fatal_code(body: &str) -> Option<String> {
+fn extract_fatal_code(body: &str) -> Option<String> {
     let parsed: serde_json::Value = serde_json::from_str(body).ok().or_else(|| {
         log::debug!("extract_fatal_code: body is not JSON, treating as unknown: {body}");
         None
@@ -49,13 +57,13 @@ pub(crate) fn extract_fatal_code(body: &str) -> Option<String> {
 }
 
 /// Classify an HTTP response as success, fatal (discard), or transient (retry).
-pub(crate) enum UploadOutcome {
+enum UploadOutcome {
     Success,
     Fatal(String),
     Transient(String),
 }
 
-pub(crate) async fn classify_response(
+async fn classify_response(
     resp: reqwest::Response,
     op: &str,
     table: &str,
@@ -91,7 +99,7 @@ pub(crate) struct FlickNoteConnector {
 /// Un-wrap JSON strings that contain objects/arrays (fixes double-marshal for jsonb columns).
 /// PowerSync stores jsonb as text, so crud.data has them as Value::String.
 /// Supabase expects Value::Object for jsonb columns.
-pub(crate) fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
+fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
     for (key, value) in data.iter_mut() {
         if let serde_json::Value::String(s) = value {
             match serde_json::from_str::<serde_json::Value>(s) {
@@ -110,11 +118,11 @@ pub(crate) fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json:
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FlickNoteCrudMarker {
+enum FlickNoteCrudMarker {
     RemoteCommittedInsert,
 }
 
-pub(crate) fn parse_flicknote_crud_marker(
+fn parse_flicknote_crud_marker(
     metadata: Option<&str>,
 ) -> Result<Option<FlickNoteCrudMarker>, PowerSyncError> {
     let Some(metadata) = metadata else {
@@ -141,6 +149,92 @@ pub(crate) fn parse_flicknote_crud_marker(
     }
 }
 
+fn prepare_crud(crud: &mut CrudEntry) -> Result<bool, PowerSyncError> {
+    if crud.table == "keyterms" {
+        log::info!(
+            "Discarding queued CRUD for retired keyterms row {}",
+            crud.id
+        );
+        return Ok(true);
+    }
+    if crud.table == "projects"
+        && let Some(data) = crud.data.as_mut()
+    {
+        data.remove("keyterm_id");
+    }
+    if parse_flicknote_crud_marker(crud.metadata.as_deref())?
+        != Some(FlickNoteCrudMarker::RemoteCommittedInsert)
+    {
+        return Ok(false);
+    }
+
+    let operation = match &crud.update_type {
+        UpdateType::Put => "PUT",
+        UpdateType::Patch => "PATCH",
+        UpdateType::Delete => "DELETE",
+    };
+    let allowed_table = matches!(crud.table.as_str(), "notes" | "note_extractions");
+    if !allowed_table || !matches!(&crud.update_type, UpdateType::Put) {
+        return Err(ps_err(format!(
+            "invalid remote-committed marker on {operation} operation for table {}",
+            crud.table,
+        )));
+    }
+    Ok(true)
+}
+
+async fn upload_crud(
+    client: &reqwest::Client,
+    token: &str,
+    supabase_url: &str,
+    supabase_anon_key: &str,
+    crud: CrudEntry,
+) -> Result<UploadOutcome, PowerSyncError> {
+    let table = crud.table;
+    let id = crud.id;
+    let (operation, response) = match crud.update_type {
+        UpdateType::Put => {
+            let mut data = crud.data.unwrap_or_default();
+            data.insert("id".into(), serde_json::Value::String(id.clone()));
+            unwrap_json_strings(&mut data);
+            let response = client
+                .post(format!("{supabase_url}/rest/v1/{table}"))
+                .header("apikey", supabase_anon_key)
+                .header("Authorization", format!("Bearer {token}"))
+                .header("Prefer", "resolution=merge-duplicates")
+                .json(&data)
+                .send()
+                .await
+                .map_err(|error| ps_err(format!("Upload PUT failed: {error}")))?;
+            ("PUT", response)
+        }
+        UpdateType::Patch => {
+            let mut data = crud.data.unwrap_or_default();
+            unwrap_json_strings(&mut data);
+            let response = client
+                .patch(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
+                .header("apikey", supabase_anon_key)
+                .header("Authorization", format!("Bearer {token}"))
+                .json(&data)
+                .send()
+                .await
+                .map_err(|error| ps_err(format!("Upload PATCH failed: {error}")))?;
+            ("PATCH", response)
+        }
+        UpdateType::Delete => {
+            let response = client
+                .delete(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
+                .header("apikey", supabase_anon_key)
+                .header("Authorization", format!("Bearer {token}"))
+                .send()
+                .await
+                .map_err(|error| ps_err(format!("Upload DELETE failed: {error}")))?;
+            ("DELETE", response)
+        }
+    };
+    Ok(classify_response(response, operation, &table, &id).await)
+}
+
 /// Inner upload logic shared by the BackendConnector and application-triggered drain.
 /// Caller is responsible for holding `upload_guard` before calling.
 ///
@@ -165,88 +259,10 @@ pub(crate) async fn run_upload(
         let mut transient_msg: Option<String> = None;
 
         for mut crud in std::mem::take(&mut tx.crud) {
-            // The backend retired the keyterm domain. Old offline databases may still
-            // have queued writes for the removed table or the removed project column.
-            // Consume those retired fields locally so they cannot block the FIFO or
-            // cause an otherwise valid project mutation to be discarded by PostgREST.
-            if crud.table == "keyterms" {
-                log::info!(
-                    "Discarding queued CRUD for retired keyterms row {}",
-                    crud.id
-                );
+            if prepare_crud(&mut crud)? {
                 continue;
             }
-            if crud.table == "projects"
-                && let Some(data) = crud.data.as_mut()
-            {
-                data.remove("keyterm_id");
-            }
-            if parse_flicknote_crud_marker(crud.metadata.as_deref())?
-                == Some(FlickNoteCrudMarker::RemoteCommittedInsert)
-            {
-                let allowed_table = matches!(crud.table.as_str(), "notes" | "note_extractions");
-                let is_put = matches!(&crud.update_type, UpdateType::Put);
-                if !allowed_table || !is_put {
-                    let operation = match &crud.update_type {
-                        UpdateType::Put => "PUT",
-                        UpdateType::Patch => "PATCH",
-                        UpdateType::Delete => "DELETE",
-                    };
-                    return Err(ps_err(format!(
-                        "invalid remote-committed marker on {operation} operation for table {}",
-                        crud.table,
-                    )));
-                }
-                continue;
-            }
-            let table = &crud.table;
-            let id = &crud.id;
-
-            // Single match on crud.update_type — UpdateType is not Copy,
-            // so we derive both op and resp in one match to avoid use-after-move.
-            let (op, resp) = match crud.update_type {
-                UpdateType::Put => {
-                    let mut data = crud.data.unwrap_or_default();
-                    data.insert("id".into(), serde_json::Value::String(id.clone()));
-                    unwrap_json_strings(&mut data);
-                    let r = client
-                        .post(format!("{supabase_url}/rest/v1/{table}"))
-                        .header("apikey", supabase_anon_key)
-                        .header("Authorization", format!("Bearer {token}"))
-                        .header("Prefer", "resolution=merge-duplicates")
-                        .json(&data)
-                        .send()
-                        .await
-                        .map_err(|e| ps_err(format!("Upload PUT failed: {e}")))?;
-                    ("PUT", r)
-                }
-                UpdateType::Patch => {
-                    let mut data = crud.data.unwrap_or_default();
-                    unwrap_json_strings(&mut data);
-                    let r = client
-                        .patch(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
-                        .header("apikey", supabase_anon_key)
-                        .header("Authorization", format!("Bearer {token}"))
-                        .json(&data)
-                        .send()
-                        .await
-                        .map_err(|e| ps_err(format!("Upload PATCH failed: {e}")))?;
-                    ("PATCH", r)
-                }
-                UpdateType::Delete => {
-                    // No payload — unwrap_json_strings not needed.
-                    let r = client
-                        .delete(format!("{supabase_url}/rest/v1/{table}?id=eq.{id}"))
-                        .header("apikey", supabase_anon_key)
-                        .header("Authorization", format!("Bearer {token}"))
-                        .send()
-                        .await
-                        .map_err(|e| ps_err(format!("Upload DELETE failed: {e}")))?;
-                    ("DELETE", r)
-                }
-            };
-
-            match classify_response(resp, op, table, id).await {
+            match upload_crud(client, token, supabase_url, supabase_anon_key, crud).await? {
                 UploadOutcome::Success => {}
                 UploadOutcome::Fatal(msg) => {
                     fatal_msg = Some(msg);
@@ -297,7 +313,7 @@ pub(crate) async fn run_upload(
 /// The checkpoint call uses `spawn_blocking` since `checkpoint_wal_standalone`
 /// does blocking I/O (rusqlite open).
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn try_upload_and_checkpoint(
+async fn try_upload_and_checkpoint(
     db: &PowerSyncDatabase,
     client: &reqwest::Client,
     auth: &GoTrueClient,
@@ -337,7 +353,7 @@ pub(crate) async fn try_upload_and_checkpoint(
     }
 }
 
-pub(crate) async fn retry_with_backoff<F, Fut>(
+async fn retry_with_backoff<F, Fut>(
     mut attempt: F,
     initial_delay: std::time::Duration,
     maximum_delay: std::time::Duration,

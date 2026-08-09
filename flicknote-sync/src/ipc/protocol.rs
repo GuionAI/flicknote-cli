@@ -128,25 +128,59 @@ pub enum AppRequest {
 }
 
 impl AppRequest {
-    pub fn may_write(&self) -> bool {
-        !matches!(
-            self,
+    pub(crate) fn kind(&self) -> AppRequestKind {
+        match self {
             Self::NoteList(_)
-                | Self::NoteFind(_)
-                | Self::NoteCount(_)
-                | Self::NoteGet { .. }
-                | Self::NoteLoadEditable { .. }
-                | Self::NoteRecord { .. }
-                | Self::NoteGetSection { .. }
-                | Self::NoteSource { .. }
-                | Self::NoteOpen { .. }
-                | Self::ProjectList { .. }
-                | Self::ProjectRecords { .. }
-                | Self::ProjectGet { .. }
-                | Self::ProjectGetByName { .. }
-                | Self::ExtractionValues { .. }
+            | Self::NoteFind(_)
+            | Self::NoteCount(_)
+            | Self::NoteGet { .. }
+            | Self::NoteLoadEditable { .. }
+            | Self::NoteRecord { .. }
+            | Self::NoteGetSection { .. }
+            | Self::NoteSource { .. }
+            | Self::NoteOpen { .. } => AppRequestKind::NoteRead,
+            Self::NoteAdd(_)
+            | Self::NoteAddEditable { .. }
+            | Self::NoteUpload { .. }
+            | Self::NoteAppend { .. }
+            | Self::NoteSaveEditable { .. }
+            | Self::NoteReplaceSection { .. }
+            | Self::NoteRenameSection { .. }
+            | Self::NoteInsert { .. }
+            | Self::NoteDeleteSection { .. }
+            | Self::NoteModify(_)
+            | Self::NoteArchive { .. }
+            | Self::NoteRestore { .. }
+            | Self::NoteShare { .. }
+            | Self::NoteUnshare { .. } => AppRequestKind::NoteWrite,
+            Self::ProjectList { .. }
+            | Self::ProjectRecords { .. }
+            | Self::ProjectGet { .. }
+            | Self::ProjectGetByName { .. } => AppRequestKind::ProjectRead,
+            Self::ProjectAdd(_)
+            | Self::ProjectModify(_)
+            | Self::ProjectArchive { .. }
+            | Self::ProjectShare { .. }
+            | Self::ProjectUnshare { .. } => AppRequestKind::ProjectWrite,
+            Self::ExtractionValues { .. } => AppRequestKind::ExtractionRead,
+        }
+    }
+
+    pub fn may_write(&self) -> bool {
+        matches!(
+            self.kind(),
+            AppRequestKind::NoteWrite | AppRequestKind::ProjectWrite
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppRequestKind {
+    NoteRead,
+    NoteWrite,
+    ProjectRead,
+    ProjectWrite,
+    ExtractionRead,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,9 +203,7 @@ pub enum AppResponse {
     Projects(Vec<ProjectDto>),
     ProjectRecords(Vec<Project>),
     Project(ProjectDto),
-    Id { id: String },
     Values(Vec<String>),
-    Unit,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -218,24 +250,6 @@ impl AppResult for u64 {
     fn from_response(response: AppResponse) -> Option<Self> {
         match response {
             AppResponse::NoteCount { count } => Some(count),
-            _ => None,
-        }
-    }
-}
-
-impl AppResult for String {
-    fn from_response(response: AppResponse) -> Option<Self> {
-        match response {
-            AppResponse::Id { id } => Some(id),
-            _ => None,
-        }
-    }
-}
-
-impl AppResult for () {
-    fn from_response(response: AppResponse) -> Option<Self> {
-        match response {
-            AppResponse::Unit => Some(()),
             _ => None,
         }
     }
@@ -294,8 +308,7 @@ pub enum DaemonResponse {
     AppError(WireError),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "code", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonError {
     Unavailable {
         path: String,

@@ -1,5 +1,8 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use flicknote_core::{REMOTE_COMMITTED_INSERT_METADATA, schema::app_schema};
+use rusqlite::params;
+
 use super::*;
 use crate::test_support::*;
 
@@ -96,46 +99,38 @@ async fn existing_database_upgrades_to_metadata_tracking_without_losing_rows() {
     );
 }
 
-#[tokio::test]
-async fn existing_database_retires_keyterm_schema_without_losing_projects() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("keyterm-retirement.db");
-    let mut legacy_schema = app_schema();
-    let projects = legacy_schema
+fn schema_with_retired_keyterms() -> powersync::schema::Schema {
+    let mut schema = app_schema();
+    let projects = schema
         .tables
         .iter_mut()
         .find(|table| table.name.as_ref() == "projects")
         .unwrap();
-    if !projects
+    projects
         .columns
-        .iter()
-        .any(|column| column.name.as_ref() == "keyterm_id")
-    {
-        projects
-            .columns
-            .push(powersync::schema::Column::text("keyterm_id"));
-    }
-    if !legacy_schema
-        .tables
-        .iter()
-        .any(|table| table.name.as_ref() == "keyterms")
-    {
-        legacy_schema.tables.push(powersync::schema::Table::create(
-            "keyterms",
-            vec![
-                powersync::schema::Column::text("user_id"),
-                powersync::schema::Column::text("name"),
-                powersync::schema::Column::text("description"),
-                powersync::schema::Column::text("content"),
-                powersync::schema::Column::text("created_at"),
-                powersync::schema::Column::text("updated_at"),
-            ],
-            |_| {},
-        ));
-    }
+        .push(powersync::schema::Column::text("keyterm_id"));
+    schema.tables.push(powersync::schema::Table::create(
+        "keyterms",
+        vec![
+            powersync::schema::Column::text("user_id"),
+            powersync::schema::Column::text("name"),
+            powersync::schema::Column::text("description"),
+            powersync::schema::Column::text("content"),
+            powersync::schema::Column::text("created_at"),
+            powersync::schema::Column::text("updated_at"),
+        ],
+        |_| {},
+    ));
+    schema
+}
+
+#[tokio::test]
+async fn existing_database_retires_keyterm_schema_without_losing_projects() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("keyterm-retirement.db");
 
     {
-        let legacy_db = test_powersync_db_at(&path, legacy_schema);
+        let legacy_db = test_powersync_db_at(&path, schema_with_retired_keyterms());
         let writer = legacy_db.writer().await.unwrap();
         writer
             .execute(

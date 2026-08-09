@@ -1,3 +1,6 @@
-pub(crate) mod attachment;
-pub(crate) mod create;
-pub(crate) mod share;
+mod attachment;
+mod create;
+mod share;
+
+pub(crate) use create::RemoteNoteCreator;
+pub(crate) use share::RemoteShareGateway;
