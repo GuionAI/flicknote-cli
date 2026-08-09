@@ -21,9 +21,9 @@ enum SyncCommand {
     Stop,
     /// Check daemon status
     Status,
-    /// Install the local PowerSync daemon
+    /// Install the local PowerSync daemon as a launchd service (macOS only)
     Install,
-    /// Uninstall the local PowerSync daemon
+    /// Uninstall the local PowerSync launchd service (macOS only)
     Uninstall,
 }
 
@@ -95,13 +95,43 @@ pub(super) async fn wait_for_daemon_ready(
     timeout: std::time::Duration,
     interval: std::time::Duration,
 ) -> Result<(), CliError> {
+    wait_for_daemon_ready_matching(config, timeout, interval, None).await
+}
+
+#[cfg(any(target_os = "macos", test))]
+async fn wait_for_daemon_ready_for_mode(
+    config: &Config,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+    expected_mode: flicknote_sync::ipc::BackendMode,
+) -> Result<(), CliError> {
+    wait_for_daemon_ready_matching(config, timeout, interval, Some(expected_mode)).await
+}
+
+async fn wait_for_daemon_ready_matching(
+    config: &Config,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+    expected_mode: Option<flicknote_sync::ipc::BackendMode>,
+) -> Result<(), CliError> {
     let wait = async {
         loop {
             match flicknote_sync::ipc::DaemonClient::new(config)
                 .health()
                 .await
             {
-                Ok(_) => return Ok(()),
+                Ok(info) => {
+                    if let Some(expected) = expected_mode
+                        && info.backend != expected
+                    {
+                        return Err(CliError::Other(format!(
+                            "Expected a {} daemon, but the endpoint is owned by a {} daemon; stop it and retry",
+                            expected.as_str(),
+                            info.backend.as_str(),
+                        )));
+                    }
+                    return Ok(());
+                }
                 Err(error) if !error.retryable() => return Err(CliError::from(error)),
                 Err(_) => tokio::time::sleep(interval).await,
             }
@@ -192,10 +222,37 @@ async fn install_with_timeout(
     timeout: std::time::Duration,
 ) -> Result<(), CliError> {
     validate_install_mode(database_url)?;
-    super::daemon::install(config)?;
-    wait_for_daemon_ready(config, timeout, HEALTH_POLL_INTERVAL).await?;
+    install_local_daemon(config, timeout).await?;
     println!("Installed and started: io.guion.flicknote.sync");
     Ok(())
+}
+
+pub(super) async fn install_local_daemon(
+    config: &Config,
+    timeout: std::time::Duration,
+) -> Result<(), CliError> {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (_config, _timeout) = (config, timeout);
+        validate_launchd_platform()
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        validate_launchd_platform()?;
+        // Prove that the shared endpoint is no longer owned by an old launchd or
+        // standalone daemon before starting the new local LaunchAgent.
+        super::daemon::stop(config)?;
+        wait_for_daemon_stopped(config, timeout, HEALTH_POLL_INTERVAL).await?;
+        super::daemon::install(config)?;
+        wait_for_daemon_ready_for_mode(
+            config,
+            timeout,
+            HEALTH_POLL_INTERVAL,
+            flicknote_sync::ipc::BackendMode::Local,
+        )
+        .await
+    }
 }
 
 fn validate_install_mode(database_url: Option<&str>) -> Result<(), CliError> {
@@ -207,7 +264,17 @@ fn validate_install_mode(database_url: Option<&str>) -> Result<(), CliError> {
     Ok(())
 }
 
+fn validate_launchd_platform() -> Result<(), CliError> {
+    if !cfg!(target_os = "macos") {
+        return Err(CliError::Other(
+            "launchd installation is only supported on macOS; use `flicknote sync start` on this platform".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn uninstall() -> Result<(), CliError> {
+    validate_launchd_platform()?;
     super::daemon::uninstall()?;
     println!("Uninstalled: io.guion.flicknote.sync");
     Ok(())
@@ -269,16 +336,51 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[tokio::test]
-    async fn install_does_not_report_success_before_health_is_ready() {
+    async fn install_rejects_unsupported_platform_without_waiting() {
         let dir = tempfile::tempdir().expect("temp dir");
         let config = test_config(dir.path());
 
         let error = install_with_timeout(&config, None, std::time::Duration::from_millis(20))
             .await
-            .expect_err("socket absence must not count as launchd readiness");
+            .expect_err("non-macOS install must be rejected immediately");
 
-        assert!(error.to_string().contains("did not become ready"));
+        assert!(error.to_string().contains("only supported on macOS"));
+    }
+
+    #[tokio::test]
+    async fn local_install_readiness_rejects_a_managed_daemon() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = test_config(dir.path());
+        let listener = tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config))
+            .expect("bind socket");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut request = String::new();
+            reader.read_line(&mut request).await.unwrap();
+            let response = serde_json::to_vec(&flicknote_sync::ipc::DaemonResponse::ServerInfo(
+                flicknote_sync::ipc::ServerInfo::managed(),
+            ))
+            .unwrap();
+            writer.write_all(&response).await.unwrap();
+        });
+
+        let error = wait_for_daemon_ready_for_mode(
+            &config,
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_millis(10),
+            flicknote_sync::ipc::BackendMode::Local,
+        )
+        .await
+        .expect_err("a pre-existing managed daemon is not local install readiness");
+
+        assert!(error.to_string().contains("managed daemon"));
+        server.await.unwrap();
     }
 
     #[tokio::test]

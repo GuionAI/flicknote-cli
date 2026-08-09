@@ -161,13 +161,13 @@ impl<'a> NoteService<'a> {
                 attachment_path: None,
             }
         };
-        let inserted = creator.create(request).await?;
+        let created = creator.create(request).await?;
         let summary = async {
-            let note = self.db.find_note(&inserted.uuid).await?;
+            let note = self.db.find_note(&created.inserted.uuid).await?;
             self.summary(note).await
         }
         .await;
-        summary.map_err(|error| confirmed_create_followup_error(&inserted, &error))
+        summary.map_err(|error| confirmed_create_followup_error(&created, &error))
     }
 
     pub async fn get(&self, note_id: &str, archived: bool) -> Result<NoteDetail, ServiceError> {
@@ -593,9 +593,10 @@ impl<'a> NoteService<'a> {
 }
 
 pub fn confirmed_create_followup_error(
-    inserted: &crate::backend::InsertedNote,
+    created: &crate::services::ports::CreatedNote,
     error: &ServiceError,
 ) -> ServiceError {
+    let inserted = &created.inserted;
     ServiceError::Remote {
         code: "note_create_partial".to_string(),
         message: format!(
@@ -609,7 +610,7 @@ pub fn confirmed_create_followup_error(
             "created": true,
             "note_id": inserted.uuid,
             "short_id": inserted.short_id,
-            "confirmed_extraction_ids": [],
+            "confirmed_extraction_ids": created.confirmed_extraction_ids,
             "pending_extraction_ids": [],
         })),
     }
@@ -621,7 +622,7 @@ mod tests {
     use crate::backend::NoteDb;
     use crate::services::dto::NoteAddInput;
     use crate::services::ports::{
-        BrowserOpener, CreateNote, NoteCreator, ShareGateway, ShareResource,
+        BrowserOpener, CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
     };
     use crate::services::test_support::{insert_normal_note, make_backend};
     use async_trait::async_trait;
@@ -878,10 +879,13 @@ mod tests {
         async fn create(
             &self,
             request: CreateNote,
-        ) -> Result<crate::backend::InsertedNote, crate::services::error::ServiceError> {
+        ) -> Result<CreatedNote, crate::services::error::ServiceError> {
             let inserted = self.db.insert_note(&request.as_insert_request()).await?;
             *self.request.lock().unwrap() = Some(request);
-            Ok(inserted)
+            Ok(CreatedNote {
+                inserted,
+                confirmed_extraction_ids: Vec::new(),
+            })
         }
     }
 
@@ -892,10 +896,13 @@ mod tests {
         async fn create(
             &self,
             request: CreateNote,
-        ) -> Result<crate::backend::InsertedNote, crate::services::error::ServiceError> {
-            Ok(crate::backend::InsertedNote {
-                uuid: request.id,
-                short_id: Some(42),
+        ) -> Result<CreatedNote, crate::services::error::ServiceError> {
+            Ok(CreatedNote {
+                inserted: crate::backend::InsertedNote {
+                    uuid: request.id,
+                    short_id: Some(42),
+                },
+                confirmed_extraction_ids: vec!["extraction-confirmed".to_string()],
             })
         }
     }
@@ -926,6 +933,10 @@ mod tests {
         assert_eq!(details["created"], true);
         assert_eq!(details["short_id"], 42);
         assert!(details["note_id"].as_str().is_some());
+        assert_eq!(
+            details["confirmed_extraction_ids"],
+            serde_json::json!(["extraction-confirmed"])
+        );
     }
 
     #[tokio::test]

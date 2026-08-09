@@ -10,7 +10,10 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::TOPIC_EXTRACTION_KEY;
-use crate::backend::{InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch};
+use crate::backend::{
+    InsertNoteReq, InsertedNote, InsertedNoteWithExtractions, NoteDb, NoteFilter, NoteLookup,
+    NoteSearch,
+};
 use crate::error::CliError;
 use crate::types::{Keyterm, Note, Project};
 
@@ -464,7 +467,7 @@ impl NoteDb for PgWireBackend {
         req: &InsertNoteReq<'_>,
         extraction_key: &str,
         values: &[String],
-    ) -> Result<InsertedNote, CliError> {
+    ) -> Result<InsertedNoteWithExtractions, CliError> {
         let metadata: Option<serde_json::Value> = req
             .metadata
             .map(serde_json::from_str)
@@ -490,22 +493,28 @@ impl NoteDb for PgWireBackend {
         .bind(now)
         .fetch_one(&mut *transaction)
         .await?;
+        let mut extraction_ids = Vec::with_capacity(values.len());
         for value in values {
+            let extraction_id = Uuid::new_v4();
             sqlx::query(
                 "INSERT INTO note_extractions (id, note_id, user_id, key, value) \
                  VALUES ($1, $2, (SELECT user_id FROM notes WHERE id = $2), $3, $4)",
             )
-            .bind(Uuid::new_v4())
+            .bind(extraction_id)
             .bind(note_id)
             .bind(extraction_key)
             .bind(value)
             .execute(&mut *transaction)
             .await?;
+            extraction_ids.push(extraction_id.to_string());
         }
         transaction.commit().await?;
-        Ok(InsertedNote {
-            uuid: row.try_get::<String, _>(0)?,
-            short_id: row.try_get::<Option<i32>, _>(1)?.map(i64::from),
+        Ok(InsertedNoteWithExtractions {
+            note: InsertedNote {
+                uuid: row.try_get::<String, _>(0)?,
+                short_id: row.try_get::<Option<i32>, _>(1)?.map(i64::from),
+            },
+            extraction_ids,
         })
     }
 

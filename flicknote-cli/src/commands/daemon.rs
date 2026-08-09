@@ -162,11 +162,6 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn install(_config: &Config) -> Result<(), CliError> {
-    Ok(())
-}
-
 #[cfg(target_os = "macos")]
 fn service_label() -> &'static str {
     "io.guion.flicknote.sync"

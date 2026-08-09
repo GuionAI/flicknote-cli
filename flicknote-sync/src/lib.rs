@@ -54,9 +54,10 @@ struct CreateNoteRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CreatedNote {
+struct RemoteCreatedNote {
     uuid: String,
     short_id: i64,
+    confirmed_extraction_ids: Vec<String>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -173,6 +174,30 @@ fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlickNoteCrudMarker {
+    RemoteCommittedInsert,
+}
+
+fn parse_flicknote_crud_marker(
+    metadata: Option<&str>,
+) -> Result<Option<FlickNoteCrudMarker>, PowerSyncError> {
+    let Some(metadata) = metadata else {
+        return Ok(None);
+    };
+    let value: serde_json::Value = serde_json::from_str(metadata)
+        .map_err(|error| ps_err(format!("invalid CRUD metadata: {error}")))?;
+    let Some(marker) = value.as_object().and_then(|object| object.get("flicknote")) else {
+        return Ok(None);
+    };
+    match marker.as_str() {
+        Some("remote_committed_insert_v1") => Ok(Some(FlickNoteCrudMarker::RemoteCommittedInsert)),
+        _ => Err(ps_err(format!(
+            "unsupported FlickNote CRUD marker: {marker}"
+        ))),
+    }
+}
+
 /// Inner upload logic shared by the BackendConnector and application-triggered drain.
 /// Caller is responsible for holding `upload_guard` before calling.
 ///
@@ -197,7 +222,9 @@ async fn run_upload(
         let mut transient_msg: Option<String> = None;
 
         for crud in std::mem::take(&mut tx.crud) {
-            if crud.metadata.as_deref() == Some(REMOTE_COMMITTED_INSERT_METADATA) {
+            if parse_flicknote_crud_marker(crud.metadata.as_deref())?
+                == Some(FlickNoteCrudMarker::RemoteCommittedInsert)
+            {
                 let allowed_table = matches!(crud.table.as_str(), "notes" | "note_extractions");
                 let is_put = matches!(&crud.update_type, UpdateType::Put);
                 if !allowed_table || !is_put {
@@ -1074,7 +1101,7 @@ async fn create_note_remotely(
     auth: &GoTrueClient,
     config: &Config,
     req: CreateNoteRequest,
-) -> Result<CreatedNote, DaemonError> {
+) -> Result<RemoteCreatedNote, DaemonError> {
     let session = auth.get_session().await.map_err(|e| DaemonError::Other {
         message: format!("Auth error: {e}"),
     })?;
@@ -1097,7 +1124,7 @@ async fn create_note_with_token(
     access_token: &str,
     user_id: &str,
     req: CreateNoteRequest,
-) -> Result<CreatedNote, DaemonError> {
+) -> Result<RemoteCreatedNote, DaemonError> {
     let extraction_rows = req
         .topics
         .iter()
@@ -1384,7 +1411,7 @@ async fn finish_remote_create(
     access_token: &str,
     row: RemoteNoteRow,
     extraction_rows: &[RemoteExtractionRow],
-) -> Result<CreatedNote, DaemonError> {
+) -> Result<RemoteCreatedNote, DaemonError> {
     let short_id = match row.short_id {
         Some(short_id) => short_id,
         None => {
@@ -1428,9 +1455,10 @@ async fn finish_remote_create(
             extraction_outcome.pending_ids,
         ));
     }
-    Ok(CreatedNote {
+    Ok(RemoteCreatedNote {
         uuid: row.id,
         short_id,
+        confirmed_extraction_ids: extraction_outcome.confirmed_ids,
     })
 }
 
@@ -1652,8 +1680,10 @@ impl NoteCreator for RemoteNoteCreator {
     async fn create(
         &self,
         request: CreateNote,
-    ) -> Result<flicknote_core::backend::InsertedNote, flicknote_core::services::error::ServiceError>
-    {
+    ) -> Result<
+        flicknote_core::services::ports::CreatedNote,
+        flicknote_core::services::error::ServiceError,
+    > {
         let created = create_note_remotely(
             &self.db,
             &self.http,
@@ -1674,9 +1704,12 @@ impl NoteCreator for RemoteNoteCreator {
         )
         .await
         .map_err(remote_create_service_error)?;
-        Ok(flicknote_core::backend::InsertedNote {
-            uuid: created.uuid,
-            short_id: Some(created.short_id),
+        Ok(flicknote_core::services::ports::CreatedNote {
+            inserted: flicknote_core::backend::InsertedNote {
+                uuid: created.uuid,
+                short_id: Some(created.short_id),
+            },
+            confirmed_extraction_ids: created.confirmed_extraction_ids,
         })
     }
 }
@@ -2001,18 +2034,26 @@ mod tests {
     async fn test_powersync_db() -> (tempfile::TempDir, PowerSyncDatabase) {
         PowerSyncEnvironment::powersync_auto_extension().unwrap();
         let directory = tempfile::tempdir().unwrap();
-        let pool = ConnectionPool::open(directory.path().join("test.db")).unwrap();
+        let db = test_powersync_db_at(directory.path().join("test.db"), app_schema());
+        db.writer().await.unwrap();
+        (directory, db)
+    }
+
+    fn test_powersync_db_at(
+        path: impl AsRef<std::path::Path>,
+        schema: powersync::schema::Schema,
+    ) -> PowerSyncDatabase {
+        PowerSyncEnvironment::powersync_auto_extension().unwrap();
+        let pool = ConnectionPool::open(path).unwrap();
         let env = PowerSyncEnvironment::custom(
             reqwest::Client::new(),
             pool,
             PowerSyncEnvironment::tokio_timer(),
         );
-        let db = PowerSyncDatabase::new(env, app_schema());
-        db.writer().await.unwrap();
-        (directory, db)
+        PowerSyncDatabase::new(env, schema)
     }
 
-    async fn insert_marked_note(db: &PowerSyncDatabase) {
+    async fn insert_note_with_metadata(db: &PowerSyncDatabase, metadata: &str) {
         let writer = db.writer().await.unwrap();
         writer
             .execute(
@@ -2031,10 +2072,14 @@ mod tests {
                     0,
                     "2026-08-09T00:00:00Z",
                     "2026-08-09T00:00:00Z",
-                    r#"{"flicknote":"remote_committed_insert_v1"}"#,
+                    metadata,
                 ],
             )
             .unwrap();
+    }
+
+    async fn insert_marked_note(db: &PowerSyncDatabase) {
+        insert_note_with_metadata(db, REMOTE_COMMITTED_INSERT_METADATA).await;
     }
 
     fn remote_note(id: &str, title: &str) -> RemoteNoteRow {
@@ -2144,6 +2189,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn existing_database_upgrades_to_metadata_tracking_without_losing_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("upgrade.db");
+        let mut legacy_schema = app_schema();
+        for table in &mut legacy_schema.tables {
+            if matches!(table.name.as_ref(), "notes" | "note_extractions") {
+                table.options.track_metadata = false;
+            }
+        }
+        {
+            let legacy_db = test_powersync_db_at(&path, legacy_schema);
+            let writer = legacy_db.writer().await.unwrap();
+            writer
+                .execute(
+                    "INSERT INTO notes (id, user_id, type, status, title) VALUES (?, ?, ?, ?, ?)",
+                    params!["existing-note", "user-1", "normal", "ready", "Preserved"],
+                )
+                .unwrap();
+            writer.execute("DELETE FROM ps_crud", []).unwrap();
+        }
+
+        let upgraded_db = test_powersync_db_at(&path, app_schema());
+        {
+            let writer = upgraded_db.writer().await.unwrap();
+            let title: String = writer
+                .query_row(
+                    "SELECT title FROM notes WHERE id = ?",
+                    params!["existing-note"],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(title, "Preserved");
+            writer
+                .execute(
+                    "INSERT INTO notes (id, user_id, type, status, title, _metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                    params![
+                        "marked-after-upgrade",
+                        "user-1",
+                        "normal",
+                        "ready",
+                        "Marked",
+                        REMOTE_COMMITTED_INSERT_METADATA,
+                    ],
+                )
+                .unwrap();
+        }
+
+        let transaction = upgraded_db.next_crud_transaction().await.unwrap().unwrap();
+        assert_eq!(transaction.crud.len(), 1);
+        assert_eq!(transaction.crud[0].id, "marked-after-upgrade");
+        assert_eq!(
+            transaction.crud[0].metadata.as_deref(),
+            Some(REMOTE_COMMITTED_INSERT_METADATA)
+        );
+    }
+
+    #[tokio::test]
     async fn remote_committed_put_completes_without_http_request() {
         let (_directory, db) = test_powersync_db().await;
         insert_marked_note(&db).await;
@@ -2160,6 +2262,66 @@ mod tests {
 
         assert!(uploaded);
         assert!(db.next_crud_transaction().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_committed_marker_is_matched_as_json_not_raw_text() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_note_with_metadata(&db, r#"{ "flicknote" : "remote_committed_insert_v1" }"#).await;
+
+        run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon-key",
+        )
+        .await
+        .unwrap();
+
+        assert!(db.next_crud_transaction().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn unsupported_flicknote_marker_is_rejected_and_retained() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_note_with_metadata(&db, r#"{"flicknote":"remote_committed_insert_v2"}"#).await;
+
+        let error = run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon-key",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported FlickNote CRUD marker")
+        );
+        assert!(db.next_crud_transaction().await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn malformed_crud_metadata_is_rejected_and_retained() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_note_with_metadata(&db, r#"{"flicknote":"remote_committed_insert_v1""#).await;
+
+        let error = run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon-key",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("invalid CRUD metadata"));
+        assert!(db.next_crud_transaction().await.unwrap().is_some());
     }
 
     #[tokio::test]

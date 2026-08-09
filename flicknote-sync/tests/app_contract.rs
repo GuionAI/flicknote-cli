@@ -6,7 +6,7 @@ use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
 use flicknote_core::services::dto::{NoteAddInput, NoteListInput, ProjectAddInput};
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::ports::{CreateNote, NoteCreator};
+use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{
     AppRequest, AppResponse, BackendMode, DaemonClient, ServerInfo, serve_app_once,
@@ -77,10 +77,13 @@ struct RecordingCreator {
 
 #[async_trait]
 impl NoteCreator for RecordingCreator {
-    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
+    async fn create(&self, request: CreateNote) -> Result<CreatedNote, ServiceError> {
         let inserted = self.db.insert_note(&request.as_insert_request()).await?;
         *self.request.lock().unwrap() = Some(request);
-        Ok(inserted)
+        Ok(CreatedNote {
+            inserted,
+            confirmed_extraction_ids: Vec::new(),
+        })
     }
 }
 
@@ -88,10 +91,13 @@ struct DetachedCreator;
 
 #[async_trait]
 impl NoteCreator for DetachedCreator {
-    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
-        Ok(InsertedNote {
-            uuid: request.id,
-            short_id: Some(91),
+    async fn create(&self, request: CreateNote) -> Result<CreatedNote, ServiceError> {
+        Ok(CreatedNote {
+            inserted: InsertedNote {
+                uuid: request.id,
+                short_id: Some(91),
+            },
+            confirmed_extraction_ids: Vec::new(),
         })
     }
 }

@@ -47,6 +47,12 @@ pub struct InsertedNote {
     pub short_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertedNoteWithExtractions {
+    pub note: InsertedNote,
+    pub extraction_ids: Vec<String>,
+}
+
 pub(crate) enum NoteLookup<'a> {
     ShortId(i64),
     Uuid(&'a str),
@@ -102,11 +108,14 @@ pub trait NoteDb: Send + Sync {
         req: &InsertNoteReq<'_>,
         extraction_key: &str,
         values: &[String],
-    ) -> Result<InsertedNote, CliError> {
+    ) -> Result<InsertedNoteWithExtractions, CliError> {
         let inserted = self.insert_note(req).await?;
         self.set_note_extractions(&inserted.uuid, extraction_key, values)
             .await?;
-        Ok(inserted)
+        Ok(InsertedNoteWithExtractions {
+            note: inserted,
+            extraction_ids: Vec::new(),
+        })
     }
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
     async fn update_note_content(
@@ -670,7 +679,7 @@ impl NoteDb for SqliteBackend {
         req: &InsertNoteReq<'_>,
         extraction_key: &str,
         values: &[String],
-    ) -> Result<InsertedNote, CliError> {
+    ) -> Result<InsertedNoteWithExtractions, CliError> {
         let mut transaction = self.db.pool.begin().await?;
         sqlx::query(SQ_INSERT)
             .bind(req.id)
@@ -691,20 +700,26 @@ impl NoteDb for SqliteBackend {
             .bind(extraction_key)
             .execute(&mut *transaction)
             .await?;
+        let mut extraction_ids = Vec::with_capacity(values.len());
         for value in values {
+            let extraction_id = uuid::Uuid::new_v4().to_string();
             sqlx::query(SQ_INSERT_EXTRACTION)
-                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(&extraction_id)
                 .bind(req.id)
                 .bind(&self.user_id)
                 .bind(extraction_key)
                 .bind(value)
                 .execute(&mut *transaction)
                 .await?;
+            extraction_ids.push(extraction_id);
         }
         transaction.commit().await?;
-        Ok(InsertedNote {
-            uuid: req.id.to_string(),
-            short_id: None,
+        Ok(InsertedNoteWithExtractions {
+            note: InsertedNote {
+                uuid: req.id.to_string(),
+                short_id: None,
+            },
+            extraction_ids,
         })
     }
 

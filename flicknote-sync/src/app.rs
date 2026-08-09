@@ -132,7 +132,7 @@ impl Application {
                     topics: parsed.topics,
                     attachment_path: None,
                 };
-                let inserted = if let Some(creator) = self.creator.as_deref() {
+                let created = if let Some(creator) = self.creator.as_deref() {
                     creator.create(request).await
                 } else if self.mode == BackendMode::Managed {
                     DirectNoteCreator::new(self.db.as_ref())
@@ -147,11 +147,11 @@ impl Application {
                 }
                 .map_err(WireError::from_service)?;
                 notes
-                    .get(&inserted.uuid, false)
+                    .get(&created.inserted.uuid, false)
                     .await
                     .map(|detail| AppResponse::NoteSummary(detail.note))
                     .map_err(|error| {
-                        WireError::from_service(confirmed_create_followup_error(&inserted, &error))
+                        WireError::from_service(confirmed_create_followup_error(&created, &error))
                     })
             }
             AppRequest::NoteUpload {
@@ -217,7 +217,7 @@ impl Application {
                             ),
                             None => None,
                         };
-                        let inserted = creator
+                        let created = creator
                             .create(CreateNote {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 note_type: note_type.to_string(),
@@ -233,12 +233,12 @@ impl Application {
                             .await
                             .map_err(WireError::from_service)?;
                         notes
-                            .get(&inserted.uuid, false)
+                            .get(&created.inserted.uuid, false)
                             .await
                             .map(|detail| AppResponse::NoteSummary(detail.note))
                             .map_err(|error| {
                                 WireError::from_service(confirmed_create_followup_error(
-                                    &inserted, &error,
+                                    &created, &error,
                                 ))
                             })
                     }
