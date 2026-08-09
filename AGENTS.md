@@ -28,8 +28,8 @@ Rust workspace with 4 crates:
 ```bash
 cargo build                # build all crates
 cargo test                 # run all tests
-cargo clippy               # lint
-cargo fmt --check          # format check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all --check    # format check
 ```
 
 Or use the justfile: `just build`, `just test`, `just check`, `just install`
@@ -48,8 +48,8 @@ columns.
 
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).
 
-- **pre-commit** runs `cargo fmt --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt` then re-commit.
-- **pre-push** runs the SQLx offline check, clippy, and cargo deny. Requires `cargo install cargo-deny`.
+- **pre-commit** runs `cargo fmt --all --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt --all` then re-commit.
+- **pre-push** runs the workspace/all-target/all-feature SQLx offline check, clippy with warnings denied, and cargo deny. Requires `cargo install cargo-deny`.
 
 Manual usage:
 
@@ -72,6 +72,7 @@ lefthook run pre-push    # run pre-push hooks
 
 - Rust 2024 edition, resolver 3
 - Guard clauses over deep nesting
+- Workspace Clippy keeps `too_many_lines`, `cognitive_complexity`, `large_futures`, and `future_not_send` enabled; CI denies all warnings across every target and feature
 - `thiserror` for error types
 - Config via XDG dirs (`~/.config/flicknote/`) or env vars
 - Data stored at `~/.local/share/flicknote/`

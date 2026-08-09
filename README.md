@@ -127,7 +127,7 @@ flicknote delete <note-id>
 
 # Manage sync daemon
 flicknote sync start
-# Reports the running daemon version and selected backend mode
+# Reports the running daemon and protocol version
 flicknote sync status
 flicknote sync stop
 
