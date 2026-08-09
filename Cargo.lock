@@ -833,6 +833,7 @@ name = "flicknote-sync"
 version = "0.4.3"
 dependencies = [
  "async-trait",
+ "chrono",
  "flicknote-auth",
  "flicknote-core",
  "futures-lite",

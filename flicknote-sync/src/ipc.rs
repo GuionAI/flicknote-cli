@@ -4,17 +4,253 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use flicknote_core::backend::InsertedNote;
 use flicknote_core::config::Config;
+use flicknote_core::services::dto::{
+    InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput,
+    NoteListInput, NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
+};
+use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, NoteCreator, ShareGateway, ShareResource as CoreShareResource,
 };
+use flicknote_core::services::source::{SourceResult, SourceView};
+use flicknote_core::types::{Keyterm, Note, Project};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixListener;
 use tokio::net::UnixStream;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+use crate::app::Application;
+
+pub const PROTOCOL_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackendMode {
+    Local,
+    Managed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    Data,
+    NoteAdd,
+    Attachment,
+    Share,
+    LocalSync,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerInfo {
+    pub protocol: u16,
+    pub backend: BackendMode,
+    pub capabilities: Vec<Capability>,
+}
+
+impl ServerInfo {
+    pub fn local() -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            backend: BackendMode::Local,
+            capabilities: vec![
+                Capability::Data,
+                Capability::NoteAdd,
+                Capability::Attachment,
+                Capability::Share,
+                Capability::LocalSync,
+            ],
+        }
+    }
+
+    pub fn managed() -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            backend: BackendMode::Managed,
+            capabilities: vec![Capability::Data, Capability::NoteAdd],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum AppRequest {
+    NoteAdd(NoteAddInput),
+    NoteAddEditable {
+        document: String,
+        project: Option<String>,
+    },
+    NoteUpload {
+        path: String,
+        project: Option<String>,
+        created_at: Option<String>,
+    },
+    NoteList(NoteListInput),
+    NoteFind(NoteFindInput),
+    NoteCount(NoteCountInput),
+    NoteGet {
+        id: String,
+        archived: bool,
+    },
+    NoteRecord {
+        id: String,
+        archived: bool,
+    },
+    NoteGetSection {
+        id: String,
+        section: String,
+    },
+    NoteSource {
+        id: String,
+        archived: bool,
+        view: SourceView,
+        range: Option<String>,
+    },
+    NoteAppend {
+        id: String,
+        content: String,
+    },
+    NoteSaveEditable {
+        id: String,
+        document: String,
+    },
+    NoteReplaceSection {
+        id: String,
+        section: String,
+        content: String,
+    },
+    NoteRenameSection {
+        id: String,
+        section: String,
+        name: String,
+    },
+    NoteInsert {
+        id: String,
+        section: String,
+        position: InsertPosition,
+        content: String,
+    },
+    NoteDeleteSection {
+        id: String,
+        section: String,
+    },
+    NoteModify(NoteModifyInput),
+    NoteArchive {
+        id: String,
+    },
+    NoteRestore {
+        id: String,
+    },
+    NoteShare {
+        id: String,
+    },
+    NoteUnshare {
+        id: String,
+    },
+    NoteOpen {
+        id: String,
+    },
+    ProjectList {
+        include_archived: bool,
+    },
+    ProjectRecords {
+        include_archived: bool,
+    },
+    ProjectGet {
+        id: String,
+    },
+    ProjectAdd(ProjectAddInput),
+    ProjectModify(ProjectModifyInput),
+    ProjectArchive {
+        id: String,
+    },
+    ProjectShare {
+        id: String,
+    },
+    ProjectUnshare {
+        id: String,
+    },
+    KeytermAdd {
+        name: String,
+        description: Option<String>,
+        content: Option<String>,
+    },
+    KeytermList,
+    KeytermGet {
+        id: String,
+    },
+    KeytermModify {
+        id: String,
+        name: Option<String>,
+        description: Option<String>,
+        content: Option<String>,
+    },
+    KeytermDelete {
+        id: String,
+    },
+    ExtractionValues {
+        keys: Vec<String>,
+        archived: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum AppResponse {
+    NoteSummary(NoteSummary),
+    NoteSummaries(Vec<NoteSummary>),
+    NoteCount { count: u64 },
+    NoteDetail(NoteDetail),
+    NoteRecord(Note),
+    NoteSection(NoteSectionResult),
+    NoteMutation(NoteMutationResult),
+    EditableSave(EditableSaveResult),
+    NoteArchive(NoteArchiveResult),
+    Source(SourceResult),
+    Share(ShareResult),
+    Unshare(UnshareResult),
+    Open(OpenResult),
+    Projects(Vec<ProjectDto>),
+    ProjectRecords(Vec<Project>),
+    Project(ProjectDto),
+    Keyterms(Vec<Keyterm>),
+    Keyterm(Keyterm),
+    Id { id: String },
+    Values(Vec<String>),
+    Unit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct WireError {
+    pub code: String,
+    pub message: String,
+    pub retryable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+impl WireError {
+    pub fn from_service(error: ServiceError) -> Self {
+        Self {
+            code: error.code().to_string(),
+            message: error.to_string(),
+            retryable: error.retryable(),
+            details: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonRequest {
+    Health {
+        protocol: u16,
+    },
+    App {
+        protocol: u16,
+        request: Box<AppRequest>,
+    },
     CreateNote(Box<CreateNoteRequest>),
     GetOrCreateShare(ShareRequest),
     RevokeShare(ShareRequest),
@@ -56,9 +292,12 @@ impl CreateNoteRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    ServerInfo(ServerInfo),
+    App(Box<AppResponse>),
+    AppError(WireError),
     NoteCreated(CreatedNote),
     ShareUrl(ShareUrlResponse),
     ShareRevoked,
@@ -144,9 +383,54 @@ impl<'a> DaemonClient<'a> {
                 other => ServiceError::Daemon(other.to_string()),
             })
     }
+
+    pub async fn health(&self) -> Result<ServerInfo, ServiceError> {
+        match self
+            .request(DaemonRequest::Health {
+                protocol: PROTOCOL_VERSION,
+            })
+            .await?
+        {
+            DaemonResponse::ServerInfo(info) if info.protocol == PROTOCOL_VERSION => Ok(info),
+            DaemonResponse::AppError(error) => Err(Self::remote_error(error)),
+            _ => Err(Self::protocol_mismatch()),
+        }
+    }
+
+    pub async fn app(&self, request: AppRequest) -> Result<AppResponse, ServiceError> {
+        match self
+            .request(DaemonRequest::App {
+                protocol: PROTOCOL_VERSION,
+                request: Box::new(request),
+            })
+            .await?
+        {
+            DaemonResponse::App(response) => Ok(*response),
+            DaemonResponse::AppError(error) => Err(Self::remote_error(error)),
+            _ => Err(Self::protocol_mismatch()),
+        }
+    }
+
+    fn remote_error(error: WireError) -> ServiceError {
+        ServiceError::Remote {
+            code: error.code,
+            message: error.message,
+            retryable: error.retryable,
+            details: error.details,
+        }
+    }
+
+    fn protocol_mismatch() -> ServiceError {
+        ServiceError::Remote {
+            code: "daemon_protocol_mismatch".to_string(),
+            message: "The running sync daemon uses an incompatible protocol. Restart it with `flicknote sync stop && flicknote sync start`.".to_string(),
+            retryable: false,
+            details: None,
+        }
+    }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl NoteCreator for DaemonClient<'_> {
     async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
         let response = self
@@ -176,7 +460,7 @@ impl NoteCreator for DaemonClient<'_> {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl ShareGateway for DaemonClient<'_> {
     async fn share(&self, resource: CoreShareResource, id: &str) -> Result<String, ServiceError> {
         let response = self
@@ -238,6 +522,77 @@ pub async fn write_response(
     response: &DaemonResponse,
 ) -> Result<(), DaemonError> {
     write_json(stream, response).await
+}
+
+pub async fn serve_app_once(
+    listener: UnixListener,
+    app: std::sync::Arc<Application>,
+    info: ServerInfo,
+) -> Result<(), DaemonError> {
+    let (mut stream, _) = listener
+        .accept()
+        .await
+        .map_err(|error| DaemonError::Other {
+            message: format!("Failed to accept daemon request: {error}"),
+        })?;
+    serve_app_stream(&mut stream, &app, &info).await
+}
+
+pub async fn serve_app(
+    listener: UnixListener,
+    app: std::sync::Arc<Application>,
+    info: ServerInfo,
+) -> Result<(), DaemonError> {
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|error| DaemonError::Other {
+                message: format!("Failed to accept daemon request: {error}"),
+            })?;
+        let app = std::sync::Arc::clone(&app);
+        let info = info.clone();
+        tokio::spawn(async move {
+            if let Err(error) = serve_app_stream(&mut stream, &app, &info).await {
+                log::warn!("application IPC request failed: {error}");
+            }
+        });
+    }
+}
+
+async fn serve_app_stream(
+    stream: &mut UnixStream,
+    app: &Application,
+    info: &ServerInfo,
+) -> Result<(), DaemonError> {
+    let response = match read_request(stream).await? {
+        DaemonRequest::Health { protocol } if protocol == PROTOCOL_VERSION => {
+            DaemonResponse::ServerInfo(info.clone())
+        }
+        DaemonRequest::App { protocol, request } if protocol == PROTOCOL_VERSION => {
+            match app.handle(*request).await {
+                Ok(response) => DaemonResponse::App(Box::new(response)),
+                Err(error) => DaemonResponse::AppError(error),
+            }
+        }
+        DaemonRequest::Health { protocol } | DaemonRequest::App { protocol, .. } => {
+            DaemonResponse::AppError(WireError {
+                code: "daemon_protocol_mismatch".to_string(),
+                message: format!(
+                    "daemon protocol {PROTOCOL_VERSION} does not support client protocol {protocol}"
+                ),
+                retryable: false,
+                details: None,
+            })
+        }
+        _ => DaemonResponse::AppError(WireError {
+            code: "daemon_protocol_mismatch".to_string(),
+            message: "legacy application request is not supported by this daemon".to_string(),
+            retryable: false,
+            details: None,
+        }),
+    };
+    write_response(stream, &response).await
 }
 
 async fn write_json<T: Serialize>(stream: &mut UnixStream, value: &T) -> Result<(), DaemonError> {
@@ -382,6 +737,43 @@ mod tests {
     }
 
     #[test]
+    fn versioned_health_and_app_requests_have_stable_contracts() {
+        let health = DaemonRequest::Health {
+            protocol: PROTOCOL_VERSION,
+        };
+        assert_eq!(
+            serde_json::to_value(health).unwrap(),
+            json!({
+                "type": "health",
+                "payload": { "protocol": PROTOCOL_VERSION }
+            })
+        );
+
+        let request = DaemonRequest::App {
+            protocol: PROTOCOL_VERSION,
+            request: Box::new(AppRequest::NoteList(NoteListInput {
+                note_type: None,
+                project: None,
+                archived: false,
+                limit: 20,
+            })),
+        };
+        let value = serde_json::to_value(request).unwrap();
+        assert_eq!(value["type"], "app");
+        assert_eq!(value["payload"]["protocol"], PROTOCOL_VERSION);
+        assert_eq!(value["payload"]["request"]["type"], "note_list");
+    }
+
+    #[test]
+    fn server_info_reports_backend_mode_and_capabilities() {
+        let info = ServerInfo::local();
+        assert_eq!(info.protocol, PROTOCOL_VERSION);
+        assert_eq!(info.backend, BackendMode::Local);
+        assert!(info.capabilities.contains(&Capability::NoteAdd));
+        assert!(info.capabilities.contains(&Capability::Share));
+    }
+
+    #[test]
     fn share_request_deserializes() {
         let value = json!({
             "type": "get_or_create_share",
@@ -444,6 +836,7 @@ mod tests {
             project_id: None,
             now: "2026-08-05T00:00:00Z".to_string(),
             topics: Vec::new(),
+            attachment_path: None,
         };
 
         let created = DaemonClient::new(&config)
@@ -517,6 +910,62 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code(), "daemon_error");
         assert!(error.to_string().contains("remote failure"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn daemon_client_preserves_versioned_app_results_and_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::App(Box::new(AppResponse::NoteCount { count: 7 })),
+        )
+        .await;
+        let response = DaemonClient::new(&config)
+            .app(AppRequest::NoteCount(NoteCountInput {
+                keywords: Vec::new(),
+                project: None,
+                note_type: None,
+                archived: false,
+            }))
+            .await
+            .unwrap();
+        assert!(matches!(response, AppResponse::NoteCount { count: 7 }));
+        assert!(matches!(server.await.unwrap(), DaemonRequest::App { .. }));
+
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(
+            &config,
+            DaemonResponse::AppError(WireError {
+                code: "note_not_found".to_string(),
+                message: "missing".to_string(),
+                retryable: false,
+                details: Some(json!({ "id": "42" })),
+            }),
+        )
+        .await;
+        let error = DaemonClient::new(&config)
+            .app(AppRequest::NoteGet {
+                id: "42".to_string(),
+                archived: false,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "note_not_found");
+        assert_eq!(error.to_string(), "missing");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn health_rejects_legacy_or_unexpected_daemon_responses() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let server = serve_response(&config, DaemonResponse::ShareRevoked).await;
+        let error = DaemonClient::new(&config).health().await.unwrap_err();
+        assert_eq!(error.code(), "daemon_protocol_mismatch");
+        assert!(error.to_string().contains("sync stop"));
         server.await.unwrap();
     }
 }

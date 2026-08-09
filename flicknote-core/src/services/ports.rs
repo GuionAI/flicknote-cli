@@ -17,6 +17,7 @@ pub struct CreateNote {
     pub project_id: Option<String>,
     pub now: String,
     pub topics: Vec<String>,
+    pub attachment_path: Option<String>,
 }
 
 impl CreateNote {
@@ -34,8 +35,8 @@ impl CreateNote {
     }
 }
 
-#[async_trait(?Send)]
-pub trait NoteCreator {
+#[async_trait]
+pub trait NoteCreator: Send + Sync {
     async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError>;
 }
 
@@ -49,10 +50,16 @@ impl<'a> DirectNoteCreator<'a> {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl NoteCreator for DirectNoteCreator<'_> {
     async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
-        Ok(self.db.insert_note(&request.as_insert_request()).await?)
+        let inserted = self.db.insert_note(&request.as_insert_request()).await?;
+        if !request.topics.is_empty() {
+            self.db
+                .set_note_extractions(&inserted.uuid, crate::TOPIC_EXTRACTION_KEY, &request.topics)
+                .await?;
+        }
+        Ok(inserted)
     }
 }
 
@@ -62,8 +69,8 @@ pub enum ShareResource {
     Project,
 }
 
-#[async_trait(?Send)]
-pub trait ShareGateway {
+#[async_trait]
+pub trait ShareGateway: Send + Sync {
     async fn share(&self, resource: ShareResource, id: &str) -> Result<String, ServiceError>;
     async fn unshare(&self, resource: ShareResource, id: &str) -> Result<(), ServiceError>;
 }

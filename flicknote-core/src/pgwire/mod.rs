@@ -203,7 +203,7 @@ impl PgWireBackend {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl NoteDb for PgWireBackend {
     fn user_id(&self) -> &str {
         ""

@@ -125,7 +125,10 @@ impl<'a> NoteService<'a> {
             .resolve_project_filter(input.project.as_deref())
             .await?;
         let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = input
+            .created_at
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
         let link_url = input.content.trim();
         let is_url = input.interpret_as_url
             && (link_url.starts_with("http://") || link_url.starts_with("https://"))
@@ -140,7 +143,8 @@ impl<'a> NoteService<'a> {
                 metadata: Some(serde_json::json!({ "link": { "url": link_url } }).to_string()),
                 project_id,
                 now,
-                topics: Vec::new(),
+                topics: input.topics.clone(),
+                attachment_path: None,
             }
         } else {
             let (title, content) = extract_title_and_strip(&input.content);
@@ -153,7 +157,8 @@ impl<'a> NoteService<'a> {
                 metadata: None,
                 project_id,
                 now,
-                topics: Vec::new(),
+                topics: input.topics,
+                attachment_path: None,
             }
         };
         let inserted = creator.create(request).await?;
@@ -585,7 +590,6 @@ impl<'a> NoteService<'a> {
 
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
-    use std::cell::RefCell;
 
     use crate::backend::NoteDb;
     use crate::services::dto::NoteAddInput;
@@ -839,17 +843,17 @@ mod tests {
 
     struct DbCreator<'a> {
         db: &'a dyn NoteDb,
-        request: RefCell<Option<CreateNote>>,
+        request: std::sync::Mutex<Option<CreateNote>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl NoteCreator for DbCreator<'_> {
         async fn create(
             &self,
             request: CreateNote,
         ) -> Result<crate::backend::InsertedNote, crate::services::error::ServiceError> {
             let inserted = self.db.insert_note(&request.as_insert_request()).await?;
-            self.request.replace(Some(request));
+            *self.request.lock().unwrap() = Some(request);
             Ok(inserted)
         }
     }
@@ -859,7 +863,7 @@ mod tests {
         let backend = make_backend().await;
         let creator = DbCreator {
             db: &backend,
-            request: RefCell::new(None),
+            request: std::sync::Mutex::new(None),
         };
         let service = NoteService::new(&backend);
 
@@ -870,12 +874,14 @@ mod tests {
                     content: "# Title\n\nBody".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    topics: Vec::new(),
+                    created_at: None,
                 },
             )
             .await
             .unwrap();
 
-        let request = creator.request.borrow();
+        let request = creator.request.lock().unwrap();
         let request = request.as_ref().unwrap();
         assert_eq!(request.note_type, "normal");
         assert_eq!(request.title.as_deref(), Some("Title"));
@@ -888,7 +894,7 @@ mod tests {
         let backend = make_backend().await;
         let creator = DbCreator {
             db: &backend,
-            request: RefCell::new(None),
+            request: std::sync::Mutex::new(None),
         };
 
         NoteService::new(&backend)
@@ -898,12 +904,14 @@ mod tests {
                     content: "https://example.com with context".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    topics: Vec::new(),
+                    created_at: None,
                 },
             )
             .await
             .unwrap();
 
-        let request = creator.request.borrow();
+        let request = creator.request.lock().unwrap();
         let request = request.as_ref().unwrap();
         assert_eq!(request.note_type, "normal");
         assert_eq!(
@@ -943,18 +951,18 @@ mod tests {
 
     #[derive(Default)]
     struct FakeSideEffects {
-        shared: RefCell<Vec<(ShareResource, String)>>,
-        opened: RefCell<Vec<String>>,
+        shared: std::sync::Mutex<Vec<(ShareResource, String)>>,
+        opened: std::sync::Mutex<Vec<String>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl ShareGateway for FakeSideEffects {
         async fn share(
             &self,
             resource: ShareResource,
             id: &str,
         ) -> Result<String, crate::services::error::ServiceError> {
-            self.shared.borrow_mut().push((resource, id.to_string()));
+            self.shared.lock().unwrap().push((resource, id.to_string()));
             Ok(format!("https://share.example/{id}"))
         }
 
@@ -963,14 +971,14 @@ mod tests {
             resource: ShareResource,
             id: &str,
         ) -> Result<(), crate::services::error::ServiceError> {
-            self.shared.borrow_mut().push((resource, id.to_string()));
+            self.shared.lock().unwrap().push((resource, id.to_string()));
             Ok(())
         }
     }
 
     impl BrowserOpener for FakeSideEffects {
         fn open(&self, url: &str) -> Result<(), crate::services::error::ServiceError> {
-            self.opened.borrow_mut().push(url.to_string());
+            self.opened.lock().unwrap().push(url.to_string());
             Ok(())
         }
     }
@@ -990,7 +998,7 @@ mod tests {
         let shared = service.share(&side_effects, &id).await.unwrap();
         assert_eq!(shared.url, format!("https://share.example/{id}"));
         assert_eq!(
-            side_effects.shared.borrow().as_slice(),
+            side_effects.shared.lock().unwrap().as_slice(),
             &[(ShareResource::Note, id.clone())]
         );
 
@@ -1004,6 +1012,9 @@ mod tests {
         assert_eq!(opened.url, "https://app.example/notes/42");
         assert!(!opened.url.contains(&id));
         assert!(opened.opened);
-        assert_eq!(side_effects.opened.borrow().as_slice(), &[opened.url]);
+        assert_eq!(
+            side_effects.opened.lock().unwrap().as_slice(),
+            &[opened.url]
+        );
     }
 }

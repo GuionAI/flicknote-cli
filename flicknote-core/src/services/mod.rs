@@ -10,6 +10,7 @@ pub mod ports;
 pub mod project;
 pub mod sections;
 pub mod source;
+pub mod upload;
 
 #[cfg(all(test, feature = "powersync"))]
 pub(crate) mod test_support;

@@ -149,7 +149,6 @@ impl From<Project> for ProjectDto {
 
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
-    use std::cell::RefCell;
 
     use crate::backend::NoteDb;
     use crate::services::dto::{Patch, ProjectAddInput, ProjectModifyInput};
@@ -207,16 +206,16 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeGateway(RefCell<Vec<(ShareResource, String)>>);
+    struct FakeGateway(std::sync::Mutex<Vec<(ShareResource, String)>>);
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl ShareGateway for FakeGateway {
         async fn share(
             &self,
             resource: ShareResource,
             id: &str,
         ) -> Result<String, crate::services::error::ServiceError> {
-            self.0.borrow_mut().push((resource, id.to_string()));
+            self.0.lock().unwrap().push((resource, id.to_string()));
             Ok("https://share.example/project".to_string())
         }
 
@@ -225,7 +224,7 @@ mod tests {
             resource: ShareResource,
             id: &str,
         ) -> Result<(), crate::services::error::ServiceError> {
-            self.0.borrow_mut().push((resource, id.to_string()));
+            self.0.lock().unwrap().push((resource, id.to_string()));
             Ok(())
         }
     }
@@ -243,7 +242,7 @@ mod tests {
         );
         assert!(service.unshare(&gateway, &id).await.unwrap().revoked);
         assert_eq!(
-            gateway.0.borrow().as_slice(),
+            gateway.0.lock().unwrap().as_slice(),
             &[
                 (ShareResource::Project, id.clone()),
                 (ShareResource::Project, id)

@@ -245,6 +245,8 @@ impl FlickNoteMcp {
                         content: params.content,
                         project: Self::effective_project(params.project),
                         interpret_as_url: true,
+                        topics: Vec::new(),
+                        created_at: None,
                     },
                 )
                 .await

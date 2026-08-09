@@ -176,6 +176,10 @@ pub struct NoteAddInput {
     pub project: Option<String>,
     #[serde(default)]
     pub interpret_as_url: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -71,8 +71,8 @@ pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError>
 
 // ─── NoteDb trait ────────────────────────────────────────────────────────────
 
-#[async_trait(?Send)]
-pub trait NoteDb {
+#[async_trait]
+pub trait NoteDb: Send + Sync {
     fn user_id(&self) -> &str;
 
     // Note resolution
@@ -397,7 +397,7 @@ async fn sqlite_exists(
     Ok(exists.is_some())
 }
 #[cfg(feature = "powersync")]
-#[async_trait(?Send)]
+#[async_trait]
 impl NoteDb for SqliteBackend {
     fn user_id(&self) -> &str {
         &self.user_id

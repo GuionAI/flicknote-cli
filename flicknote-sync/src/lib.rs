@@ -6,7 +6,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::{
-    REMOTE_COMMITTED_INSERT_METADATA, TOPIC_EXTRACTION_KEY, config::Config, schema::app_schema,
+    REMOTE_COMMITTED_INSERT_METADATA, TOPIC_EXTRACTION_KEY,
+    backend::{NoteDb, SqliteBackend},
+    config::Config,
+    db::Database,
+    schema::app_schema,
+    services::ports::{CreateNote, NoteCreator, ShareGateway, ShareResource as CoreShareResource},
 };
 use futures_lite::StreamExt;
 use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -18,7 +23,9 @@ use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use tokio::{net::UnixListener, sync::mpsc};
 
+pub mod app;
 pub mod ipc;
+use app::Application;
 use ipc::{
     CreateNoteRequest, CreatedNote, DaemonError, DaemonRequest, DaemonResponse, ShareRequest,
     ShareResource, ShareUrlResponse,
@@ -1276,6 +1283,104 @@ async fn lookup_remote_extraction(
     Ok(rows.pop())
 }
 
+struct RemoteNoteCreator {
+    db: PowerSyncDatabase,
+    auth: Arc<GoTrueClient>,
+    http: reqwest::Client,
+    config: Arc<Config>,
+}
+
+#[async_trait]
+impl NoteCreator for RemoteNoteCreator {
+    async fn create(
+        &self,
+        request: CreateNote,
+    ) -> Result<flicknote_core::backend::InsertedNote, flicknote_core::services::error::ServiceError>
+    {
+        let created = create_note_remotely(
+            &self.db,
+            &self.http,
+            &self.auth,
+            &self.config,
+            CreateNoteRequest {
+                id: request.id,
+                note_type: request.note_type,
+                status: request.status,
+                title: request.title,
+                content: request.content,
+                metadata: request.metadata,
+                project_id: request.project_id,
+                now: request.now,
+                topics: request.topics,
+                attachment_path: request.attachment_path,
+            },
+        )
+        .await
+        .map_err(|error| {
+            flicknote_core::services::error::ServiceError::Daemon(error.to_string())
+        })?;
+        Ok(flicknote_core::backend::InsertedNote {
+            uuid: created.uuid,
+            short_id: Some(created.short_id),
+        })
+    }
+}
+
+struct RemoteShareGateway {
+    http: reqwest::Client,
+    auth: Arc<GoTrueClient>,
+    config: Arc<Config>,
+    lock: Arc<ShareRequestLock>,
+}
+
+#[async_trait]
+impl ShareGateway for RemoteShareGateway {
+    async fn share(
+        &self,
+        resource: CoreShareResource,
+        id: &str,
+    ) -> Result<String, flicknote_core::services::error::ServiceError> {
+        let request = ShareRequest {
+            resource: match resource {
+                CoreShareResource::Note => ShareResource::Note,
+                CoreShareResource::Project => ShareResource::Project,
+            },
+            id: id.to_string(),
+        };
+        self.lock
+            .run(get_or_create_share(
+                &self.http,
+                &self.auth,
+                &self.config,
+                &request,
+            ))
+            .await
+            .map_err(|error| {
+                flicknote_core::services::error::ServiceError::Daemon(error.to_string())
+            })
+    }
+
+    async fn unshare(
+        &self,
+        resource: CoreShareResource,
+        id: &str,
+    ) -> Result<(), flicknote_core::services::error::ServiceError> {
+        let request = ShareRequest {
+            resource: match resource {
+                CoreShareResource::Note => ShareResource::Note,
+                CoreShareResource::Project => ShareResource::Project,
+            },
+            id: id.to_string(),
+        };
+        self.lock
+            .run(revoke_share(&self.http, &self.auth, &self.config, &request))
+            .await
+            .map_err(|error| {
+                flicknote_core::services::error::ServiceError::Daemon(error.to_string())
+            })
+    }
+}
+
 async fn serve_socket(
     listener: UnixListener,
     db: PowerSyncDatabase,
@@ -1283,6 +1388,7 @@ async fn serve_socket(
     http: reqwest::Client,
     config: Arc<Config>,
     share_lock: Arc<ShareRequestLock>,
+    app: Arc<Application>,
 ) {
     loop {
         let (mut stream, _) = match listener.accept().await {
@@ -1297,8 +1403,42 @@ async fn serve_socket(
         let http = http.clone();
         let config = Arc::clone(&config);
         let share_lock = Arc::clone(&share_lock);
+        let app = Arc::clone(&app);
         tokio::spawn(async move {
             let response = match ipc::read_request(&mut stream).await {
+                Ok(DaemonRequest::Health { protocol }) => {
+                    if protocol == ipc::PROTOCOL_VERSION {
+                        DaemonResponse::ServerInfo(ipc::ServerInfo::local())
+                    } else {
+                        DaemonResponse::AppError(ipc::WireError {
+                            code: "daemon_protocol_mismatch".to_string(),
+                            message: format!(
+                                "daemon protocol {} does not support client protocol {protocol}",
+                                ipc::PROTOCOL_VERSION
+                            ),
+                            retryable: false,
+                            details: None,
+                        })
+                    }
+                }
+                Ok(DaemonRequest::App { protocol, request }) => {
+                    if protocol != ipc::PROTOCOL_VERSION {
+                        DaemonResponse::AppError(ipc::WireError {
+                            code: "daemon_protocol_mismatch".to_string(),
+                            message: format!(
+                                "daemon protocol {} does not support client protocol {protocol}",
+                                ipc::PROTOCOL_VERSION
+                            ),
+                            retryable: false,
+                            details: None,
+                        })
+                    } else {
+                        match app.handle(*request).await {
+                            Ok(response) => DaemonResponse::App(Box::new(response)),
+                            Err(error) => DaemonResponse::AppError(error),
+                        }
+                    }
+                }
                 Ok(DaemonRequest::CreateNote(req)) => {
                     match create_note_remotely(&db, &http, &auth, &config, *req).await {
                         Ok(note) => DaemonResponse::NoteCreated(note),
@@ -1333,12 +1473,17 @@ async fn serve_socket(
 }
 
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let config = Config::load()?;
-    config.validate()?;
+    let config = Arc::new(Config::load()?);
 
     let pid_file = pid_path(&config);
     let _pid_guard = check_and_write_pid(&pid_file)?;
     let (socket_listener, _socket_guard) = bind_socket(&config)?;
+
+    if let Ok(database_url) = std::env::var("DATABASE_URL") {
+        return run_managed(socket_listener, database_url).await;
+    }
+
+    config.validate()?;
 
     PowerSyncEnvironment::powersync_auto_extension()?;
 
@@ -1513,12 +1658,35 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let socket_config = Arc::new(config);
+    let user_id = flicknote_core::session::get_user_id(&config)?;
+    let backend: Arc<dyn NoteDb> = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await?,
+        user_id,
+    });
+    let socket_config = Arc::clone(&config);
     let socket_config_for_task = Arc::clone(&socket_config);
     let socket_db = db.clone();
     let socket_auth = Arc::clone(&auth);
     let socket_http = reqwest::Client::new();
     let socket_share_lock = Arc::new(ShareRequestLock::default());
+    let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator {
+        db: db.clone(),
+        auth: Arc::clone(&auth),
+        http: socket_http.clone(),
+        config: Arc::clone(&config),
+    });
+    let gateway: Arc<dyn ShareGateway> = Arc::new(RemoteShareGateway {
+        http: socket_http.clone(),
+        auth: Arc::clone(&auth),
+        config: Arc::clone(&config),
+        lock: Arc::clone(&socket_share_lock),
+    });
+    let app = Arc::new(
+        Application::new(backend, ipc::BackendMode::Local)
+            .with_creator(creator)
+            .with_share_gateway(gateway)
+            .with_web_url(config.web_url.clone()),
+    );
     let mut socket_handle = tokio::spawn(async move {
         serve_socket(
             socket_listener,
@@ -1527,6 +1695,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
             socket_http,
             socket_config_for_task,
             socket_share_lock,
+            app,
         )
         .await;
     });
@@ -1569,6 +1738,22 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     Ok(())
+}
+
+async fn run_managed(
+    listener: UnixListener,
+    database_url: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let backend: Arc<dyn NoteDb> =
+        Arc::new(flicknote_core::pgwire::PgWireBackend::connect(&database_url).await?);
+    let app = Arc::new(Application::new(backend, ipc::BackendMode::Managed));
+    log::info!("Managed daemon ready (pid {})", std::process::id());
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => Ok(()),
+        result = ipc::serve_app(listener, app, ipc::ServerInfo::managed()) => {
+            result.map_err(Into::into)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -70,6 +70,8 @@ pub(crate) async fn run(
                 content,
                 project: project.clone(),
                 interpret_as_url: args.value.is_some(),
+                topics: Vec::new(),
+                created_at: None,
             },
         )
         .await?;
