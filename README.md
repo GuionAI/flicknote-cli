@@ -129,6 +129,7 @@ flicknote delete <note-id>
 
 # Manage sync daemon
 flicknote sync start
+# Reports the running daemon version and selected backend mode
 flicknote sync status
 flicknote sync stop
 
@@ -152,15 +153,15 @@ start it as a subprocess:
 }
 ```
 
-The MCP server exposes typed note, note-source, and project tools. Note content
+The MCP server is available with a local daemon; managed daemons return an
+`unsupported_capability` error before stdio protocol output. It exposes typed
+note, note-source, and project tools. Note content
 and exact `before`/`after` edits are JSON fields, so callers do not need shell
 heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
 project tools use project names. `note_source` reads stored source data, while
 `note_get` reads editable note content. Every data tool uses the running daemon;
-the MCP process never opens SQLite or connects to Postgres. The daemon chooses
-one backend at startup: local PowerSync by default, or managed Postgres when
-`DATABASE_URL` is set in the daemon environment. The server does not start the
-daemon automatically.
+the MCP process never opens SQLite. The server does not start the daemon
+automatically.
 
 ## Configuration
 

@@ -3,7 +3,7 @@
 use clap::{CommandFactory, Parser, Subcommand};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_sync::ipc::DaemonClient;
+use flicknote_sync::ipc::{Capability, DaemonClient};
 
 const ROOT_HELP: &str = include_str!("help/root.md");
 
@@ -118,8 +118,9 @@ async fn run() -> Result<(), CliError> {
     }
 
     let daemon = DaemonClient::new(&config);
-    daemon.health().await?;
+    let server_info = daemon.health().await?;
     if matches!(cli.command, Some(Commands::Mcp)) {
+        server_info.require(Capability::Mcp, "mcp")?;
         return tokio::task::LocalSet::new()
             .run_until(mcp::serve(std::rc::Rc::new(config)))
             .await;
@@ -308,7 +309,7 @@ mod tests {
                 let daemon_server = tokio::spawn(serve_app(
                     daemon_listener,
                     app,
-                    ServerInfo::managed(),
+                    ServerInfo::local(),
                 ));
                 let server = mcp::FlickNoteMcp::new(Rc::new(config));
                 let (server_io, client_io) = tokio::io::duplex(8 * 1024);

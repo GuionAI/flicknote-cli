@@ -61,12 +61,12 @@ fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path)
                     db: Database::open_local(&config).await.unwrap(),
                     user_id: "test-user".to_string(),
                 });
-                let app = std::sync::Arc::new(Application::new(backend, BackendMode::Managed));
+                let app = std::sync::Arc::new(Application::new(backend, BackendMode::Local));
                 let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
                 ready_tx.send(()).unwrap();
                 tokio::select! {
                     _ = shutdown_rx => {}
-                    result = serve_app(listener, app, ServerInfo::managed()) => result.unwrap(),
+                    result = serve_app(listener, app, ServerInfo::local()) => result.unwrap(),
                 }
             });
     });

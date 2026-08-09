@@ -31,8 +31,8 @@ pub(crate) async fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError
     match &args.command {
         SyncCommand::Start => start(config).await,
         SyncCommand::Stop => stop(config),
-        SyncCommand::Status => status(config),
-        SyncCommand::Install => install(config),
+        SyncCommand::Status => status(config).await,
+        SyncCommand::Install => install(config).await,
         SyncCommand::Uninstall => uninstall(),
     }
 }
@@ -90,7 +90,7 @@ async fn start_with_binary_and_timeout(
     Ok(())
 }
 
-async fn wait_for_daemon_ready(
+pub(super) async fn wait_for_daemon_ready(
     config: &Config,
     timeout: std::time::Duration,
     interval: std::time::Duration,
@@ -125,17 +125,44 @@ fn stop(config: &Config) -> Result<(), CliError> {
     Ok(())
 }
 
-fn status(config: &Config) -> Result<(), CliError> {
+async fn status(config: &Config) -> Result<(), CliError> {
     match super::daemon::read_pid(config) {
-        Some(pid) => println!("FlickNote daemon: running (pid {pid})"),
+        Some(pid) => {
+            let info = flicknote_sync::ipc::DaemonClient::new(config)
+                .health()
+                .await?;
+            println!("{}", format_running_status(pid, &info));
+        }
         None => println!("FlickNote daemon: not running"),
     }
     Ok(())
 }
 
-fn install(config: &Config) -> Result<(), CliError> {
-    validate_install_mode(std::env::var("DATABASE_URL").ok().as_deref())?;
+fn format_running_status(pid: u32, info: &flicknote_sync::ipc::ServerInfo) -> String {
+    let backend = info.backend.as_str();
+    format!(
+        "FlickNote daemon: running (pid {pid}, version {}, backend {backend}, protocol {})",
+        info.version, info.protocol
+    )
+}
+
+async fn install(config: &Config) -> Result<(), CliError> {
+    install_with_timeout(
+        config,
+        std::env::var("DATABASE_URL").ok().as_deref(),
+        DAEMON_START_TIMEOUT,
+    )
+    .await
+}
+
+async fn install_with_timeout(
+    config: &Config,
+    database_url: Option<&str>,
+    timeout: std::time::Duration,
+) -> Result<(), CliError> {
+    validate_install_mode(database_url)?;
     super::daemon::install(config)?;
+    wait_for_daemon_ready(config, timeout, HEALTH_POLL_INTERVAL).await?;
     println!("Installed and started: io.guion.flicknote.sync");
     Ok(())
 }
@@ -209,5 +236,26 @@ mod tests {
                 .to_string()
                 .contains("only installs the local PowerSync daemon")
         );
+    }
+
+    #[tokio::test]
+    async fn install_does_not_report_success_before_health_is_ready() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = test_config(dir.path());
+
+        let error = install_with_timeout(&config, None, std::time::Duration::from_millis(20))
+            .await
+            .expect_err("socket absence must not count as launchd readiness");
+
+        assert!(error.to_string().contains("did not become ready"));
+    }
+
+    #[test]
+    fn status_line_reports_runtime_version_and_backend() {
+        let line = format_running_status(42, &flicknote_sync::ipc::ServerInfo::managed());
+
+        assert!(line.contains("pid 42"));
+        assert!(line.contains(env!("CARGO_PKG_VERSION")));
+        assert!(line.contains("managed"));
     }
 }

@@ -82,6 +82,12 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
     // then bootstraps fresh. The daemon starts immediately (KeepAlive + RunAtLoad)
     // and creates the local DB on startup.
     super::daemon::install(config)?;
+    super::sync::wait_for_daemon_ready(
+        config,
+        std::time::Duration::from_secs(10),
+        std::time::Duration::from_millis(100),
+    )
+    .await?;
     println!("Sync daemon installed and started");
 
     Ok(())

@@ -69,14 +69,16 @@ Mutating section commands print the updated tree after the change.
 
 ## MCP Server
 
-`flicknote mcp` serves typed note, source, and project tools over local stdio.
+`flicknote mcp` serves typed note, source, and project tools over local stdio
+and requires a daemon running in local PowerSync mode. Managed daemons reject
+MCP startup with `unsupported_capability` before protocol output.
 Configure an MCP client to run `flicknote` with `args: ["mcp"]`. Content and
 exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
 heredocs or edit-mode delimiters. Note tools use numeric short IDs and hide
 internal UUIDs; project tools use project names. Use `note_get` for editable
-content and `note_source` only for stored source data. The server supports only
-the daemon-selected workspace. Every data tool requires the running sync daemon;
-the CLI and MCP server never open the local database directly.
+content and `note_source` only for stored source data. Every data tool requires
+the running sync daemon; the CLI and MCP server never open the local database
+directly.
 
 `flicknote mcp` does not expose Gateway tools. Use the CLI command below for
 authenticated Gateway access.

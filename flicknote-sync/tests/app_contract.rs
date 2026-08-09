@@ -282,6 +282,43 @@ async fn managed_app_adds_note_and_topics_through_the_backend() {
 }
 
 #[tokio::test]
+async fn managed_app_rejects_local_only_workflows() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let upload = directory.path().join("note.md");
+    std::fs::write(&upload, "# imported").unwrap();
+    let backend = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await.unwrap(),
+        user_id: "user-1".to_string(),
+    });
+    let app = Application::new(backend, BackendMode::Managed);
+
+    for request in [
+        AppRequest::NoteAddEditable {
+            document: "# editor-created".to_string(),
+            project: None,
+        },
+        AppRequest::NoteUpload {
+            path: upload.to_string_lossy().into_owned(),
+            project: None,
+            created_at: None,
+        },
+        AppRequest::NoteLoadEditable {
+            id: "missing".to_string(),
+        },
+        AppRequest::NoteOpen {
+            id: "missing".to_string(),
+        },
+        AppRequest::NoteShare {
+            id: "missing".to_string(),
+        },
+    ] {
+        let error = app.handle(request).await.unwrap_err();
+        assert_eq!(error.code, "unsupported_capability");
+    }
+}
+
+#[tokio::test]
 async fn local_app_owns_attachment_normalization_and_creator_call() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
@@ -321,7 +358,11 @@ async fn app_owns_editable_document_parsing_and_persistence() {
         db: Database::open_local(&config).await.unwrap(),
         user_id: "user-1".to_string(),
     });
-    let app = Application::new(backend.clone(), BackendMode::Managed);
+    let creator = Arc::new(RecordingCreator {
+        db: backend.clone(),
+        request: std::sync::Mutex::new(None),
+    });
+    let app = Application::new(backend.clone(), BackendMode::Local).with_creator(creator);
 
     let created = app
         .handle(AppRequest::NoteAddEditable {

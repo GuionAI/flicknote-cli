@@ -1128,8 +1128,8 @@ async fn create_note_with_token(
         "updated_at": req.now,
     });
 
-    let resp = match http
-        .post(format!(
+    let send_create = || {
+        http.post(format!(
             "{}/rest/v1/notes?on_conflict=id",
             config.supabase_url
         ))
@@ -1141,42 +1141,30 @@ async fn create_note_with_token(
         )
         .json(&payload)
         .send()
-        .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            match reconcile_ambiguous_remote_create(http, config, access_token, &req.id).await {
-                AmbiguousCreateReconciliation::Found(row) => {
-                    return finish_remote_create(
-                        db,
-                        http,
-                        config,
-                        access_token,
-                        *row,
-                        &extraction_rows,
-                    )
-                    .await;
-                }
-                AmbiguousCreateReconciliation::Absent => {
-                    if attachment_path.is_some()
-                        && let Err(cleanup_error) =
-                            delete_attachment(http, config, access_token, &req.id).await
+    };
+    let (resp, initial_transport_error) = match send_create().await {
+        Ok(resp) => (resp, None),
+        Err(initial_error) => {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            match send_create().await {
+                Ok(resp) => (resp, Some(initial_error.to_string())),
+                Err(retry_error) => {
+                    if let Ok(Some(row)) =
+                        lookup_remote_note(http, config, access_token, &req.id).await
                     {
-                        log::warn!(
-                            "Failed to clean up uploaded attachment after confirming note absence: {cleanup_error}"
-                        );
+                        return finish_remote_create(
+                            db,
+                            http,
+                            config,
+                            access_token,
+                            row,
+                            &extraction_rows,
+                        )
+                        .await;
                     }
-                    return Err(DaemonError::Other {
-                        message: format!(
-                            "Remote note create failed and note {} was confirmed absent: {e}",
-                            req.id
-                        ),
-                    });
-                }
-                AmbiguousCreateReconciliation::Unknown(reconciliation_error) => {
                     return Err(ambiguous_create_error(
                         format!(
-                            "Remote note create outcome is unknown for note {} after a transport failure ({e}); reconciliation could not confirm creation or absence: {reconciliation_error}. Do not create it again.",
+                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry: {retry_error}). The attachment was retained. Do not create it again.",
                             req.id
                         ),
                         req.id,
@@ -1193,6 +1181,16 @@ async fn create_note_with_token(
         if let Ok(Some(row)) = lookup_remote_note(http, config, access_token, &req.id).await {
             return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
                 .await;
+        }
+        if let Some(initial_error) = initial_transport_error {
+            return Err(ambiguous_create_error(
+                format!(
+                    "Remote note create outcome is unknown for note {} after retrying the same stable UUID: the first attempt failed in transport ({initial_error}) and the retry returned {status}: {body}. The attachment was retained. Do not create it again.",
+                    req.id
+                ),
+                req.id,
+                &extraction_rows,
+            ));
         }
         if attachment_path.is_some()
             && let Err(e) = delete_attachment(http, config, access_token, &req.id).await
@@ -1232,42 +1230,6 @@ async fn create_note_with_token(
         }
     };
     finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
-}
-
-enum AmbiguousCreateReconciliation {
-    Found(Box<RemoteNoteRow>),
-    Absent,
-    Unknown(String),
-}
-
-async fn reconcile_ambiguous_remote_create(
-    http: &reqwest::Client,
-    config: &Config,
-    access_token: &str,
-    note_id: &str,
-) -> AmbiguousCreateReconciliation {
-    const ATTEMPTS: usize = 3;
-    let mut confirmed_absent = 0;
-    let mut last_error = None;
-
-    for attempt in 0..ATTEMPTS {
-        match lookup_remote_note(http, config, access_token, note_id).await {
-            Ok(Some(row)) => return AmbiguousCreateReconciliation::Found(Box::new(row)),
-            Ok(None) => confirmed_absent += 1,
-            Err(error) => last_error = Some(error.to_string()),
-        }
-        if attempt + 1 < ATTEMPTS {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
-
-    if confirmed_absent == ATTEMPTS {
-        AmbiguousCreateReconciliation::Absent
-    } else {
-        AmbiguousCreateReconciliation::Unknown(
-            last_error.unwrap_or_else(|| "inconsistent reconciliation responses".to_string()),
-        )
-    }
 }
 
 fn confirmed_create_error(
@@ -2670,12 +2632,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ambiguous_transport_failure_retries_reconciliation_before_returning() {
+    async fn ambiguous_transport_failure_retries_create_with_the_same_stable_uuid() {
         let body = r#"[{"id":"note-recovered-after-retry","short_id":83,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
-        let (origin, server) = spawn_disconnected_then_retry_responses(vec![
-            ("503 Service Unavailable", r#"{"message":"try later"}"#),
-            ("200 OK", body),
-        ]);
+        let (origin, server) = spawn_disconnected_then_retry_responses(vec![("201 Created", body)]);
         let mut config = test_config(String::new());
         config.supabase_url = origin;
         config.supabase_anon_key = "anon-key".to_string();
@@ -2705,7 +2664,9 @@ mod tests {
 
         let created = result.unwrap();
         assert_eq!(created.short_id, 83);
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].starts_with("POST /rest/v1/notes"));
+        assert!(requests[1].starts_with("POST /rest/v1/notes"));
     }
 
     #[tokio::test]

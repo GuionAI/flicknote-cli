@@ -56,6 +56,14 @@ impl Application {
     }
 
     pub async fn handle(&self, request: AppRequest) -> Result<AppResponse, WireError> {
+        let required = request.required_capability();
+        if !self.mode.supports(required) {
+            return Err(Self::unsupported(
+                request.operation_name(),
+                required,
+                self.mode,
+            ));
+        }
         let may_write = request.may_write();
         let result = self.handle_inner(request).await;
         if may_write
@@ -88,7 +96,11 @@ impl Application {
                         .map(AppResponse::NoteSummary)
                         .map_err(WireError::from_service);
                 }
-                Err(Self::unsupported("note_add"))
+                Err(Self::unsupported(
+                    "note_add",
+                    crate::ipc::Capability::NoteAdd,
+                    self.mode,
+                ))
             }
             AppRequest::NoteAddEditable { document, project } => {
                 let parsed =
@@ -127,7 +139,11 @@ impl Application {
                         .create(request)
                         .await
                 } else {
-                    return Err(Self::unsupported("note_add_editable"));
+                    return Err(Self::unsupported(
+                        "note_add_editable",
+                        crate::ipc::Capability::Editor,
+                        self.mode,
+                    ));
                 }
                 .map_err(WireError::from_service)?;
                 notes
@@ -165,7 +181,11 @@ impl Application {
                                 .add(&DirectNoteCreator::new(self.db.as_ref()), input)
                                 .await
                         } else {
-                            return Err(Self::unsupported("note_upload"));
+                            return Err(Self::unsupported(
+                                "note_upload",
+                                crate::ipc::Capability::Attachment,
+                                self.mode,
+                            ));
                         }
                         .map(AppResponse::NoteSummary)
                         .map_err(WireError::from_service)
@@ -174,10 +194,13 @@ impl Application {
                         note_type,
                         metadata,
                     } => {
-                        let creator = self
-                            .creator
-                            .as_deref()
-                            .ok_or_else(|| Self::unsupported("attachment"))?;
+                        let creator = self.creator.as_deref().ok_or_else(|| {
+                            Self::unsupported(
+                                "attachment",
+                                crate::ipc::Capability::Attachment,
+                                self.mode,
+                            )
+                        })?;
                         let project_id = match project.as_deref() {
                             Some(name) => Some(
                                 self.db
@@ -338,10 +361,9 @@ impl Application {
                 .map(AppResponse::NoteArchive)
                 .map_err(WireError::from_service),
             AppRequest::NoteShare { id } => {
-                let gateway = self
-                    .share_gateway
-                    .as_deref()
-                    .ok_or_else(|| Self::unsupported("note_share"))?;
+                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
+                    Self::unsupported("note_share", crate::ipc::Capability::Share, self.mode)
+                })?;
                 notes
                     .share(gateway, &id)
                     .await
@@ -349,10 +371,9 @@ impl Application {
                     .map_err(WireError::from_service)
             }
             AppRequest::NoteUnshare { id } => {
-                let gateway = self
-                    .share_gateway
-                    .as_deref()
-                    .ok_or_else(|| Self::unsupported("note_unshare"))?;
+                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
+                    Self::unsupported("note_unshare", crate::ipc::Capability::Share, self.mode)
+                })?;
                 notes
                     .unshare(gateway, &id)
                     .await
@@ -422,10 +443,9 @@ impl Application {
                 .map(AppResponse::Project)
                 .map_err(WireError::from_service),
             AppRequest::ProjectShare { id } => {
-                let gateway = self
-                    .share_gateway
-                    .as_deref()
-                    .ok_or_else(|| Self::unsupported("project_share"))?;
+                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
+                    Self::unsupported("project_share", crate::ipc::Capability::Share, self.mode)
+                })?;
                 projects
                     .share(gateway, &id)
                     .await
@@ -433,10 +453,9 @@ impl Application {
                     .map_err(WireError::from_service)
             }
             AppRequest::ProjectUnshare { id } => {
-                let gateway = self
-                    .share_gateway
-                    .as_deref()
-                    .ok_or_else(|| Self::unsupported("project_unshare"))?;
+                let gateway = self.share_gateway.as_deref().ok_or_else(|| {
+                    Self::unsupported("project_unshare", crate::ipc::Capability::Share, self.mode)
+                })?;
                 projects
                     .unshare(gateway, &id)
                     .await
@@ -532,13 +551,14 @@ impl Application {
         }
     }
 
-    fn unsupported(operation: &str) -> WireError {
-        WireError {
-            code: "unsupported_operation".to_string(),
-            message: format!("{operation} is not available in this daemon mode"),
-            retryable: false,
-            details: None,
-        }
+    fn unsupported(
+        operation: &str,
+        capability: crate::ipc::Capability,
+        mode: BackendMode,
+    ) -> WireError {
+        WireError::from_service(crate::ipc::unsupported_capability(
+            mode, capability, operation,
+        ))
     }
 
     fn db_error(error: flicknote_core::error::CliError) -> WireError {

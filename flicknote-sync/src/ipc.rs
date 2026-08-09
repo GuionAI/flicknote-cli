@@ -37,13 +37,69 @@ pub enum Capability {
     Data,
     NoteAdd,
     Attachment,
+    Editor,
+    Browser,
+    Mcp,
     Share,
     LocalSync,
+}
+
+const LOCAL_CAPABILITIES: &[Capability] = &[
+    Capability::Data,
+    Capability::NoteAdd,
+    Capability::Attachment,
+    Capability::Editor,
+    Capability::Browser,
+    Capability::Mcp,
+    Capability::Share,
+    Capability::LocalSync,
+];
+const MANAGED_CAPABILITIES: &[Capability] = &[Capability::Data, Capability::NoteAdd];
+
+impl BackendMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Managed => "managed",
+        }
+    }
+
+    pub const fn capabilities(self) -> &'static [Capability] {
+        match self {
+            Self::Local => LOCAL_CAPABILITIES,
+            Self::Managed => MANAGED_CAPABILITIES,
+        }
+    }
+
+    pub fn supports(self, capability: Capability) -> bool {
+        self.capabilities().contains(&capability)
+    }
+}
+
+pub fn unsupported_capability(
+    mode: BackendMode,
+    capability: Capability,
+    operation: &str,
+) -> ServiceError {
+    ServiceError::Remote {
+        code: "unsupported_capability".to_string(),
+        message: format!(
+            "{operation} is not available in {} daemon mode",
+            mode.as_str()
+        ),
+        retryable: false,
+        details: Some(serde_json::json!({
+            "operation": operation,
+            "backend": mode,
+            "required_capability": capability,
+        })),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub protocol: u16,
+    pub version: String,
     pub backend: BackendMode,
     pub capabilities: Vec<Capability>,
 }
@@ -52,23 +108,26 @@ impl ServerInfo {
     pub fn local() -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
+            version: env!("CARGO_PKG_VERSION").to_string(),
             backend: BackendMode::Local,
-            capabilities: vec![
-                Capability::Data,
-                Capability::NoteAdd,
-                Capability::Attachment,
-                Capability::Share,
-                Capability::LocalSync,
-            ],
+            capabilities: BackendMode::Local.capabilities().to_vec(),
         }
     }
 
     pub fn managed() -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
+            version: env!("CARGO_PKG_VERSION").to_string(),
             backend: BackendMode::Managed,
-            capabilities: vec![Capability::Data, Capability::NoteAdd],
+            capabilities: BackendMode::Managed.capabilities().to_vec(),
         }
+    }
+
+    pub fn require(&self, capability: Capability, operation: &str) -> Result<(), ServiceError> {
+        if self.capabilities.contains(&capability) {
+            return Ok(());
+        }
+        Err(unsupported_capability(self.backend, capability, operation))
     }
 }
 
@@ -221,6 +280,38 @@ impl AppRequest {
                 | Self::KeytermGet { .. }
                 | Self::ExtractionValues { .. }
         )
+    }
+
+    pub fn required_capability(&self) -> Capability {
+        match self {
+            Self::NoteAdd(_) => Capability::NoteAdd,
+            Self::NoteAddEditable { .. }
+            | Self::NoteLoadEditable { .. }
+            | Self::NoteSaveEditable { .. } => Capability::Editor,
+            Self::NoteUpload { .. } => Capability::Attachment,
+            Self::NoteOpen { .. } => Capability::Browser,
+            Self::NoteShare { .. }
+            | Self::NoteUnshare { .. }
+            | Self::ProjectShare { .. }
+            | Self::ProjectUnshare { .. } => Capability::Share,
+            _ => Capability::Data,
+        }
+    }
+
+    pub fn operation_name(&self) -> &'static str {
+        match self {
+            Self::NoteAdd(_) => "note_add",
+            Self::NoteAddEditable { .. } => "note_add_editable",
+            Self::NoteUpload { .. } => "note_upload",
+            Self::NoteLoadEditable { .. } => "note_load_editable",
+            Self::NoteSaveEditable { .. } => "note_save_editable",
+            Self::NoteOpen { .. } => "note_open",
+            Self::NoteShare { .. } => "note_share",
+            Self::NoteUnshare { .. } => "note_unshare",
+            Self::ProjectShare { .. } => "project_share",
+            Self::ProjectUnshare { .. } => "project_unshare",
+            _ => "data",
+        }
     }
 }
 
@@ -398,6 +489,9 @@ pub enum DaemonError {
     InvalidResponse {
         message: String,
     },
+    IncompleteResponse {
+        message: String,
+    },
     Other {
         message: String,
     },
@@ -412,6 +506,7 @@ impl fmt::Display for DaemonError {
             Self::PartialCreate { message, .. }
             | Self::AmbiguousCreate { message, .. }
             | Self::InvalidResponse { message }
+            | Self::IncompleteResponse { message }
             | Self::Other { message } => f.write_str(message),
         }
     }
@@ -435,7 +530,7 @@ fn request_timeout_error(
     path: &std::path::Path,
     stage: &str,
 ) -> DaemonError {
-    if matches!(request, DaemonRequest::Health { .. }) {
+    if !is_mutating_app_request(request) {
         return unavailable(path, stage);
     }
     DaemonError::Other {
@@ -443,6 +538,18 @@ fn request_timeout_error(
             "Timed out while {stage} from the sync daemon at {}; the application request outcome is unknown. Do not retry it automatically.",
             path.display()
         ),
+    }
+}
+
+fn is_mutating_app_request(request: &DaemonRequest) -> bool {
+    matches!(request, DaemonRequest::App { request, .. } if request.may_write())
+}
+
+fn response_timeout_for(request: &DaemonRequest) -> Option<std::time::Duration> {
+    match request {
+        DaemonRequest::Health { .. } => Some(IPC_HEALTH_RESPONSE_TIMEOUT),
+        DaemonRequest::App { request, .. } if request.may_write() => None,
+        DaemonRequest::App { .. } => Some(IPC_APP_RESPONSE_TIMEOUT),
     }
 }
 
@@ -458,23 +565,42 @@ pub async fn send_request(
             path: path.display().to_string(),
             message: error.to_string(),
         })?;
-    tokio::time::timeout(IPC_WRITE_TIMEOUT, write_json(&mut stream, request))
-        .await
-        .map_err(|_| request_timeout_error(request, &path, "sending a request"))??;
-    let mut buf = Vec::new();
-    let response_timeout = if matches!(request, DaemonRequest::Health { .. }) {
-        IPC_HEALTH_RESPONSE_TIMEOUT
+    if is_mutating_app_request(request) {
+        write_json(&mut stream, request).await?;
     } else {
-        IPC_APP_RESPONSE_TIMEOUT
-    };
-    tokio::time::timeout(response_timeout, stream.read_to_end(&mut buf))
-        .await
-        .map_err(|_| request_timeout_error(request, &path, "waiting for a response"))?
-        .map_err(|e| DaemonError::Other {
+        tokio::time::timeout(IPC_WRITE_TIMEOUT, write_json(&mut stream, request))
+            .await
+            .map_err(|_| request_timeout_error(request, &path, "sending a request"))??;
+    }
+    let mut buf = Vec::new();
+    match response_timeout_for(request) {
+        Some(response_timeout) => {
+            tokio::time::timeout(response_timeout, stream.read_to_end(&mut buf))
+                .await
+                .map_err(|_| request_timeout_error(request, &path, "waiting for a response"))?
+        }
+        None => stream.read_to_end(&mut buf).await,
+    }
+    .map_err(|e| {
+        if matches!(request, DaemonRequest::Health { .. }) {
+            return DaemonError::Unavailable {
+                path: path.display().to_string(),
+                message: format!("daemon closed the health connection: {e}"),
+            };
+        }
+        DaemonError::Other {
             message: format!("Failed to read daemon response: {e}"),
-        })?;
-    serde_json::from_slice(&buf).map_err(|e| DaemonError::InvalidResponse {
-        message: format!("Failed to parse daemon response: {e}"),
+        }
+    })?;
+    serde_json::from_slice(&buf).map_err(|e| {
+        if e.is_eof() {
+            return DaemonError::IncompleteResponse {
+                message: format!("Daemon closed the connection before a complete response: {e}"),
+            };
+        }
+        DaemonError::InvalidResponse {
+            message: format!("Failed to parse daemon response: {e}"),
+        }
     })
 }
 
@@ -495,6 +621,11 @@ impl<'a> DaemonClient<'a> {
                 DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(format!(
                     "{error}. Start it with `flicknote sync start`."
                 )),
+                DaemonError::IncompleteResponse { .. } if is_health => {
+                    ServiceError::DaemonUnavailable(format!(
+                        "Sync daemon is not ready: {error}. Start it with `flicknote sync start`."
+                    ))
+                }
                 DaemonError::InvalidResponse { .. } if is_health => Self::protocol_mismatch(),
                 other => ServiceError::Daemon(other.to_string()),
             })
@@ -750,9 +881,21 @@ mod tests {
     fn server_info_reports_backend_mode_and_capabilities() {
         let info = ServerInfo::local();
         assert_eq!(info.protocol, PROTOCOL_VERSION);
+        assert!(!info.version.is_empty());
         assert_eq!(info.backend, BackendMode::Local);
         assert!(info.capabilities.contains(&Capability::NoteAdd));
         assert!(info.capabilities.contains(&Capability::Share));
+        assert!(
+            serde_json::to_value(&info).unwrap()["capabilities"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("mcp"))
+        );
+
+        let error = ServerInfo::managed()
+            .require(Capability::Mcp, "mcp")
+            .unwrap_err();
+        assert_eq!(error.code(), "unsupported_capability");
     }
 
     #[test]
@@ -808,25 +951,15 @@ mod tests {
     }
 
     #[test]
-    fn application_timeout_is_non_retryable_because_its_outcome_is_unknown() {
+    fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,
-            request: Box::new(AppRequest::NoteCount(NoteCountInput {
-                keywords: Vec::new(),
-                project: None,
-                note_type: None,
-                archived: false,
-            })),
+            request: Box::new(AppRequest::NoteArchive {
+                id: "note-1".to_string(),
+            }),
         };
 
-        let error = request_timeout_error(
-            &request,
-            std::path::Path::new("/tmp/flicknote.sock"),
-            "waiting for a response",
-        );
-
-        assert!(matches!(error, DaemonError::Other { .. }));
-        assert!(error.to_string().contains("outcome is unknown"));
+        assert_eq!(response_timeout_for(&request), None);
     }
 
     #[tokio::test]
@@ -917,5 +1050,23 @@ mod tests {
             server.await.unwrap(),
             DaemonRequest::Health { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn health_maps_empty_startup_response_to_retryable_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _request = read_request(&mut stream).await.unwrap();
+            drop(stream);
+        });
+
+        let error = DaemonClient::new(&config).health().await.unwrap_err();
+
+        assert_eq!(error.code(), "daemon_unavailable");
+        assert!(error.retryable());
+        server.await.unwrap();
     }
 }
