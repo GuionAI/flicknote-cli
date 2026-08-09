@@ -383,8 +383,11 @@ pub enum DaemonError {
     PartialCreate {
         message: String,
         note_id: String,
-        short_id: i64,
+        short_id: Option<i64>,
         pending_extraction_ids: Vec<String>,
+    },
+    InvalidResponse {
+        message: String,
     },
     Other {
         message: String,
@@ -397,7 +400,9 @@ impl fmt::Display for DaemonError {
             Self::Unavailable { path, message } => {
                 write!(f, "Sync daemon is not available at {path}: {message}")
             }
-            Self::PartialCreate { message, .. } | Self::Other { message } => f.write_str(message),
+            Self::PartialCreate { message, .. }
+            | Self::InvalidResponse { message }
+            | Self::Other { message } => f.write_str(message),
         }
     }
 }
@@ -428,7 +433,7 @@ pub async fn send_request(
         .map_err(|e| DaemonError::Other {
             message: format!("Failed to read daemon response: {e}"),
         })?;
-    serde_json::from_slice(&buf).map_err(|e| DaemonError::Other {
+    serde_json::from_slice(&buf).map_err(|e| DaemonError::InvalidResponse {
         message: format!("Failed to parse daemon response: {e}"),
     })
 }
@@ -443,12 +448,14 @@ impl<'a> DaemonClient<'a> {
     }
 
     async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
+        let is_health = matches!(request, DaemonRequest::Health { .. });
         send_request(self.config, &request)
             .await
             .map_err(|error| match error {
                 DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(format!(
                     "{error}. Start it with `flicknote sync start`."
                 )),
+                DaemonError::InvalidResponse { .. } if is_health => Self::protocol_mismatch(),
                 other => ServiceError::Daemon(other.to_string()),
             })
     }
@@ -792,5 +799,35 @@ mod tests {
         assert_eq!(error.code(), "daemon_protocol_mismatch");
         assert!(error.to_string().contains("sync stop"));
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn health_maps_legacy_daemon_error_to_protocol_mismatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await.unwrap();
+            let response = json!({
+                "type": "error",
+                "payload": {
+                    "code": "other",
+                    "message": "Failed to parse daemon request: unknown variant `health`"
+                }
+            });
+            write_json(&mut stream, &response).await.unwrap();
+            request
+        });
+
+        let error = DaemonClient::new(&config).health().await.unwrap_err();
+
+        assert_eq!(error.code(), "daemon_protocol_mismatch");
+        assert!(!error.retryable());
+        assert!(error.to_string().contains("sync stop"));
+        assert!(matches!(
+            server.await.unwrap(),
+            DaemonRequest::Health { .. }
+        ));
     }
 }

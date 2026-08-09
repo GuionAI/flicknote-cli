@@ -392,14 +392,14 @@ async fn try_upload_and_checkpoint(
     supabase_anon_key: &str,
     context: &str,
     db_path: &Path,
-) {
+) -> bool {
     let _guard = guard.lock().await;
 
     let token = match auth.get_session().await {
         Ok(s) => s.access_token,
         Err(e) => {
             log::warn!("{context}: auth error: {e}");
-            return;
+            return false;
         }
     };
     match run_upload(db, client, &token, supabase_url, supabase_anon_key).await {
@@ -414,9 +414,58 @@ async fn try_upload_and_checkpoint(
             {
                 log::error!("Post-upload WAL checkpoint task panicked: {e}");
             }
+            true
         }
-        Err(e) => log::warn!("{context}: upload failed: {e}"),
+        Err(e) => {
+            log::warn!("{context}: upload failed: {e}");
+            false
+        }
     }
+}
+
+async fn retry_with_backoff<F, Fut>(
+    mut attempt: F,
+    initial_delay: std::time::Duration,
+    maximum_delay: std::time::Duration,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let mut delay = initial_delay;
+    while !attempt().await {
+        tokio::time::sleep(delay).await;
+        delay = delay.saturating_mul(2).min(maximum_delay);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn retry_upload_until_success(
+    db: &PowerSyncDatabase,
+    client: &reqwest::Client,
+    auth: &GoTrueClient,
+    guard: &tokio::sync::Mutex<()>,
+    supabase_url: &str,
+    supabase_anon_key: &str,
+    context: &str,
+    db_path: &Path,
+) {
+    retry_with_backoff(
+        || {
+            try_upload_and_checkpoint(
+                db,
+                client,
+                auth,
+                guard,
+                supabase_url,
+                supabase_anon_key,
+                context,
+                db_path,
+            )
+        },
+        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(30),
+    )
+    .await;
 }
 
 #[async_trait]
@@ -1131,24 +1180,77 @@ async fn create_note_with_token(
         });
     }
 
-    let mut rows = resp
-        .json::<Vec<RemoteNoteRow>>()
-        .await
-        .map_err(|e| DaemonError::Other {
-            message: format!("Failed to parse remote note create response: {e}"),
-        })?;
-    let row = match rows.pop() {
-        Some(row) => row,
-        None => lookup_remote_note(http, config, access_token, &req.id)
+    let row = match resp.json::<Vec<RemoteNoteRow>>().await {
+        Ok(mut rows) => match rows.pop() {
+            Some(row) => row,
+            None => {
+                reconcile_confirmed_remote_note(
+                    http,
+                    config,
+                    access_token,
+                    &req.id,
+                    &extraction_rows,
+                    format!("Remote note create returned no row for note {}", req.id),
+                )
+                .await?
+            }
+        },
+        Err(error) => {
+            reconcile_confirmed_remote_note(
+                http,
+                config,
+                access_token,
+                &req.id,
+                &extraction_rows,
+                format!("Failed to parse remote note create response: {error}"),
+            )
             .await?
-            .ok_or_else(|| DaemonError::Other {
-                message: format!(
-                    "Remote note create returned no row and note {} was not found",
-                    req.id
-                ),
-            })?,
+        }
     };
     finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
+}
+
+fn confirmed_create_error(
+    message: String,
+    note_id: String,
+    short_id: Option<i64>,
+    extraction_rows: &[RemoteExtractionRow],
+) -> DaemonError {
+    DaemonError::PartialCreate {
+        message,
+        note_id,
+        short_id,
+        pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
+    }
+}
+
+async fn reconcile_confirmed_remote_note(
+    http: &reqwest::Client,
+    config: &Config,
+    access_token: &str,
+    note_id: &str,
+    extraction_rows: &[RemoteExtractionRow],
+    original_error: String,
+) -> Result<RemoteNoteRow, DaemonError> {
+    match lookup_remote_note(http, config, access_token, note_id).await {
+        Ok(Some(row)) => Ok(row),
+        Ok(None) => Err(confirmed_create_error(
+            format!(
+                "Note {note_id} was accepted remotely, but its canonical row could not be recovered: {original_error}. Do not create it again."
+            ),
+            note_id.to_string(),
+            None,
+            extraction_rows,
+        )),
+        Err(error) => Err(confirmed_create_error(
+            format!(
+                "Note {note_id} was accepted remotely, but its canonical row could not be recovered: {original_error}; reconciliation failed: {error}. Do not create it again."
+            ),
+            note_id.to_string(),
+            None,
+            extraction_rows,
+        )),
+    }
 }
 
 async fn finish_remote_create(
@@ -1159,21 +1261,41 @@ async fn finish_remote_create(
     row: RemoteNoteRow,
     extraction_rows: &[RemoteExtractionRow],
 ) -> Result<CreatedNote, DaemonError> {
-    let short_id = row.short_id.ok_or_else(|| DaemonError::Other {
-        message: "Remote note create returned no short id".to_string(),
-    })?;
-    commit_remote_note(db, &row).await?;
+    let short_id = match row.short_id {
+        Some(short_id) => short_id,
+        None => {
+            return Err(confirmed_create_error(
+                format!(
+                    "Note {} was created remotely, but the backend returned no short id. Do not create it again.",
+                    row.id
+                ),
+                row.id,
+                None,
+                extraction_rows,
+            ));
+        }
+    };
+    if let Err(error) = commit_remote_note(db, &row).await {
+        return Err(confirmed_create_error(
+            format!(
+                "Note {short_id} was created remotely, but could not be committed locally: {error}. Do not create it again."
+            ),
+            row.id,
+            Some(short_id),
+            extraction_rows,
+        ));
+    }
     if let Err(error) =
         create_extractions_with_token(db, http, config, access_token, extraction_rows).await
     {
-        return Err(DaemonError::PartialCreate {
-            message: format!(
+        return Err(confirmed_create_error(
+            format!(
                 "Note {short_id} was created, but its topics were not fully confirmed: {error}"
             ),
-            note_id: row.id,
-            short_id,
-            pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
-        });
+            row.id,
+            Some(short_id),
+            extraction_rows,
+        ));
     }
     Ok(CreatedNote {
         uuid: row.id,
@@ -1522,7 +1644,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut upload_handle = tokio::spawn(async move {
         // Initial upload on startup recovers committed CRUD left by a crash,
         // a lost in-process signal, or a pre-upgrade CLI writer.
-        try_upload_and_checkpoint(
+        retry_upload_until_success(
             &upload_db,
             &upload_client,
             &upload_auth_clone,
@@ -1552,7 +1674,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            try_upload_and_checkpoint(
+            retry_upload_until_success(
                 &upload_db,
                 &upload_client,
                 &upload_auth_clone,
@@ -1685,6 +1807,24 @@ mod tests {
     use flicknote_core::config::ConfigPaths;
 
     use super::*;
+
+    #[tokio::test]
+    async fn failed_upload_is_retried_without_a_second_write_trigger() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempt_counter = Arc::clone(&attempts);
+
+        retry_with_backoff(
+            move || {
+                let attempt_counter = Arc::clone(&attempt_counter);
+                async move { attempt_counter.fetch_add(1, Ordering::SeqCst) > 0 }
+            },
+            std::time::Duration::from_millis(1),
+            std::time::Duration::from_millis(2),
+        )
+        .await;
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
 
     async fn test_powersync_db() -> (tempfile::TempDir, PowerSyncDatabase) {
         PowerSyncEnvironment::powersync_auto_extension().unwrap();
@@ -2033,7 +2173,7 @@ mod tests {
         let error = remote_create_service_error(DaemonError::PartialCreate {
             message: "note created; topics pending".to_string(),
             note_id: "note-partial".to_string(),
-            short_id: 80,
+            short_id: Some(80),
             pending_extraction_ids: vec!["extraction-1".to_string()],
         });
 
@@ -2141,7 +2281,7 @@ mod tests {
             panic!("expected partial create error")
         };
         assert_eq!(note_id, "note-partial");
-        assert_eq!(short_id, 80);
+        assert_eq!(short_id, Some(80));
         assert_eq!(pending_extraction_ids.len(), 1);
         let reader = db.reader().await.unwrap();
         let count: i64 = reader
@@ -2195,6 +2335,142 @@ mod tests {
                 "GET /rest/v1/notes?id=eq.note-retry&select=* HTTP/1.1",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn remote_create_recovers_malformed_success_response_by_stable_uuid() {
+        let body = r#"[{"id":"note-malformed","short_id":81,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![("201 Created", "{"), ("200 OK", body)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let created = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-malformed".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(created.short_id, 81);
+        assert_eq!(
+            server.join().unwrap(),
+            [
+                "POST /rest/v1/notes?on_conflict=id HTTP/1.1",
+                "GET /rest/v1/notes?id=eq.note-malformed&select=* HTTP/1.1",
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn malformed_success_with_failed_reconciliation_reports_confirmed_create() {
+        let (origin, server) = spawn_server(vec![
+            ("201 Created", "{"),
+            ("503 Service Unavailable", r#"{"message":"try later"}"#),
+        ]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let error = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-confirmed".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let service_error = remote_create_service_error(error);
+
+        assert_eq!(service_error.code(), "note_create_partial");
+        let flicknote_core::services::error::ServiceError::Remote { details, .. } = service_error
+        else {
+            panic!("expected structured remote error")
+        };
+        let details = details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["note_id"], "note-confirmed");
+        assert!(details["short_id"].is_null());
+        assert_eq!(server.join().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn local_commit_failure_after_remote_create_reports_partial_success() {
+        let note = r#"[{"id":"note-local-failure","short_id":82,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![("201 Created", note)]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        db.writer()
+            .await
+            .unwrap()
+            .execute("DROP VIEW notes", [])
+            .unwrap();
+
+        let error = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-local-failure".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let service_error = remote_create_service_error(error);
+
+        assert_eq!(service_error.code(), "note_create_partial");
+        let flicknote_core::services::error::ServiceError::Remote { details, .. } = service_error
+        else {
+            panic!("expected structured remote error")
+        };
+        let details = details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["note_id"], "note-local-failure");
+        assert_eq!(details["short_id"], 82);
+        assert_eq!(server.join().unwrap().len(), 1);
     }
 
     #[tokio::test]
