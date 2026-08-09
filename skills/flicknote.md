@@ -5,7 +5,7 @@ description: "FlickNote CLI for managing notes - add, find, detail, modify, and 
 
 # FlickNote CLI
 
-Use FlickNote to save and retrieve local-first notes from the command line.
+Use FlickNote to save and retrieve daemon-backed, local-first notes from the command line.
 Run `flicknote <command> --help` for exact flags and examples.
 
 ## Project Use
@@ -75,8 +75,8 @@ exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
 heredocs or edit-mode delimiters. Note tools use numeric short IDs and hide
 internal UUIDs; project tools use project names. Use `note_get` for editable
 content and `note_source` only for stored source data. The server supports only
-the local PowerSync workspace. Note creation and note/project share or unshare
-require the sync daemon; local reads and edits do not.
+the daemon-selected workspace. Every data tool requires the running sync daemon;
+the CLI and MCP server never open the local database directly.
 
 `flicknote mcp` does not expose Gateway tools. Use the CLI command below for
 authenticated Gateway access.

@@ -1,9 +1,8 @@
 use clap::{Args, Subcommand};
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectModifyInput};
-use flicknote_core::services::project::ProjectService;
+use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectDto, ProjectModifyInput};
+use flicknote_core::types::{Keyterm, Project};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const PROJECT_HELP: &str = include_str!("../help/project.md");
 
@@ -12,16 +11,6 @@ const PROJECT_HELP: &str = include_str!("../help/project.md");
 pub(crate) struct ProjectArgs {
     #[command(subcommand)]
     command: ProjectCommands,
-}
-
-impl ProjectArgs {
-    pub(crate) fn local_workspace_command_name(&self) -> Option<&'static str> {
-        match &self.command {
-            ProjectCommands::Share(_) => Some("project share"),
-            ProjectCommands::Unshare(_) => Some("project unshare"),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Subcommand)]
@@ -94,42 +83,43 @@ struct DeleteProjectArgs {
     id: String,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    config: &Config,
-    args: &ProjectArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ProjectArgs) -> Result<(), CliError> {
     match &args.command {
-        ProjectCommands::List(a) => list(db, a).await,
-        ProjectCommands::Add(a) => add(db, a).await,
-        ProjectCommands::Detail(a) => detail(db, a).await,
-        ProjectCommands::Share(a) => super::share::run_project(db, config, &a.id).await,
-        ProjectCommands::Unshare(a) => super::share::run_unshare_project(db, config, &a.id).await,
-        ProjectCommands::Modify(a) => modify(db, a).await,
-        ProjectCommands::Delete(a) => delete(db, a).await,
+        ProjectCommands::List(a) => list(daemon, a).await,
+        ProjectCommands::Add(a) => add(daemon, a).await,
+        ProjectCommands::Detail(a) => detail(daemon, a).await,
+        ProjectCommands::Share(a) => super::share::run_project(daemon, &a.id).await,
+        ProjectCommands::Unshare(a) => super::share::run_unshare_project(daemon, &a.id).await,
+        ProjectCommands::Modify(a) => modify(daemon, a).await,
+        ProjectCommands::Delete(a) => delete(daemon, a).await,
     }
 }
 
-async fn add(db: &dyn NoteDb, args: &AddProjectArgs) -> Result<(), CliError> {
-    let project = ProjectService::new(db)
-        .add(ProjectAddInput {
+async fn add(daemon: &DaemonClient<'_>, args: &AddProjectArgs) -> Result<(), CliError> {
+    let project: ProjectDto = daemon
+        .call(AppRequest::ProjectAdd(ProjectAddInput {
             name: args.name.clone(),
             keyterm: args.keyterm.clone(),
             color: args.color.clone(),
-        })
+        }))
         .await?;
     println!("Created project \"{}\" ({}).", project.name, project.id);
     Ok(())
 }
 
-async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
-    let projects = ProjectService::new(db).list(args.include_archived).await?;
+async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
+    let projects: Vec<ProjectDto> = daemon
+        .call(AppRequest::ProjectList {
+            include_archived: args.include_archived,
+        })
+        .await?;
 
     if args.json {
-        let mut values = Vec::with_capacity(projects.len());
-        for project in &projects {
-            values.push(db.find_project(&project.id).await?);
-        }
+        let values: Vec<Project> = daemon
+            .call(AppRequest::ProjectRecords {
+                include_archived: args.include_archived,
+            })
+            .await?;
         println!(
             "{}",
             serde_json::to_string_pretty(&values).map_err(CliError::Json)?
@@ -162,8 +152,12 @@ async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
-    let project = ProjectService::new(db).get(&args.id).await?;
+async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliError> {
+    let project: ProjectDto = daemon
+        .call(AppRequest::ProjectGet {
+            id: args.id.clone(),
+        })
+        .await?;
 
     println!("ID:      {}", project.id);
     println!("Name:    {}", project.name);
@@ -171,7 +165,12 @@ async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
         println!("Color:   {color}");
     }
     if let Some(ref keyterm_id) = project.keyterm_id {
-        match db.find_keyterm(keyterm_id).await {
+        match daemon
+            .call::<Keyterm>(AppRequest::KeytermGet {
+                id: keyterm_id.clone(),
+            })
+            .await
+        {
             Ok(keyterm) => println!("Keyterm: {} ({keyterm_id})", keyterm.name),
             Err(error) => {
                 eprintln!("warning: could not look up keyterm {keyterm_id} ({error})")
@@ -196,25 +195,29 @@ async fn detail(db: &dyn NoteDb, args: &DetailArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-async fn modify(db: &dyn NoteDb, args: &ModifyProjectArgs) -> Result<(), CliError> {
+async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(), CliError> {
     let patch = |value: &Option<String>| match value.as_deref() {
         None => Patch::Missing,
         Some("none") => Patch::Null,
         Some(value) => Patch::Value(value.to_string()),
     };
-    let project = ProjectService::new(db)
-        .modify(ProjectModifyInput {
+    let project: ProjectDto = daemon
+        .call(AppRequest::ProjectModify(ProjectModifyInput {
             id: args.id.clone(),
             keyterm: patch(&args.keyterm),
             color: patch(&args.color),
-        })
+        }))
         .await?;
     println!("Updated project {}.", project.id);
     Ok(())
 }
 
-async fn delete(db: &dyn NoteDb, args: &DeleteProjectArgs) -> Result<(), CliError> {
-    let project = ProjectService::new(db).archive(&args.id).await?;
+async fn delete(daemon: &DaemonClient<'_>, args: &DeleteProjectArgs) -> Result<(), CliError> {
+    let project: ProjectDto = daemon
+        .call(AppRequest::ProjectArchive {
+            id: args.id.clone(),
+        })
+        .await?;
     println!("Deleted project {}.", project.id);
     Ok(())
 }

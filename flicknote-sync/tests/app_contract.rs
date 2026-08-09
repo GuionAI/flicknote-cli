@@ -36,6 +36,40 @@ fn application_is_safe_to_share_between_daemon_request_tasks() {
     assert_send_sync::<Application>();
 }
 
+#[tokio::test]
+async fn application_signals_every_may_write_request_even_when_it_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let backend = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await.unwrap(),
+        user_id: "user-1".to_string(),
+    });
+    let (signal, mut receiver) = tokio::sync::mpsc::channel(4);
+    let app = Application::new(backend, BackendMode::Local).with_write_signal(signal);
+
+    app.handle(AppRequest::NoteList(NoteListInput {
+        note_type: None,
+        project: None,
+        archived: false,
+        limit: 20,
+    }))
+    .await
+    .unwrap();
+    assert!(receiver.try_recv().is_err());
+
+    let error = app
+        .handle(AppRequest::KeytermModify {
+            id: "missing".to_string(),
+            name: None,
+            description: None,
+            content: None,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, "nothing_to_modify");
+    receiver.try_recv().unwrap();
+}
+
 struct RecordingCreator {
     db: Arc<dyn NoteDb>,
     request: std::sync::Mutex<Option<CreateNote>>,

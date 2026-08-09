@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use flicknote_core::TOPIC_EXTRACTION_KEY;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const TOPIC_HELP: &str = include_str!("../help/topic.md");
 const TOPIC_LIST_HELP: &str = "Examples:
@@ -26,15 +26,18 @@ enum TopicCommands {
 #[command(after_help = TOPIC_LIST_HELP)]
 struct ListArgs {}
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &TopicArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &TopicArgs) -> Result<(), CliError> {
     match &args.command {
-        TopicCommands::List(args) => list(db, args).await,
+        TopicCommands::List(args) => list(daemon, args).await,
     }
 }
 
-async fn list(db: &dyn NoteDb, _args: &ListArgs) -> Result<(), CliError> {
-    let values = db
-        .list_extraction_values(&[TOPIC_EXTRACTION_KEY], false)
+async fn list(daemon: &DaemonClient<'_>, _args: &ListArgs) -> Result<(), CliError> {
+    let values: Vec<String> = daemon
+        .call(AppRequest::ExtractionValues {
+            keys: vec![TOPIC_EXTRACTION_KEY.to_string()],
+            archived: false,
+        })
         .await?;
     println!("{}", values.join(", "));
     Ok(())

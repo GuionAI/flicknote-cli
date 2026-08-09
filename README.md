@@ -1,6 +1,6 @@
 # flicknote-cli
 
-Local-first note management CLI with cloud sync. Captures, queries, and manages notes stored in a local SQLite database synced to the cloud via PowerSync and Supabase.
+Daemon-backed note management CLI with local-first sync. The CLI and MCP server use a typed Unix-socket API; the daemon owns SQLite/PowerSync or the configured managed Postgres backend.
 
 ## Features
 
@@ -95,8 +95,8 @@ flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
 
-# Note IDs are numeric short IDs from list/detail. Pending-sync notes may show
-# a UUID prefix; full UUIDs are also accepted for compatibility.
+# Note IDs are numeric short IDs from list/detail. Full UUIDs are also accepted
+# for compatibility.
 
 # Get a specific note (use --tree to see section IDs)
 flicknote detail <note-id>
@@ -156,12 +156,11 @@ The MCP server exposes typed note, note-source, and project tools. Note content
 and exact `before`/`after` edits are JSON fields, so callers do not need shell
 heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
 project tools use project names. `note_source` reads stored source data, while
-`note_get` reads editable note content. It only supports the local PowerSync
-workspace; if `DATABASE_URL` is set, startup fails before MCP protocol output
-begins. `note_add`, note and
-project sharing, and unsharing use the running sync daemon because those
-operations require an account and network access. Other tools operate directly
-on the local database. The server does not start the daemon automatically.
+`note_get` reads editable note content. Every data tool uses the running daemon;
+the MCP process never opens SQLite or connects to Postgres. The daemon chooses
+one backend at startup: local PowerSync by default, or managed Postgres when
+`DATABASE_URL` is set in the daemon environment. The server does not start the
+daemon automatically.
 
 ## Configuration
 
@@ -171,6 +170,7 @@ Environment variables:
 - `FLICKNOTE_SUPABASE_URL`
 - `FLICKNOTE_SUPABASE_KEY`
 - `FLICKNOTE_POWERSYNC_URL`
+- `DATABASE_URL` (daemon-only managed backend selection)
 
 Data directory: `~/.local/share/flicknote/`
 
@@ -180,10 +180,10 @@ Rust workspace with 4 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `flicknote-cli` | binary | CLI commands and installable sync daemon binary |
+| `flicknote-cli` | binary | Thin CLI/MCP clients and installable daemon binary |
 | `flicknote-core` | library | Database, config, shared services, DTOs, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
-| `flicknote-sync` | library | Background sync daemon implementation |
+| `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
 
 ## License
 

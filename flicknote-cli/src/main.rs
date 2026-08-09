@@ -1,13 +1,9 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{CommandFactory, Parser, Subcommand};
-use flicknote_core::backend::NoteDb;
-#[cfg(feature = "powersync")]
-use flicknote_core::backend::SqliteBackend;
 use flicknote_core::config::Config;
-#[cfg(feature = "powersync")]
-use flicknote_core::db::Database;
 use flicknote_core::error::CliError;
+use flicknote_sync::ipc::DaemonClient;
 
 const ROOT_HELP: &str = include_str!("help/root.md");
 
@@ -73,7 +69,7 @@ enum Commands {
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
     Logout,
-    /// Manage local workspace sync
+    /// Manage the FlickNote daemon
     Sync(commands::sync::SyncArgs),
     /// Install agent skills
     Skill(commands::skill::SkillArgs),
@@ -91,66 +87,6 @@ enum Commands {
     Open(commands::open::OpenArgs),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum WorkspaceMode {
-    Local,
-    Managed,
-}
-
-impl WorkspaceMode {
-    fn detect() -> Self {
-        if std::env::var("DATABASE_URL").is_ok() {
-            Self::Managed
-        } else {
-            Self::Local
-        }
-    }
-}
-
-impl Commands {
-    fn local_workspace_command_name(&self) -> Option<&'static str> {
-        match self {
-            Self::Mcp => Some("mcp"),
-            Self::Gateway(_) => Some("gateway"),
-            Self::Upload(_) => Some("upload"),
-            Self::Edit(_) => Some("edit"),
-            Self::Login(_) => Some("login"),
-            Self::Logout => Some("logout"),
-            Self::Sync(_) => Some("sync"),
-            Self::Skill(_) => Some("skill"),
-            Self::Import(_) => Some("import"),
-            Self::Open(_) => Some("open"),
-            Self::Share(_) => Some("share"),
-            Self::Unshare(_) => Some("unshare"),
-            Self::Project(args) => args.local_workspace_command_name(),
-            _ => None,
-        }
-    }
-}
-
-fn enforce_workspace_gate(cli: &Cli, mode: WorkspaceMode) -> Result<(), CliError> {
-    if mode == WorkspaceMode::Local {
-        return Ok(());
-    }
-
-    let Some(ref command) = cli.command else {
-        return Ok(());
-    };
-
-    if let Some(name) = command.local_workspace_command_name() {
-        return Err(local_workspace_required_error(name));
-    }
-
-    Ok(())
-}
-
-fn local_workspace_required_error(command: &str) -> CliError {
-    CliError::Other(format!(
-        "`flicknote {command}` is not available in managed workspaces.\n\
-         Use a local workspace for file, editor, browser, Gateway, sharing, sync, sign-in, and skill commands."
-    ))
-}
-
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(e) = run().await {
@@ -161,8 +97,12 @@ async fn main() {
 
 async fn run() -> Result<(), CliError> {
     let cli = Cli::parse();
-    let workspace_mode = WorkspaceMode::detect();
-    enforce_workspace_gate(&cli, workspace_mode)?;
+    if cli.command.is_none() {
+        Cli::command()
+            .print_help()
+            .map_err(|error| CliError::Other(error.to_string()))?;
+        return Ok(());
+    }
     let config = Config::load()?;
 
     // Commands that don't need a database connection or session
@@ -177,45 +117,17 @@ async fn run() -> Result<(), CliError> {
         }
     }
 
-    // Backend selection: DATABASE_URL set → pgwire, else → SQLite (powersync)
-    #[cfg(feature = "storage-pgwire")]
-    if let Ok(database_url) = std::env::var("DATABASE_URL") {
-        let backend = flicknote_core::pgwire::PgWireBackend::connect(&database_url).await?;
-        return dispatch(&cli, &config, &backend, commands::add::AddCreateMode::Local).await;
+    let daemon = DaemonClient::new(&config);
+    daemon.health().await?;
+    if matches!(cli.command, Some(Commands::Mcp)) {
+        return tokio::task::LocalSet::new()
+            .run_until(mcp::serve(std::rc::Rc::new(config)))
+            .await;
     }
-
-    #[cfg(not(feature = "powersync"))]
-    return Err(CliError::Other(
-        "No storage backend available — set DATABASE_URL for pgwire, or build with powersync feature"
-            .into(),
-    ));
-
-    #[cfg(feature = "powersync")]
-    {
-        let db = Database::open_local(&config).await?;
-        let user_id = flicknote_core::session::get_user_id(&config)?;
-        let backend: std::rc::Rc<dyn NoteDb> = std::rc::Rc::new(SqliteBackend { db, user_id });
-        if matches!(cli.command, Some(Commands::Mcp)) {
-            return tokio::task::LocalSet::new()
-                .run_until(mcp::serve(backend, std::rc::Rc::new(config)))
-                .await;
-        }
-        dispatch(
-            &cli,
-            &config,
-            backend.as_ref(),
-            commands::add::AddCreateMode::Daemon,
-        )
-        .await
-    }
+    dispatch(&cli, &daemon).await
 }
 
-async fn dispatch(
-    cli: &Cli,
-    config: &Config,
-    db: &dyn NoteDb,
-    add_mode: commands::add::AddCreateMode,
-) -> Result<(), CliError> {
+async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()
@@ -225,31 +137,31 @@ async fn dispatch(
 
     match command {
         Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
-        Commands::Add(args) => commands::add::run(db, config, args, add_mode).await,
-        Commands::Upload(args) => commands::upload::run(db, config, args, add_mode).await,
-        Commands::Append(args) => commands::append::run(db, config, args).await,
-        Commands::Delete(args) => commands::delete::run(db, config, args).await,
-        Commands::Edit(args) => commands::edit::run(db, config, args, add_mode).await,
-        Commands::Restore(args) => commands::restore::run(db, config, args).await,
-        Commands::List(args) => commands::list::run(db, args).await,
-        Commands::Count(args) => commands::count::run(db, args).await,
-        Commands::Find(args) => commands::find::run(db, args).await,
-        Commands::Topic(args) => commands::topic::run(db, args).await,
-        Commands::Entity(args) => commands::entity::run(db, args).await,
+        Commands::Add(args) => commands::add::run(daemon, args).await,
+        Commands::Upload(args) => commands::upload::run(daemon, args).await,
+        Commands::Append(args) => commands::append::run(daemon, args).await,
+        Commands::Delete(args) => commands::delete::run(daemon, args).await,
+        Commands::Edit(args) => commands::edit::run(daemon, args).await,
+        Commands::Restore(args) => commands::restore::run(daemon, args).await,
+        Commands::List(args) => commands::list::run(daemon, args).await,
+        Commands::Count(args) => commands::count::run(daemon, args).await,
+        Commands::Find(args) => commands::find::run(daemon, args).await,
+        Commands::Topic(args) => commands::topic::run(daemon, args).await,
+        Commands::Entity(args) => commands::entity::run(daemon, args).await,
         Commands::Gateway(_) => unreachable!("Gateway is dispatched before database setup"),
-        Commands::Source(args) => commands::source::run(db, args).await,
-        Commands::Detail(args) => commands::detail::run(db, config, args).await,
-        Commands::Content(args) => commands::content::run(db, args).await,
-        Commands::Share(args) => commands::share::run_note(db, config, args).await,
-        Commands::Unshare(args) => commands::share::run_unshare_note(db, config, args).await,
-        Commands::Project(args) => commands::project::run(db, config, args).await,
-        Commands::Keyterm(args) => commands::keyterm::run(db, args).await,
-        Commands::Rename(args) => commands::rename::run(db, config, args).await,
-        Commands::Insert(args) => commands::insert::run(db, config, args).await,
-        Commands::Replace(args) => commands::replace::run(db, config, args).await,
-        Commands::Modify(args) => commands::modify::run(db, config, args).await,
-        Commands::Open(args) => commands::open::run(db, config, args).await,
-        Commands::Import(args) => commands::import::run(db, config, args, add_mode).await,
+        Commands::Source(args) => commands::source::run(daemon, args).await,
+        Commands::Detail(args) => commands::detail::run(daemon, args).await,
+        Commands::Content(args) => commands::content::run(daemon, args).await,
+        Commands::Share(args) => commands::share::run_note(daemon, args).await,
+        Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
+        Commands::Project(args) => commands::project::run(daemon, args).await,
+        Commands::Keyterm(args) => commands::keyterm::run(daemon, args).await,
+        Commands::Rename(args) => commands::rename::run(daemon, args).await,
+        Commands::Insert(args) => commands::insert::run(daemon, args).await,
+        Commands::Replace(args) => commands::replace::run(daemon, args).await,
+        Commands::Modify(args) => commands::modify::run(daemon, args).await,
+        Commands::Open(args) => commands::open::run(daemon, args).await,
+        Commands::Import(args) => commands::import::run(daemon, args).await,
         // Login/Logout/Sync/Skill are handled before dispatch() is called
         Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Skill(_) => {
             unreachable!()
@@ -261,7 +173,6 @@ async fn dispatch(
 mod tests {
     use super::*;
 
-    #[cfg(feature = "powersync")]
     async fn call_mcp_tool(
         writer: &mut tokio::io::WriteHalf<tokio::io::DuplexStream>,
         reader: &mut tokio::io::BufReader<tokio::io::ReadHalf<tokio::io::DuplexStream>>,
@@ -286,7 +197,6 @@ mod tests {
         serde_json::from_str(&response).unwrap()
     }
 
-    #[cfg(feature = "powersync")]
     fn assert_json_does_not_contain_string(value: &serde_json::Value, excluded: &str) {
         match value {
             serde_json::Value::String(actual) => assert_ne!(actual, excluded),
@@ -306,10 +216,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[cfg(feature = "powersync")]
     async fn mcp_server_lists_contract_and_calls_note_list() {
+        use flicknote_core::backend::{NoteDb, SqliteBackend};
+        use flicknote_core::db::Database;
+        use flicknote_sync::app::Application;
+        use flicknote_sync::ipc::{BackendMode, ServerInfo, serve_app, socket_path};
         use rmcp::ServiceExt;
         use std::rc::Rc;
+        use std::sync::Arc;
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
         tokio::task::LocalSet::new()
@@ -331,10 +245,10 @@ mod tests {
                     },
                 };
                 let database = Database::open_local(&config).await.unwrap();
-                let backend = SqliteBackend {
+                let backend = Arc::new(SqliteBackend {
                     db: database,
                     user_id: "test-user".to_string(),
-                };
+                });
                 let project_id = backend.create_project("MCP Project").await.unwrap();
                 let note_id = uuid::Uuid::new_v4().to_string();
                 backend
@@ -386,8 +300,17 @@ mod tests {
                 .headings[0]
                     .id
                     .clone();
-                let backend: Rc<dyn NoteDb> = Rc::new(backend);
-                let server = mcp::FlickNoteMcp::new(backend, Rc::new(config));
+                let app = Arc::new(
+                    Application::new(backend, BackendMode::Managed)
+                        .with_web_url(config.web_url.clone()),
+                );
+                let daemon_listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+                let daemon_server = tokio::spawn(serve_app(
+                    daemon_listener,
+                    app,
+                    ServerInfo::managed(),
+                ));
+                let server = mcp::FlickNoteMcp::new(Rc::new(config));
                 let (server_io, client_io) = tokio::io::duplex(8 * 1024);
                 let server = tokio::task::spawn_local(async move {
                     server.serve(server_io).await.unwrap().waiting().await
@@ -697,7 +620,7 @@ mod tests {
                     "Note has no source data"
                 );
 
-                let daemon_error = call_mcp_tool(
+                let added = call_mcp_tool(
                     &mut client_write,
                     &mut client_read,
                     10,
@@ -705,15 +628,8 @@ mod tests {
                     serde_json::json!({ "content": "daemon-backed note" }),
                 )
                 .await;
-                assert_eq!(daemon_error["result"]["isError"], true);
-                assert_eq!(
-                    daemon_error["result"]["structuredContent"]["code"],
-                    "daemon_unavailable"
-                );
-                assert_eq!(
-                    daemon_error["result"]["structuredContent"]["retryable"],
-                    true
-                );
+                assert_eq!(added["result"]["isError"], false);
+                assert_eq!(added["result"]["structuredContent"]["title"], serde_json::Value::Null);
 
                 let archived = call_mcp_tool(
                     &mut client_write,
@@ -741,6 +657,7 @@ mod tests {
                 drop(client_write);
                 drop(client_read);
                 server.await.unwrap().unwrap();
+                daemon_server.abort();
             })
             .await;
     }
@@ -840,75 +757,5 @@ mod tests {
     #[test]
     fn mcp_subcommand_parses() {
         assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_ok());
-    }
-
-    #[test]
-    fn managed_workspace_blocks_local_workspace_commands() {
-        for argv in [
-            ["flicknote", "mcp"].as_slice(),
-            [
-                "flicknote",
-                "gateway",
-                "request",
-                "--path",
-                "/web/v1/search",
-            ]
-            .as_slice(),
-            ["flicknote", "upload", "file.pdf"].as_slice(),
-            ["flicknote", "edit"].as_slice(),
-            ["flicknote", "login"].as_slice(),
-            ["flicknote", "logout"].as_slice(),
-            ["flicknote", "sync", "status"].as_slice(),
-            ["flicknote", "skill", "install"].as_slice(),
-            ["flicknote", "import", "notes"].as_slice(),
-            ["flicknote", "open", "123"].as_slice(),
-            ["flicknote", "share", "123"].as_slice(),
-            ["flicknote", "unshare", "123"].as_slice(),
-            [
-                "flicknote",
-                "project",
-                "share",
-                "550e8400-e29b-41d4-a716-446655440000",
-            ]
-            .as_slice(),
-            [
-                "flicknote",
-                "project",
-                "unshare",
-                "550e8400-e29b-41d4-a716-446655440000",
-            ]
-            .as_slice(),
-        ] {
-            let cli = Cli::try_parse_from(argv).unwrap();
-            let err = enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap_err();
-            assert!(format!("{err}").contains("not available in managed workspaces"));
-        }
-    }
-
-    #[test]
-    fn managed_workspace_allows_data_commands() {
-        for argv in [
-            ["flicknote", "add", "note"].as_slice(),
-            ["flicknote", "append", "1"].as_slice(),
-            ["flicknote", "delete", "1"].as_slice(),
-            ["flicknote", "restore", "1"].as_slice(),
-            ["flicknote", "list"].as_slice(),
-            ["flicknote", "count"].as_slice(),
-            ["flicknote", "find", "keyword"].as_slice(),
-            ["flicknote", "topic", "list"].as_slice(),
-            ["flicknote", "entity", "list"].as_slice(),
-            ["flicknote", "source", "1"].as_slice(),
-            ["flicknote", "detail", "1"].as_slice(),
-            ["flicknote", "content", "1"].as_slice(),
-            ["flicknote", "project", "list"].as_slice(),
-            ["flicknote", "keyterm", "list"].as_slice(),
-            ["flicknote", "rename", "--section", "a1", "1", "New"].as_slice(),
-            ["flicknote", "insert", "1", "--after", "a1"].as_slice(),
-            ["flicknote", "replace", "1", "--section", "a1"].as_slice(),
-            ["flicknote", "modify", "1"].as_slice(),
-        ] {
-            let cli = Cli::try_parse_from(argv).unwrap();
-            enforce_workspace_gate(&cli, WorkspaceMode::Managed).unwrap();
-        }
     }
 }

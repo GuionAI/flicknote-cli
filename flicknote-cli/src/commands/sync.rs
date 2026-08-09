@@ -12,15 +12,15 @@ pub(crate) struct SyncArgs {
 
 #[derive(Subcommand)]
 enum SyncCommand {
-    /// Start local sync service in background
+    /// Start the FlickNote daemon in background
     Start,
-    /// Stop local sync service
+    /// Stop the FlickNote daemon
     Stop,
-    /// Check local sync service status
+    /// Check daemon status
     Status,
-    /// Install local sync service
+    /// Install the local PowerSync daemon
     Install,
-    /// Uninstall local sync service
+    /// Uninstall the local PowerSync daemon
     Uninstall,
 }
 
@@ -36,7 +36,7 @@ pub(crate) fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
 
 fn start(config: &Config) -> Result<(), CliError> {
     if let Some(pid) = super::daemon::read_pid(config) {
-        println!("Local sync service already running (pid {pid})");
+        println!("FlickNote daemon already running (pid {pid})");
         return Ok(());
     }
 
@@ -63,31 +63,41 @@ fn start_with_binary(config: &Config, daemon_binary: &Path) -> Result<(), CliErr
         .spawn()?;
 
     let pid = child.id();
-    println!("Local sync service started (pid {pid})");
+    println!("FlickNote daemon started (pid {pid})");
     Ok(())
 }
 
 fn stop(config: &Config) -> Result<(), CliError> {
     if super::daemon::read_pid(config).is_none() {
-        println!("Local sync service not running");
+        println!("FlickNote daemon not running");
         return Ok(());
     }
     super::daemon::stop(config)?;
-    println!("Local sync service stopped");
+    println!("FlickNote daemon stopped");
     Ok(())
 }
 
 fn status(config: &Config) -> Result<(), CliError> {
     match super::daemon::read_pid(config) {
-        Some(pid) => println!("Local sync service: running (pid {pid})"),
-        None => println!("Local sync service: not running"),
+        Some(pid) => println!("FlickNote daemon: running (pid {pid})"),
+        None => println!("FlickNote daemon: not running"),
     }
     Ok(())
 }
 
 fn install(config: &Config) -> Result<(), CliError> {
+    validate_install_mode(std::env::var("DATABASE_URL").ok().as_deref())?;
     super::daemon::install(config)?;
     println!("Installed and started: io.guion.flicknote.sync");
+    Ok(())
+}
+
+fn validate_install_mode(database_url: Option<&str>) -> Result<(), CliError> {
+    if database_url.is_some() {
+        return Err(CliError::Other(
+            "`flicknote sync install` only installs the local PowerSync daemon; start a managed daemon explicitly with `flicknote sync start`.".to_string(),
+        ));
+    }
     Ok(())
 }
 
@@ -136,5 +146,16 @@ mod tests {
         start_with_binary(&config, &daemon).expect("start fake daemon");
 
         assert!(!super::super::daemon::pid_file(&config).exists());
+    }
+
+    #[test]
+    fn launchd_install_is_local_only() {
+        validate_install_mode(None).unwrap();
+        let error = validate_install_mode(Some("postgres://managed")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("only installs the local PowerSync daemon")
+        );
     }
 }

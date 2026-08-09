@@ -1,9 +1,8 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::{NoteModifyInput, NoteMutationResult};
 use flicknote_core::services::edit_match::{is_edit_mode, parse_edit_input};
-use flicknote_core::services::note::{NoteModifyInput, NoteService};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree, try_read_stdin};
 
@@ -28,11 +27,7 @@ pub(crate) struct ModifyArgs {
     unflagged: bool,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &ModifyArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ModifyArgs) -> Result<(), CliError> {
     let piped = try_read_stdin()?;
     if let Some(input) = piped.as_deref()
         && !is_edit_mode(input)
@@ -57,15 +52,15 @@ pub(crate) async fn run(
     } else {
         None
     };
-    let result = NoteService::new(db)
-        .modify(NoteModifyInput {
+    let result: NoteMutationResult = daemon
+        .call(AppRequest::NoteModify(NoteModifyInput {
             id: args.id.clone(),
             before,
             after,
             section: args.section.clone(),
             project: args.project.clone(),
             flagged,
-        })
+        }))
         .await?;
 
     println!("Modified note {}.\n", display_summary_id(&result.note));

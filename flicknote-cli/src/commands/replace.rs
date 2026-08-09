@@ -1,10 +1,9 @@
 //! `flicknote replace` — overwrite a whole section.
 
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::NoteMutationResult;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree, try_read_stdin};
 
@@ -20,18 +19,18 @@ pub(crate) struct ReplaceArgs {
     section: String,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &ReplaceArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ReplaceArgs) -> Result<(), CliError> {
     let Some(content) = try_read_stdin()? else {
         return Err(CliError::Other(
             "--section requires content from stdin".into(),
         ));
     };
-    let result = NoteService::new(db)
-        .replace_section(&args.id, &args.section, &content)
+    let result: NoteMutationResult = daemon
+        .call(AppRequest::NoteReplaceSection {
+            id: args.id.clone(),
+            section: args.section.clone(),
+            content,
+        })
         .await?;
     println!(
         "Replaced section in note {}.\n",

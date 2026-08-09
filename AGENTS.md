@@ -13,10 +13,10 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): CLI commands and local stdio MCP server
+- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): thin CLI/MCP clients and daemon entrypoint; data commands never open SQLite or Postgres
 - **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Background sync daemon library (PowerSync ↔ Supabase)
+- **flicknote-sync** — Daemon application host, typed RPC boundary, backend ownership, and PowerSync ↔ Supabase sync
 
 ### modify vs replace
 

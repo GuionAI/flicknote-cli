@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use flicknote_core::ENTITY_EXTRACTION_KEYS;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const ENTITY_HELP: &str = include_str!("../help/entity.md");
 const ENTITY_LIST_HELP: &str = "Examples:
@@ -32,21 +32,27 @@ struct ListArgs {
     entity_type: Option<String>,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &EntityArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &EntityArgs) -> Result<(), CliError> {
     match &args.command {
-        EntityCommands::List(args) => list(db, args).await,
+        EntityCommands::List(args) => list(daemon, args).await,
     }
 }
 
-async fn list(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
-    let typed_key;
+async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
     let keys = if let Some(ref entity_type) = args.entity_type {
-        typed_key = format!("::{entity_type}");
-        vec![typed_key.as_str()]
+        vec![format!("::{entity_type}")]
     } else {
-        ENTITY_EXTRACTION_KEYS.to_vec()
+        ENTITY_EXTRACTION_KEYS
+            .iter()
+            .map(|key| (*key).to_string())
+            .collect()
     };
-    let values = db.list_extraction_values(&keys, false).await?;
+    let values: Vec<String> = daemon
+        .call(AppRequest::ExtractionValues {
+            keys,
+            archived: false,
+        })
+        .await?;
     println!("{}", values.join(", "));
     Ok(())
 }

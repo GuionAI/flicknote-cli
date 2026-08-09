@@ -1,8 +1,8 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::NoteDetail;
+use flicknote_core::types::Note;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, note_json, print_section_tree};
 
@@ -24,12 +24,13 @@ pub(crate) struct DetailArgs {
     archived: bool,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &DetailArgs,
-) -> Result<(), CliError> {
-    let detail = NoteService::new(db).get(&args.id, args.archived).await?;
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliError> {
+    let detail: NoteDetail = daemon
+        .call(AppRequest::NoteGet {
+            id: args.id.clone(),
+            archived: args.archived,
+        })
+        .await?;
     if args.tree {
         if detail.sections.is_empty() {
             println!("(no headings found)");
@@ -39,11 +40,12 @@ pub(crate) async fn run(
         return Ok(());
     }
     if args.json {
-        let note = if args.archived {
-            db.find_archived_note(&detail.note.uuid).await?
-        } else {
-            db.find_note(&detail.note.uuid).await?
-        };
+        let note: Note = daemon
+            .call(AppRequest::NoteRecord {
+                id: detail.note.uuid.clone(),
+                archived: args.archived,
+            })
+            .await?;
         let value = note_json(&note, detail.note.project.as_deref());
         println!(
             "{}",

@@ -27,5 +27,4 @@ pub(crate) mod source;
 pub(crate) mod sync;
 pub(crate) mod topic;
 pub(crate) mod upload;
-pub(crate) mod upload_util;
 pub(crate) mod util;

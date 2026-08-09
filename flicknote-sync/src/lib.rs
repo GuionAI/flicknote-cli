@@ -14,7 +14,6 @@ use flicknote_core::{
     services::ports::{CreateNote, NoteCreator, ShareGateway, ShareResource as CoreShareResource},
 };
 use futures_lite::StreamExt;
-use notify::{Config as NotifyConfig, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use powersync::{
     BackendConnector, ConnectionPool, PowerSyncCredentials, PowerSyncDatabase, SyncOptions,
     UpdateType, env::PowerSyncEnvironment, error::PowerSyncError,
@@ -26,10 +25,39 @@ use tokio::{net::UnixListener, sync::mpsc};
 pub mod app;
 pub mod ipc;
 use app::Application;
-use ipc::{
-    CreateNoteRequest, CreatedNote, DaemonError, DaemonRequest, DaemonResponse, ShareRequest,
-    ShareResource, ShareUrlResponse,
-};
+use ipc::DaemonError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShareResource {
+    Note,
+    Project,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShareRequest {
+    resource: ShareResource,
+    id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CreateNoteRequest {
+    id: String,
+    note_type: String,
+    status: String,
+    title: Option<String>,
+    content: Option<String>,
+    metadata: Option<String>,
+    project_id: Option<String>,
+    now: String,
+    topics: Vec<String>,
+    attachment_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CreatedNote {
+    uuid: String,
+    short_id: i64,
+}
 
 /// Helper to convert arbitrary errors into PowerSyncError.
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
@@ -137,7 +165,7 @@ fn unwrap_json_strings(data: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
-/// Inner upload logic shared by the BackendConnector impl and the fsnotify watcher.
+/// Inner upload logic shared by the BackendConnector and application-triggered drain.
 /// Caller is responsible for holding `upload_guard` before calling.
 ///
 /// Returns `true` if at least one CRUD transaction was processed and committed,
@@ -345,7 +373,7 @@ fn checkpoint_wal_standalone(db_path: &Path, label: &str, mode: WalCheckpointMod
 }
 
 /// Acquire the upload guard, get a fresh token, run_upload, and checkpoint.
-/// Shared by both the startup path and the watcher loop to avoid divergence.
+/// Shared by the startup drain and application-triggered drain.
 /// `context` is used as a log prefix (e.g. "Startup upload", "Upload").
 ///
 /// A PASSIVE checkpoint is run after a successful upload to reclaim WAL space
@@ -409,7 +437,7 @@ impl BackendConnector for FlickNoteConnector {
     async fn upload_data(&self) -> Result<(), PowerSyncError> {
         let _guard = self.upload_guard.lock().await;
         let token = self.get_token().await?;
-        // Ignore the bool — checkpoint is only safe to call from the watcher path,
+        // Ignore the bool — checkpoint is only safe to call from the serialized drain path,
         // not here (SDK callback fires during active sync alongside the download actor).
         run_upload(
             &self.db,
@@ -1135,7 +1163,18 @@ async fn finish_remote_create(
         message: "Remote note create returned no short id".to_string(),
     })?;
     commit_remote_note(db, &row).await?;
-    create_extractions_with_token(db, http, config, access_token, extraction_rows).await?;
+    if let Err(error) =
+        create_extractions_with_token(db, http, config, access_token, extraction_rows).await
+    {
+        return Err(DaemonError::PartialCreate {
+            message: format!(
+                "Note {short_id} was created, but its topics were not fully confirmed: {error}"
+            ),
+            note_id: row.id,
+            short_id,
+            pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
+        });
+    }
     Ok(CreatedNote {
         uuid: row.id,
         short_id,
@@ -1290,6 +1329,30 @@ struct RemoteNoteCreator {
     config: Arc<Config>,
 }
 
+fn remote_create_service_error(
+    error: DaemonError,
+) -> flicknote_core::services::error::ServiceError {
+    match error {
+        DaemonError::PartialCreate {
+            message,
+            note_id,
+            short_id,
+            pending_extraction_ids,
+        } => flicknote_core::services::error::ServiceError::Remote {
+            code: "note_create_partial".to_string(),
+            message,
+            retryable: false,
+            details: Some(serde_json::json!({
+                "created": true,
+                "note_id": note_id,
+                "short_id": short_id,
+                "pending_extraction_ids": pending_extraction_ids,
+            })),
+        },
+        error => flicknote_core::services::error::ServiceError::Daemon(error.to_string()),
+    }
+}
+
 #[async_trait]
 impl NoteCreator for RemoteNoteCreator {
     async fn create(
@@ -1316,9 +1379,7 @@ impl NoteCreator for RemoteNoteCreator {
             },
         )
         .await
-        .map_err(|error| {
-            flicknote_core::services::error::ServiceError::Daemon(error.to_string())
-        })?;
+        .map_err(remote_create_service_error)?;
         Ok(flicknote_core::backend::InsertedNote {
             uuid: created.uuid,
             short_id: Some(created.short_id),
@@ -1378,97 +1439,6 @@ impl ShareGateway for RemoteShareGateway {
             .map_err(|error| {
                 flicknote_core::services::error::ServiceError::Daemon(error.to_string())
             })
-    }
-}
-
-async fn serve_socket(
-    listener: UnixListener,
-    db: PowerSyncDatabase,
-    auth: Arc<GoTrueClient>,
-    http: reqwest::Client,
-    config: Arc<Config>,
-    share_lock: Arc<ShareRequestLock>,
-    app: Arc<Application>,
-) {
-    loop {
-        let (mut stream, _) = match listener.accept().await {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("IPC accept failed: {e}");
-                continue;
-            }
-        };
-        let db = db.clone();
-        let auth = Arc::clone(&auth);
-        let http = http.clone();
-        let config = Arc::clone(&config);
-        let share_lock = Arc::clone(&share_lock);
-        let app = Arc::clone(&app);
-        tokio::spawn(async move {
-            let response = match ipc::read_request(&mut stream).await {
-                Ok(DaemonRequest::Health { protocol }) => {
-                    if protocol == ipc::PROTOCOL_VERSION {
-                        DaemonResponse::ServerInfo(ipc::ServerInfo::local())
-                    } else {
-                        DaemonResponse::AppError(ipc::WireError {
-                            code: "daemon_protocol_mismatch".to_string(),
-                            message: format!(
-                                "daemon protocol {} does not support client protocol {protocol}",
-                                ipc::PROTOCOL_VERSION
-                            ),
-                            retryable: false,
-                            details: None,
-                        })
-                    }
-                }
-                Ok(DaemonRequest::App { protocol, request }) => {
-                    if protocol != ipc::PROTOCOL_VERSION {
-                        DaemonResponse::AppError(ipc::WireError {
-                            code: "daemon_protocol_mismatch".to_string(),
-                            message: format!(
-                                "daemon protocol {} does not support client protocol {protocol}",
-                                ipc::PROTOCOL_VERSION
-                            ),
-                            retryable: false,
-                            details: None,
-                        })
-                    } else {
-                        match app.handle(*request).await {
-                            Ok(response) => DaemonResponse::App(Box::new(response)),
-                            Err(error) => DaemonResponse::AppError(error),
-                        }
-                    }
-                }
-                Ok(DaemonRequest::CreateNote(req)) => {
-                    match create_note_remotely(&db, &http, &auth, &config, *req).await {
-                        Ok(note) => DaemonResponse::NoteCreated(note),
-                        Err(e) => DaemonResponse::Error(e),
-                    }
-                }
-                Ok(DaemonRequest::GetOrCreateShare(req)) => {
-                    match share_lock
-                        .run(get_or_create_share(&http, &auth, &config, &req))
-                        .await
-                    {
-                        Ok(url) => DaemonResponse::ShareUrl(ShareUrlResponse { url }),
-                        Err(e) => DaemonResponse::Error(e),
-                    }
-                }
-                Ok(DaemonRequest::RevokeShare(req)) => {
-                    match share_lock
-                        .run(revoke_share(&http, &auth, &config, &req))
-                        .await
-                    {
-                        Ok(()) => DaemonResponse::ShareRevoked,
-                        Err(e) => DaemonResponse::Error(e),
-                    }
-                }
-                Err(e) => DaemonResponse::Error(e),
-            };
-            if let Err(e) = ipc::write_response(&mut stream, &response).await {
-                log::warn!("IPC response failed: {e}");
-            }
-        });
     }
 }
 
@@ -1537,52 +1507,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
 
-    // Watch the WAL file for cross-process writes from the CLI.
-    // PowerSync's in-process ps_crud watch can't detect writes from a separate process
-    // (e.g. `flicknote add`). Watching the WAL file catches any SQLite write regardless
-    // of which process wrote it, with ~200ms trailing-debounce latency.
+    // Application writes happen in this process. Each may-write request sends a
+    // best-effort trigger; the startup drain recovers committed writes whose signal
+    // was lost because of a crash or a full channel.
     let (trigger_tx, mut trigger_rx) = mpsc::channel::<()>(16);
-
-    // Build the WAL filename ("<db_file>-wal") for event filtering.
-    // The WAL may not exist yet on a fresh DB, so watch the parent dir and
-    // filter by filename — handles both cases without runtime switching.
-    let wal_filename = {
-        let mut name = config
-            .paths
-            .db_file
-            .file_name()
-            .ok_or("db_file path has no filename component")?
-            .to_os_string();
-        name.push("-wal");
-        name
-    };
-    let db_dir = config
-        .paths
-        .db_file
-        .parent()
-        .ok_or("db_file path has no parent directory")?
-        .to_path_buf();
-    let wal_fname_clone = wal_filename.clone();
-
-    let mut fs_watcher = RecommendedWatcher::new(
-        move |res: Result<notify::Event, notify::Error>| match res {
-            Err(e) => log::error!("fs_watcher error (uploads may stall): {e}"),
-            Ok(event) => {
-                if !matches!(event.kind, EventKind::Modify(_)) {
-                    return;
-                }
-                let is_wal = event
-                    .paths
-                    .iter()
-                    .any(|p| p.file_name().is_some_and(|f| f == wal_fname_clone));
-                if is_wal && trigger_tx.try_send(()).is_err() {
-                    log::debug!("WAL trigger channel full — event dropped (burst in progress)");
-                }
-            }
-        },
-        NotifyConfig::default(),
-    )?;
-    fs_watcher.watch(&db_dir, RecursiveMode::NonRecursive)?;
 
     let upload_db = db.clone();
     let upload_supabase_url = config.supabase_url.clone();
@@ -1592,8 +1520,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let upload_db_path = config.paths.db_file.clone();
 
     let mut upload_handle = tokio::spawn(async move {
-        // Initial upload on startup — pick up any ps_crud entries written before
-        // the daemon started (e.g. CLI ran while daemon was down).
+        // Initial upload on startup recovers committed CRUD left by a crash,
+        // a lost in-process signal, or a pre-upgrade CLI writer.
         try_upload_and_checkpoint(
             &upload_db,
             &upload_client,
@@ -1607,9 +1535,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await;
 
         loop {
-            // Block until a WAL change is detected.
+            // Block until the application host reports a may-write request.
             if trigger_rx.recv().await.is_none() {
-                break; // watcher dropped — daemon shutting down
+                break;
             }
 
             // Trailing debounce: collapse burst writes (e.g. bulk import) into a
@@ -1664,9 +1592,6 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         user_id,
     });
     let socket_config = Arc::clone(&config);
-    let socket_config_for_task = Arc::clone(&socket_config);
-    let socket_db = db.clone();
-    let socket_auth = Arc::clone(&auth);
     let socket_http = reqwest::Client::new();
     let socket_share_lock = Arc::new(ShareRequestLock::default());
     let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator {
@@ -1679,25 +1604,19 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         http: socket_http.clone(),
         auth: Arc::clone(&auth),
         config: Arc::clone(&config),
-        lock: Arc::clone(&socket_share_lock),
+        lock: socket_share_lock,
     });
     let app = Arc::new(
         Application::new(backend, ipc::BackendMode::Local)
             .with_creator(creator)
             .with_share_gateway(gateway)
-            .with_web_url(config.web_url.clone()),
+            .with_web_url(config.web_url.clone())
+            .with_write_signal(trigger_tx),
     );
     let mut socket_handle = tokio::spawn(async move {
-        serve_socket(
-            socket_listener,
-            socket_db,
-            socket_auth,
-            socket_http,
-            socket_config_for_task,
-            socket_share_lock,
-            app,
-        )
-        .await;
+        if let Err(error) = ipc::serve_app(socket_listener, app, ipc::ServerInfo::local()).await {
+            log::error!("Application socket server failed: {error}");
+        }
     });
 
     tokio::select! {
@@ -2109,6 +2028,23 @@ mod tests {
         (format!("http://{address}"), handle)
     }
 
+    #[test]
+    fn partial_remote_create_maps_to_non_retryable_structured_service_error() {
+        let error = remote_create_service_error(DaemonError::PartialCreate {
+            message: "note created; topics pending".to_string(),
+            note_id: "note-partial".to_string(),
+            short_id: 80,
+            pending_extraction_ids: vec!["extraction-1".to_string()],
+        });
+
+        assert_eq!(error.code(), "note_create_partial");
+        assert!(!error.retryable());
+        let flicknote_core::services::error::ServiceError::Remote { details, .. } = error else {
+            panic!("expected remote service error")
+        };
+        assert_eq!(details.unwrap()["short_id"], 80);
+    }
+
     #[tokio::test]
     async fn remote_create_returns_after_canonical_note_is_committed_locally() {
         let body = r#"[{"id":"note-create","short_id":77,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
@@ -2156,6 +2092,67 @@ mod tests {
             server.join().unwrap(),
             ["POST /rest/v1/notes?on_conflict=id HTTP/1.1"]
         );
+    }
+
+    #[tokio::test]
+    async fn remote_create_reports_typed_partial_success_after_note_commit() {
+        let note = r#"[{"id":"note-partial","short_id":80,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![
+            ("201 Created", note),
+            (
+                "500 Internal Server Error",
+                r#"{"message":"topic failure"}"#,
+            ),
+        ]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let error = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-partial".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested title".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: vec!["rust".to_string()],
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap_err();
+
+        let DaemonError::PartialCreate {
+            note_id,
+            short_id,
+            pending_extraction_ids,
+            ..
+        } = error
+        else {
+            panic!("expected partial create error")
+        };
+        assert_eq!(note_id, "note-partial");
+        assert_eq!(short_id, 80);
+        assert_eq!(pending_extraction_ids.len(), 1);
+        let reader = db.reader().await.unwrap();
+        let count: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM notes WHERE id = ?",
+                params!["note-partial"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[tokio::test]

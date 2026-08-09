@@ -7,6 +7,75 @@ use std::time::{Duration, Instant};
 use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
+use flicknote_sync::app::Application;
+use flicknote_sync::ipc::{BackendMode, ServerInfo, serve_app, socket_path};
+
+fn test_config(config_root: &std::path::Path, data_root: &std::path::Path) -> Config {
+    let config_dir = config_root.join("flicknote");
+    let data_dir = data_root.join("flicknote");
+    Config {
+        supabase_url: String::new(),
+        supabase_anon_key: String::new(),
+        powersync_url: String::new(),
+        api_url: String::new(),
+        web_url: None,
+        paths: ConfigPaths {
+            config_file: config_dir.join("config.json"),
+            session_file: config_dir.join("session.json"),
+            db_file: data_dir.join("flicknote.db"),
+            log_file: data_dir.join("flicknote.log"),
+            config_dir,
+            data_dir,
+        },
+    }
+}
+
+struct DaemonGuard {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _shutdown_result = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path) -> DaemonGuard {
+    let config = test_config(config_root, data_root);
+    std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let backend = std::sync::Arc::new(SqliteBackend {
+                    db: Database::open_local(&config).await.unwrap(),
+                    user_id: "test-user".to_string(),
+                });
+                let app = std::sync::Arc::new(Application::new(backend, BackendMode::Managed));
+                let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+                ready_tx.send(()).unwrap();
+                tokio::select! {
+                    _ = shutdown_rx => {}
+                    result = serve_app(listener, app, ServerInfo::managed()) => result.unwrap(),
+                }
+            });
+    });
+    ready_rx.recv().unwrap();
+    DaemonGuard {
+        shutdown: Some(shutdown_tx),
+        thread: Some(thread),
+    }
+}
 
 fn write_session(config_root: &std::path::Path) {
     write_session_with_expiry(config_root, None);
@@ -36,24 +105,8 @@ async fn seed_workspace(
     data_root: &std::path::Path,
 ) -> (String, String) {
     write_session(config_root);
-    let config_dir = config_root.join("flicknote");
-    let data_dir = data_root.join("flicknote");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    let config = Config {
-        supabase_url: String::new(),
-        supabase_anon_key: String::new(),
-        powersync_url: String::new(),
-        api_url: String::new(),
-        web_url: None,
-        paths: ConfigPaths {
-            config_file: config_dir.join("config.json"),
-            session_file: config_dir.join("session.json"),
-            db_file: data_dir.join("flicknote.db"),
-            log_file: data_dir.join("flicknote.log"),
-            config_dir,
-            data_dir,
-        },
-    };
+    let config = test_config(config_root, data_root);
+    std::fs::create_dir_all(&config.paths.data_dir).unwrap();
     let database = Database::open_local(&config).await.unwrap();
     let backend = SqliteBackend {
         db: database,
@@ -512,6 +565,7 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
     let (note_id, _) = seed_workspace(&config_root, &data_root).await;
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let listed = run_cli_json(&config_root, &data_root, &["list", "--json"]);
     assert_legacy_note_shape(&listed[0], &serde_json::Value::Null);
@@ -538,6 +592,7 @@ fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
     write_session(&config_root);
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .arg("mcp")
@@ -586,17 +641,47 @@ fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
 }
 
 #[test]
-fn managed_workspace_rejects_mcp_before_protocol_output() {
+fn mcp_requires_daemon_before_protocol_output() {
+    let directory = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .arg("mcp")
-        .env("DATABASE_URL", "postgres://unused")
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("`flicknote mcp` is not available in managed workspaces")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+}
+
+#[test]
+fn data_commands_require_the_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .arg("list")
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+}
+
+#[test]
+fn root_help_does_not_require_the_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
 }

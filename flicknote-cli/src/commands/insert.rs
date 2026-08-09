@@ -1,9 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::InsertPosition;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::{InsertPosition, NoteMutationResult};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree, read_stdin_required};
 
@@ -25,11 +23,7 @@ pub(crate) struct InsertArgs {
     after: Option<String>,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &InsertArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &InsertArgs) -> Result<(), CliError> {
     let (section, position) = match (&args.before, &args.after) {
         (Some(section), None) => (section.as_str(), InsertPosition::Before),
         (None, Some(section)) => (section.as_str(), InsertPosition::After),
@@ -41,8 +35,13 @@ pub(crate) async fn run(
     };
 
     let insert_content = read_stdin_required()?;
-    let result = NoteService::new(db)
-        .insert(&args.id, section, position, &insert_content)
+    let result: NoteMutationResult = daemon
+        .call(AppRequest::NoteInsert {
+            id: args.id.clone(),
+            section: section.to_string(),
+            position,
+            content: insert_content,
+        })
         .await?;
     let position = match position {
         InsertPosition::Before => "before",

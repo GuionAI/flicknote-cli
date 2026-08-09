@@ -16,6 +16,7 @@ pub struct Application {
     creator: Option<Arc<dyn NoteCreator>>,
     share_gateway: Option<Arc<dyn ShareGateway>>,
     web_url: Option<String>,
+    write_signal: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl Application {
@@ -26,6 +27,7 @@ impl Application {
             creator: None,
             share_gateway: None,
             web_url: None,
+            write_signal: None,
         }
     }
 
@@ -44,11 +46,30 @@ impl Application {
         self
     }
 
+    pub fn with_write_signal(mut self, signal: tokio::sync::mpsc::Sender<()>) -> Self {
+        self.write_signal = Some(signal);
+        self
+    }
+
     pub fn mode(&self) -> BackendMode {
         self.mode
     }
 
     pub async fn handle(&self, request: AppRequest) -> Result<AppResponse, WireError> {
+        let may_write = request.may_write();
+        let result = self.handle_inner(request).await;
+        if may_write
+            && let Some(signal) = &self.write_signal
+            && signal.try_send(()).is_err()
+        {
+            log::debug!(
+                "Upload trigger channel full or closed; startup/next write will drain CRUD"
+            );
+        }
+        result
+    }
+
+    async fn handle_inner(&self, request: AppRequest) -> Result<AppResponse, WireError> {
         let notes = NoteService::new(self.db.as_ref());
         let projects = ProjectService::new(self.db.as_ref());
         match request {
@@ -230,6 +251,18 @@ impl Application {
                 .await
                 .map(AppResponse::NoteDetail)
                 .map_err(WireError::from_service),
+            AppRequest::NoteLoadEditable { id } => {
+                let id = self.db.resolve_note_id(&id).await.map_err(Self::db_error)?;
+                flicknote_core::services::editable_document::load_editable_note(
+                    self.db.as_ref(),
+                    &id,
+                )
+                .await
+                .map(|document| {
+                    AppResponse::EditableDocument(crate::ipc::EditableDocument { document })
+                })
+                .map_err(Self::db_error)
+            }
             AppRequest::NoteRecord { id, archived } => {
                 let id = if archived {
                     self.db.resolve_archived_note_id(&id).await
@@ -358,6 +391,21 @@ impl Application {
                 .await
                 .map(AppResponse::Project)
                 .map_err(WireError::from_service),
+            AppRequest::ProjectGetByName { name } => {
+                let id = self
+                    .db
+                    .find_project_by_name(&name)
+                    .await
+                    .map_err(Self::db_error)?
+                    .ok_or_else(|| {
+                        WireError::from_service(ServiceError::ProjectNotFound(name.clone()))
+                    })?;
+                projects
+                    .get(&id)
+                    .await
+                    .map(AppResponse::Project)
+                    .map_err(WireError::from_service)
+            }
             AppRequest::ProjectAdd(input) => projects
                 .add(input)
                 .await

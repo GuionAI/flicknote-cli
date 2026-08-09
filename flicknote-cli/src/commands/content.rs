@@ -1,7 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::{NoteDetail, NoteSectionResult};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const CONTENT_HELP: &str = include_str!("../help/content.md");
 
@@ -15,11 +15,26 @@ pub(crate) struct ContentArgs {
     section: Option<String>,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &ContentArgs) -> Result<(), CliError> {
-    let service = NoteService::new(db);
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ContentArgs) -> Result<(), CliError> {
     let output = match args.section.as_deref() {
-        Some(section) => service.get_section(&args.id, section).await?.content,
-        None => service.get(&args.id, false).await?.content,
+        Some(section) => {
+            daemon
+                .call::<NoteSectionResult>(AppRequest::NoteGetSection {
+                    id: args.id.clone(),
+                    section: section.to_string(),
+                })
+                .await?
+                .content
+        }
+        None => {
+            daemon
+                .call::<NoteDetail>(AppRequest::NoteGet {
+                    id: args.id.clone(),
+                    archived: false,
+                })
+                .await?
+                .content
+        }
     };
     print!("{output}");
     Ok(())
