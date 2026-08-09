@@ -4,7 +4,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
     NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput, NoteListInput,
-    NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, Patch,
+    NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
     ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
@@ -499,7 +499,6 @@ impl FlickNoteMcp {
         structured(
             self.call::<ProjectDto>(AppRequest::ProjectAdd(ProjectAddInput {
                 name: params.name,
-                keyterm: None,
                 color: params.color,
             }))
             .await
@@ -522,7 +521,6 @@ impl FlickNoteMcp {
         structured(
             self.call::<ProjectDto>(AppRequest::ProjectModify(ProjectModifyInput {
                 id: project_id,
-                keyterm: Patch::Missing,
                 color: params.color,
             }))
             .await

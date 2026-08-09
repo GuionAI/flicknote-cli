@@ -63,8 +63,6 @@ enum Commands {
     Unshare(commands::share::UnshareArgs),
     /// Manage projects
     Project(commands::project::ProjectArgs),
-    /// Manage keyterm sets
-    Keyterm(commands::keyterm::KeytermArgs),
     /// Authenticate with FlickNote
     Login(commands::login::LoginArgs),
     /// Log out — remove saved session
@@ -171,7 +169,6 @@ async fn dispatch(
         Commands::Share(args) => commands::share::run_note(daemon, args).await,
         Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
         Commands::Project(args) => commands::project::run(daemon, args).await,
-        Commands::Keyterm(args) => commands::keyterm::run(daemon, args).await,
         Commands::Rename(args) => commands::rename::run(daemon, args).await,
         Commands::Insert(args) => commands::insert::run(daemon, args).await,
         Commands::Replace(args) => commands::replace::run(daemon, args).await,
@@ -397,18 +394,6 @@ mod tests {
                         tool["name"]
                     );
                 }
-                for tool in tools.iter().filter(|tool| {
-                    tool["name"]
-                        .as_str()
-                        .is_some_and(|name| name.starts_with("project_"))
-                }) {
-                    assert!(
-                        !tool["inputSchema"].to_string().contains("keyterm")
-                            && !tool["outputSchema"].to_string().contains("keyterm"),
-                        "{} must not expose keyterm functionality",
-                        tool["name"]
-                    );
-                }
                 let project_get_schema = tools
                     .iter()
                     .find(|tool| tool["name"] == "project_get")
@@ -557,12 +542,6 @@ mod tests {
                         .get("id")
                         .is_none()
                 );
-                assert!(
-                    projects["result"]["structuredContent"][0]
-                        .get("keyterm_id")
-                        .is_none()
-                );
-
                 let project = call_mcp_tool(
                     &mut client_write,
                     &mut client_read,

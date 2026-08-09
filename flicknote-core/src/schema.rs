@@ -99,31 +99,8 @@ pub fn app_schema() -> Schema {
             Column::text("color"),
             Column::integer("is_archived"),
             Column::text("created_at"),
-            Column::text("keyterm_id"),
         ],
         |_| {},
-    ));
-
-    schema.tables.push(Table::create(
-        "keyterms",
-        vec![
-            Column::text("user_id"),
-            Column::text("name"),
-            Column::text("description"),
-            Column::text("content"),
-            Column::text("created_at"),
-            Column::text("updated_at"),
-        ],
-        |t| {
-            t.indexes = vec![Index {
-                name: "keyterms_user".into(),
-                columns: vec![IndexedColumn {
-                    name: "user_id".into(),
-                    ascending: true,
-                    type_name: "TEXT".into(),
-                }],
-            }];
-        },
     ));
 
     schema.tables.push(Table::create(

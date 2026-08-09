@@ -10,7 +10,7 @@ use flicknote_core::services::dto::{
 use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::source::{SourceResult, SourceView};
-use flicknote_core::types::{Keyterm, Note, Project};
+use flicknote_core::types::{Note, Project};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
@@ -243,24 +243,6 @@ pub enum AppRequest {
     ProjectUnshare {
         id: String,
     },
-    KeytermAdd {
-        name: String,
-        description: Option<String>,
-        content: Option<String>,
-    },
-    KeytermList,
-    KeytermGet {
-        id: String,
-    },
-    KeytermModify {
-        id: String,
-        name: Option<String>,
-        description: Option<String>,
-        content: Option<String>,
-    },
-    KeytermDelete {
-        id: String,
-    },
     ExtractionValues {
         keys: Vec<String>,
         archived: bool,
@@ -284,8 +266,6 @@ impl AppRequest {
                 | Self::ProjectRecords { .. }
                 | Self::ProjectGet { .. }
                 | Self::ProjectGetByName { .. }
-                | Self::KeytermList
-                | Self::KeytermGet { .. }
                 | Self::ExtractionValues { .. }
         )
     }
@@ -343,8 +323,6 @@ pub enum AppResponse {
     Projects(Vec<ProjectDto>),
     ProjectRecords(Vec<Project>),
     Project(ProjectDto),
-    Keyterms(Vec<Keyterm>),
-    Keyterm(Keyterm),
     Id { id: String },
     Values(Vec<String>),
     Unit,
@@ -388,8 +366,6 @@ app_result!(OpenResult, AppResponse::Open);
 app_result!(Vec<ProjectDto>, AppResponse::Projects);
 app_result!(Vec<Project>, AppResponse::ProjectRecords);
 app_result!(ProjectDto, AppResponse::Project);
-app_result!(Vec<Keyterm>, AppResponse::Keyterms);
-app_result!(Keyterm, AppResponse::Keyterm);
 app_result!(Vec<String>, AppResponse::Values);
 
 impl AppResult for u64 {

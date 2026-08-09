@@ -2259,6 +2259,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn existing_database_retires_keyterm_schema_without_losing_projects() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("keyterm-retirement.db");
+        let mut legacy_schema = app_schema();
+        let projects = legacy_schema
+            .tables
+            .iter_mut()
+            .find(|table| table.name.as_ref() == "projects")
+            .unwrap();
+        if !projects
+            .columns
+            .iter()
+            .any(|column| column.name.as_ref() == "keyterm_id")
+        {
+            projects
+                .columns
+                .push(powersync::schema::Column::text("keyterm_id"));
+        }
+        if !legacy_schema
+            .tables
+            .iter()
+            .any(|table| table.name.as_ref() == "keyterms")
+        {
+            legacy_schema.tables.push(powersync::schema::Table::create(
+                "keyterms",
+                vec![
+                    powersync::schema::Column::text("user_id"),
+                    powersync::schema::Column::text("name"),
+                    powersync::schema::Column::text("description"),
+                    powersync::schema::Column::text("content"),
+                    powersync::schema::Column::text("created_at"),
+                    powersync::schema::Column::text("updated_at"),
+                ],
+                |_| {},
+            ));
+        }
+
+        {
+            let legacy_db = test_powersync_db_at(&path, legacy_schema);
+            let writer = legacy_db.writer().await.unwrap();
+            writer
+                .execute(
+                    "INSERT INTO keyterms (id, user_id, name) VALUES (?, ?, ?)",
+                    params!["retired-keyterm", "user-1", "Retired"],
+                )
+                .unwrap();
+            writer
+                .execute(
+                    "INSERT INTO projects (id, user_id, name, keyterm_id) VALUES (?, ?, ?, ?)",
+                    params![
+                        "preserved-project",
+                        "user-1",
+                        "Preserved",
+                        "retired-keyterm"
+                    ],
+                )
+                .unwrap();
+            writer.execute("DELETE FROM ps_crud", []).unwrap();
+        }
+
+        let upgraded_db = test_powersync_db_at(&path, app_schema());
+        let writer = upgraded_db.writer().await.unwrap();
+        let project_name: String = writer
+            .query_row(
+                "SELECT name FROM projects WHERE id = ?",
+                params!["preserved-project"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(project_name, "Preserved");
+        let retired_view_count: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'view' AND name = 'keyterms'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retired_view_count, 0);
+        let retired_column_count: i64 = writer
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'keyterm_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(retired_column_count, 0);
+    }
+
+    #[tokio::test]
     async fn remote_committed_put_completes_without_http_request() {
         let (_directory, db) = test_powersync_db().await;
         insert_marked_note(&db).await;

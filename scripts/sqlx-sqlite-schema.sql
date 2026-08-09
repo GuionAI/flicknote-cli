@@ -21,19 +21,8 @@ CREATE TABLE projects (
   user_id TEXT,
   name TEXT,
   color TEXT,
-  keyterm_id TEXT,
   is_archived INTEGER,
   created_at TEXT
-);
-
-CREATE TABLE keyterms (
-  id TEXT PRIMARY KEY,
-  user_id TEXT,
-  name TEXT,
-  description TEXT,
-  content TEXT,
-  created_at TEXT,
-  updated_at TEXT
 );
 
 CREATE TABLE note_extractions (

@@ -11,7 +11,6 @@ pub(crate) mod find;
 pub(crate) mod gateway;
 pub(crate) mod import;
 pub(crate) mod insert;
-pub(crate) mod keyterm;
 pub(crate) mod list;
 pub(crate) mod login;
 pub(crate) mod logout;

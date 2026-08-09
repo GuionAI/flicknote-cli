@@ -4,7 +4,6 @@ Examples:
   flicknote project detail <project-id>
   flicknote project share <project-id>
   flicknote project unshare <project-id>
-  flicknote project modify <project-id> --keyterm <keyterm-id>
   flicknote project modify <project-id> --color "#FF5733"
   flicknote project delete <project-id>
 

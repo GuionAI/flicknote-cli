@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
-use flicknote_core::services::dto::{NoteAddInput, NoteListInput, ProjectAddInput};
+use flicknote_core::services::dto::{
+    NoteAddInput, NoteListInput, Patch, ProjectAddInput, ProjectModifyInput,
+};
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
 use flicknote_sync::app::Application;
@@ -86,12 +88,10 @@ async fn application_signals_every_may_write_request_even_when_it_fails() {
     assert!(receiver.try_recv().is_err());
 
     let error = app
-        .handle(AppRequest::KeytermModify {
+        .handle(AppRequest::ProjectModify(ProjectModifyInput {
             id: "missing".to_string(),
-            name: None,
-            description: None,
-            content: None,
-        })
+            color: Patch::Missing,
+        }))
         .await
         .unwrap_err();
     assert_eq!(error.code, "nothing_to_modify");
@@ -231,7 +231,7 @@ async fn app_routes_note_list_and_append_through_services() {
 }
 
 #[tokio::test]
-async fn app_owns_project_keyterm_and_catalog_domain_operations() {
+async fn app_owns_project_and_catalog_domain_operations() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let backend = Arc::new(SqliteBackend {
@@ -240,23 +240,9 @@ async fn app_owns_project_keyterm_and_catalog_domain_operations() {
     });
     let app = Application::new(backend, BackendMode::Local);
 
-    let keyterm = app
-        .handle(AppRequest::KeytermAdd {
-            name: "Rust".to_string(),
-            description: Some("Language".to_string()),
-            content: Some("ownership".to_string()),
-        })
-        .await
-        .unwrap();
-    let AppResponse::Keyterm(keyterm) = keyterm else {
-        panic!("unexpected keyterm response")
-    };
-    assert_eq!(keyterm.name, "Rust");
-
     let project = app
         .handle(AppRequest::ProjectAdd(ProjectAddInput {
             name: "work".to_string(),
-            keyterm: Some(keyterm.id.clone()),
             color: Some("#123456".to_string()),
         }))
         .await
@@ -265,7 +251,7 @@ async fn app_owns_project_keyterm_and_catalog_domain_operations() {
         panic!("unexpected project response")
     };
     assert_eq!(project.name, "work");
-    assert_eq!(project.keyterm_id.as_deref(), Some(keyterm.id.as_str()));
+    assert_eq!(project.color.as_deref(), Some("#123456"));
 
     let values = app
         .handle(AppRequest::ExtractionValues {

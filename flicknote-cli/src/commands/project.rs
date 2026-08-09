@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectDto, ProjectModifyInput};
-use flicknote_core::types::{Keyterm, Project};
+use flicknote_core::types::Project;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const PROJECT_HELP: &str = include_str!("../help/project.md");
@@ -35,9 +35,6 @@ enum ProjectCommands {
 struct AddProjectArgs {
     /// Project name
     name: String,
-    /// Associate a keyterm set by ID
-    #[arg(long)]
-    keyterm: Option<String>,
     /// Color hex code (e.g. #FF5733)
     #[arg(long)]
     color: Option<String>,
@@ -69,9 +66,6 @@ struct ShareProjectArgs {
 struct ModifyProjectArgs {
     /// Project ID (full UUID)
     id: String,
-    /// Associate a keyterm set by ID (use "none" to clear)
-    #[arg(long)]
-    keyterm: Option<String>,
     /// Color hex code (use "none" to clear)
     #[arg(long)]
     color: Option<String>,
@@ -99,7 +93,6 @@ async fn add(daemon: &DaemonClient<'_>, args: &AddProjectArgs) -> Result<(), Cli
     let project: ProjectDto = daemon
         .call(AppRequest::ProjectAdd(ProjectAddInput {
             name: args.name.clone(),
-            keyterm: args.keyterm.clone(),
             color: args.color.clone(),
         }))
         .await?;
@@ -164,19 +157,6 @@ async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliE
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
-    if let Some(ref keyterm_id) = project.keyterm_id {
-        match daemon
-            .call::<Keyterm>(AppRequest::KeytermGet {
-                id: keyterm_id.clone(),
-            })
-            .await
-        {
-            Ok(keyterm) => println!("Keyterm: {} ({keyterm_id})", keyterm.name),
-            Err(error) => {
-                eprintln!("warning: could not look up keyterm {keyterm_id} ({error})")
-            }
-        }
-    }
     let status = if project.archived {
         "archived"
     } else {
@@ -204,7 +184,6 @@ async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(
     let project: ProjectDto = daemon
         .call(AppRequest::ProjectModify(ProjectModifyInput {
             id: args.id.clone(),
-            keyterm: patch(&args.keyterm),
             color: patch(&args.color),
         }))
         .await?;

@@ -127,7 +127,7 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 mod tests {
     use super::*;
     use crate::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
-    use crate::types::{Keyterm, Project};
+    use crate::types::Project;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -517,7 +517,6 @@ mod tests {
         async fn update_project(
             &self,
             _id: &str,
-            _keyterm_id: Option<Option<&str>>,
             _color: Option<Option<&str>>,
         ) -> Result<(), CliError> {
             unimplemented!()
@@ -595,43 +594,6 @@ mod tests {
                     .map(|value| (extraction_type.to_string(), value.clone())),
             );
             Ok(())
-        }
-
-        async fn resolve_keyterm_id(&self, _prefix: &str) -> Result<String, CliError> {
-            unimplemented!()
-        }
-
-        async fn insert_keyterm(
-            &self,
-            _id: &str,
-            _name: &str,
-            _description: Option<&str>,
-            _content: Option<&str>,
-            _now: &str,
-        ) -> Result<Keyterm, CliError> {
-            unimplemented!()
-        }
-
-        async fn find_keyterm(&self, _id: &str) -> Result<Keyterm, CliError> {
-            unimplemented!()
-        }
-
-        async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-            unimplemented!()
-        }
-
-        async fn update_keyterm(
-            &self,
-            _id: &str,
-            _name: Option<&str>,
-            _description: Option<&str>,
-            _content: Option<&str>,
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
-        async fn delete_keyterm(&self, _id: &str) -> Result<(), CliError> {
-            unimplemented!()
         }
     }
 }

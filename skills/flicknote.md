@@ -110,5 +110,4 @@ flicknote content --help
 flicknote modify --help
 flicknote replace --help
 flicknote project --help
-flicknote keyterm --help
 ```

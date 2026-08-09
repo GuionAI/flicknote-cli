@@ -15,7 +15,7 @@ use crate::backend::{
     NoteSearch,
 };
 use crate::error::CliError;
-use crate::types::{Keyterm, Note, Project};
+use crate::types::{Note, Project};
 
 const PG_FIND_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
@@ -23,17 +23,12 @@ const PG_FIND_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, c
 const PG_FIND_ARCHIVED_NOTE: &str = "SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged, \
      project_id, metadata, source, created_at, updated_at, deleted_at \
      FROM notes WHERE id = $1 AND deleted_at IS NOT NULL LIMIT 1";
-const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
+const PG_FIND_PROJECT: &str = "SELECT id, user_id, name, color, is_archived, created_at \
      FROM projects WHERE id = $1 LIMIT 1";
-const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
+const PG_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, is_archived, created_at \
      FROM projects WHERE COALESCE(is_archived, false) = false ORDER BY name";
-const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at \
+const PG_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, is_archived, created_at \
      FROM projects WHERE COALESCE(is_archived, false) = true ORDER BY name";
-const PG_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
-     FROM keyterms WHERE id = $1 LIMIT 1";
-const PG_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at \
-     FROM keyterms ORDER BY name";
-
 #[derive(sqlx::FromRow)]
 struct NotePgRow {
     pub id: Uuid,
@@ -60,20 +55,8 @@ struct ProjectPgRow {
     pub user_id: Uuid,
     pub name: String,
     pub color: Option<String>,
-    pub keyterm_id: Option<Uuid>,
     pub is_archived: Option<bool>,
     pub created_at: Option<DateTime<Utc>>,
-}
-
-#[derive(sqlx::FromRow)]
-struct KeytermPgRow {
-    pub id: Uuid,
-    pub user_id: Uuid,
-    pub name: String,
-    pub description: Option<String>,
-    pub content: Option<String>,
-    pub created_at: Option<DateTime<Utc>>,
-    pub updated_at: Option<DateTime<Utc>>,
 }
 
 impl From<NotePgRow> for Note {
@@ -105,23 +88,8 @@ impl From<ProjectPgRow> for Project {
             user_id: r.user_id.to_string(),
             name: r.name,
             color: r.color,
-            keyterm_id: r.keyterm_id.map(|u| u.to_string()),
             is_archived: r.is_archived.map(|b| if b { 1 } else { 0 }),
             created_at: r.created_at.map(|t| t.to_rfc3339()),
-        }
-    }
-}
-
-impl From<KeytermPgRow> for Keyterm {
-    fn from(r: KeytermPgRow) -> Self {
-        Self {
-            id: r.id.to_string(),
-            user_id: r.user_id.to_string(),
-            name: r.name,
-            description: r.description,
-            content: r.content,
-            created_at: r.created_at.map(|t| t.to_rfc3339()),
-            updated_at: r.updated_at.map(|t| t.to_rfc3339()),
         }
     }
 }
@@ -684,31 +652,21 @@ impl NoteDb for PgWireBackend {
         .await
     }
 
-    async fn update_project(
-        &self,
-        id: &str,
-        keyterm_id: Option<Option<&str>>,
-        color: Option<Option<&str>>,
-    ) -> Result<(), CliError> {
-        let update_keyterm = keyterm_id.is_some();
+    async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError> {
         let update_color = color.is_some();
-        if !(update_keyterm || update_color) {
+        if !update_color {
             return Ok(());
         }
 
-        let keyterm_value = keyterm_id.map(parse_uuid_opt).transpose()?.flatten();
         let project_id = parse_uuid(id)?;
         let color_value = color.flatten();
         let result = sqlx::query!(
             r#"
             UPDATE projects SET
-                keyterm_id = CASE WHEN $2::bool THEN $3::uuid ELSE keyterm_id END,
-                color = CASE WHEN $4::bool THEN $5::text ELSE color END
+                color = CASE WHEN $2::bool THEN $3::text ELSE color END
             WHERE id = $1
             "#,
             project_id,
-            update_keyterm,
-            keyterm_value,
             update_color,
             color_value,
         )
@@ -872,110 +830,6 @@ impl NoteDb for PgWireBackend {
         }
         Ok(())
     }
-
-    async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
-        resolve_pg_uuid_id(
-            &self.pool,
-            "SELECT id::text FROM keyterms WHERE id = $1 LIMIT 1",
-            prefix,
-            || CliError::Other(format!("Keyterm not found: {prefix}")),
-        )
-        .await
-    }
-
-    async fn insert_keyterm(
-        &self,
-        id: &str,
-        name: &str,
-        description: Option<&str>,
-        content: Option<&str>,
-        now: &str,
-    ) -> Result<Keyterm, CliError> {
-        let now = parse_iso_utc(now)?;
-        let row = sqlx::query_as::<_, KeytermPgRow>(
-            "INSERT INTO keyterms (id, name, description, content, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             RETURNING id, user_id, name, description, content, created_at, updated_at",
-        )
-        .bind(parse_uuid(id)?)
-        .bind(name)
-        .bind(description)
-        .bind(content)
-        .bind(now)
-        .bind(now)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.into())
-    }
-
-    async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
-        sqlx::query_as::<_, KeytermPgRow>(PG_FIND_KEYTERM)
-            .bind(parse_uuid(id)?)
-            .fetch_optional(&self.pool)
-            .await?
-            .map(Keyterm::from)
-            .ok_or_else(|| CliError::Other(format!("Keyterm not found: {id}")))
-    }
-
-    async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-        let rows = sqlx::query_as::<_, KeytermPgRow>(PG_LIST_KEYTERMS)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.into_iter().map(Keyterm::from).collect())
-    }
-
-    async fn update_keyterm(
-        &self,
-        id: &str,
-        name: Option<&str>,
-        description: Option<&str>,
-        content: Option<&str>,
-    ) -> Result<(), CliError> {
-        let update_name = name.is_some();
-        let update_description = description.is_some();
-        let update_content = content.is_some();
-        if !(update_name || update_description || update_content) {
-            return Ok(());
-        }
-
-        let keyterm_id = parse_uuid(id)?;
-        let now = Utc::now();
-        let result = sqlx::query!(
-            r#"
-            UPDATE keyterms SET
-                name = CASE WHEN $2::bool THEN $3::text ELSE name END,
-                description = CASE WHEN $4::bool THEN $5::text ELSE description END,
-                content = CASE WHEN $6::bool THEN $7::text ELSE content END,
-                updated_at = CASE WHEN ($2::bool OR $4::bool OR $6::bool) THEN $8::timestamptz ELSE updated_at END
-            WHERE id = $1
-            "#,
-            keyterm_id,
-            update_name,
-            name,
-            update_description,
-            description,
-            update_content,
-            content,
-            now,
-        )
-        .execute(&self.pool)
-        .await?;
-        if result.rows_affected() == 0 {
-            return Err(CliError::Other(format!("Keyterm not found: {id}")));
-        }
-        Ok(())
-    }
-
-    async fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
-        let result = sqlx::query("DELETE FROM keyterms WHERE id = $1")
-            .bind(parse_uuid(id)?)
-            .execute(&self.pool)
-            .await?;
-        if result.rows_affected() == 0 {
-            return Err(CliError::Other(format!("Keyterm not found: {id}")));
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -1077,7 +931,6 @@ mod tests {
             user_id: Uuid::nil(),
             name: "My Project".into(),
             color: Some("#ff0000".into()),
-            keyterm_id: None,
             is_archived: Some(false),
             created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
         };
@@ -1086,25 +939,5 @@ mod tests {
         assert_eq!(project.name, "My Project");
         assert_eq!(project.is_archived, Some(0));
         assert!(project.created_at.is_some());
-    }
-
-    #[test]
-    fn test_keyterm_pg_row_from() {
-        use chrono::TimeZone;
-        let pg_row = KeytermPgRow {
-            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003").unwrap(),
-            user_id: Uuid::nil(),
-            name: "TODO".into(),
-            description: Some("Action items".into()),
-            content: Some("topics".into()),
-            created_at: Utc.with_ymd_and_hms(2026, 4, 8, 12, 0, 0).single(),
-            updated_at: Utc.with_ymd_and_hms(2026, 4, 9, 10, 0, 0).single(),
-        };
-        let k: Keyterm = pg_row.into();
-        assert_eq!(k.id, "550e8400-e29b-41d4-a716-446655440003");
-        assert_eq!(k.name, "TODO");
-        assert!(k.description.is_some());
-        assert!(k.created_at.is_some());
-        assert!(k.updated_at.is_some());
     }
 }
