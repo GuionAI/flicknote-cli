@@ -890,11 +890,12 @@ impl NoteDb for PgWireBackend {
         description: Option<&str>,
         content: Option<&str>,
         now: &str,
-    ) -> Result<(), CliError> {
+    ) -> Result<Keyterm, CliError> {
         let now = parse_iso_utc(now)?;
-        sqlx::query(
+        let row = sqlx::query_as::<_, KeytermPgRow>(
             "INSERT INTO keyterms (id, name, description, content, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6)",
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             RETURNING id, user_id, name, description, content, created_at, updated_at",
         )
         .bind(parse_uuid(id)?)
         .bind(name)
@@ -902,9 +903,9 @@ impl NoteDb for PgWireBackend {
         .bind(content)
         .bind(now)
         .bind(now)
-        .execute(&self.pool)
+        .fetch_one(&self.pool)
         .await?;
-        Ok(())
+        Ok(row.into())
     }
 
     async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {

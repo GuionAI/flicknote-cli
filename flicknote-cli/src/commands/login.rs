@@ -17,6 +17,9 @@ pub(crate) struct LoginArgs {
 }
 
 pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
+    let database_url = std::env::var("DATABASE_URL").ok();
+    let manage_local_daemon =
+        manages_daemon_after_login_for(cfg!(target_os = "macos"), database_url.as_deref());
     if config.paths.session_file.exists() {
         if !args.force {
             return Err(CliError::Other(
@@ -24,8 +27,10 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
             ));
         }
         // --force: stop daemon and clear stale session before re-auth
-        super::daemon::stop(config)?;
-        super::daemon::uninstall()?;
+        if manage_local_daemon {
+            super::daemon::stop(config)?;
+            super::daemon::uninstall()?;
+        }
         std::fs::remove_file(&config.paths.session_file)?;
     }
 
@@ -78,7 +83,7 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
 
     println!("Authenticated");
 
-    if manages_daemon_after_login() {
+    if manage_local_daemon {
         // The macOS login flow owns the per-user LaunchAgent lifecycle.
         super::sync::install_local_daemon(config, std::time::Duration::from_secs(10)).await?;
         println!("Sync daemon installed and started");
@@ -87,8 +92,8 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
     Ok(())
 }
 
-const fn manages_daemon_after_login() -> bool {
-    cfg!(target_os = "macos")
+const fn manages_daemon_after_login_for(target_is_macos: bool, database_url: Option<&str>) -> bool {
+    target_is_macos && database_url.is_none()
 }
 
 #[cfg(test)]
@@ -96,6 +101,16 @@ mod tests {
     #[cfg(not(target_os = "macos"))]
     #[test]
     fn non_macos_login_does_not_wait_for_a_launchd_daemon() {
-        assert!(!super::manages_daemon_after_login());
+        assert!(!super::manages_daemon_after_login_for(false, None));
+    }
+
+    #[test]
+    fn managed_login_never_manages_the_local_launch_agent() {
+        assert!(!super::manages_daemon_after_login_for(
+            true,
+            Some("postgres://managed")
+        ));
+        assert!(super::manages_daemon_after_login_for(true, None));
+        assert!(!super::manages_daemon_after_login_for(false, None));
     }
 }

@@ -213,7 +213,7 @@ pub trait NoteDb: Send + Sync {
         description: Option<&str>,
         content: Option<&str>,
         now: &str,
-    ) -> Result<(), CliError>;
+    ) -> Result<Keyterm, CliError>;
     async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError>;
     async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError>;
     async fn update_keyterm(
@@ -1117,7 +1117,7 @@ impl NoteDb for SqliteBackend {
         description: Option<&str>,
         content: Option<&str>,
         now: &str,
-    ) -> Result<(), CliError> {
+    ) -> Result<Keyterm, CliError> {
         sqlx::query(SQ_INSERT_KEYTERM)
             .bind(id)
             .bind(&self.user_id)
@@ -1128,7 +1128,15 @@ impl NoteDb for SqliteBackend {
             .bind(now)
             .execute(&self.db.pool)
             .await?;
-        Ok(())
+        Ok(Keyterm {
+            id: id.to_string(),
+            user_id: self.user_id.clone(),
+            name: name.to_string(),
+            description: description.map(str::to_string),
+            content: content.map(str::to_string),
+            created_at: Some(now.to_string()),
+            updated_at: Some(now.to_string()),
+        })
     }
 
     async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
@@ -2046,5 +2054,28 @@ mod tests {
 
         assert!(backend.resolve_project_id(project_prefix).await.is_err());
         assert!(backend.resolve_keyterm_id(keyterm_prefix).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn insert_keyterm_returns_the_committed_record() {
+        let backend = make_backend().await;
+        let now = chrono::Utc::now().to_rfc3339();
+        let keyterm_id = uuid::Uuid::new_v4().to_string();
+
+        let inserted = backend
+            .insert_keyterm(
+                &keyterm_id,
+                "Rust",
+                Some("Language"),
+                Some("ownership"),
+                &now,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(inserted.id, keyterm_id);
+        assert_eq!(inserted.name, "Rust");
+        assert_eq!(inserted.description.as_deref(), Some("Language"));
+        assert_eq!(inserted.content.as_deref(), Some("ownership"));
     }
 }

@@ -1,9 +1,12 @@
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::Command;
+
+const DAEMON_BINARY_NAME: &str = "flicknote-sync";
 
 pub(crate) fn pid_file(config: &Config) -> PathBuf {
     config.paths.data_dir.join("sync.pid")
@@ -14,12 +17,49 @@ pub(crate) fn read_pid(config: &Config) -> Option<u32> {
     let content = fs::read_to_string(&path).ok()?;
     let pid: u32 = content.trim().parse().ok()?;
     #[allow(unsafe_code)]
-    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+    if unsafe { libc::kill(pid as i32, 0) } == 0
+        && process_matches_executable(pid, std::path::Path::new(DAEMON_BINARY_NAME))
+    {
         return Some(pid);
     }
     #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
     let _ = fs::remove_file(&path);
     None
+}
+
+#[cfg(target_os = "linux")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    #[allow(unsafe_code)]
+    let length = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as u32,
+        )
+    };
+    if length <= 0 {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    Some(PathBuf::from(OsStr::from_bytes(&buffer)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_executable(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
+fn process_matches_executable(pid: u32, expected: &std::path::Path) -> bool {
+    process_executable(pid).and_then(|path| path.file_name().map(OsStr::to_owned))
+        == expected.file_name().map(OsStr::to_owned)
 }
 
 pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
@@ -28,7 +68,7 @@ pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
     let dir = exe
         .parent()
         .ok_or_else(|| CliError::Other("Could not determine executable directory".into()))?;
-    let binary = dir.join("flicknote-sync");
+    let binary = dir.join(DAEMON_BINARY_NAME);
     if !binary.exists() {
         return Err(CliError::Other(format!(
             "Sync daemon binary not found at {}: ensure flicknote-sync is installed alongside flicknote",
@@ -235,7 +275,27 @@ fn bootout_service(uid: u32, label: &str) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use flicknote_core::config::ConfigPaths;
+
     use super::*;
+
+    fn test_config(dir: &std::path::Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: dir.to_path_buf(),
+                data_dir: dir.to_path_buf(),
+                config_file: dir.join("config.json"),
+                session_file: dir.join("session.json"),
+                db_file: dir.join("flicknote.db"),
+                log_file: dir.join("flicknote.log"),
+            },
+        }
+    }
 
     #[test]
     fn launchd_install_runs_bootstrap_then_kickstart() {
@@ -268,5 +328,27 @@ mod tests {
                 "gui/501/io.guion.flicknote.sync".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn process_identity_must_match_expected_executable_before_signalling() {
+        let current = std::env::current_exe().unwrap();
+        assert!(process_matches_executable(std::process::id(), &current));
+
+        let unrelated = tempfile::NamedTempFile::new().unwrap();
+        assert!(!process_matches_executable(
+            std::process::id(),
+            unrelated.path(),
+        ));
+    }
+
+    #[test]
+    fn stale_pid_for_an_unrelated_live_process_is_removed_without_being_accepted() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        fs::write(pid_file(&config), std::process::id().to_string()).unwrap();
+
+        assert_eq!(read_pid(&config), None);
+        assert!(!pid_file(&config).exists());
     }
 }

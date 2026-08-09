@@ -608,7 +608,7 @@ mod tests {
             _description: Option<&str>,
             _content: Option<&str>,
             _now: &str,
-        ) -> Result<(), CliError> {
+        ) -> Result<Keyterm, CliError> {
             unimplemented!()
         }
 

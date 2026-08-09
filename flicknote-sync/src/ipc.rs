@@ -619,6 +619,7 @@ impl<'a> DaemonClient<'a> {
 
     async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
         let is_health = matches!(request, DaemonRequest::Health { .. });
+        let is_mutating = is_mutating_app_request(&request);
         send_request(self.config, &request)
             .await
             .map_err(|error| match error {
@@ -630,7 +631,15 @@ impl<'a> DaemonClient<'a> {
                         "Sync daemon is not ready: {error}. Start it with `flicknote sync start`."
                     ))
                 }
-                DaemonError::InvalidResponse { .. } if is_health => Self::protocol_mismatch(),
+                DaemonError::IncompleteResponse { message } if is_mutating => {
+                    ServiceError::Remote {
+                        code: "daemon_request_outcome_unknown".to_string(),
+                        message,
+                        retryable: false,
+                        details: None,
+                    }
+                }
+                DaemonError::InvalidResponse { .. } => Self::protocol_mismatch(),
                 other => ServiceError::Daemon(other.to_string()),
             })
     }
@@ -1023,6 +1032,58 @@ mod tests {
         let error = DaemonClient::new(&config).health().await.unwrap_err();
         assert_eq!(error.code(), "daemon_protocol_mismatch");
         assert!(error.to_string().contains("sync stop"));
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn application_maps_unknown_envelope_to_protocol_mismatch() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _request = read_request(&mut stream).await.unwrap();
+            write_json(&mut stream, &json!({"type":"legacy_result","payload":{}}))
+                .await
+                .unwrap();
+        });
+
+        let error = DaemonClient::new(&config)
+            .app(AppRequest::NoteCount(NoteCountInput {
+                keywords: Vec::new(),
+                project: None,
+                note_type: None,
+                archived: false,
+            }))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "daemon_protocol_mismatch");
+        assert!(!error.retryable());
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn mutating_application_maps_incomplete_response_to_unknown_outcome() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let _request = read_request(&mut stream).await.unwrap();
+            stream.write_all(br#"{"type":"app""#).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+
+        let error = DaemonClient::new(&config)
+            .app(AppRequest::NoteArchive {
+                id: "note-1".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "daemon_request_outcome_unknown");
+        assert!(!error.retryable());
         server.await.unwrap();
     }
 

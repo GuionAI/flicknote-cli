@@ -187,9 +187,17 @@ fn parse_flicknote_crud_marker(
     };
     let value: serde_json::Value = serde_json::from_str(metadata)
         .map_err(|error| ps_err(format!("invalid CRUD metadata: {error}")))?;
-    let Some(marker) = value.as_object().and_then(|object| object.get("flicknote")) else {
+    let Some(object) = value.as_object() else {
         return Ok(None);
     };
+    let Some(marker) = object.get("flicknote") else {
+        return Ok(None);
+    };
+    if object.len() != 1 {
+        return Err(ps_err(
+            "invalid FlickNote CRUD metadata: expected exactly one marker field",
+        ));
+    }
     match marker.as_str() {
         Some("remote_committed_insert_v1") => Ok(Some(FlickNoteCrudMarker::RemoteCommittedInsert)),
         _ => Err(ps_err(format!(
@@ -2280,6 +2288,33 @@ mod tests {
         .unwrap();
 
         assert!(db.next_crud_transaction().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn remote_committed_marker_rejects_extra_metadata_fields() {
+        let (_directory, db) = test_powersync_db().await;
+        insert_note_with_metadata(
+            &db,
+            r#"{"flicknote":"remote_committed_insert_v1","other":true}"#,
+        )
+        .await;
+
+        let error = run_upload(
+            &db,
+            &reqwest::Client::new(),
+            "token",
+            "http://127.0.0.1:1",
+            "anon",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid FlickNote CRUD metadata")
+        );
+        assert!(db.crud_transactions().try_next().await.unwrap().is_some());
     }
 
     #[tokio::test]

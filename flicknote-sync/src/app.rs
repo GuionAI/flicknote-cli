@@ -480,15 +480,12 @@ impl Application {
                 }
                 let id = uuid::Uuid::new_v4().to_string();
                 let now = chrono::Utc::now().to_rfc3339();
-                self.db
+                let keyterm = self
+                    .db
                     .insert_keyterm(&id, &name, description.as_deref(), content.as_deref(), &now)
                     .await
                     .map_err(Self::db_error)?;
-                self.db
-                    .find_keyterm(&id)
-                    .await
-                    .map(AppResponse::Keyterm)
-                    .map_err(Self::db_error)
+                Ok(AppResponse::Keyterm(keyterm))
             }
             AppRequest::KeytermList => self
                 .db

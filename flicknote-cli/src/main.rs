@@ -125,16 +125,31 @@ async fn run() -> Result<(), CliError> {
             .run_until(mcp::serve(std::rc::Rc::new(config)))
             .await;
     }
-    dispatch(&cli, &daemon).await
+    dispatch(&cli, &daemon, &server_info).await
 }
 
-async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> {
+fn preflight_command(
+    command: &Commands,
+    server_info: &flicknote_sync::ipc::ServerInfo,
+) -> Result<(), CliError> {
+    if matches!(command, Commands::Edit(_)) {
+        server_info.require(Capability::Editor, "note_edit")?;
+    }
+    Ok(())
+}
+
+async fn dispatch(
+    cli: &Cli,
+    daemon: &DaemonClient<'_>,
+    server_info: &flicknote_sync::ipc::ServerInfo,
+) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()
             .map_err(|e| CliError::Other(e.to_string()))?;
         return Ok(());
     };
+    preflight_command(command, server_info)?;
 
     match command {
         Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
@@ -717,6 +732,21 @@ mod tests {
     #[test]
     fn upload_command_parses() {
         assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
+    }
+
+    #[test]
+    fn managed_edit_is_rejected_before_dispatching_to_the_editor() {
+        let cli = Cli::try_parse_from(["flicknote", "edit"]).unwrap();
+        let command = cli.command.as_ref().unwrap();
+
+        let error =
+            preflight_command(command, &flicknote_sync::ipc::ServerInfo::managed()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("not available in managed daemon mode")
+        );
     }
 
     #[test]
