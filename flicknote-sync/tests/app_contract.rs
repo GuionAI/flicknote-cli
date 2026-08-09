@@ -84,6 +84,50 @@ impl NoteCreator for RecordingCreator {
     }
 }
 
+struct DetachedCreator;
+
+#[async_trait]
+impl NoteCreator for DetachedCreator {
+    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
+        Ok(InsertedNote {
+            uuid: request.id,
+            short_id: Some(91),
+        })
+    }
+}
+
+#[tokio::test]
+async fn app_preserves_created_identity_when_editor_or_attachment_summary_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let attachment = directory.path().join("report.pdf");
+    std::fs::write(&attachment, b"pdf").unwrap();
+    let backend = Arc::new(SqliteBackend {
+        db: Database::open_local(&config).await.unwrap(),
+        user_id: "user-1".to_string(),
+    });
+    let app = Application::new(backend, BackendMode::Local).with_creator(Arc::new(DetachedCreator));
+
+    for request in [
+        AppRequest::NoteAddEditable {
+            document: "# editor-created".to_string(),
+            project: None,
+        },
+        AppRequest::NoteUpload {
+            path: attachment.to_string_lossy().into_owned(),
+            project: None,
+            created_at: None,
+        },
+    ] {
+        let error = app.handle(request).await.unwrap_err();
+        assert_eq!(error.code, "note_create_partial");
+        let details = error.details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["short_id"], 91);
+        assert!(details["note_id"].as_str().is_some());
+    }
+}
+
 #[tokio::test]
 async fn app_routes_note_list_and_append_through_services() {
     const NOTE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";

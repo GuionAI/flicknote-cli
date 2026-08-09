@@ -479,6 +479,7 @@ pub enum DaemonError {
         message: String,
         note_id: String,
         short_id: Option<i64>,
+        confirmed_extraction_ids: Vec<String>,
         pending_extraction_ids: Vec<String>,
     },
     AmbiguousCreate {
@@ -548,6 +549,9 @@ fn is_mutating_app_request(request: &DaemonRequest) -> bool {
 fn response_timeout_for(request: &DaemonRequest) -> Option<std::time::Duration> {
     match request {
         DaemonRequest::Health { .. } => Some(IPC_HEALTH_RESPONSE_TIMEOUT),
+        // Once a write request may have reached the daemon, a transport timeout cannot tell
+        // whether it committed. Keep waiting for the authoritative response until the protocol
+        // has durable operation IDs and status reconciliation (tracked as FlickNote #1785).
         DaemonRequest::App { request, .. } if request.may_write() => None,
         DaemonRequest::App { .. } => Some(IPC_APP_RESPONSE_TIMEOUT),
     }

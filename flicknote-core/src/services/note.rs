@@ -162,8 +162,12 @@ impl<'a> NoteService<'a> {
             }
         };
         let inserted = creator.create(request).await?;
-        let note = self.db.find_note(&inserted.uuid).await?;
-        self.summary(note).await
+        let summary = async {
+            let note = self.db.find_note(&inserted.uuid).await?;
+            self.summary(note).await
+        }
+        .await;
+        summary.map_err(|error| confirmed_create_followup_error(&inserted, &error))
     }
 
     pub async fn get(&self, note_id: &str, archived: bool) -> Result<NoteDetail, ServiceError> {
@@ -588,6 +592,29 @@ impl<'a> NoteService<'a> {
     }
 }
 
+pub fn confirmed_create_followup_error(
+    inserted: &crate::backend::InsertedNote,
+    error: &ServiceError,
+) -> ServiceError {
+    ServiceError::Remote {
+        code: "note_create_partial".to_string(),
+        message: format!(
+            "Note {} was created, but its canonical result could not be loaded: {error}. Do not create it again.",
+            inserted
+                .short_id
+                .map_or_else(|| inserted.uuid.clone(), |id| id.to_string())
+        ),
+        retryable: false,
+        details: Some(serde_json::json!({
+            "created": true,
+            "note_id": inserted.uuid,
+            "short_id": inserted.short_id,
+            "confirmed_extraction_ids": [],
+            "pending_extraction_ids": [],
+        })),
+    }
+}
+
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
 
@@ -856,6 +883,49 @@ mod tests {
             *self.request.lock().unwrap() = Some(request);
             Ok(inserted)
         }
+    }
+
+    struct DetachedCreator;
+
+    #[async_trait]
+    impl NoteCreator for DetachedCreator {
+        async fn create(
+            &self,
+            request: CreateNote,
+        ) -> Result<crate::backend::InsertedNote, crate::services::error::ServiceError> {
+            Ok(crate::backend::InsertedNote {
+                uuid: request.id,
+                short_id: Some(42),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn add_reports_structured_partial_when_summary_read_fails_after_create() {
+        let backend = make_backend().await;
+        let error = NoteService::new(&backend)
+            .add(
+                &DetachedCreator,
+                NoteAddInput {
+                    content: "Body".to_string(),
+                    project: None,
+                    interpret_as_url: false,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "note_create_partial");
+        assert!(!error.retryable());
+        let crate::services::error::ServiceError::Remote { details, .. } = error else {
+            panic!("expected structured post-create error")
+        };
+        let details = details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["short_id"], 42);
+        assert!(details["note_id"].as_str().is_some());
     }
 
     #[tokio::test]

@@ -59,6 +59,14 @@ struct CreatedNote {
     short_id: i64,
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ExtractionCreateOutcome {
+    confirmed_ids: Vec<String>,
+    pending_ids: Vec<String>,
+    diagnostic: Option<String>,
+    local_commit_error: Option<String>,
+}
+
 /// Helper to convert arbitrary errors into PowerSyncError.
 fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
     std::io::Error::other(msg.to_string()).into()
@@ -1142,8 +1150,67 @@ async fn create_note_with_token(
         .json(&payload)
         .send()
     };
-    let (resp, initial_transport_error) = match send_create().await {
-        Ok(resp) => (resp, None),
+    let (resp, initial_ambiguous_error) = match send_create().await {
+        Ok(resp) if !is_ambiguous_create_status(resp.status()) => (resp, None),
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            let initial_error = format!("the first attempt returned {status}: {body}");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            match send_create().await {
+                Ok(resp) if !is_ambiguous_create_status(resp.status()) => {
+                    (resp, Some(initial_error))
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    if let Ok(Some(row)) =
+                        lookup_remote_note(http, config, access_token, &req.id).await
+                    {
+                        return finish_remote_create(
+                            db,
+                            http,
+                            config,
+                            access_token,
+                            row,
+                            &extraction_rows,
+                        )
+                        .await;
+                    }
+                    return Err(ambiguous_create_error(
+                        format!(
+                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry returned {status}: {body}). The attachment was retained. Do not create it again.",
+                            req.id
+                        ),
+                        req.id,
+                        &extraction_rows,
+                    ));
+                }
+                Err(retry_error) => {
+                    if let Ok(Some(row)) =
+                        lookup_remote_note(http, config, access_token, &req.id).await
+                    {
+                        return finish_remote_create(
+                            db,
+                            http,
+                            config,
+                            access_token,
+                            row,
+                            &extraction_rows,
+                        )
+                        .await;
+                    }
+                    return Err(ambiguous_create_error(
+                        format!(
+                            "Remote note create outcome is unknown for note {} after retrying the same stable UUID ({initial_error}; retry: {retry_error}). The attachment was retained. Do not create it again.",
+                            req.id
+                        ),
+                        req.id,
+                        &extraction_rows,
+                    ));
+                }
+            }
+        }
         Err(initial_error) => {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             match send_create().await {
@@ -1182,10 +1249,10 @@ async fn create_note_with_token(
             return finish_remote_create(db, http, config, access_token, row, &extraction_rows)
                 .await;
         }
-        if let Some(initial_error) = initial_transport_error {
+        if let Some(initial_error) = initial_ambiguous_error {
             return Err(ambiguous_create_error(
                 format!(
-                    "Remote note create outcome is unknown for note {} after retrying the same stable UUID: the first attempt failed in transport ({initial_error}) and the retry returned {status}: {body}. The attachment was retained. Do not create it again.",
+                    "Remote note create outcome is unknown for note {} after retrying the same stable UUID: {initial_error}; the retry returned {status}: {body}. The attachment was retained. Do not create it again.",
                     req.id
                 ),
                 req.id,
@@ -1232,6 +1299,12 @@ async fn create_note_with_token(
     finish_remote_create(db, http, config, access_token, row, &extraction_rows).await
 }
 
+fn is_ambiguous_create_status(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 fn confirmed_create_error(
     message: String,
     note_id: String,
@@ -1242,7 +1315,24 @@ fn confirmed_create_error(
         message,
         note_id,
         short_id,
+        confirmed_extraction_ids: Vec::new(),
         pending_extraction_ids: extraction_rows.iter().map(|row| row.id.clone()).collect(),
+    }
+}
+
+fn partial_create_error(
+    message: String,
+    note_id: String,
+    short_id: Option<i64>,
+    confirmed_extraction_ids: Vec<String>,
+    pending_extraction_ids: Vec<String>,
+) -> DaemonError {
+    DaemonError::PartialCreate {
+        message,
+        note_id,
+        short_id,
+        confirmed_extraction_ids,
+        pending_extraction_ids,
     }
 }
 
@@ -1319,16 +1409,23 @@ async fn finish_remote_create(
             extraction_rows,
         ));
     }
-    if let Err(error) =
-        create_extractions_with_token(db, http, config, access_token, extraction_rows).await
+    let extraction_outcome =
+        create_extractions_with_token(db, http, config, access_token, extraction_rows).await;
+    if !extraction_outcome.pending_ids.is_empty() || extraction_outcome.local_commit_error.is_some()
     {
-        return Err(confirmed_create_error(
+        let reason = extraction_outcome
+            .local_commit_error
+            .as_deref()
+            .or(extraction_outcome.diagnostic.as_deref())
+            .unwrap_or("one or more extraction rows could not be confirmed");
+        return Err(partial_create_error(
             format!(
-                "Note {short_id} was created, but its topics were not fully confirmed: {error}"
+                "Note {short_id} was created, but its topics were not fully committed: {reason}"
             ),
             row.id,
             Some(short_id),
-            extraction_rows,
+            extraction_outcome.confirmed_ids,
+            extraction_outcome.pending_ids,
         ));
     }
     Ok(CreatedNote {
@@ -1377,12 +1474,12 @@ async fn create_extractions_with_token(
     config: &Config,
     access_token: &str,
     requested: &[RemoteExtractionRow],
-) -> Result<Vec<RemoteExtractionRow>, DaemonError> {
+) -> ExtractionCreateOutcome {
     if requested.is_empty() {
-        return Ok(Vec::new());
+        return ExtractionCreateOutcome::default();
     }
 
-    let resp = http
+    let response = http
         .post(format!(
             "{}/rest/v1/note_extractions?on_conflict=id",
             config.supabase_url
@@ -1395,27 +1492,36 @@ async fn create_extractions_with_token(
         )
         .json(requested)
         .send()
-        .await
-        .map_err(|e| DaemonError::Other {
-            message: format!("Remote note extraction create failed: {e}"),
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        return Err(DaemonError::Other {
-            message: format!(
-                "Created note remotely, but failed to create note extractions ({status}): {body}\nDo not create it again; retry with the same note UUID."
-            ),
-        });
-    }
-
-    let mut rows = resp
-        .json::<Vec<RemoteExtractionRow>>()
-        .await
-        .map_err(|error| DaemonError::Other {
-            message: format!("Failed to parse remote extraction create response: {error}"),
-        })?;
+        .await;
+    let (mut rows, mut diagnostics) = match response {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<Vec<RemoteExtractionRow>>().await {
+                Ok(rows) => (rows, Vec::new()),
+                Err(error) => (
+                    Vec::new(),
+                    vec![format!(
+                        "failed to parse remote extraction create response: {error}"
+                    )],
+                ),
+            }
+        }
+        Ok(response) => {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            (
+                Vec::new(),
+                vec![format!(
+                    "remote extraction create returned {status}: {body}"
+                )],
+            )
+        }
+        Err(error) => (
+            Vec::new(),
+            vec![format!(
+                "remote extraction create failed in transport: {error}"
+            )],
+        ),
+    };
     let mut confirmed_ids = rows
         .iter()
         .map(|row| row.id.clone())
@@ -1424,24 +1530,39 @@ async fn create_extractions_with_token(
         if confirmed_ids.contains(&expected.id) {
             continue;
         }
-        if let Some(row) =
-            lookup_remote_extraction(http, config, access_token, &expected.id).await?
-        {
-            rows.push(row);
-            confirmed_ids.insert(expected.id.clone());
+        match lookup_remote_extraction(http, config, access_token, &expected.id).await {
+            Ok(Some(row)) => {
+                rows.push(row);
+                confirmed_ids.insert(expected.id.clone());
+            }
+            Ok(None) => {}
+            Err(error) => diagnostics.push(error.to_string()),
         }
     }
-    if rows.len() != requested.len() {
-        return Err(DaemonError::Other {
-            message: format!(
-                "Created note remotely, but only {} of {} extraction rows were confirmed",
-                rows.len(),
-                requested.len()
-            ),
-        });
+    let confirmed_ids = requested
+        .iter()
+        .filter(|row| confirmed_ids.contains(&row.id))
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let pending_ids = requested
+        .iter()
+        .filter(|row| !confirmed_ids.contains(&row.id))
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let local_commit_error = if rows.is_empty() {
+        None
+    } else {
+        commit_remote_extractions(db, &rows)
+            .await
+            .err()
+            .map(|error| error.to_string())
+    };
+    ExtractionCreateOutcome {
+        confirmed_ids,
+        pending_ids,
+        diagnostic: (!diagnostics.is_empty()).then(|| diagnostics.join("; ")),
+        local_commit_error,
     }
-    commit_remote_extractions(db, &rows).await?;
-    Ok(rows)
 }
 
 async fn lookup_remote_extraction(
@@ -1493,6 +1614,7 @@ fn remote_create_service_error(
             message,
             note_id,
             short_id,
+            confirmed_extraction_ids,
             pending_extraction_ids,
         } => flicknote_core::services::error::ServiceError::Remote {
             code: "note_create_partial".to_string(),
@@ -1502,6 +1624,7 @@ fn remote_create_service_error(
                 "created": true,
                 "note_id": note_id,
                 "short_id": short_id,
+                "confirmed_extraction_ids": confirmed_extraction_ids,
                 "pending_extraction_ids": pending_extraction_ids,
             })),
         },
@@ -2250,6 +2373,7 @@ mod tests {
             message: "note created; topics pending".to_string(),
             note_id: "note-partial".to_string(),
             short_id: Some(80),
+            confirmed_extraction_ids: vec!["extraction-confirmed".to_string()],
             pending_extraction_ids: vec!["extraction-1".to_string()],
         });
 
@@ -2258,7 +2382,12 @@ mod tests {
         let flicknote_core::services::error::ServiceError::Remote { details, .. } = error else {
             panic!("expected remote service error")
         };
-        assert_eq!(details.unwrap()["short_id"], 80);
+        let details = details.unwrap();
+        assert_eq!(details["short_id"], 80);
+        assert_eq!(
+            details["confirmed_extraction_ids"],
+            serde_json::json!(["extraction-confirmed"])
+        );
     }
 
     #[tokio::test]
@@ -2670,6 +2799,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retryable_status_retries_create_with_the_same_stable_uuid() {
+        let body = r#"[{"id":"note-retryable-status","short_id":84,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
+        let (origin, server) = spawn_server(vec![
+            ("503 Service Unavailable", r#"{"message":"try later"}"#),
+            ("201 Created", body),
+        ]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+
+        let created = create_note_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            "user-1",
+            CreateNoteRequest {
+                id: "note-retryable-status".to_string(),
+                note_type: "normal".to_string(),
+                status: "ai_queued".to_string(),
+                title: Some("Requested".to_string()),
+                content: Some("Body".to_string()),
+                metadata: None,
+                project_id: None,
+                now: "2026-08-09T00:00:00Z".to_string(),
+                topics: Vec::new(),
+                attachment_path: None,
+            },
+        )
+        .await
+        .unwrap();
+        let requests = server.join().unwrap();
+
+        assert_eq!(created.short_id, 84);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("POST /rest/v1/notes"))
+        );
+    }
+
+    #[tokio::test]
     async fn remote_extraction_create_commits_confirmed_rows_locally() {
         let body = r#"[{"id":"extraction-create","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
         let (origin, server) = spawn_server(vec![("201 Created", body)]);
@@ -2685,17 +2858,17 @@ mod tests {
             value: "rust".to_string(),
         }];
 
-        let confirmed = create_extractions_with_token(
+        let outcome = create_extractions_with_token(
             &db,
             &reqwest::Client::new(),
             &config,
             "access-token",
             &requested,
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert_eq!(confirmed.len(), 1);
+        assert_eq!(outcome.confirmed_ids, ["extraction-create"]);
+        assert!(outcome.pending_ids.is_empty());
         let reader = db.reader().await.unwrap();
         let count: i64 = reader
             .query_row(
@@ -2727,17 +2900,17 @@ mod tests {
             value: "rust".to_string(),
         }];
 
-        let confirmed = create_extractions_with_token(
+        let outcome = create_extractions_with_token(
             &db,
             &reqwest::Client::new(),
             &config,
             "access-token",
             &requested,
         )
-        .await
-        .unwrap();
+        .await;
 
-        assert_eq!(confirmed.len(), 1);
+        assert_eq!(outcome.confirmed_ids, ["extraction-retry"]);
+        assert!(outcome.pending_ids.is_empty());
         assert_eq!(
             server.join().unwrap(),
             [
@@ -2745,6 +2918,54 @@ mod tests {
                 "GET /rest/v1/note_extractions?id=eq.extraction-retry&select=* HTTP/1.1",
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn remote_extraction_create_commits_confirmed_subset_and_reports_exact_pending_ids() {
+        let body = r#"[{"id":"extraction-confirmed","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
+        let (origin, server) = spawn_server(vec![("201 Created", body), ("200 OK", "[]")]);
+        let mut config = test_config(String::new());
+        config.supabase_url = origin;
+        config.supabase_anon_key = "anon-key".to_string();
+        let (_directory, db) = test_powersync_db().await;
+        let requested = vec![
+            RemoteExtractionRow {
+                id: "extraction-confirmed".to_string(),
+                note_id: "note-create".to_string(),
+                user_id: "user-1".to_string(),
+                key: TOPIC_EXTRACTION_KEY.to_string(),
+                value: "rust".to_string(),
+            },
+            RemoteExtractionRow {
+                id: "extraction-pending".to_string(),
+                note_id: "note-create".to_string(),
+                user_id: "user-1".to_string(),
+                key: TOPIC_EXTRACTION_KEY.to_string(),
+                value: "sqlite".to_string(),
+            },
+        ];
+
+        let outcome = create_extractions_with_token(
+            &db,
+            &reqwest::Client::new(),
+            &config,
+            "access-token",
+            &requested,
+        )
+        .await;
+
+        assert_eq!(outcome.confirmed_ids, ["extraction-confirmed"]);
+        assert_eq!(outcome.pending_ids, ["extraction-pending"]);
+        let reader = db.reader().await.unwrap();
+        let count: i64 = reader
+            .query_row(
+                "SELECT COUNT(*) FROM note_extractions WHERE id = ?",
+                params!["extraction-confirmed"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(server.join().unwrap().len(), 2);
     }
 
     #[tokio::test]

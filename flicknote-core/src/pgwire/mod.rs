@@ -459,6 +459,56 @@ impl NoteDb for PgWireBackend {
         })
     }
 
+    async fn insert_note_with_extractions(
+        &self,
+        req: &InsertNoteReq<'_>,
+        extraction_key: &str,
+        values: &[String],
+    ) -> Result<InsertedNote, CliError> {
+        let metadata: Option<serde_json::Value> = req
+            .metadata
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|e| CliError::Database(format!("invalid metadata JSON: {e}")))?;
+        let now = parse_iso_utc(req.now)?;
+        let note_id = parse_uuid(req.id)?;
+        let mut transaction = self.pool.begin().await?;
+        let row = sqlx::query(
+            "INSERT INTO notes \
+             (id, type, status, title, content, metadata, project_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             RETURNING id::text, short_id",
+        )
+        .bind(note_id)
+        .bind(req.note_type)
+        .bind(req.status)
+        .bind(req.title)
+        .bind(req.content)
+        .bind(metadata)
+        .bind(parse_uuid_opt(req.project_id)?)
+        .bind(now)
+        .bind(now)
+        .fetch_one(&mut *transaction)
+        .await?;
+        for value in values {
+            sqlx::query(
+                "INSERT INTO note_extractions (id, note_id, user_id, key, value) \
+                 VALUES ($1, $2, (SELECT user_id FROM notes WHERE id = $2), $3, $4)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(note_id)
+            .bind(extraction_key)
+            .bind(value)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(InsertedNote {
+            uuid: row.try_get::<String, _>(0)?,
+            short_id: row.try_get::<Option<i32>, _>(1)?.map(i64::from),
+        })
+    }
+
     async fn update_note_content(
         &self,
         id: &str,

@@ -78,17 +78,30 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
 
     println!("Authenticated");
 
-    // Install launchd service — this boots out any existing service first,
-    // then bootstraps fresh. The daemon starts immediately (KeepAlive + RunAtLoad)
-    // and creates the local DB on startup.
-    super::daemon::install(config)?;
-    super::sync::wait_for_daemon_ready(
-        config,
-        std::time::Duration::from_secs(10),
-        std::time::Duration::from_millis(100),
-    )
-    .await?;
-    println!("Sync daemon installed and started");
+    if manages_daemon_after_login() {
+        // The macOS login flow owns the per-user LaunchAgent lifecycle.
+        super::daemon::install(config)?;
+        super::sync::wait_for_daemon_ready(
+            config,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(100),
+        )
+        .await?;
+        println!("Sync daemon installed and started");
+    }
 
     Ok(())
+}
+
+const fn manages_daemon_after_login() -> bool {
+    cfg!(target_os = "macos")
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_login_does_not_wait_for_a_launchd_daemon() {
+        assert!(!super::manages_daemon_after_login());
+    }
 }

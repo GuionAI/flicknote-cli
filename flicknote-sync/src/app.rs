@@ -3,7 +3,7 @@ use std::sync::Arc;
 use flicknote_core::backend::NoteDb;
 use flicknote_core::services::dto::NoteAddInput;
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
 use flicknote_core::services::ports::{CreateNote, DirectNoteCreator, NoteCreator, ShareGateway};
 use flicknote_core::services::project::ProjectService;
 use flicknote_core::services::upload::{self, UploadKind};
@@ -150,7 +150,9 @@ impl Application {
                     .get(&inserted.uuid, false)
                     .await
                     .map(|detail| AppResponse::NoteSummary(detail.note))
-                    .map_err(WireError::from_service)
+                    .map_err(|error| {
+                        WireError::from_service(confirmed_create_followup_error(&inserted, &error))
+                    })
             }
             AppRequest::NoteUpload {
                 path,
@@ -234,7 +236,11 @@ impl Application {
                             .get(&inserted.uuid, false)
                             .await
                             .map(|detail| AppResponse::NoteSummary(detail.note))
-                            .map_err(WireError::from_service)
+                            .map_err(|error| {
+                                WireError::from_service(confirmed_create_followup_error(
+                                    &inserted, &error,
+                                ))
+                            })
                     }
                 }
             }

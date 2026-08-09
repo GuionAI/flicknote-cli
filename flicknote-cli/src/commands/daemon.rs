@@ -40,6 +40,13 @@ pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
 
 /// Stop the sync daemon if running. Returns Ok(()) even if not running.
 pub(crate) fn stop(config: &Config) -> Result<(), CliError> {
+    #[cfg(target_os = "macos")]
+    {
+        #[allow(unsafe_code)]
+        let uid = unsafe { libc::getuid() };
+        bootout_service(uid, service_label())?;
+    }
+
     let Some(pid) = read_pid(config) else {
         return Ok(());
     };
@@ -69,7 +76,7 @@ pub(crate) fn uninstall() -> Result<(), CliError> {
 
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
-    bootout_service(uid, label);
+    bootout_service(uid, label)?;
 
     if plist_path.exists() {
         fs::remove_file(&plist_path)?;
@@ -131,7 +138,7 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
 
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
-    bootout_service(uid, label);
+    bootout_service(uid, label)?;
 
     for args in launchd_install_commands(uid, label, &plist_path) {
         let command_name = args
@@ -202,23 +209,33 @@ fn launchd_install_commands(
     ]
 }
 
-/// Run `launchctl bootout`, warning on unexpected errors (not-loaded is expected and silent).
+#[cfg(any(target_os = "macos", test))]
+fn launchd_stop_command(uid: u32, label: &str) -> Vec<String> {
+    vec!["bootout".to_string(), format!("gui/{uid}/{label}")]
+}
+
+/// Run `launchctl bootout`; an already-unloaded service is an idempotent success.
 #[cfg(target_os = "macos")]
-fn bootout_service(uid: u32, label: &str) {
+fn bootout_service(uid: u32, label: &str) -> Result<(), CliError> {
+    let args = launchd_stop_command(uid, label);
     let result = Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid}/{label}")])
-        .output();
-    if let Ok(out) = result
-        && !out.status.success()
-    {
+        .args(&args)
+        .output()
+        .map_err(|error| CliError::Other(format!("launchctl bootout failed: {error}")))?;
+    if !result.status.success() {
+        let out = result;
         let stderr = String::from_utf8_lossy(&out.stderr);
         let is_expected = stderr.contains("No such process")
             || stderr.contains("not loaded")
             || stderr.contains("Could not find");
-        if !is_expected && !stderr.trim().is_empty() {
-            eprintln!("Warning: launchctl bootout: {}", stderr.trim());
+        if !is_expected {
+            return Err(CliError::Other(format!(
+                "launchctl bootout failed: {}",
+                stderr.trim()
+            )));
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -243,6 +260,17 @@ mod tests {
                     "-k".to_string(),
                     "gui/501/io.guion.flicknote.sync".to_string(),
                 ],
+            ]
+        );
+    }
+
+    #[test]
+    fn launchd_stop_boots_out_the_keepalive_service() {
+        assert_eq!(
+            launchd_stop_command(501, "io.guion.flicknote.sync"),
+            vec![
+                "bootout".to_string(),
+                "gui/501/io.guion.flicknote.sync".to_string(),
             ]
         );
     }

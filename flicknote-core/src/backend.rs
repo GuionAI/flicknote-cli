@@ -97,6 +97,17 @@ pub trait NoteDb: Send + Sync {
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
+    async fn insert_note_with_extractions(
+        &self,
+        req: &InsertNoteReq<'_>,
+        extraction_key: &str,
+        values: &[String],
+    ) -> Result<InsertedNote, CliError> {
+        let inserted = self.insert_note(req).await?;
+        self.set_note_extractions(&inserted.uuid, extraction_key, values)
+            .await?;
+        Ok(inserted)
+    }
     /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
     async fn update_note_content(
         &self,
@@ -648,6 +659,49 @@ impl NoteDb for SqliteBackend {
             .bind(req.now)
             .execute(&self.db.pool)
             .await?;
+        Ok(InsertedNote {
+            uuid: req.id.to_string(),
+            short_id: None,
+        })
+    }
+
+    async fn insert_note_with_extractions(
+        &self,
+        req: &InsertNoteReq<'_>,
+        extraction_key: &str,
+        values: &[String],
+    ) -> Result<InsertedNote, CliError> {
+        let mut transaction = self.db.pool.begin().await?;
+        sqlx::query(SQ_INSERT)
+            .bind(req.id)
+            .bind(&self.user_id)
+            .bind(req.note_type)
+            .bind(req.status)
+            .bind(req.title)
+            .bind(req.content)
+            .bind(req.metadata)
+            .bind(req.project_id)
+            .bind(req.now)
+            .bind(req.now)
+            .execute(&mut *transaction)
+            .await?;
+        sqlx::query(SQ_CLEAR_EXTRACTIONS)
+            .bind(&self.user_id)
+            .bind(req.id)
+            .bind(extraction_key)
+            .execute(&mut *transaction)
+            .await?;
+        for value in values {
+            sqlx::query(SQ_INSERT_EXTRACTION)
+                .bind(uuid::Uuid::new_v4().to_string())
+                .bind(req.id)
+                .bind(&self.user_id)
+                .bind(extraction_key)
+                .bind(value)
+                .execute(&mut *transaction)
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(InsertedNote {
             uuid: req.id.to_string(),
             short_id: None,

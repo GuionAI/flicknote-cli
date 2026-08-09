@@ -30,7 +30,7 @@ enum SyncCommand {
 pub(crate) async fn run(config: &Config, args: &SyncArgs) -> Result<(), CliError> {
     match &args.command {
         SyncCommand::Start => start(config).await,
-        SyncCommand::Stop => stop(config),
+        SyncCommand::Stop => stop(config).await,
         SyncCommand::Status => status(config).await,
         SyncCommand::Install => install(config).await,
         SyncCommand::Uninstall => uninstall(),
@@ -115,14 +115,45 @@ pub(super) async fn wait_for_daemon_ready(
     })?
 }
 
-fn stop(config: &Config) -> Result<(), CliError> {
-    if super::daemon::read_pid(config).is_none() {
+async fn stop(config: &Config) -> Result<(), CliError> {
+    let was_running = super::daemon::read_pid(config).is_some()
+        || flicknote_sync::ipc::socket_path(config).exists();
+    super::daemon::stop(config)?;
+    if !was_running {
         println!("FlickNote daemon not running");
         return Ok(());
     }
-    super::daemon::stop(config)?;
+    wait_for_daemon_stopped(config, DAEMON_START_TIMEOUT, HEALTH_POLL_INTERVAL).await?;
+    let socket = flicknote_sync::ipc::socket_path(config);
+    if socket.exists() {
+        fs::remove_file(socket)?;
+    }
     println!("FlickNote daemon stopped");
     Ok(())
+}
+
+async fn wait_for_daemon_stopped(
+    config: &Config,
+    timeout: std::time::Duration,
+    interval: std::time::Duration,
+) -> Result<(), CliError> {
+    let wait = async {
+        loop {
+            let health = flicknote_sync::ipc::DaemonClient::new(config)
+                .health()
+                .await;
+            if matches!(health, Err(ref error) if error.code() == "daemon_unavailable") {
+                return;
+            }
+            tokio::time::sleep(interval).await;
+        }
+    };
+    tokio::time::timeout(timeout, wait).await.map_err(|_| {
+        CliError::Other(format!(
+            "Sync daemon did not stop within {timeout:?}; check {}",
+            config.paths.log_file.display()
+        ))
+    })
 }
 
 async fn status(config: &Config) -> Result<(), CliError> {
@@ -248,6 +279,37 @@ mod tests {
             .expect_err("socket absence must not count as launchd readiness");
 
         assert!(error.to_string().contains("did not become ready"));
+    }
+
+    #[tokio::test]
+    async fn stop_waits_until_daemon_health_is_unavailable() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let config = test_config(dir.path());
+        let listener = tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config))
+            .expect("bind socket");
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = tokio::io::BufReader::new(reader);
+            let mut request = String::new();
+            reader.read_line(&mut request).await.unwrap();
+            let response = serde_json::to_vec(&flicknote_sync::ipc::DaemonResponse::ServerInfo(
+                flicknote_sync::ipc::ServerInfo::local(),
+            ))
+            .unwrap();
+            writer.write_all(&response).await.unwrap();
+        });
+
+        wait_for_daemon_stopped(
+            &config,
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_millis(10),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
     }
 
     #[test]
