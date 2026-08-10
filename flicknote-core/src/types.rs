@@ -1,11 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
     pub short_id: Option<i64>,
     pub user_id: String,
-    #[sqlx(rename = "type")]
     pub r#type: String,
     pub status: String,
     pub title: Option<String>,
@@ -30,7 +29,7 @@ impl Note {
             .map(std::string::ToString::to_string)
     }
 }
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub id: String,
     pub user_id: String,

@@ -19,10 +19,7 @@ impl BackendConnector for FlickNoteConnector {
     }
 
     async fn upload_data(&self) -> Result<(), PowerSyncError> {
-        let _guard = self.upload_guard.lock().await;
         let token = self.get_token().await?;
-        // Ignore the bool — checkpoint is only safe to call from the serialized drain path,
-        // not here (SDK callback fires during active sync alongside the download actor).
         run_upload(
             &self.db,
             &self.http_client,

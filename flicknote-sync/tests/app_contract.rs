@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::schema::app_schema;
-use flicknote_core::services::dto::{NoteListInput, Patch, ProjectAddInput, ProjectModifyInput};
+use flicknote_core::services::dto::{NoteListInput, ProjectAddInput};
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
@@ -50,35 +50,6 @@ fn test_backend(config: &Config) -> Arc<LocalPowerSyncBackend> {
 fn application_is_safe_to_share_between_daemon_request_tasks() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Application>();
-}
-
-#[tokio::test]
-async fn application_signals_every_may_write_request_even_when_it_fails() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let backend = test_backend(&config);
-    let (signal, mut receiver) = tokio::sync::mpsc::channel(4);
-    let app = test_app(backend).with_write_signal(signal);
-
-    app.handle(AppRequest::NoteList(NoteListInput {
-        note_type: None,
-        project: None,
-        archived: false,
-        limit: 20,
-    }))
-    .await
-    .unwrap();
-    assert!(receiver.try_recv().is_err());
-
-    let error = app
-        .handle(AppRequest::ProjectModify(ProjectModifyInput {
-            id: "missing".to_string(),
-            color: Patch::Missing,
-        }))
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, "nothing_to_modify");
-    receiver.try_recv().unwrap();
 }
 
 struct RecordingCreator {
@@ -304,8 +275,7 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let backend = test_backend(&config);
-    let (signal, mut receiver) = tokio::sync::mpsc::channel(1);
-    let app = Arc::new(test_app(backend).with_write_signal(signal));
+    let app = Arc::new(test_app(backend));
     let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
     let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
 
@@ -331,7 +301,6 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
         panic!("expected protocol mismatch")
     };
     assert_eq!(error.code, "daemon_protocol_mismatch");
-    assert!(receiver.try_recv().is_err());
     server.await.unwrap().unwrap();
 }
 

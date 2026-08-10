@@ -1,27 +1,152 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use flicknote_core::{REMOTE_COMMITTED_INSERT_METADATA, schema::app_schema};
+use async_trait::async_trait;
+use flicknote_core::{
+    REMOTE_COMMITTED_INSERT_METADATA,
+    backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb},
+    schema::app_schema,
+};
+use powersync::{BackendConnector, PowerSyncCredentials, SyncOptions};
 use rusqlite::params;
 
 use super::*;
 use crate::test_support::*;
 
-#[tokio::test]
-async fn failed_upload_is_retried_without_a_second_write_trigger() {
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let attempt_counter = Arc::clone(&attempts);
+#[derive(Clone)]
+struct ActorTestConnector {
+    db: PowerSyncDatabase,
+    attempts: Arc<AtomicUsize>,
+    failures_remaining: Arc<AtomicUsize>,
+}
 
-    retry_with_backoff(
-        move || {
-            let attempt_counter = Arc::clone(&attempt_counter);
-            async move { attempt_counter.fetch_add(1, Ordering::SeqCst) > 0 }
-        },
-        std::time::Duration::from_millis(1),
-        std::time::Duration::from_millis(2),
-    )
+impl ActorTestConnector {
+    fn new(db: PowerSyncDatabase, failures: usize) -> Self {
+        Self {
+            db,
+            attempts: Arc::new(AtomicUsize::new(0)),
+            failures_remaining: Arc::new(AtomicUsize::new(failures)),
+        }
+    }
+
+    fn attempts(&self) -> usize {
+        self.attempts.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl BackendConnector for ActorTestConnector {
+    async fn fetch_credentials(&self) -> Result<PowerSyncCredentials, PowerSyncError> {
+        Ok(PowerSyncCredentials {
+            endpoint: "http://127.0.0.1:1".to_string(),
+            token: "test-token".to_string(),
+        })
+    }
+
+    async fn upload_data(&self) -> Result<(), PowerSyncError> {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        if self
+            .failures_remaining
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ps_err("transient test failure"));
+        }
+
+        while let Some(transaction) = self.db.next_crud_transaction().await? {
+            transaction.complete().await?;
+        }
+        Ok(())
+    }
+}
+
+async fn insert_actor_test_note(db: &PowerSyncDatabase, id: &str) {
+    let backend = LocalPowerSyncBackend::new(db.clone(), "user-1".to_string());
+    backend
+        .insert_note(&InsertNoteReq {
+            id,
+            note_type: "normal",
+            status: "ready",
+            title: Some("Actor test"),
+            content: Some("Body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-10T00:00:00Z",
+        })
+        .await
+        .unwrap();
+}
+
+async fn crud_count(db: &PowerSyncDatabase) -> i64 {
+    let reader = db.reader().await.unwrap();
+    reader
+        .query_row("SELECT COUNT(*) FROM ps_crud", [], |row| row.get(0))
+        .unwrap()
+}
+
+async fn wait_for_actor_upload(connector: &ActorTestConnector, expected_attempts: usize) {
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            if connector.attempts() >= expected_attempts && crud_count(&connector.db).await == 0 {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
     .await;
+    assert!(
+        result.is_ok(),
+        "timed out with {} upload attempt(s) and {} queued CRUD row(s)",
+        connector.attempts(),
+        crud_count(&connector.db).await,
+    );
+}
 
-    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+async fn connect_actor(db: &PowerSyncDatabase, connector: ActorTestConnector) {
+    let mut options = SyncOptions::new(connector);
+    options.with_retry_delay(std::time::Duration::from_millis(5));
+    db.connect(options).await;
+}
+
+#[tokio::test]
+async fn powersync_actor_uploads_a_local_backend_write_without_an_app_signal() {
+    let (_directory, db) = test_powersync_db().await;
+    db.async_tasks().spawn_with_tokio();
+    let connector = ActorTestConnector::new(db.clone(), 0);
+    connect_actor(&db, connector.clone()).await;
+
+    insert_actor_test_note(&db, "live-write").await;
+
+    wait_for_actor_upload(&connector, 1).await;
+    db.disconnect().await;
+}
+
+#[tokio::test]
+async fn powersync_actor_drains_crud_that_existed_before_connect() {
+    let (_directory, db) = test_powersync_db().await;
+    insert_actor_test_note(&db, "startup-backlog").await;
+    assert_eq!(crud_count(&db).await, 1);
+    db.async_tasks().spawn_with_tokio();
+    let connector = ActorTestConnector::new(db.clone(), 0);
+
+    connect_actor(&db, connector.clone()).await;
+
+    wait_for_actor_upload(&connector, 1).await;
+    db.disconnect().await;
+}
+
+#[tokio::test]
+async fn powersync_actor_retries_a_transient_upload_failure() {
+    let (_directory, db) = test_powersync_db().await;
+    db.async_tasks().spawn_with_tokio();
+    let connector = ActorTestConnector::new(db.clone(), 1);
+    connect_actor(&db, connector.clone()).await;
+
+    insert_actor_test_note(&db, "retry-write").await;
+
+    wait_for_actor_upload(&connector, 2).await;
+    db.disconnect().await;
 }
 
 #[tokio::test]
@@ -181,17 +306,15 @@ async fn existing_database_retires_keyterm_schema_without_losing_projects() {
     }
 
     let (server_url, server) = spawn_capture_server(1);
-    assert!(
-        run_upload(
-            &upgraded_db,
-            &reqwest::Client::new(),
-            "token",
-            &server_url,
-            "anon-key",
-        )
-        .await
-        .unwrap()
-    );
+    run_upload(
+        &upgraded_db,
+        &reqwest::Client::new(),
+        "token",
+        &server_url,
+        "anon-key",
+    )
+    .await
+    .unwrap();
     assert!(upgraded_db.next_crud_transaction().await.unwrap().is_none());
     let requests = server.join().unwrap();
     assert_eq!(requests.len(), 1);
@@ -207,7 +330,7 @@ async fn remote_committed_put_completes_without_http_request() {
     let (_directory, db) = test_powersync_db().await;
     insert_marked_note(&db).await;
 
-    let uploaded = run_upload(
+    run_upload(
         &db,
         &reqwest::Client::new(),
         "token",
@@ -217,7 +340,6 @@ async fn remote_committed_put_completes_without_http_request() {
     .await
     .unwrap();
 
-    assert!(uploaded);
     assert!(db.next_crud_transaction().await.unwrap().is_none());
 }
 

@@ -14,7 +14,6 @@ pub struct Application {
     creator: Arc<dyn NoteCreator>,
     share_gateway: Arc<dyn ShareGateway>,
     web_url: Option<String>,
-    write_signal: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl Application {
@@ -28,7 +27,6 @@ impl Application {
             creator,
             share_gateway,
             web_url: None,
-            write_signal: None,
         }
     }
 
@@ -37,23 +35,8 @@ impl Application {
         self
     }
 
-    pub fn with_write_signal(mut self, signal: tokio::sync::mpsc::Sender<()>) -> Self {
-        self.write_signal = Some(signal);
-        self
-    }
-
     pub async fn handle(&self, request: AppRequest) -> Result<AppResponse, WireError> {
-        let may_write = request.may_write();
-        let result = self.handle_inner(request).await;
-        if may_write
-            && let Some(signal) = &self.write_signal
-            && signal.try_send(()).is_err()
-        {
-            log::debug!(
-                "Upload trigger channel full or closed; startup/next write will drain CRUD"
-            );
-        }
-        result
+        self.handle_inner(request).await
     }
 
     async fn handle_inner(&self, request: AppRequest) -> Result<AppResponse, WireError> {

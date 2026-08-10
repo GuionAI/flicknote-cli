@@ -26,9 +26,6 @@ pub enum CliError {
     #[error("PowerSync error: {0}")]
     PowerSync(#[from] powersync::error::PowerSyncError),
 
-    #[error("Database error: {0}")]
-    Sqlx(#[from] sqlx::Error),
-
     #[cfg(feature = "powersync")]
     #[error("Database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
