@@ -37,15 +37,12 @@ where
 pub struct ProjectModifyInput {
     pub id: String,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
-    pub keyterm: Patch<String>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub color: Patch<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProjectAddInput {
     pub name: String,
-    pub keyterm: Option<String>,
     pub color: Option<String>,
 }
 
@@ -54,7 +51,6 @@ pub struct ProjectDto {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
-    pub keyterm_id: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -176,6 +172,10 @@ pub struct NoteAddInput {
     pub project: Option<String>,
     #[serde(default)]
     pub interpret_as_url: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub topics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -228,25 +228,20 @@ mod tests {
     fn project_patch_distinguishes_missing_null_and_value() {
         let missing: ProjectModifyInput =
             serde_json::from_value(serde_json::json!({ "id": "project-id" })).unwrap();
-        assert_eq!(missing.keyterm, Patch::Missing);
         assert_eq!(missing.color, Patch::Missing);
 
         let clear: ProjectModifyInput = serde_json::from_value(serde_json::json!({
             "id": "project-id",
-            "keyterm": null,
             "color": null
         }))
         .unwrap();
-        assert_eq!(clear.keyterm, Patch::Null);
         assert_eq!(clear.color, Patch::Null);
 
         let set: ProjectModifyInput = serde_json::from_value(serde_json::json!({
             "id": "project-id",
-            "keyterm": "keyterm-id",
             "color": "#336699"
         }))
         .unwrap();
-        assert_eq!(set.keyterm, Patch::Value("keyterm-id".to_string()));
         assert_eq!(set.color, Patch::Value("#336699".to_string()));
     }
 

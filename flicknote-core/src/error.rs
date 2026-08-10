@@ -29,10 +29,6 @@ pub enum CliError {
     #[error("Database error: {0}")]
     Sqlx(#[from] sqlx::Error),
 
-    #[cfg(feature = "storage-pgwire")]
-    #[error("Database error: {0}")]
-    Database(String),
-
     #[error("HTTP error: {0}")]
     Http(String),
 

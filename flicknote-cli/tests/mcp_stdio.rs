@@ -4,9 +4,186 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::db::Database;
+use flicknote_core::services::error::ServiceError;
+use flicknote_core::services::ports::{
+    CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+};
+use flicknote_sync::app::Application;
+use flicknote_sync::ipc::{
+    AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo, read_request, serve_app,
+    socket_path, write_response,
+};
+
+struct UnusedCreator;
+
+#[async_trait]
+impl NoteCreator for UnusedCreator {
+    async fn create(&self, _request: CreateNote) -> Result<CreatedNote, ServiceError> {
+        Err(ServiceError::Daemon("unexpected create".to_string()))
+    }
+}
+
+struct UnusedShareGateway;
+
+#[async_trait]
+impl ShareGateway for UnusedShareGateway {
+    async fn share(&self, _resource: ShareResource, _id: &str) -> Result<String, ServiceError> {
+        Err(ServiceError::Daemon("unexpected share".to_string()))
+    }
+
+    async fn unshare(&self, _resource: ShareResource, _id: &str) -> Result<(), ServiceError> {
+        Err(ServiceError::Daemon("unexpected unshare".to_string()))
+    }
+}
+
+fn test_config(config_root: &std::path::Path, data_root: &std::path::Path) -> Config {
+    let config_dir = config_root.join("flicknote");
+    let data_dir = data_root.join("flicknote");
+    Config {
+        supabase_url: String::new(),
+        supabase_anon_key: String::new(),
+        powersync_url: String::new(),
+        api_url: String::new(),
+        web_url: None,
+        paths: ConfigPaths {
+            config_file: config_dir.join("config.json"),
+            session_file: config_dir.join("session.json"),
+            db_file: data_dir.join("flicknote.db"),
+            log_file: data_dir.join("flicknote.log"),
+            config_dir,
+            data_dir,
+        },
+    }
+}
+
+struct DaemonGuard {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+struct ScriptedDaemonGuard {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    requests: std::sync::Arc<std::sync::Mutex<Vec<AppRequest>>>,
+    socket: std::path::PathBuf,
+}
+
+impl ScriptedDaemonGuard {
+    fn requests(&self) -> Vec<AppRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
+impl Drop for ScriptedDaemonGuard {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _shutdown_result = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+        let _remove_result = std::fs::remove_file(&self.socket);
+    }
+}
+
+fn spawn_scripted_daemon(
+    config_root: &std::path::Path,
+    data_root: &std::path::Path,
+    info: ServerInfo,
+    responder: impl Fn(&AppRequest) -> DaemonResponse + Send + Sync + 'static,
+) -> ScriptedDaemonGuard {
+    let config = test_config(config_root, data_root);
+    std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+    let requests = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&requests);
+    let responder = std::sync::Arc::new(responder);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+                ready_tx.send(()).unwrap();
+                tokio::pin!(shutdown_rx);
+                loop {
+                    let accepted = tokio::select! {
+                        _ = &mut shutdown_rx => break,
+                        accepted = listener.accept() => accepted.unwrap(),
+                    };
+                    let (mut stream, _) = accepted;
+                    let request = read_request(&mut stream).await.unwrap();
+                    let response = match request {
+                        DaemonRequest::Health { .. } => DaemonResponse::ServerInfo(info.clone()),
+                        DaemonRequest::App { request, .. } => {
+                            recorded.lock().unwrap().push((*request).clone());
+                            responder(&request)
+                        }
+                    };
+                    write_response(&mut stream, &response).await.unwrap();
+                }
+            });
+    });
+    ready_rx.recv().unwrap();
+    ScriptedDaemonGuard {
+        shutdown: Some(shutdown_tx),
+        thread: Some(thread),
+        requests,
+        socket: socket_path(&test_config(config_root, data_root)),
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _shutdown_result = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path) -> DaemonGuard {
+    let config = test_config(config_root, data_root);
+    std::fs::create_dir_all(&config.paths.data_dir).unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let thread = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                let backend = std::sync::Arc::new(SqliteBackend {
+                    db: Database::open_local(&config).await.unwrap(),
+                    user_id: "test-user".to_string(),
+                });
+                let app = std::sync::Arc::new(Application::new(
+                    backend,
+                    std::sync::Arc::new(UnusedCreator),
+                    std::sync::Arc::new(UnusedShareGateway),
+                ));
+                let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+                ready_tx.send(()).unwrap();
+                tokio::select! {
+                    _ = shutdown_rx => {}
+                    result = serve_app(listener, app, ServerInfo::current()) => result.unwrap(),
+                }
+            });
+    });
+    ready_rx.recv().unwrap();
+    DaemonGuard {
+        shutdown: Some(shutdown_tx),
+        thread: Some(thread),
+    }
+}
 
 fn write_session(config_root: &std::path::Path) {
     write_session_with_expiry(config_root, None);
@@ -36,24 +213,8 @@ async fn seed_workspace(
     data_root: &std::path::Path,
 ) -> (String, String) {
     write_session(config_root);
-    let config_dir = config_root.join("flicknote");
-    let data_dir = data_root.join("flicknote");
-    std::fs::create_dir_all(&data_dir).unwrap();
-    let config = Config {
-        supabase_url: String::new(),
-        supabase_anon_key: String::new(),
-        powersync_url: String::new(),
-        api_url: String::new(),
-        web_url: None,
-        paths: ConfigPaths {
-            config_file: config_dir.join("config.json"),
-            session_file: config_dir.join("session.json"),
-            db_file: data_dir.join("flicknote.db"),
-            log_file: data_dir.join("flicknote.log"),
-            config_dir,
-            data_dir,
-        },
-    };
+    let config = test_config(config_root, data_root);
+    std::fs::create_dir_all(&config.paths.data_dir).unwrap();
     let database = Database::open_local(&config).await.unwrap();
     let backend = SqliteBackend {
         db: database,
@@ -88,7 +249,6 @@ fn run_cli_json(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
     assert!(
@@ -97,6 +257,48 @@ fn run_cli_json(
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).unwrap()
+}
+
+fn run_cli_with_input(
+    config_root: &std::path::Path,
+    data_root: &std::path::Path,
+    args: &[&str],
+    input: &str,
+) -> std::process::Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(args)
+        .env("XDG_CONFIG_HOME", config_root)
+        .env("XDG_DATA_HOME", data_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
+    flicknote_core::services::dto::NoteSummary {
+        short_id: Some(77),
+        uuid: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        note_type: "normal".to_string(),
+        status: "synced".to_string(),
+        title: Some("Adapter note".to_string()),
+        project_id: None,
+        project: None,
+        topics: Vec::new(),
+        summary: None,
+        flagged: false,
+        created_at: None,
+        updated_at: None,
+        deleted_at: None,
+    }
 }
 
 fn assert_legacy_note_shape(note: &serde_json::Value, project: &serde_json::Value) {
@@ -218,7 +420,6 @@ fn gateway_request_writes_a_chunked_sse_response_to_stdout_without_exposing_its_
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -257,7 +458,6 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -302,7 +502,6 @@ fn gateway_request_rejects_invalid_piped_json_before_sending_it() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", "http://127.0.0.1:9/api/v1")
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -346,7 +545,6 @@ fn gateway_request_bypasses_system_proxies() {
         .env_remove("all_proxy")
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -392,7 +590,6 @@ fn gateway_request_refreshes_sessions_without_using_system_proxies() {
         .env_remove("all_proxy")
         .env_remove("NO_PROXY")
         .env_remove("no_proxy")
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -424,7 +621,6 @@ fn gateway_request_does_not_forward_session_refresh_to_redirect_target() {
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
         .env("FLICKNOTE_SUPABASE_URL", &origin)
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -461,7 +657,6 @@ fn gateway_request_does_not_echo_an_upstream_error_body() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -489,7 +684,6 @@ fn gateway_request_reports_http_date_retry_after() {
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
         .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
-        .env_remove("DATABASE_URL")
         .output()
         .unwrap();
 
@@ -512,6 +706,7 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
     let (note_id, _) = seed_workspace(&config_root, &data_root).await;
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let listed = run_cli_json(&config_root, &data_root, &["list", "--json"]);
     assert_legacy_note_shape(&listed[0], &serde_json::Value::Null);
@@ -533,17 +728,51 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
 }
 
 #[test]
+fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |_| {
+        DaemonResponse::App(Box::new(AppResponse::NoteMutation(
+            flicknote_core::services::dto::NoteMutationResult {
+                note: fake_note_summary(),
+                sections: Vec::new(),
+            },
+        )))
+    });
+
+    let output = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["append", "77"],
+        "new paragraph\n",
+    );
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Appended to note 77.\n"
+    );
+    let requests = daemon.requests();
+    assert!(matches!(
+        requests.as_slice(),
+        [AppRequest::NoteAppend { id, content }]
+            if id == "77" && content == "new paragraph"
+    ));
+}
+
+#[test]
 fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
     write_session(&config_root);
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .arg("mcp")
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env_remove("DATABASE_URL")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -586,17 +815,44 @@ fn mcp_binary_keeps_stdout_as_json_rpc_frames() {
 }
 
 #[test]
-fn managed_workspace_rejects_mcp_before_protocol_output() {
+fn mcp_requires_daemon_before_protocol_output() {
+    let directory = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .arg("mcp")
-        .env("DATABASE_URL", "postgres://unused")
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
         .output()
         .unwrap();
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("`flicknote mcp` is not available in managed workspaces")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+}
+
+#[test]
+fn data_commands_require_the_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .arg("list")
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+}
+
+#[test]
+fn root_help_does_not_require_the_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Usage:"));
 }

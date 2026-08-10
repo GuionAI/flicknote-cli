@@ -26,6 +26,13 @@ pub enum ServiceError {
     DaemonUnavailable(String),
     #[error("Sync daemon request failed: {0}")]
     Daemon(String),
+    #[error("{message}")]
+    Remote {
+        code: String,
+        message: String,
+        retryable: bool,
+        details: Option<serde_json::Value>,
+    },
     #[error("Missing configuration: {0}")]
     ConfigMissing(String),
     #[error("I/O error: {0}")]
@@ -37,7 +44,7 @@ pub enum ServiceError {
 }
 
 impl ServiceError {
-    pub const fn code(&self) -> &'static str {
+    pub fn code(&self) -> &str {
         match self {
             Self::InvalidArgument(_) => "invalid_argument",
             Self::NoteNotFound(_) => "note_not_found",
@@ -50,6 +57,7 @@ impl ServiceError {
             Self::NothingToModify => "nothing_to_modify",
             Self::DaemonUnavailable(_) => "daemon_unavailable",
             Self::Daemon(_) => "daemon_error",
+            Self::Remote { code, .. } => code,
             Self::ConfigMissing(_) => "config_missing",
             Self::Io(_) => "io_error",
             Self::Internal(_) | Self::Backend(_) => "internal_error",
@@ -57,7 +65,11 @@ impl ServiceError {
     }
 
     pub const fn retryable(&self) -> bool {
-        matches!(self, Self::DaemonUnavailable(_))
+        match self {
+            Self::DaemonUnavailable(_) => true,
+            Self::Remote { retryable, .. } => *retryable,
+            _ => false,
+        }
     }
 }
 

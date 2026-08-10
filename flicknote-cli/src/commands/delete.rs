@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::{NoteArchiveResult, NoteMutationResult};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree};
 
@@ -15,14 +14,13 @@ pub(crate) struct DeleteArgs {
     section: Option<String>,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &DeleteArgs,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &DeleteArgs) -> Result<(), CliError> {
     if let Some(ref section_id) = args.section {
-        let result = NoteService::new(db)
-            .delete_section(&args.id, section_id)
+        let result: NoteMutationResult = daemon
+            .call(AppRequest::NoteDeleteSection {
+                id: args.id.clone(),
+                section: section_id.clone(),
+            })
             .await?;
         println!(
             "Removed section {} from note {}.\n",
@@ -31,7 +29,11 @@ pub(crate) async fn run(
         );
         print_section_tree(&result.sections);
     } else {
-        let result = NoteService::new(db).archive(&args.id).await?;
+        let result: NoteArchiveResult = daemon
+            .call(AppRequest::NoteArchive {
+                id: args.id.clone(),
+            })
+            .await?;
         let display_id = result
             .short_id
             .map(|id| id.to_string())

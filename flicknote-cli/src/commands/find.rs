@@ -1,7 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::{ExtractionFilterDto, NoteFindInput, NoteService};
+use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, NoteSummary};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
 
@@ -60,7 +60,7 @@ fn parse_search_input(args: &[String]) -> Result<ParsedSearch, CliError> {
     })
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<(), CliError> {
     let project = resolve_project_arg(&args.project);
     if args.project.is_none()
         && let Some(name) = project.as_deref()
@@ -68,17 +68,17 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &FindArgs) -> Result<(), CliError
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
     let parsed = parse_search_input(&args.keywords)?;
-    let notes = NoteService::new(db)
-        .find(NoteFindInput {
+    let notes: Vec<NoteSummary> = daemon
+        .call(AppRequest::NoteFind(NoteFindInput {
             keywords: parsed.keywords,
             extractions: parsed.extractions,
             project,
             archived: args.archived,
             limit: args.limit,
-        })
+        }))
         .await?;
     if args.json {
-        let values = note_summaries_json(db, &notes, args.archived).await?;
+        let values = note_summaries_json(daemon, &notes, args.archived).await?;
         println!(
             "{}",
             serde_json::to_string_pretty(&values).map_err(CliError::Json)?

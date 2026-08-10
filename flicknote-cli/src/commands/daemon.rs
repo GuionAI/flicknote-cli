@@ -1,9 +1,12 @@
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::process::Command;
+
+const DAEMON_BINARY_NAME: &str = "flicknote-sync";
 
 pub(crate) fn pid_file(config: &Config) -> PathBuf {
     config.paths.data_dir.join("sync.pid")
@@ -14,12 +17,49 @@ pub(crate) fn read_pid(config: &Config) -> Option<u32> {
     let content = fs::read_to_string(&path).ok()?;
     let pid: u32 = content.trim().parse().ok()?;
     #[allow(unsafe_code)]
-    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+    if unsafe { libc::kill(pid as i32, 0) } == 0
+        && process_matches_executable(pid, std::path::Path::new(DAEMON_BINARY_NAME))
+    {
         return Some(pid);
     }
     #[allow(clippy::let_underscore_must_use, clippy::let_underscore_untyped)]
     let _ = fs::remove_file(&path);
     None
+}
+
+#[cfg(target_os = "linux")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_executable(pid: u32) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut buffer = vec![0_u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    #[allow(unsafe_code)]
+    let length = unsafe {
+        libc::proc_pidpath(
+            pid as libc::c_int,
+            buffer.as_mut_ptr().cast(),
+            buffer.len() as u32,
+        )
+    };
+    if length <= 0 {
+        return None;
+    }
+    buffer.truncate(length as usize);
+    Some(PathBuf::from(OsStr::from_bytes(&buffer)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_executable(_pid: u32) -> Option<PathBuf> {
+    None
+}
+
+fn process_matches_executable(pid: u32, expected: &std::path::Path) -> bool {
+    process_executable(pid).and_then(|path| path.file_name().map(OsStr::to_owned))
+        == expected.file_name().map(OsStr::to_owned)
 }
 
 pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
@@ -28,7 +68,7 @@ pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
     let dir = exe
         .parent()
         .ok_or_else(|| CliError::Other("Could not determine executable directory".into()))?;
-    let binary = dir.join("flicknote-sync");
+    let binary = dir.join(DAEMON_BINARY_NAME);
     if !binary.exists() {
         return Err(CliError::Other(format!(
             "Sync daemon binary not found at {}: ensure flicknote-sync is installed alongside flicknote",
@@ -40,6 +80,13 @@ pub(crate) fn daemon_binary() -> Result<PathBuf, CliError> {
 
 /// Stop the sync daemon if running. Returns Ok(()) even if not running.
 pub(crate) fn stop(config: &Config) -> Result<(), CliError> {
+    #[cfg(target_os = "macos")]
+    {
+        #[allow(unsafe_code)]
+        let uid = unsafe { libc::getuid() };
+        bootout_service(uid, service_label())?;
+    }
+
     let Some(pid) = read_pid(config) else {
         return Ok(());
     };
@@ -69,7 +116,7 @@ pub(crate) fn uninstall() -> Result<(), CliError> {
 
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
-    bootout_service(uid, label);
+    bootout_service(uid, label)?;
 
     if plist_path.exists() {
         fs::remove_file(&plist_path)?;
@@ -131,7 +178,7 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
 
     #[allow(unsafe_code)]
     let uid = unsafe { libc::getuid() };
-    bootout_service(uid, label);
+    bootout_service(uid, label)?;
 
     for args in launchd_install_commands(uid, label, &plist_path) {
         let command_name = args
@@ -152,18 +199,6 @@ pub(crate) fn install(config: &Config) -> Result<(), CliError> {
         }
     }
 
-    wait_for_path(
-        &flicknote_sync::ipc::socket_path(config),
-        std::time::Duration::from_secs(5),
-        std::time::Duration::from_millis(100),
-    )
-    .map_err(|e| CliError::Other(format!("Sync daemon did not become ready: {e}")))?;
-
-    Ok(())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn install(_config: &Config) -> Result<(), CliError> {
     Ok(())
 }
 
@@ -210,47 +245,57 @@ fn launchd_install_commands(
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn wait_for_path(
-    path: &std::path::Path,
-    timeout: std::time::Duration,
-    interval: std::time::Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    while start.elapsed() < timeout {
-        if path.exists() {
-            return Ok(());
-        }
-        std::thread::sleep(interval);
-    }
-    Err(format!(
-        "{} did not appear within {:?}",
-        path.display(),
-        timeout
-    ))
+fn launchd_stop_command(uid: u32, label: &str) -> Vec<String> {
+    vec!["bootout".to_string(), format!("gui/{uid}/{label}")]
 }
 
-/// Run `launchctl bootout`, warning on unexpected errors (not-loaded is expected and silent).
+/// Run `launchctl bootout`; an already-unloaded service is an idempotent success.
 #[cfg(target_os = "macos")]
-fn bootout_service(uid: u32, label: &str) {
+fn bootout_service(uid: u32, label: &str) -> Result<(), CliError> {
+    let args = launchd_stop_command(uid, label);
     let result = Command::new("launchctl")
-        .args(["bootout", &format!("gui/{uid}/{label}")])
-        .output();
-    if let Ok(out) = result
-        && !out.status.success()
-    {
+        .args(&args)
+        .output()
+        .map_err(|error| CliError::Other(format!("launchctl bootout failed: {error}")))?;
+    if !result.status.success() {
+        let out = result;
         let stderr = String::from_utf8_lossy(&out.stderr);
         let is_expected = stderr.contains("No such process")
             || stderr.contains("not loaded")
             || stderr.contains("Could not find");
-        if !is_expected && !stderr.trim().is_empty() {
-            eprintln!("Warning: launchctl bootout: {}", stderr.trim());
+        if !is_expected {
+            return Err(CliError::Other(format!(
+                "launchctl bootout failed: {}",
+                stderr.trim()
+            )));
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use flicknote_core::config::ConfigPaths;
+
     use super::*;
+
+    fn test_config(dir: &std::path::Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: dir.to_path_buf(),
+                data_dir: dir.to_path_buf(),
+                config_file: dir.join("config.json"),
+                session_file: dir.join("session.json"),
+                db_file: dir.join("flicknote.db"),
+                log_file: dir.join("flicknote.log"),
+            },
+        }
+    }
 
     #[test]
     fn launchd_install_runs_bootstrap_then_kickstart() {
@@ -275,31 +320,35 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_path_returns_when_socket_appears() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let socket = dir.path().join("sync.sock");
-        fs::write(&socket, "").expect("write socket marker");
-
-        wait_for_path(
-            &socket,
-            std::time::Duration::from_secs(1),
-            std::time::Duration::from_millis(1),
-        )
-        .expect("socket ready");
+    fn launchd_stop_boots_out_the_keepalive_service() {
+        assert_eq!(
+            launchd_stop_command(501, "io.guion.flicknote.sync"),
+            vec![
+                "bootout".to_string(),
+                "gui/501/io.guion.flicknote.sync".to_string(),
+            ]
+        );
     }
 
     #[test]
-    fn wait_for_path_errors_when_socket_never_appears() {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let socket = dir.path().join("sync.sock");
+    fn process_identity_must_match_expected_executable_before_signalling() {
+        let current = std::env::current_exe().unwrap();
+        assert!(process_matches_executable(std::process::id(), &current));
 
-        let err = wait_for_path(
-            &socket,
-            std::time::Duration::from_millis(1),
-            std::time::Duration::from_millis(1),
-        )
-        .expect_err("missing socket should fail");
+        let unrelated = tempfile::NamedTempFile::new().unwrap();
+        assert!(!process_matches_executable(
+            std::process::id(),
+            unrelated.path(),
+        ));
+    }
 
-        assert!(err.contains("sync.sock"));
+    #[test]
+    fn stale_pid_for_an_unrelated_live_process_is_removed_without_being_accepted() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        fs::write(pid_file(&config), std::process::id().to_string()).unwrap();
+
+        assert_eq!(read_pid(&config), None);
+        assert!(!pid_file(&config).exists());
     }
 }

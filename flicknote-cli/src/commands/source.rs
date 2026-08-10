@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
 use flicknote_core::services::source::{SourceResult, SourceView};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const SOURCE_HELP: &str = include_str!("../help/source.md");
 
@@ -24,7 +23,7 @@ pub(crate) struct SourceArgs {
     archived: bool,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &SourceArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &SourceArgs) -> Result<(), CliError> {
     if args.info && args.json {
         return Err(CliError::Other(
             "--info cannot be used with --json source output".into(),
@@ -37,8 +36,13 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &SourceArgs) -> Result<(), CliErr
     } else {
         SourceView::Rendered
     };
-    let result = NoteService::new(db)
-        .source(&args.id, args.archived, view, args.range.as_deref())
+    let result: SourceResult = daemon
+        .call(AppRequest::NoteSource {
+            id: args.id.clone(),
+            archived: args.archived,
+            view,
+            range: args.range.clone(),
+        })
         .await?;
     let output = match result {
         SourceResult::Rendered { content, .. } => content,

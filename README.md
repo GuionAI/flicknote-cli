@@ -1,6 +1,6 @@
 # flicknote-cli
 
-Local-first note management CLI with cloud sync. Captures, queries, and manages notes stored in a local SQLite database synced to the cloud via PowerSync and Supabase.
+Daemon-backed note management CLI with local-first sync. The CLI and MCP server use a typed Unix-socket API; the daemon owns SQLite and PowerSync.
 
 ## Features
 
@@ -38,9 +38,7 @@ just install
 CI sets `SQLX_OFFLINE=true`. After adding or changing `sqlx::query!`,
 `query_as!`, or `query_scalar!` macros, run `just sqlx-prepare` and commit
 the generated `.sqlx` metadata. The prepare script checks SQLite against a
-local fixture DB and pgwire against the local Supabase Postgres used by
-`flicknote-services` sqlc (`localhost:30432/supabase` by default), then merges
-both metadata sets.
+local fixture database.
 
 Runtime-built `sqlx::query` calls are checked at build time for Rust types, but
 sqlx does not emit offline metadata for them.
@@ -95,8 +93,8 @@ flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
 
-# Note IDs are numeric short IDs from list/detail. Pending-sync notes may show
-# a UUID prefix; full UUIDs are also accepted for compatibility.
+# Note IDs are numeric short IDs from list/detail. Full UUIDs are also accepted
+# for compatibility.
 
 # Get a specific note (use --tree to see section IDs)
 flicknote detail <note-id>
@@ -129,6 +127,7 @@ flicknote delete <note-id>
 
 # Manage sync daemon
 flicknote sync start
+# Reports the running daemon and protocol version
 flicknote sync status
 flicknote sync stop
 
@@ -152,16 +151,14 @@ start it as a subprocess:
 }
 ```
 
-The MCP server exposes typed note, note-source, and project tools. Note content
+The MCP server requires the local daemon. It exposes typed note, note-source,
+and project tools. Note content
 and exact `before`/`after` edits are JSON fields, so callers do not need shell
 heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
 project tools use project names. `note_source` reads stored source data, while
-`note_get` reads editable note content. It only supports the local PowerSync
-workspace; if `DATABASE_URL` is set, startup fails before MCP protocol output
-begins. `note_add`, note and
-project sharing, and unsharing use the running sync daemon because those
-operations require an account and network access. Other tools operate directly
-on the local database. The server does not start the daemon automatically.
+`note_get` reads editable note content. Every data tool uses the running daemon;
+the MCP process never opens SQLite. The server does not start the daemon
+automatically.
 
 ## Configuration
 
@@ -180,10 +177,10 @@ Rust workspace with 4 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `flicknote-cli` | binary | CLI commands and installable sync daemon binary |
+| `flicknote-cli` | binary | Thin CLI/MCP clients and installable daemon binary |
 | `flicknote-core` | library | Database, config, shared services, DTOs, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
-| `flicknote-sync` | library | Background sync daemon implementation |
+| `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
 
 ## License
 

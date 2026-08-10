@@ -1,25 +1,8 @@
-use flicknote_core::backend::InsertedNote;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{NoteSummary, SectionDto};
 use flicknote_core::types::Note;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use std::io::{IsTerminal, Read};
-
-pub(crate) async fn resolve_note_id(db: &dyn NoteDb, prefix: &str) -> Result<String, CliError> {
-    db.resolve_note_id(prefix).await
-}
-
-pub(crate) fn display_note_id(note: &Note) -> String {
-    note.short_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| note.id.clone())
-}
-
-pub(crate) fn display_inserted_note_id(note: &InsertedNote) -> String {
-    note.short_id
-        .map(|id| id.to_string())
-        .unwrap_or_else(|| note.uuid.clone())
-}
 
 pub(crate) fn display_summary_id(note: &NoteSummary) -> String {
     note.short_id
@@ -46,17 +29,18 @@ pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::
 }
 
 pub(crate) async fn note_summaries_json(
-    db: &dyn NoteDb,
+    daemon: &DaemonClient<'_>,
     notes: &[NoteSummary],
     archived: bool,
 ) -> Result<Vec<serde_json::Value>, CliError> {
     let mut values = Vec::with_capacity(notes.len());
     for summary in notes {
-        let note = if archived {
-            db.find_archived_note(&summary.uuid).await?
-        } else {
-            db.find_note(&summary.uuid).await?
-        };
+        let note: Note = daemon
+            .call(AppRequest::NoteRecord {
+                id: summary.uuid.clone(),
+                archived,
+            })
+            .await?;
         values.push(note_json(&note, None));
     }
     Ok(values)
@@ -177,47 +161,5 @@ pub(crate) fn classify_stdin_buf(buf: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn note_with_ids(id: &str, short_id: Option<i64>) -> Note {
-        Note {
-            id: id.to_string(),
-            short_id,
-            user_id: "test-user".to_string(),
-            r#type: "normal".to_string(),
-            status: "ai_queued".to_string(),
-            title: None,
-            content: None,
-            summary: None,
-            is_flagged: None,
-            project_id: None,
-            metadata: None,
-            source: None,
-            created_at: None,
-            updated_at: None,
-            deleted_at: None,
-        }
-    }
-
-    #[test]
-    fn test_display_note_id_prefers_short_id() {
-        let note = note_with_ids("550e8400-e29b-41d4-a716-446655440000", Some(42));
-
-        assert_eq!(display_note_id(&note), "42");
-    }
-
-    #[test]
-    fn test_display_note_id_uses_full_uuid_without_short_id() {
-        let note = note_with_ids("550e8400-e29b-41d4-a716-446655440000", None);
-
-        assert_eq!(
-            display_note_id(&note),
-            "550e8400-e29b-41d4-a716-446655440000"
-        );
     }
 }

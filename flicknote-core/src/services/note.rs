@@ -125,7 +125,10 @@ impl<'a> NoteService<'a> {
             .resolve_project_filter(input.project.as_deref())
             .await?;
         let id = uuid::Uuid::new_v4().to_string();
-        let now = chrono::Utc::now().to_rfc3339();
+        let now = input
+            .created_at
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
         let link_url = input.content.trim();
         let is_url = input.interpret_as_url
             && (link_url.starts_with("http://") || link_url.starts_with("https://"))
@@ -140,7 +143,8 @@ impl<'a> NoteService<'a> {
                 metadata: Some(serde_json::json!({ "link": { "url": link_url } }).to_string()),
                 project_id,
                 now,
-                topics: Vec::new(),
+                topics: input.topics.clone(),
+                attachment_path: None,
             }
         } else {
             let (title, content) = extract_title_and_strip(&input.content);
@@ -153,12 +157,17 @@ impl<'a> NoteService<'a> {
                 metadata: None,
                 project_id,
                 now,
-                topics: Vec::new(),
+                topics: input.topics,
+                attachment_path: None,
             }
         };
-        let inserted = creator.create(request).await?;
-        let note = self.db.find_note(&inserted.uuid).await?;
-        self.summary(note).await
+        let created = creator.create(request).await?;
+        let summary = async {
+            let note = self.db.find_note(&created.inserted.uuid).await?;
+            self.summary(note).await
+        }
+        .await;
+        summary.map_err(|error| confirmed_create_followup_error(&created, &error))
     }
 
     pub async fn get(&self, note_id: &str, archived: bool) -> Result<NoteDetail, ServiceError> {
@@ -583,14 +592,37 @@ impl<'a> NoteService<'a> {
     }
 }
 
+pub fn confirmed_create_followup_error(
+    created: &crate::services::ports::CreatedNote,
+    error: &ServiceError,
+) -> ServiceError {
+    let inserted = &created.inserted;
+    ServiceError::Remote {
+        code: "note_create_partial".to_string(),
+        message: format!(
+            "Note {} was created, but its canonical result could not be loaded: {error}. Do not create it again.",
+            inserted
+                .short_id
+                .map_or_else(|| inserted.uuid.clone(), |id| id.to_string())
+        ),
+        retryable: false,
+        details: Some(serde_json::json!({
+            "created": true,
+            "note_id": inserted.uuid,
+            "short_id": inserted.short_id,
+            "confirmed_extraction_ids": created.confirmed_extraction_ids,
+            "pending_extraction_ids": [],
+        })),
+    }
+}
+
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
-    use std::cell::RefCell;
 
     use crate::backend::NoteDb;
     use crate::services::dto::NoteAddInput;
     use crate::services::ports::{
-        BrowserOpener, CreateNote, NoteCreator, ShareGateway, ShareResource,
+        BrowserOpener, CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
     };
     use crate::services::test_support::{insert_normal_note, make_backend};
     use async_trait::async_trait;
@@ -839,19 +871,72 @@ mod tests {
 
     struct DbCreator<'a> {
         db: &'a dyn NoteDb,
-        request: RefCell<Option<CreateNote>>,
+        request: std::sync::Mutex<Option<CreateNote>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl NoteCreator for DbCreator<'_> {
         async fn create(
             &self,
             request: CreateNote,
-        ) -> Result<crate::backend::InsertedNote, crate::services::error::ServiceError> {
+        ) -> Result<CreatedNote, crate::services::error::ServiceError> {
             let inserted = self.db.insert_note(&request.as_insert_request()).await?;
-            self.request.replace(Some(request));
-            Ok(inserted)
+            *self.request.lock().unwrap() = Some(request);
+            Ok(CreatedNote {
+                inserted,
+                confirmed_extraction_ids: Vec::new(),
+            })
         }
+    }
+
+    struct DetachedCreator;
+
+    #[async_trait]
+    impl NoteCreator for DetachedCreator {
+        async fn create(
+            &self,
+            request: CreateNote,
+        ) -> Result<CreatedNote, crate::services::error::ServiceError> {
+            Ok(CreatedNote {
+                inserted: crate::backend::InsertedNote {
+                    uuid: request.id,
+                    short_id: Some(42),
+                },
+                confirmed_extraction_ids: vec!["extraction-confirmed".to_string()],
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn add_reports_structured_partial_when_summary_read_fails_after_create() {
+        let backend = make_backend().await;
+        let error = NoteService::new(&backend)
+            .add(
+                &DetachedCreator,
+                NoteAddInput {
+                    content: "Body".to_string(),
+                    project: None,
+                    interpret_as_url: false,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "note_create_partial");
+        assert!(!error.retryable());
+        let crate::services::error::ServiceError::Remote { details, .. } = error else {
+            panic!("expected structured post-create error")
+        };
+        let details = details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["short_id"], 42);
+        assert!(details["note_id"].as_str().is_some());
+        assert_eq!(
+            details["confirmed_extraction_ids"],
+            serde_json::json!(["extraction-confirmed"])
+        );
     }
 
     #[tokio::test]
@@ -859,7 +944,7 @@ mod tests {
         let backend = make_backend().await;
         let creator = DbCreator {
             db: &backend,
-            request: RefCell::new(None),
+            request: std::sync::Mutex::new(None),
         };
         let service = NoteService::new(&backend);
 
@@ -870,12 +955,14 @@ mod tests {
                     content: "# Title\n\nBody".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    topics: Vec::new(),
+                    created_at: None,
                 },
             )
             .await
             .unwrap();
 
-        let request = creator.request.borrow();
+        let request = creator.request.lock().unwrap();
         let request = request.as_ref().unwrap();
         assert_eq!(request.note_type, "normal");
         assert_eq!(request.title.as_deref(), Some("Title"));
@@ -888,7 +975,7 @@ mod tests {
         let backend = make_backend().await;
         let creator = DbCreator {
             db: &backend,
-            request: RefCell::new(None),
+            request: std::sync::Mutex::new(None),
         };
 
         NoteService::new(&backend)
@@ -898,12 +985,14 @@ mod tests {
                     content: "https://example.com with context".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    topics: Vec::new(),
+                    created_at: None,
                 },
             )
             .await
             .unwrap();
 
-        let request = creator.request.borrow();
+        let request = creator.request.lock().unwrap();
         let request = request.as_ref().unwrap();
         assert_eq!(request.note_type, "normal");
         assert_eq!(
@@ -943,18 +1032,18 @@ mod tests {
 
     #[derive(Default)]
     struct FakeSideEffects {
-        shared: RefCell<Vec<(ShareResource, String)>>,
-        opened: RefCell<Vec<String>>,
+        shared: std::sync::Mutex<Vec<(ShareResource, String)>>,
+        opened: std::sync::Mutex<Vec<String>>,
     }
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl ShareGateway for FakeSideEffects {
         async fn share(
             &self,
             resource: ShareResource,
             id: &str,
         ) -> Result<String, crate::services::error::ServiceError> {
-            self.shared.borrow_mut().push((resource, id.to_string()));
+            self.shared.lock().unwrap().push((resource, id.to_string()));
             Ok(format!("https://share.example/{id}"))
         }
 
@@ -963,14 +1052,14 @@ mod tests {
             resource: ShareResource,
             id: &str,
         ) -> Result<(), crate::services::error::ServiceError> {
-            self.shared.borrow_mut().push((resource, id.to_string()));
+            self.shared.lock().unwrap().push((resource, id.to_string()));
             Ok(())
         }
     }
 
     impl BrowserOpener for FakeSideEffects {
         fn open(&self, url: &str) -> Result<(), crate::services::error::ServiceError> {
-            self.opened.borrow_mut().push(url.to_string());
+            self.opened.lock().unwrap().push(url.to_string());
             Ok(())
         }
     }
@@ -990,7 +1079,7 @@ mod tests {
         let shared = service.share(&side_effects, &id).await.unwrap();
         assert_eq!(shared.url, format!("https://share.example/{id}"));
         assert_eq!(
-            side_effects.shared.borrow().as_slice(),
+            side_effects.shared.lock().unwrap().as_slice(),
             &[(ShareResource::Note, id.clone())]
         );
 
@@ -1004,6 +1093,9 @@ mod tests {
         assert_eq!(opened.url, "https://app.example/notes/42");
         assert!(!opened.url.contains(&id));
         assert!(opened.opened);
-        assert_eq!(side_effects.opened.borrow().as_slice(), &[opened.url]);
+        assert_eq!(
+            side_effects.opened.lock().unwrap().as_slice(),
+            &[opened.url]
+        );
     }
 }

@@ -2,16 +2,13 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use std::fs;
 
-pub(crate) fn run(config: &Config) -> Result<(), CliError> {
+pub(crate) async fn run(config: &Config) -> Result<(), CliError> {
     if !config.paths.session_file.exists() {
         println!("Already logged out");
         return Ok(());
     }
 
-    // 1. Stop the sync daemon (silently succeeds if not running)
     super::daemon::stop(config)?;
-
-    // 2. Uninstall the launchd service
     super::daemon::uninstall()?;
 
     // 3. Delete local DB files — collect errors so session is always cleared

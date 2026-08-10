@@ -18,17 +18,11 @@ path = "src/bin/flicknote-sync.rs"
 [package.metadata.dist]
 formula = "flicknote"
 
-[features]
-default = ["powersync", "storage-pgwire"]
-powersync = ["flicknote-core/powersync"]
-storage-pgwire = ["flicknote-core/storage-pgwire"]
-
 [dependencies]
 flicknote-core = { path = "../flicknote-core", default-features = false }
 flicknote-auth = { path = "../flicknote-auth" }
 flicknote-sync = { path = "../flicknote-sync" }
 clap = { version = "4", features = ["derive"] }
-uuid = { workspace = true }
 chrono = "0.4"
 url = "2"
 serde_json = { workspace = true }
@@ -36,20 +30,20 @@ tokio = { workspace = true }
 libc = "0.2"
 dirs = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "charset", "http2", "rustls-tls"] }
-mime_guess = "2"
 futures-util = "0.3"
 serde = { workspace = true }
 open = "5"
 tempfile = "3"
 env_logger = "0.11"
 log = "0.4"
-rmcp = { version = "3.1.0", default-features = false, features = ["server", "transport-io", "local", "macros"] }
+rmcp = { version = "3.1.0", default-features = false, features = ["server", "transport-io", "macros"] }
 schemars = "1"
 httpdate = "1.0.3"
 
 [dev-dependencies]
 async-trait = { workspace = true }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
+uuid = { workspace = true }
 
 [lints]
 workspace = true

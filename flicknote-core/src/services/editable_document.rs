@@ -4,6 +4,7 @@ use crate::TOPIC_EXTRACTION_KEY;
 use crate::backend::NoteDb;
 use crate::error::CliError;
 use crate::types::Note;
+use serde::{Deserialize, Serialize};
 
 use super::frontmatter::{self, EditableDoc};
 
@@ -14,7 +15,7 @@ pub struct ParsedEditableNote {
     pub topics: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditableSaveResult {
     pub title_changed: bool,
     pub content_changed: bool,
@@ -126,15 +127,15 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 mod tests {
     use super::*;
     use crate::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
-    use crate::types::{Keyterm, Project};
-    use std::cell::RefCell;
+    use crate::types::Project;
     use std::collections::HashMap;
+    use std::sync::Mutex;
 
     const NOTE_ID: &str = "01234567-89ab-cdef-0123-456789abcdef";
 
     struct FakeNoteDb {
-        note: RefCell<Note>,
-        extractions: RefCell<HashMap<String, Vec<(String, String)>>>,
+        note: Mutex<Note>,
+        extractions: Mutex<HashMap<String, Vec<(String, String)>>>,
     }
 
     impl FakeNoteDb {
@@ -142,18 +143,19 @@ mod tests {
             let mut map = HashMap::new();
             map.insert(note.id.clone(), extractions);
             Self {
-                note: RefCell::new(note),
-                extractions: RefCell::new(map),
+                note: Mutex::new(note),
+                extractions: Mutex::new(map),
             }
         }
 
         fn note(&self) -> Note {
-            self.note.borrow().clone()
+            self.note.lock().unwrap().clone()
         }
 
         fn extraction_values(&self, extraction_type: &str) -> Vec<String> {
             self.extractions
-                .borrow()
+                .lock()
+                .unwrap()
                 .get(NOTE_ID)
                 .into_iter()
                 .flatten()
@@ -395,7 +397,7 @@ mod tests {
         assert_eq!(normal_note_content_ref(&parsed), Some(""));
     }
 
-    #[async_trait::async_trait(?Send)]
+    #[async_trait::async_trait]
     impl NoteDb for FakeNoteDb {
         fn user_id(&self) -> &str {
             "user"
@@ -410,7 +412,7 @@ mod tests {
         }
 
         async fn find_note(&self, id: &str) -> Result<Note, CliError> {
-            let note = self.note.borrow();
+            let note = self.note.lock().unwrap();
             if note.id == id {
                 return Ok(note.clone());
             }
@@ -455,7 +457,7 @@ mod tests {
             content: &str,
             _requeue: bool,
         ) -> Result<(), CliError> {
-            let mut note = self.note.borrow_mut();
+            let mut note = self.note.lock().unwrap();
             if note.id != id {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
@@ -515,7 +517,6 @@ mod tests {
         async fn update_project(
             &self,
             _id: &str,
-            _keyterm_id: Option<Option<&str>>,
             _color: Option<Option<&str>>,
         ) -> Result<(), CliError> {
             unimplemented!()
@@ -526,7 +527,7 @@ mod tests {
         }
 
         async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
-            let mut note = self.note.borrow_mut();
+            let mut note = self.note.lock().unwrap();
             if note.id != id {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
@@ -555,7 +556,7 @@ mod tests {
             extraction_types: &[&str],
         ) -> Result<HashMap<String, Vec<(String, String)>>, CliError> {
             let mut result = HashMap::new();
-            let store = self.extractions.borrow();
+            let store = self.extractions.lock().unwrap();
             for note_id in note_ids {
                 let Some(rows) = store.get(*note_id) else {
                     continue;
@@ -584,7 +585,7 @@ mod tests {
             extraction_type: &str,
             values: &[String],
         ) -> Result<(), CliError> {
-            let mut store = self.extractions.borrow_mut();
+            let mut store = self.extractions.lock().unwrap();
             let rows = store.entry(note_id.to_string()).or_default();
             rows.retain(|(kind, _)| kind != extraction_type);
             rows.extend(
@@ -593,43 +594,6 @@ mod tests {
                     .map(|value| (extraction_type.to_string(), value.clone())),
             );
             Ok(())
-        }
-
-        async fn resolve_keyterm_id(&self, _prefix: &str) -> Result<String, CliError> {
-            unimplemented!()
-        }
-
-        async fn insert_keyterm(
-            &self,
-            _id: &str,
-            _name: &str,
-            _description: Option<&str>,
-            _content: Option<&str>,
-            _now: &str,
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
-        async fn find_keyterm(&self, _id: &str) -> Result<Keyterm, CliError> {
-            unimplemented!()
-        }
-
-        async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-            unimplemented!()
-        }
-
-        async fn update_keyterm(
-            &self,
-            _id: &str,
-            _name: Option<&str>,
-            _description: Option<&str>,
-            _content: Option<&str>,
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
-        async fn delete_keyterm(&self, _id: &str) -> Result<(), CliError> {
-            unimplemented!()
         }
     }
 }

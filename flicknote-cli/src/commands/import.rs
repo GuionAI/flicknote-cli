@@ -1,12 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
-use flicknote_core::backend::{InsertNoteReq, NoteDb};
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::NoteSummary;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request, resolve_project};
-use super::util::{display_inserted_note_id, resolve_project_arg};
+use super::util::{display_summary_id, resolve_project_arg};
 
 #[derive(Args)]
 pub(crate) struct ImportArgs {
@@ -17,12 +16,7 @@ pub(crate) struct ImportArgs {
     project: Option<String>,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    config: &Config,
-    args: &ImportArgs,
-    mode: AddCreateMode,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ImportArgs) -> Result<(), CliError> {
     // Collect .md files
     let files = collect_md_files(&args.path)?;
     if files.is_empty() {
@@ -30,68 +24,41 @@ pub(crate) async fn run(
         return Ok(());
     }
 
-    // Resolve project if specified
     let effective_project = resolve_project_arg(&args.project);
-    let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name).await?)
-    } else {
-        None
-    };
-
     let mut imported = Vec::new();
 
     for file in &files {
-        let content = std::fs::read_to_string(file)
-            .map_err(|e| CliError::Other(format!("Failed to read {}: {}", file.display(), e)))?;
-
-        if content.trim().is_empty() {
-            continue;
-        }
-
-        let id = uuid::Uuid::new_v4().to_string();
-        let (title, stripped_content) =
-            flicknote_core::services::note_content::extract_title_and_strip(&content);
         let created_at = file_created_time(file);
-
-        let inserted = if mode.uses_daemon() {
-            create_note_with_daemon(
-                config,
-                daemon_create_request(&InsertNoteReq {
-                    id: &id,
-                    note_type: "normal",
-                    status: "ai_queued",
-                    title: title.as_deref(),
-                    content: Some(&stripped_content),
-                    metadata: None,
-                    project_id: project_id.as_deref(),
-                    now: &created_at,
-                }),
-            )
-            .await?
-        } else {
-            db.insert_note(&InsertNoteReq {
-                id: &id,
-                note_type: "normal",
-                status: "ai_queued",
-                title: title.as_deref(),
-                content: Some(&stripped_content),
-                metadata: None,
-                project_id: project_id.as_deref(),
-                now: &created_at,
+        let path = std::fs::canonicalize(file).map_err(|error| {
+            CliError::Other(format!("Failed to resolve {}: {error}", file.display()))
+        })?;
+        let inserted: NoteSummary = match daemon
+            .call(AppRequest::NoteUpload {
+                path: path.to_string_lossy().into_owned(),
+                project: effective_project.clone(),
+                created_at: Some(created_at),
             })
-            .await?
+            .await
+        {
+            Ok(note) => note,
+            Err(error)
+                if error.code() == "invalid_argument"
+                    && error.to_string().contains("content must not be empty") =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error.into()),
         };
-
-        imported.push((inserted, title, file.clone()));
+        imported.push((inserted, file.clone()));
     }
 
-    for (inserted, title, file) in &imported {
+    for (inserted, file) in &imported {
         let filename = file.file_name().and_then(|s| s.to_str()).unwrap_or("?");
-        let display_title = title.as_deref().unwrap_or("(untitled)");
+        let display_title = inserted.title.as_deref().unwrap_or("(untitled)");
         println!(
             "Imported {} → {} — {}",
             filename,
-            display_inserted_note_id(inserted),
+            display_summary_id(inserted),
             display_title
         );
     }

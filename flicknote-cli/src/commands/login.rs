@@ -17,15 +17,19 @@ pub(crate) struct LoginArgs {
 }
 
 pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliError> {
+    if config.paths.session_file.exists() && !args.force {
+        return Err(CliError::Other(
+            "Already logged in. Use `flicknote login --force` to re-authenticate (e.g. after sync issues).".into(),
+        ));
+    }
+
+    let manage_local_daemon = manages_daemon_after_login_for(cfg!(target_os = "macos"));
     if config.paths.session_file.exists() {
-        if !args.force {
-            return Err(CliError::Other(
-                "Already logged in. Use `flicknote login --force` to re-authenticate (e.g. after sync issues).".into(),
-            ));
+        // --force: stop the macOS LaunchAgent before clearing the stale session.
+        if manage_local_daemon {
+            super::daemon::stop(config)?;
+            super::daemon::uninstall()?;
         }
-        // --force: stop daemon and clear stale session before re-auth
-        super::daemon::stop(config)?;
-        super::daemon::uninstall()?;
         std::fs::remove_file(&config.paths.session_file)?;
     }
 
@@ -78,11 +82,30 @@ pub(crate) async fn run(config: &Config, args: &LoginArgs) -> Result<(), CliErro
 
     println!("Authenticated");
 
-    // Install launchd service — this boots out any existing service first,
-    // then bootstraps fresh. The daemon starts immediately (KeepAlive + RunAtLoad)
-    // and creates the local DB on startup.
-    super::daemon::install(config)?;
-    println!("Sync daemon installed and started");
+    if manage_local_daemon {
+        // The macOS login flow owns the per-user LaunchAgent lifecycle.
+        super::sync::install_local_daemon(config, std::time::Duration::from_secs(10)).await?;
+        println!("Sync daemon installed and started");
+    }
 
     Ok(())
+}
+
+const fn manages_daemon_after_login_for(target_is_macos: bool) -> bool {
+    target_is_macos
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn non_macos_login_does_not_wait_for_a_launchd_daemon() {
+        assert!(!super::manages_daemon_after_login_for(false));
+    }
+
+    #[test]
+    fn macos_login_manages_the_local_launch_agent() {
+        assert!(super::manages_daemon_after_login_for(true));
+        assert!(!super::manages_daemon_after_login_for(false));
+    }
 }

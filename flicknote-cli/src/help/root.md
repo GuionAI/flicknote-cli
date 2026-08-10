@@ -1,6 +1,5 @@
-FlickNote works with local and managed workspaces.
-Managed workspaces support data commands that do not require local files or services.
-Local workspaces are required for file, editor, browser, sharing, sync, sign-in, and skill commands.
+Data commands require the FlickNote daemon. Start it with `flicknote sync start`.
+The daemon owns the local PowerSync database and remote synchronization.
 Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:

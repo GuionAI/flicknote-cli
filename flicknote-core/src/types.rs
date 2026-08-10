@@ -36,18 +36,6 @@ pub struct Project {
     pub user_id: String,
     pub name: String,
     pub color: Option<String>,
-    pub keyterm_id: Option<String>,
     pub is_archived: Option<i64>,
     pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Keyterm {
-    pub id: String,
-    pub user_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub content: Option<String>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
 }

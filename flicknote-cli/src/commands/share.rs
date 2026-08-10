@@ -1,10 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
-use flicknote_core::services::project::ProjectService;
-use flicknote_sync::ipc::DaemonClient;
+use flicknote_core::services::dto::{ShareResult, UnshareResult};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const SHARE_HELP: &str = include_str!("../help/share.md");
 const UNSHARE_HELP: &str = include_str!("../help/unshare.md");
@@ -23,49 +20,43 @@ pub(crate) struct UnshareArgs {
     pub(crate) id: String,
 }
 
-pub(crate) async fn run_note(
-    db: &dyn NoteDb,
-    config: &Config,
-    args: &ShareArgs,
-) -> Result<(), CliError> {
-    let result = NoteService::new(db)
-        .share(&DaemonClient::new(config), &args.id)
+pub(crate) async fn run_note(daemon: &DaemonClient<'_>, args: &ShareArgs) -> Result<(), CliError> {
+    let result: ShareResult = daemon
+        .call(AppRequest::NoteShare {
+            id: args.id.clone(),
+        })
         .await?;
     println!("{}", result.url);
     Ok(())
 }
 
-pub(crate) async fn run_project(
-    db: &dyn NoteDb,
-    config: &Config,
-    id: &str,
-) -> Result<(), CliError> {
-    let result = ProjectService::new(db)
-        .share(&DaemonClient::new(config), id)
+pub(crate) async fn run_project(daemon: &DaemonClient<'_>, id: &str) -> Result<(), CliError> {
+    let result: ShareResult = daemon
+        .call(AppRequest::ProjectShare { id: id.to_string() })
         .await?;
     println!("{}", result.url);
     Ok(())
 }
 
 pub(crate) async fn run_unshare_note(
-    db: &dyn NoteDb,
-    config: &Config,
+    daemon: &DaemonClient<'_>,
     args: &UnshareArgs,
 ) -> Result<(), CliError> {
-    NoteService::new(db)
-        .unshare(&DaemonClient::new(config), &args.id)
+    let _: UnshareResult = daemon
+        .call(AppRequest::NoteUnshare {
+            id: args.id.clone(),
+        })
         .await?;
     println!("Share link revoked.");
     Ok(())
 }
 
 pub(crate) async fn run_unshare_project(
-    db: &dyn NoteDb,
-    config: &Config,
+    daemon: &DaemonClient<'_>,
     id: &str,
 ) -> Result<(), CliError> {
-    ProjectService::new(db)
-        .unshare(&DaemonClient::new(config), id)
+    let _: UnshareResult = daemon
+        .call(AppRequest::ProjectUnshare { id: id.to_string() })
         .await?;
     println!("Share link revoked.");
     Ok(())

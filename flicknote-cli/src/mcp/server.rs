@@ -1,17 +1,16 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
-use flicknote_core::backend::NoteDb;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
-    NoteAddInput, NoteModifyInput, NoteSectionResult, OpenResult, Patch, ProjectAddInput,
-    ProjectModifyInput, ShareResult, UnshareResult,
+    NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput, NoteListInput,
+    NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::{NoteCountInput, NoteFindInput, NoteListInput, NoteService};
-use flicknote_core::services::project::ProjectService;
+use flicknote_core::services::ports::BrowserOpener;
 use flicknote_core::services::source::SourceResult;
-use flicknote_sync::ipc::DaemonClient;
+use flicknote_sync::ipc::{AppRequest, AppResult, DaemonClient};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
@@ -63,26 +62,20 @@ struct CountResult {
 
 #[derive(Clone)]
 pub(crate) struct FlickNoteMcp {
-    db: Rc<dyn NoteDb>,
-    config: Rc<Config>,
+    config: Arc<Config>,
     tool_router: ToolRouter<Self>,
 }
 
 impl FlickNoteMcp {
-    pub(crate) fn new(db: Rc<dyn NoteDb>, config: Rc<Config>) -> Self {
+    pub(crate) fn new(config: Arc<Config>) -> Self {
         Self {
-            db,
             config,
             tool_router: Self::tool_router(),
         }
     }
 
-    fn note_service(&self) -> NoteService<'_> {
-        NoteService::new(self.db.as_ref())
-    }
-
-    fn project_service(&self) -> ProjectService<'_> {
-        ProjectService::new(self.db.as_ref())
+    async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
+        DaemonClient::new(&self.config).call(request).await
     }
 
     fn effective_project(project: Option<String>) -> Option<String> {
@@ -94,10 +87,11 @@ impl FlickNoteMcp {
     }
 
     async fn resolve_project_name(&self, name: &str) -> Result<String, ServiceError> {
-        self.db
-            .find_project_by_name(name)
-            .await?
-            .ok_or_else(|| ServiceError::ProjectNotFound(name.to_string()))
+        self.call::<ProjectDto>(AppRequest::ProjectGetByName {
+            name: name.to_string(),
+        })
+        .await
+        .map(|project| project.id)
     }
 }
 
@@ -117,15 +111,14 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteListParams>,
     ) -> Result<Json<Vec<McpNoteSummary>>, CallToolResult> {
         structured(
-            self.note_service()
-                .list(NoteListInput {
-                    note_type: params.note_type.map(|value| value.as_str().to_string()),
-                    project: Self::effective_project(params.project),
-                    archived: params.archived,
-                    limit: params.limit,
-                })
-                .await
-                .map(|notes| notes.into_iter().map(Into::into).collect()),
+            self.call::<Vec<NoteSummary>>(AppRequest::NoteList(NoteListInput {
+                note_type: params.note_type.map(|value| value.as_str().to_string()),
+                project: Self::effective_project(params.project),
+                archived: params.archived,
+                limit: params.limit,
+            }))
+            .await
+            .map(|notes| notes.into_iter().map(Into::into).collect()),
         )
     }
 
@@ -139,16 +132,15 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteFindParams>,
     ) -> Result<Json<Vec<McpNoteSummary>>, CallToolResult> {
         structured(
-            self.note_service()
-                .find(NoteFindInput {
-                    keywords: params.keywords,
-                    extractions: params.extractions,
-                    project: Self::effective_project(params.project),
-                    archived: params.archived,
-                    limit: params.limit,
-                })
-                .await
-                .map(|notes| notes.into_iter().map(Into::into).collect()),
+            self.call::<Vec<NoteSummary>>(AppRequest::NoteFind(NoteFindInput {
+                keywords: params.keywords,
+                extractions: params.extractions,
+                project: Self::effective_project(params.project),
+                archived: params.archived,
+                limit: params.limit,
+            }))
+            .await
+            .map(|notes| notes.into_iter().map(Into::into).collect()),
         )
     }
 
@@ -162,15 +154,14 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteCountParams>,
     ) -> Result<Json<CountResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .count(NoteCountInput {
-                    keywords: params.keywords,
-                    project: Self::effective_project(params.project),
-                    note_type: params.note_type.map(|value| value.as_str().to_string()),
-                    archived: params.archived,
-                })
-                .await
-                .map(|count| CountResult { count }),
+            self.call::<u64>(AppRequest::NoteCount(NoteCountInput {
+                keywords: params.keywords,
+                project: Self::effective_project(params.project),
+                note_type: params.note_type.map(|value| value.as_str().to_string()),
+                archived: params.archived,
+            }))
+            .await
+            .map(|count| CountResult { count }),
         )
     }
 
@@ -184,10 +175,12 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteGetParams>,
     ) -> Result<Json<McpNoteDetail>, CallToolResult> {
         structured(
-            self.note_service()
-                .get(&params.id.to_string(), params.archived)
-                .await
-                .map(Into::into),
+            self.call::<NoteDetail>(AppRequest::NoteGet {
+                id: params.id.to_string(),
+                archived: params.archived,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -201,9 +194,11 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteSectionParams>,
     ) -> Result<Json<NoteSectionResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .get_section(&params.id.to_string(), &params.section)
-                .await,
+            self.call(AppRequest::NoteGetSection {
+                id: params.id.to_string(),
+                section: params.section,
+            })
+            .await,
         )
     }
 
@@ -217,14 +212,13 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteSourceParams>,
     ) -> Result<Json<SourceResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .source(
-                    &params.id.to_string(),
-                    params.archived,
-                    params.view,
-                    params.range.as_deref(),
-                )
-                .await,
+            self.call(AppRequest::NoteSource {
+                id: params.id.to_string(),
+                archived: params.archived,
+                view: params.view,
+                range: params.range,
+            })
+            .await,
         )
     }
 
@@ -238,17 +232,15 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteAddParams>,
     ) -> Result<Json<McpNoteSummary>, CallToolResult> {
         structured(
-            self.note_service()
-                .add(
-                    &DaemonClient::new(&self.config),
-                    NoteAddInput {
-                        content: params.content,
-                        project: Self::effective_project(params.project),
-                        interpret_as_url: true,
-                    },
-                )
-                .await
-                .map(Into::into),
+            self.call::<NoteSummary>(AppRequest::NoteAdd(NoteAddInput {
+                content: params.content,
+                project: Self::effective_project(params.project),
+                interpret_as_url: true,
+                topics: Vec::new(),
+                created_at: None,
+            }))
+            .await
+            .map(Into::into),
         )
     }
 
@@ -261,17 +253,16 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteModifyParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .modify(NoteModifyInput {
-                    id: params.id.to_string(),
-                    before: params.before,
-                    after: params.after,
-                    section: params.section,
-                    project: params.project,
-                    flagged: params.flagged,
-                })
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteModify(NoteModifyInput {
+                id: params.id.to_string(),
+                before: params.before,
+                after: params.after,
+                section: params.section,
+                project: params.project,
+                flagged: params.flagged,
+            }))
+            .await
+            .map(Into::into),
         )
     }
 
@@ -284,10 +275,12 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteContentParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .append(&params.id.to_string(), &params.content)
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteAppend {
+                id: params.id.to_string(),
+                content: params.content,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -300,15 +293,14 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteInsertParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .insert(
-                    &params.id.to_string(),
-                    &params.section,
-                    params.position,
-                    &params.content,
-                )
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteInsert {
+                id: params.id.to_string(),
+                section: params.section,
+                position: params.position,
+                content: params.content,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -321,10 +313,13 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteSectionContentParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .replace_section(&params.id.to_string(), &params.section, &params.content)
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteReplaceSection {
+                id: params.id.to_string(),
+                section: params.section,
+                content: params.content,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -337,10 +332,13 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteRenameSectionParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .rename_section(&params.id.to_string(), &params.section, &params.name)
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteRenameSection {
+                id: params.id.to_string(),
+                section: params.section,
+                name: params.name,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -354,10 +352,12 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteSectionParams>,
     ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .delete_section(&params.id.to_string(), &params.section)
-                .await
-                .map(Into::into),
+            self.call::<NoteMutationResult>(AppRequest::NoteDeleteSection {
+                id: params.id.to_string(),
+                section: params.section,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -371,10 +371,11 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteIdParams>,
     ) -> Result<Json<McpNoteArchiveResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .archive(&params.id.to_string())
-                .await
-                .map(Into::into),
+            self.call::<NoteArchiveResult>(AppRequest::NoteArchive {
+                id: params.id.to_string(),
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -387,10 +388,11 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteIdParams>,
     ) -> Result<Json<McpNoteArchiveResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .restore(&params.id.to_string())
-                .await
-                .map(Into::into),
+            self.call::<NoteArchiveResult>(AppRequest::NoteRestore {
+                id: params.id.to_string(),
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -404,9 +406,10 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteIdParams>,
     ) -> Result<Json<ShareResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .share(&DaemonClient::new(&self.config), &params.id.to_string())
-                .await,
+            self.call(AppRequest::NoteShare {
+                id: params.id.to_string(),
+            })
+            .await,
         )
     }
 
@@ -420,9 +423,10 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteIdParams>,
     ) -> Result<Json<UnshareResult>, CallToolResult> {
         structured(
-            self.note_service()
-                .unshare(&DaemonClient::new(&self.config), &params.id.to_string())
-                .await,
+            self.call(AppRequest::NoteUnshare {
+                id: params.id.to_string(),
+            })
+            .await,
         )
     }
 
@@ -435,16 +439,17 @@ impl FlickNoteMcp {
         &self,
         Parameters(params): Parameters<NoteIdParams>,
     ) -> Result<Json<OpenResult>, CallToolResult> {
-        let Some(web_url) = self.config.web_url.as_deref() else {
-            return Err(tool_error(&ServiceError::ConfigMissing(
-                "webUrl".to_string(),
-            )));
-        };
-        structured(
-            self.note_service()
-                .open(&SystemBrowserOpener, web_url, &params.id.to_string())
-                .await,
-        )
+        let mut result: OpenResult = self
+            .call(AppRequest::NoteOpen {
+                id: params.id.to_string(),
+            })
+            .await
+            .map_err(|error| tool_error(&error))?;
+        SystemBrowserOpener
+            .open(&result.url)
+            .map_err(|error| tool_error(&error))?;
+        result.opened = true;
+        Ok(Json(result))
     }
 
     #[tool(
@@ -457,10 +462,11 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<ProjectListParams>,
     ) -> Result<Json<Vec<McpProjectDto>>, CallToolResult> {
         structured(
-            self.project_service()
-                .list(params.include_archived)
-                .await
-                .map(|projects| projects.into_iter().map(Into::into).collect()),
+            self.call::<Vec<ProjectDto>>(AppRequest::ProjectList {
+                include_archived: params.include_archived,
+            })
+            .await
+            .map(|projects| projects.into_iter().map(Into::into).collect()),
         )
     }
 
@@ -473,15 +479,12 @@ impl FlickNoteMcp {
         &self,
         Parameters(params): Parameters<ProjectIdParams>,
     ) -> Result<Json<McpProjectDto>, CallToolResult> {
-        let project_id = self
-            .resolve_project_name(&params.project)
-            .await
-            .map_err(|error| tool_error(&error))?;
         structured(
-            self.project_service()
-                .get(&project_id)
-                .await
-                .map(Into::into),
+            self.call::<ProjectDto>(AppRequest::ProjectGetByName {
+                name: params.project,
+            })
+            .await
+            .map(Into::into),
         )
     }
 
@@ -494,14 +497,12 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<ProjectAddParams>,
     ) -> Result<Json<McpProjectDto>, CallToolResult> {
         structured(
-            self.project_service()
-                .add(ProjectAddInput {
-                    name: params.name,
-                    keyterm: None,
-                    color: params.color,
-                })
-                .await
-                .map(Into::into),
+            self.call::<ProjectDto>(AppRequest::ProjectAdd(ProjectAddInput {
+                name: params.name,
+                color: params.color,
+            }))
+            .await
+            .map(Into::into),
         )
     }
 
@@ -518,14 +519,12 @@ impl FlickNoteMcp {
             .await
             .map_err(|error| tool_error(&error))?;
         structured(
-            self.project_service()
-                .modify(ProjectModifyInput {
-                    id: project_id,
-                    keyterm: Patch::Missing,
-                    color: params.color,
-                })
-                .await
-                .map(Into::into),
+            self.call::<ProjectDto>(AppRequest::ProjectModify(ProjectModifyInput {
+                id: project_id,
+                color: params.color,
+            }))
+            .await
+            .map(Into::into),
         )
     }
 
@@ -543,8 +542,7 @@ impl FlickNoteMcp {
             .await
             .map_err(|error| tool_error(&error))?;
         structured(
-            self.project_service()
-                .archive(&project_id)
+            self.call::<ProjectDto>(AppRequest::ProjectArchive { id: project_id })
                 .await
                 .map(Into::into),
         )
@@ -563,11 +561,7 @@ impl FlickNoteMcp {
             .resolve_project_name(&params.project)
             .await
             .map_err(|error| tool_error(&error))?;
-        structured(
-            self.project_service()
-                .share(&DaemonClient::new(&self.config), &project_id)
-                .await,
-        )
+        structured(self.call(AppRequest::ProjectShare { id: project_id }).await)
     }
 
     #[tool(
@@ -584,8 +578,7 @@ impl FlickNoteMcp {
             .await
             .map_err(|error| tool_error(&error))?;
         structured(
-            self.project_service()
-                .unshare(&DaemonClient::new(&self.config), &project_id)
+            self.call(AppRequest::ProjectUnshare { id: project_id })
                 .await,
         )
     }
@@ -597,13 +590,13 @@ impl ServerHandler for FlickNoteMcp {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("flicknote", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Local-first FlickNote note and project tools. Network-backed add/share/unshare require the running sync daemon.",
+                "Daemon-backed FlickNote note and project tools. Every data tool requires the running FlickNote daemon.",
             )
     }
 }
 
-pub(crate) async fn serve(db: Rc<dyn NoteDb>, config: Rc<Config>) -> Result<(), CliError> {
-    FlickNoteMcp::new(db, config)
+pub(crate) async fn serve(config: Arc<Config>) -> Result<(), CliError> {
+    FlickNoteMcp::new(config)
         .serve(rmcp::transport::stdio())
         .await
         .map_err(|error| CliError::Other(format!("failed to initialize MCP server: {error}")))?
@@ -615,7 +608,24 @@ pub(crate) async fn serve(db: Rc<dyn NoteDb>, config: Rc<Config>) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use flicknote_core::config::Config;
+
     use super::FlickNoteMcp;
+
+    fn assert_send<T: Send>(_: T) {}
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[allow(dead_code)]
+    fn assert_serve_future_is_send(config: Arc<Config>) {
+        assert_send(super::serve(config));
+    }
+
+    #[test]
+    fn mcp_service_is_send_and_sync() {
+        assert_send_sync::<FlickNoteMcp>();
+    }
 
     #[test]
     fn explicit_project_wins_then_falls_back_to_non_empty_environment_value() {

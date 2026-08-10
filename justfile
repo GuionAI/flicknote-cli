@@ -22,11 +22,11 @@ check: fmt clippy test
 
 # Check Rust formatting.
 fmt:
-    cargo fmt -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --check
+    cargo fmt --all --check
 
 # Run Clippy with warnings denied.
 clippy:
-    cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Refresh SQLx offline metadata.
 sqlx-prepare:

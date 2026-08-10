@@ -7,7 +7,7 @@ use crate::TOPIC_EXTRACTION_KEY;
 #[cfg(feature = "powersync")]
 use crate::db::Database;
 use crate::error::CliError;
-use crate::types::{Keyterm, Note, Project};
+use crate::types::{Note, Project};
 
 // ─── Filter / request types ──────────────────────────────────────────────────
 
@@ -71,8 +71,8 @@ pub(crate) fn parse_note_lookup(input: &str) -> Result<NoteLookup<'_>, CliError>
 
 // ─── NoteDb trait ────────────────────────────────────────────────────────────
 
-#[async_trait(?Send)]
-pub trait NoteDb {
+#[async_trait]
+pub trait NoteDb: Send + Sync {
     fn user_id(&self) -> &str;
 
     // Note resolution
@@ -138,13 +138,8 @@ pub trait NoteDb {
         old_project_id: Option<&str>,
     ) -> Result<Option<String>, CliError>;
 
-    /// Update project metadata. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
-    async fn update_project(
-        &self,
-        id: &str,
-        keyterm_id: Option<Option<&str>>,
-        color: Option<Option<&str>>,
-    ) -> Result<(), CliError>;
+    /// Update project color. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
+    async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError>;
 
     /// Delete (archive) a project by ID. Returns `ProjectNotFound` if no such project exists.
     async fn delete_project(&self, id: &str) -> Result<(), CliError>;
@@ -183,27 +178,6 @@ pub trait NoteDb {
         extraction_key: &str,
         values: &[String],
     ) -> Result<(), CliError>;
-
-    // Keyterm operations
-    async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError>;
-    async fn insert_keyterm(
-        &self,
-        id: &str,
-        name: &str,
-        description: Option<&str>,
-        content: Option<&str>,
-        now: &str,
-    ) -> Result<(), CliError>;
-    async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError>;
-    async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError>;
-    async fn update_keyterm(
-        &self,
-        id: &str,
-        name: Option<&str>,
-        description: Option<&str>,
-        content: Option<&str>,
-    ) -> Result<(), CliError>;
-    async fn delete_keyterm(&self, id: &str) -> Result<(), CliError>;
 }
 
 // ─── SqliteBackend ───────────────────────────────────────────────────────────
@@ -264,10 +238,10 @@ const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND nam
 #[cfg(feature = "powersync")]
 const SQ_FIND_PROJECT_NAME: &str = "SELECT name FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
      WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL) ORDER BY name";
 #[cfg(feature = "powersync")]
-const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
 #[cfg(feature = "powersync")]
 const SQ_CREATE_PROJECT: &str =
@@ -310,21 +284,11 @@ const SQ_INSERT_EXTRACTION: &str =
     "INSERT INTO note_extractions (id, note_id, user_id, key, value) VALUES (?, ?, ?, ?, ?)";
 
 #[cfg(feature = "powersync")]
-const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, keyterm_id, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
+const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 #[cfg(feature = "powersync")]
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
-#[cfg(feature = "powersync")]
-const SQ_RESOLVE_KEYTERM: &str = "SELECT id FROM keyterms WHERE user_id = ? AND id = ? LIMIT 1";
-#[cfg(feature = "powersync")]
-const SQ_INSERT_KEYTERM: &str = "INSERT INTO keyterms (id, user_id, name, description, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)";
-#[cfg(feature = "powersync")]
-const SQ_FIND_KEYTERM: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? AND id = ? LIMIT 1";
-#[cfg(feature = "powersync")]
-const SQ_LIST_KEYTERMS: &str = "SELECT id, user_id, name, description, content, created_at, updated_at FROM keyterms WHERE user_id = ? ORDER BY name";
-#[cfg(feature = "powersync")]
-const SQ_DELETE_KEYTERM: &str = "DELETE FROM keyterms WHERE user_id = ? AND id = ?";
 #[cfg(feature = "powersync")]
 async fn resolve_sqlite_uuid_id(
     pool: &SqlitePool,
@@ -397,7 +361,7 @@ async fn sqlite_exists(
     Ok(exists.is_some())
 }
 #[cfg(feature = "powersync")]
-#[async_trait(?Send)]
+#[async_trait]
 impl NoteDb for SqliteBackend {
     fn user_id(&self) -> &str {
         &self.user_id
@@ -828,29 +792,19 @@ impl NoteDb for SqliteBackend {
         .await
     }
 
-    async fn update_project(
-        &self,
-        id: &str,
-        keyterm_id: Option<Option<&str>>,
-        color: Option<Option<&str>>,
-    ) -> Result<(), CliError> {
-        let update_keyterm = keyterm_id.is_some();
+    async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError> {
         let update_color = color.is_some();
-        if !(update_keyterm || update_color) {
+        if !update_color {
             return Ok(());
         }
 
-        let keyterm_value = keyterm_id.flatten();
         let color_value = color.flatten();
         sqlx::query!(
             r#"
             UPDATE projects SET
-                keyterm_id = CASE WHEN ? THEN ? ELSE keyterm_id END,
                 color = CASE WHEN ? THEN ? ELSE color END
             WHERE user_id = ? AND id = ?
             "#,
-            update_keyterm,
-            keyterm_value,
             update_color,
             color_value,
             self.user_id,
@@ -1027,105 +981,6 @@ impl NoteDb for SqliteBackend {
                 .execute(&self.db.pool)
                 .await?;
         }
-        Ok(())
-    }
-
-    async fn resolve_keyterm_id(&self, prefix: &str) -> Result<String, CliError> {
-        resolve_sqlite_uuid_id(
-            &self.db.pool,
-            SQ_RESOLVE_KEYTERM,
-            &self.user_id,
-            prefix,
-            || CliError::Other(format!("Keyterm not found: {prefix}")),
-        )
-        .await
-    }
-
-    async fn insert_keyterm(
-        &self,
-        id: &str,
-        name: &str,
-        description: Option<&str>,
-        content: Option<&str>,
-        now: &str,
-    ) -> Result<(), CliError> {
-        sqlx::query(SQ_INSERT_KEYTERM)
-            .bind(id)
-            .bind(&self.user_id)
-            .bind(name)
-            .bind(description)
-            .bind(content)
-            .bind(now)
-            .bind(now)
-            .execute(&self.db.pool)
-            .await?;
-        Ok(())
-    }
-
-    async fn find_keyterm(&self, id: &str) -> Result<Keyterm, CliError> {
-        sqlx::query_as::<_, Keyterm>(SQ_FIND_KEYTERM)
-            .bind(&self.user_id)
-            .bind(id)
-            .fetch_optional(&self.db.pool)
-            .await?
-            .ok_or_else(|| CliError::Other(format!("Keyterm not found: {id}")))
-    }
-
-    async fn list_keyterms(&self) -> Result<Vec<Keyterm>, CliError> {
-        Ok(sqlx::query_as::<_, Keyterm>(SQ_LIST_KEYTERMS)
-            .bind(&self.user_id)
-            .fetch_all(&self.db.pool)
-            .await?)
-    }
-
-    async fn update_keyterm(
-        &self,
-        id: &str,
-        name: Option<&str>,
-        description: Option<&str>,
-        content: Option<&str>,
-    ) -> Result<(), CliError> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let update_name = name.is_some();
-        let update_description = description.is_some();
-        let update_content = content.is_some();
-        if !(update_name || update_description || update_content) {
-            return Ok(());
-        }
-
-        sqlx::query!(
-            r#"
-            UPDATE keyterms SET
-                name = CASE WHEN ? THEN ? ELSE name END,
-                description = CASE WHEN ? THEN ? ELSE description END,
-                content = CASE WHEN ? THEN ? ELSE content END,
-                updated_at = CASE WHEN (? OR ? OR ?) THEN ? ELSE updated_at END
-            WHERE user_id = ? AND id = ?
-            "#,
-            update_name,
-            name,
-            update_description,
-            description,
-            update_content,
-            content,
-            update_name,
-            update_description,
-            update_content,
-            now,
-            self.user_id,
-            id,
-        )
-        .execute(&self.db.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn delete_keyterm(&self, id: &str) -> Result<(), CliError> {
-        sqlx::query(SQ_DELETE_KEYTERM)
-            .bind(&self.user_id)
-            .bind(id)
-            .execute(&self.db.pool)
-            .await?;
         Ok(())
     }
 }
@@ -1952,30 +1807,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_project_and_keyterm_resolvers_reject_uuid_prefixes() {
+    async fn test_project_resolver_rejects_uuid_prefixes() {
         let backend = make_backend().await;
-        let now = chrono::Utc::now().to_rfc3339();
 
         let project_id = backend.create_project("Exact Project").await.unwrap();
-        let keyterm_id = uuid::Uuid::new_v4().to_string();
-        backend
-            .insert_keyterm(&keyterm_id, "Keyterm", None, None, &now)
-            .await
-            .unwrap();
 
         assert_eq!(
             backend.resolve_project_id(&project_id).await.unwrap(),
             project_id
         );
-        assert_eq!(
-            backend.resolve_keyterm_id(&keyterm_id).await.unwrap(),
-            keyterm_id
-        );
 
         let project_prefix = &project_id[..8];
-        let keyterm_prefix = &keyterm_id[..8];
 
         assert!(backend.resolve_project_id(project_prefix).await.is_err());
-        assert!(backend.resolve_keyterm_id(keyterm_prefix).await.is_err());
     }
 }

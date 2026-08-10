@@ -1,10 +1,9 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::OpenResult;
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::NoteService;
 use flicknote_core::services::ports::BrowserOpener;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
 pub(crate) struct OpenArgs {
@@ -20,16 +19,13 @@ impl BrowserOpener for SystemBrowserOpener {
     }
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, config: &Config, args: &OpenArgs) -> Result<(), CliError> {
-    let web_url = config.web_url.as_deref().ok_or_else(|| {
-        CliError::Other(
-            "webUrl not configured. Set it in ~/.config/flicknote/config.json or FLICKNOTE_WEB_URL."
-                .into(),
-        )
-    })?;
-    let result = NoteService::new(db)
-        .open(&SystemBrowserOpener, web_url, &args.id)
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &OpenArgs) -> Result<(), CliError> {
+    let result: OpenResult = daemon
+        .call(AppRequest::NoteOpen {
+            id: args.id.clone(),
+        })
         .await?;
+    SystemBrowserOpener.open(&result.url)?;
     println!("Opened {}", result.url);
     Ok(())
 }

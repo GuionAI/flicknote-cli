@@ -37,6 +37,12 @@ unsafe_code = "warn"
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]
+# Keep async and control-flow complexity visible across every crate and target.
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+large_futures = "warn"
+future_not_send = "warn"
+
 # Error swallowing prevention
 let_underscore_must_use = "warn"
 let_underscore_untyped = "warn"

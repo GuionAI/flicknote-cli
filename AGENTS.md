@@ -13,10 +13,10 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): CLI commands and local stdio MCP server
+- **flicknote-cli** — CLI package (`flicknote`, `flicknote-sync`): thin CLI/MCP clients and daemon entrypoint; data commands never open SQLite or Postgres
 - **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Background sync daemon library (PowerSync ↔ Supabase)
+- **flicknote-sync** — Daemon application host, typed RPC boundary, backend ownership, and PowerSync ↔ Supabase sync
 
 ### modify vs replace
 
@@ -28,8 +28,8 @@ Rust workspace with 4 crates:
 ```bash
 cargo build                # build all crates
 cargo test                 # run all tests
-cargo clippy               # lint
-cargo fmt --check          # format check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo fmt --all --check    # format check
 ```
 
 Or use the justfile: `just build`, `just test`, `just check`, `just install`
@@ -40,23 +40,16 @@ After changing any `sqlx::query!`, `query_as!`, or `query_scalar!` macro, run
 `just sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
 files.
 
-For pgwire metadata, `just sqlx-prepare` must run against a local Postgres
-schema that already has the matching FlickNote backend migrations applied. If
-prepare reports a missing column or relation, update the local prepare DB from
-the backend migrations first, then rerun prepare. Keep
-`scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected columns.
-
-When the CLI depends on a fresh backend schema change, confirm the local prepare
-database has that backend migration applied before trusting generated metadata.
-For short-id work, this means the local database must include the backend
-`add_user_short_ids` migration before regenerating pgwire metadata.
+`just sqlx-prepare` validates SQLite macros against the local fixture schema.
+Keep `scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected
+columns.
 
 ## Git Hooks (lefthook)
 
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).
 
-- **pre-commit** runs `cargo fmt --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt` then re-commit.
-- **pre-push** runs the SQLx offline check, clippy, and cargo deny. Requires `cargo install cargo-deny`.
+- **pre-commit** runs `cargo fmt --all --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt --all` then re-commit.
+- **pre-push** runs the workspace/all-target/all-feature SQLx offline check, clippy with warnings denied, and cargo deny. Requires `cargo install cargo-deny`.
 
 Manual usage:
 
@@ -73,13 +66,13 @@ lefthook run pre-push    # run pre-push hooks
 - **tokio** — async runtime
 - **reqwest** — HTTP client (auth + PostgREST backend)
 - **serde/serde_json** — serialization
-- **postgres** — sync Postgres client for pgwire backend
-- **sea-query** — SQL query builder (1.0.0-rc.32 + sea-query-postgres 0.6.0-rc.3 for pgwire)
+- **sqlx** — typed local SQLite access pending migration to the shared PowerSync pool
 
 ## Project Conventions
 
 - Rust 2024 edition, resolver 3
 - Guard clauses over deep nesting
+- Workspace Clippy keeps `too_many_lines`, `cognitive_complexity`, `large_futures`, and `future_not_send` enabled; CI denies all warnings across every target and feature
 - `thiserror` for error types
 - Config via XDG dirs (`~/.config/flicknote/`) or env vars
 - Data stored at `~/.local/share/flicknote/`

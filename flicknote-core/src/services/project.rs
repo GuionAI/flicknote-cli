@@ -45,44 +45,27 @@ impl<'a> ProjectService<'a> {
                 input.name
             )));
         }
-        let keyterm_id = match input.keyterm.as_deref() {
-            Some(keyterm) => Some(self.resolve_keyterm_id(keyterm).await?),
-            None => None,
-        };
         let id = self.db.create_project(&input.name).await?;
-        if keyterm_id.is_some() || input.color.is_some() {
+        if input.color.is_some() {
             self.db
-                .update_project(
-                    &id,
-                    keyterm_id.as_deref().map(Some),
-                    input.color.as_deref().map(Some),
-                )
+                .update_project(&id, input.color.as_deref().map(Some))
                 .await?;
         }
         Ok(self.db.find_project(&id).await?.into())
     }
 
     pub async fn modify(&self, input: ProjectModifyInput) -> Result<ProjectDto, ServiceError> {
-        if input.keyterm.is_missing() && input.color.is_missing() {
+        if input.color.is_missing() {
             return Err(ServiceError::NothingToModify);
         }
         let id = self.resolve_project_id(&input.id).await?;
-        let resolved_keyterm = match input.keyterm {
-            Patch::Missing => None,
-            Patch::Null => Some(None),
-            Patch::Value(keyterm) => Some(Some(self.resolve_keyterm_id(&keyterm).await?)),
-        };
         let color = match input.color {
             Patch::Missing => None,
             Patch::Null => Some(None),
             Patch::Value(color) => Some(Some(color)),
         };
         self.db
-            .update_project(
-                &id,
-                resolved_keyterm.as_ref().map(|value| value.as_deref()),
-                color.as_ref().map(|value| value.as_deref()),
-            )
+            .update_project(&id, color.as_ref().map(|value| value.as_deref()))
             .await?;
         Ok(self.db.find_project(&id).await?.into())
     }
@@ -122,16 +105,6 @@ impl<'a> ProjectService<'a> {
                 other => ServiceError::from(other),
             })
     }
-
-    async fn resolve_keyterm_id(&self, input: &str) -> Result<String, ServiceError> {
-        self.db
-            .resolve_keyterm_id(input)
-            .await
-            .map_err(|error| match error {
-                CliError::Other(message) => ServiceError::InvalidArgument(message),
-                other => ServiceError::from(other),
-            })
-    }
 }
 
 impl From<Project> for ProjectDto {
@@ -140,7 +113,6 @@ impl From<Project> for ProjectDto {
             id: project.id,
             name: project.name,
             color: project.color,
-            keyterm_id: project.keyterm_id,
             archived: project.is_archived.unwrap_or(0) != 0,
             created_at: project.created_at,
         }
@@ -149,7 +121,6 @@ impl From<Project> for ProjectDto {
 
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
-    use std::cell::RefCell;
 
     use crate::backend::NoteDb;
     use crate::services::dto::{Patch, ProjectAddInput, ProjectModifyInput};
@@ -162,27 +133,19 @@ mod tests {
     #[tokio::test]
     async fn add_get_modify_and_archive_share_one_typed_contract() {
         let backend = make_backend().await;
-        let keyterm_id = uuid::Uuid::new_v4().to_string();
-        backend
-            .insert_keyterm(&keyterm_id, "Rust", None, None, "2026-08-05T00:00:00Z")
-            .await
-            .unwrap();
         let service = ProjectService::new(&backend);
 
         let created = service
             .add(ProjectAddInput {
                 name: "work".to_string(),
-                keyterm: Some(keyterm_id.clone()),
                 color: Some("#123456".to_string()),
             })
             .await
             .unwrap();
         assert_eq!(created.name, "work");
-        assert_eq!(created.keyterm_id.as_deref(), Some(keyterm_id.as_str()));
         let duplicate = service
             .add(ProjectAddInput {
                 name: "work".to_string(),
-                keyterm: None,
                 color: None,
             })
             .await
@@ -192,12 +155,10 @@ mod tests {
         let modified = service
             .modify(ProjectModifyInput {
                 id: created.id.clone(),
-                keyterm: Patch::Null,
                 color: Patch::Value("#abcdef".to_string()),
             })
             .await
             .unwrap();
-        assert_eq!(modified.keyterm_id, None);
         assert_eq!(modified.color.as_deref(), Some("#abcdef"));
 
         let archived = service.archive(&created.id).await.unwrap();
@@ -207,16 +168,16 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct FakeGateway(RefCell<Vec<(ShareResource, String)>>);
+    struct FakeGateway(std::sync::Mutex<Vec<(ShareResource, String)>>);
 
-    #[async_trait(?Send)]
+    #[async_trait]
     impl ShareGateway for FakeGateway {
         async fn share(
             &self,
             resource: ShareResource,
             id: &str,
         ) -> Result<String, crate::services::error::ServiceError> {
-            self.0.borrow_mut().push((resource, id.to_string()));
+            self.0.lock().unwrap().push((resource, id.to_string()));
             Ok("https://share.example/project".to_string())
         }
 
@@ -225,7 +186,7 @@ mod tests {
             resource: ShareResource,
             id: &str,
         ) -> Result<(), crate::services::error::ServiceError> {
-            self.0.borrow_mut().push((resource, id.to_string()));
+            self.0.lock().unwrap().push((resource, id.to_string()));
             Ok(())
         }
     }
@@ -243,7 +204,7 @@ mod tests {
         );
         assert!(service.unshare(&gateway, &id).await.unwrap().revoked);
         assert_eq!(
-            gateway.0.borrow().as_slice(),
+            gateway.0.lock().unwrap().as_slice(),
             &[
                 (ShareResource::Project, id.clone()),
                 (ShareResource::Project, id)
@@ -252,7 +213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_lookup_and_keyterm_validation_use_domain_error_codes() {
+    async fn project_lookup_uses_domain_error_code() {
         let backend = make_backend().await;
         let service = ProjectService::new(&backend);
 
@@ -261,22 +222,5 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(missing.code(), "project_not_found");
-
-        let invalid_keyterm = service
-            .add(ProjectAddInput {
-                name: "must-not-be-created".to_string(),
-                keyterm: Some("550e8400-e29b-41d4-a716-446655440000".to_string()),
-                color: None,
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(invalid_keyterm.code(), "invalid_argument");
-        assert!(
-            backend
-                .find_project_by_name("must-not-be-created")
-                .await
-                .unwrap()
-                .is_none()
-        );
     }
 }

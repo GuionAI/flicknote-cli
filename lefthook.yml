@@ -2,7 +2,7 @@ pre-commit:
   parallel: true
   commands:
     cargo-fmt:
-      run: cargo fmt --check -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync
+      run: cargo fmt --all --check
     sqlx-metadata:
       run: |
         if git diff --cached -U0 -- ':(glob)**/*.rs' | grep -Eq '^\+.*sqlx::(query!|query_as!|query_scalar!)'; then
@@ -18,8 +18,8 @@ pre-push:
   parallel: true
   commands:
     cargo-sqlx-offline-check:
-      run: SQLX_OFFLINE=true cargo check --all-targets --all-features
+      run: SQLX_OFFLINE=true cargo check --workspace --all-targets --all-features
     cargo-clippy:
-      run: cargo clippy -p flicknote-auth -p flicknote-cli -p flicknote-core -p flicknote-sync --all-targets -- -D warnings
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo-deny:
       run: cargo deny check

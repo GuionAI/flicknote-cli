@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::NoteMutationResult;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree};
 
@@ -17,13 +16,13 @@ pub(crate) struct RenameArgs {
     name: String,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &RenameArgs,
-) -> Result<(), CliError> {
-    let result = NoteService::new(db)
-        .rename_section(&args.id, &args.section, &args.name)
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &RenameArgs) -> Result<(), CliError> {
+    let result: NoteMutationResult = daemon
+        .call(AppRequest::NoteRenameSection {
+            id: args.id.clone(),
+            section: args.section.clone(),
+            name: args.name.clone(),
+        })
         .await?;
     println!(
         "Renamed section {} → '{}' in note {}.\n",

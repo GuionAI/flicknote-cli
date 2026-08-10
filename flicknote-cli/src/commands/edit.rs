@@ -1,13 +1,9 @@
-use super::add::resolve_project;
-use super::add::{AddCreateMode, create_note_with_daemon, daemon_create_request_with_topics};
-use super::util::{
-    display_inserted_note_id, display_note_id, resolve_note_id, resolve_project_arg,
-};
+use super::util::{display_summary_id, resolve_project_arg};
 use clap::Args;
-use flicknote_core::TOPIC_EXTRACTION_KEY;
-use flicknote_core::backend::{InsertNoteReq, NoteDb};
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
+use flicknote_core::services::dto::{NoteDetail, NoteSummary};
+use flicknote_core::services::editable_document::EditableSaveResult;
+use flicknote_sync::ipc::{AppRequest, DaemonClient, EditableDocument};
 use std::io::Write;
 #[derive(Args)]
 pub(crate) struct EditArgs {
@@ -70,10 +66,11 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
     Ok(content.trim_end().to_string())
 }
 /// Edit an existing note.
-async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<(), CliError> {
-    let full_id = resolve_note_id(db, id).await?;
-    let display_content =
-        flicknote_core::services::editable_document::load_editable_note(db, &full_id).await?;
+async fn edit_existing(daemon: &DaemonClient<'_>, id: &str) -> Result<(), CliError> {
+    let display_content = daemon
+        .call::<EditableDocument>(AppRequest::NoteLoadEditable { id: id.to_string() })
+        .await?
+        .document;
     let edited = open_in_editor(&display_content)?;
     if edited == display_content.trim_end() {
         println!("No changes.");
@@ -84,100 +81,64 @@ async fn edit_existing(db: &dyn NoteDb, _config: &Config, id: &str) -> Result<()
             "Edited content is empty — aborting. Use `flicknote delete` to remove a note.".into(),
         ));
     }
-    let result =
-        flicknote_core::services::editable_document::save_editable_note(db, &full_id, &edited)
-            .await?;
+    let result: EditableSaveResult = daemon
+        .call(AppRequest::NoteSaveEditable {
+            id: id.to_string(),
+            document: edited,
+        })
+        .await?;
+    let note: NoteDetail = daemon
+        .call(AppRequest::NoteGet {
+            id: id.to_string(),
+            archived: false,
+        })
+        .await?;
     if result.title_changed {
-        let note = db.find_note(&full_id).await?;
-        println!("Updated title for note {}.", display_note_id(&note));
+        println!("Updated title for note {}.", display_summary_id(&note.note));
     }
     if result.content_changed {
-        let note = db.find_note(&full_id).await?;
-        println!("Updated content for note {}.", display_note_id(&note));
+        println!(
+            "Updated content for note {}.",
+            display_summary_id(&note.note)
+        );
     }
     Ok(())
 }
 /// Create a new note from editor.
 async fn create_from_editor(
-    db: &dyn NoteDb,
-    config: &Config,
+    daemon: &DaemonClient<'_>,
     project_arg: &Option<String>,
-    mode: AddCreateMode,
 ) -> Result<(), CliError> {
     let edited = open_in_editor("")?;
     if edited.is_empty() {
         println!("Empty buffer — no note created.");
         return Ok(());
     }
-    let id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now().to_rfc3339();
-    let parsed = flicknote_core::services::editable_document::parse_editable_note(&edited)?;
     let effective_project = resolve_project_arg(project_arg);
-    let project_id = if let Some(ref name) = effective_project {
-        Some(resolve_project(db, name).await?)
-    } else {
-        None
-    };
-    let inserted = if mode.uses_daemon() {
-        create_note_with_daemon(
-            config,
-            daemon_create_request_with_topics(
-                &InsertNoteReq {
-                    id: &id,
-                    note_type: "normal",
-                    status: "ai_queued",
-                    title: Some(parsed.title.as_str()),
-                    content: flicknote_core::services::editable_document::normal_note_content_ref(
-                        &parsed,
-                    ),
-                    metadata: None,
-                    project_id: project_id.as_deref(),
-                    now: &now,
-                },
-                &parsed.topics,
-            ),
-        )
-        .await?
-    } else {
-        db.insert_note(&InsertNoteReq {
-            id: &id,
-            note_type: "normal",
-            status: "ai_queued",
-            title: Some(parsed.title.as_str()),
-            content: flicknote_core::services::editable_document::normal_note_content_ref(&parsed),
-            metadata: None,
-            project_id: project_id.as_deref(),
-            now: &now,
+    let inserted: NoteSummary = daemon
+        .call(AppRequest::NoteAddEditable {
+            document: edited,
+            project: effective_project.clone(),
         })
-        .await?
-    };
-    if matches!(mode, AddCreateMode::Local) && !parsed.topics.is_empty() {
-        db.set_note_extractions(&id, TOPIC_EXTRACTION_KEY, &parsed.topics)
-            .await?;
-    }
+        .await?;
     match effective_project.as_deref() {
         Some(name) => println!(
             "Created note {} in project \"{name}\".",
-            display_inserted_note_id(&inserted)
+            display_summary_id(&inserted)
         ),
-        None => println!("Created note {}.", display_inserted_note_id(&inserted)),
+        None => println!("Created note {}.", display_summary_id(&inserted)),
     }
     Ok(())
 }
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    config: &Config,
-    args: &EditArgs,
-    mode: AddCreateMode,
-) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &EditArgs) -> Result<(), CliError> {
     if args.id.is_some() && args.project.is_some() {
         return Err(CliError::Other(
             "--project is only valid when creating a new note (omit the ID)".into(),
         ));
     }
     match &args.id {
-        Some(id) => edit_existing(db, config, id).await,
-        None => create_from_editor(db, config, &args.project, mode).await,
+        Some(id) => edit_existing(daemon, id).await,
+        None => create_from_editor(daemon, &args.project).await,
     }
 }
 #[cfg(test)]

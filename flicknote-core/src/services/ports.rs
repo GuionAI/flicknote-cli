@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::backend::{InsertNoteReq, InsertedNote, NoteDb};
+use crate::backend::{InsertNoteReq, InsertedNote};
 
 use super::error::ServiceError;
 
@@ -17,6 +17,7 @@ pub struct CreateNote {
     pub project_id: Option<String>,
     pub now: String,
     pub topics: Vec<String>,
+    pub attachment_path: Option<String>,
 }
 
 impl CreateNote {
@@ -34,26 +35,15 @@ impl CreateNote {
     }
 }
 
-#[async_trait(?Send)]
-pub trait NoteCreator {
-    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError>;
+#[async_trait]
+pub trait NoteCreator: Send + Sync {
+    async fn create(&self, request: CreateNote) -> Result<CreatedNote, ServiceError>;
 }
 
-pub struct DirectNoteCreator<'a> {
-    db: &'a dyn NoteDb,
-}
-
-impl<'a> DirectNoteCreator<'a> {
-    pub fn new(db: &'a dyn NoteDb) -> Self {
-        Self { db }
-    }
-}
-
-#[async_trait(?Send)]
-impl NoteCreator for DirectNoteCreator<'_> {
-    async fn create(&self, request: CreateNote) -> Result<InsertedNote, ServiceError> {
-        Ok(self.db.insert_note(&request.as_insert_request()).await?)
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedNote {
+    pub inserted: InsertedNote,
+    pub confirmed_extraction_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,12 +52,24 @@ pub enum ShareResource {
     Project,
 }
 
-#[async_trait(?Send)]
-pub trait ShareGateway {
+#[async_trait]
+pub trait ShareGateway: Send + Sync {
     async fn share(&self, resource: ShareResource, id: &str) -> Result<String, ServiceError>;
     async fn unshare(&self, resource: ShareResource, id: &str) -> Result<(), ServiceError>;
 }
 
-pub trait BrowserOpener {
+pub trait BrowserOpener: Send + Sync {
     fn open(&self, url: &str) -> Result<(), ServiceError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrowserOpener;
+
+    fn assert_send_sync<T: Send + Sync + ?Sized>() {}
+
+    #[test]
+    fn browser_opener_port_is_send_and_sync() {
+        assert_send_sync::<dyn BrowserOpener>();
+    }
 }

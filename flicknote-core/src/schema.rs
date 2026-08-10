@@ -1,9 +1,21 @@
 use powersync::schema::{Column, Index, IndexedColumn, Schema, Table};
 
 pub fn app_schema() -> Schema {
-    let mut schema = Schema::default();
+    Schema {
+        tables: vec![
+            notes_table(),
+            projects_table(),
+            note_extractions_table(),
+            taskchampion_tasks_table(),
+            taskchampion_operations_table(),
+            settings_table(),
+        ],
+        ..Schema::default()
+    }
+}
 
-    schema.tables.push(Table::create(
+fn notes_table() -> Table {
+    Table::create(
         "notes",
         vec![
             Column::integer("short_id"),
@@ -21,76 +33,26 @@ pub fn app_schema() -> Schema {
             Column::text("updated_at"),
             Column::text("deleted_at"),
         ],
-        |t| {
-            t.indexes = vec![
-                Index {
-                    name: "notes_user_short_id_idx".into(),
-                    columns: vec![
-                        IndexedColumn {
-                            name: "user_id".into(),
-                            ascending: true,
-                            type_name: "TEXT".into(),
-                        },
-                        IndexedColumn {
-                            name: "short_id".into(),
-                            ascending: true,
-                            type_name: "INTEGER".into(),
-                        },
-                    ],
-                },
-                Index {
-                    name: "type".into(),
-                    columns: vec![IndexedColumn {
-                        name: "type".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "project".into(),
-                    columns: vec![IndexedColumn {
-                        name: "project_id".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "status".into(),
-                    columns: vec![IndexedColumn {
-                        name: "status".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "created".into(),
-                    columns: vec![IndexedColumn {
-                        name: "created_at".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "notes_deleted_at_idx".into(),
-                    columns: vec![IndexedColumn {
-                        name: "deleted_at".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "notes_updated_at_idx".into(),
-                    columns: vec![IndexedColumn {
-                        name: "updated_at".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
+        |table| {
+            table.options.track_metadata = true;
+            table.indexes = vec![
+                compound_index(
+                    "notes_user_short_id_idx",
+                    &[("user_id", "TEXT"), ("short_id", "INTEGER")],
+                ),
+                index("type", "type", "TEXT"),
+                index("project", "project_id", "TEXT"),
+                index("status", "status", "TEXT"),
+                index("created", "created_at", "TEXT"),
+                index("notes_deleted_at_idx", "deleted_at", "TEXT"),
+                index("notes_updated_at_idx", "updated_at", "TEXT"),
             ];
         },
-    ));
+    )
+}
 
-    schema.tables.push(Table::create(
+fn projects_table() -> Table {
+    Table::create(
         "projects",
         vec![
             Column::text("user_id"),
@@ -98,34 +60,13 @@ pub fn app_schema() -> Schema {
             Column::text("color"),
             Column::integer("is_archived"),
             Column::text("created_at"),
-            Column::text("keyterm_id"),
         ],
         |_| {},
-    ));
+    )
+}
 
-    schema.tables.push(Table::create(
-        "keyterms",
-        vec![
-            Column::text("user_id"),
-            Column::text("name"),
-            Column::text("description"),
-            Column::text("content"),
-            Column::text("created_at"),
-            Column::text("updated_at"),
-        ],
-        |t| {
-            t.indexes = vec![Index {
-                name: "keyterms_user".into(),
-                columns: vec![IndexedColumn {
-                    name: "user_id".into(),
-                    ascending: true,
-                    type_name: "TEXT".into(),
-                }],
-            }];
-        },
-    ));
-
-    schema.tables.push(Table::create(
+fn note_extractions_table() -> Table {
+    Table::create(
         "note_extractions",
         vec![
             Column::text("note_id"),
@@ -133,29 +74,18 @@ pub fn app_schema() -> Schema {
             Column::text("key"),
             Column::text("value"),
         ],
-        |t| {
-            t.indexes = vec![
-                Index {
-                    name: "note_extractions_note_id_idx".into(),
-                    columns: vec![IndexedColumn {
-                        name: "note_id".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "note_extractions_key_idx".into(),
-                    columns: vec![IndexedColumn {
-                        name: "key".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
+        |table| {
+            table.options.track_metadata = true;
+            table.indexes = vec![
+                index("note_extractions_note_id_idx", "note_id", "TEXT"),
+                index("note_extractions_key_idx", "key", "TEXT"),
             ];
         },
-    ));
+    )
+}
 
-    schema.tables.push(Table::create(
+fn taskchampion_tasks_table() -> Table {
+    Table::create(
         "tc_tasks",
         vec![
             Column::integer("short_id"),
@@ -175,56 +105,35 @@ pub fn app_schema() -> Schema {
             Column::text("note_id"),
             Column::text("project_id"),
         ],
-        |t| {
-            t.indexes = vec![
-                Index {
-                    name: "tc_tasks_user_short_id_idx".into(),
-                    columns: vec![
-                        IndexedColumn {
-                            name: "user_id".into(),
-                            ascending: true,
-                            type_name: "TEXT".into(),
-                        },
-                        IndexedColumn {
-                            name: "short_id".into(),
-                            ascending: true,
-                            type_name: "INTEGER".into(),
-                        },
-                    ],
-                },
-                Index {
-                    name: "tc_tasks_status".into(),
-                    columns: vec![IndexedColumn {
-                        name: "status".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
-                Index {
-                    name: "tc_tasks_parent".into(),
-                    columns: vec![IndexedColumn {
-                        name: "parent_id".into(),
-                        ascending: true,
-                        type_name: "TEXT".into(),
-                    }],
-                },
+        |table| {
+            table.indexes = vec![
+                compound_index(
+                    "tc_tasks_user_short_id_idx",
+                    &[("user_id", "TEXT"), ("short_id", "INTEGER")],
+                ),
+                index("tc_tasks_status", "status", "TEXT"),
+                index("tc_tasks_parent", "parent_id", "TEXT"),
             ];
         },
-    ));
+    )
+}
 
-    schema.tables.push(Table::create(
+fn taskchampion_operations_table() -> Table {
+    Table::create(
         "tc_operations",
         vec![
             Column::text("user_id"),
             Column::text("data"),
             Column::text("created_at"),
         ],
-        |t| {
-            t.options.local_only = true;
+        |table| {
+            table.options.local_only = true;
         },
-    ));
+    )
+}
 
-    schema.tables.push(Table::create(
+fn settings_table() -> Table {
+    Table::create(
         "settings",
         vec![
             Column::text("language"),
@@ -235,7 +144,42 @@ pub fn app_schema() -> Schema {
             Column::text("tc_config"),
         ],
         |_| {},
-    ));
+    )
+}
 
-    schema
+fn index(name: &str, column: &str, type_name: &str) -> Index {
+    compound_index(name, &[(column, type_name)])
+}
+
+fn compound_index(name: &str, columns: &[(&str, &str)]) -> Index {
+    Index {
+        name: name.to_string().into(),
+        columns: columns
+            .iter()
+            .map(|(name, type_name)| IndexedColumn {
+                name: (*name).to_string().into(),
+                ascending: true,
+                type_name: (*type_name).to_string().into(),
+            })
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_committed_tables_track_crud_metadata() {
+        let schema = app_schema();
+
+        for name in ["notes", "note_extractions"] {
+            let table = schema
+                .tables
+                .iter()
+                .find(|table| table.name == name)
+                .unwrap_or_else(|| panic!("missing {name} table"));
+            assert!(table.options.track_metadata, "{name} must track metadata");
+        }
+    }
 }

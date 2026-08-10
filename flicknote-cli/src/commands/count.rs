@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::{NoteCountInput, NoteService};
+use flicknote_core::services::dto::NoteCountInput;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::resolve_project_arg;
 
@@ -21,19 +20,19 @@ pub(crate) struct CountArgs {
     keywords: Vec<String>,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &CountArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CountArgs) -> Result<(), CliError> {
     let project = resolve_project_arg(&args.project);
-    let count = match NoteService::new(db)
-        .count(NoteCountInput {
+    let count: u64 = match daemon
+        .call(AppRequest::NoteCount(NoteCountInput {
             keywords: args.keywords.clone(),
             project: project.clone(),
             note_type: args.r#type.clone(),
             archived: args.archived,
-        })
+        }))
         .await
     {
         Ok(count) => count,
-        Err(ServiceError::ProjectNotFound(_)) => {
+        Err(error) if error.code() == "project_not_found" => {
             eprintln!(
                 "Warning: no project found with name \"{}\".",
                 project.as_deref().unwrap_or_default()

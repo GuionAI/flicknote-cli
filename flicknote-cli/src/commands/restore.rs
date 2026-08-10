@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
-use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::note::NoteService;
+use flicknote_core::services::dto::NoteArchiveResult;
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
 pub(crate) struct RestoreArgs {
@@ -10,12 +9,12 @@ pub(crate) struct RestoreArgs {
     id: String,
 }
 
-pub(crate) async fn run(
-    db: &dyn NoteDb,
-    _config: &Config,
-    args: &RestoreArgs,
-) -> Result<(), CliError> {
-    let result = NoteService::new(db).restore(&args.id).await?;
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &RestoreArgs) -> Result<(), CliError> {
+    let result: NoteArchiveResult = daemon
+        .call(AppRequest::NoteRestore {
+            id: args.id.clone(),
+        })
+        .await?;
     let display_id = result
         .short_id
         .map(|id| id.to_string())

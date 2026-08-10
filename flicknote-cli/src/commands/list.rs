@@ -1,8 +1,7 @@
 use clap::Args;
-use flicknote_core::backend::NoteDb;
 use flicknote_core::error::CliError;
-use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::{NoteListInput, NoteService};
+use flicknote_core::services::dto::{NoteListInput, NoteSummary};
+use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
 
@@ -28,24 +27,24 @@ pub(crate) struct ListArgs {
     json: bool,
 }
 
-pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
     let project = resolve_project_arg(&args.project);
     if args.project.is_none()
         && let Some(name) = project.as_deref()
     {
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
-    let notes = match NoteService::new(db)
-        .list(NoteListInput {
+    let notes: Vec<NoteSummary> = match daemon
+        .call(AppRequest::NoteList(NoteListInput {
             note_type: args.r#type.clone(),
             project: project.clone(),
             archived: args.archived,
             limit: args.limit,
-        })
+        }))
         .await
     {
         Ok(notes) => notes,
-        Err(ServiceError::ProjectNotFound(_)) => {
+        Err(error) if error.code() == "project_not_found" => {
             eprintln!(
                 "Warning: no project found with name \"{}\".",
                 project.as_deref().unwrap_or_default()
@@ -55,7 +54,7 @@ pub(crate) async fn run(db: &dyn NoteDb, args: &ListArgs) -> Result<(), CliError
         Err(error) => return Err(error.into()),
     };
     if args.json {
-        let values = note_summaries_json(db, &notes, args.archived).await?;
+        let values = note_summaries_json(daemon, &notes, args.archived).await?;
         println!(
             "{}",
             serde_json::to_string_pretty(&values).map_err(CliError::Json)?
