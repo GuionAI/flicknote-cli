@@ -1693,7 +1693,7 @@ checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 [[package]]
 name = "powersync"
 version = "0.0.7"
-source = "git+https://github.com/GuionAI/powersync-native?rev=133f7eabacfbd49b3240f8313807105eab0ef315#133f7eabacfbd49b3240f8313807105eab0ef315"
+source = "git+https://github.com/GuionAI/powersync-native?tag=v0.0.7-guion.1#34acf8d013ca4750f2be23a1b306ee401cd7d438"
 dependencies = [
  "async-channel",
  "async-lock",
