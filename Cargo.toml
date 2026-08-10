@@ -21,7 +21,7 @@ pre-release-commit-message = "chore: release {{version}}"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time"] }
-powersync = { git = "https://github.com/GuionAI/powersync-native", rev = "133f7eabacfbd49b3240f8313807105eab0ef315", features = ["tokio", "reqwest"] }
+powersync = { git = "https://github.com/GuionAI/powersync-native", tag = "v0.0.7-guion.1", features = ["tokio", "reqwest"] }
 base64 = "0.22"
 rusqlite = { version = "0.39", features = ["load_extension", "bundled"] }
 async-trait = "0.1"
