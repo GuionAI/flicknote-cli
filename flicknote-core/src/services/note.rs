@@ -636,7 +636,7 @@ mod tests {
     async fn append_separates_content_and_does_not_requeue() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "existing", "synced").await;
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let result = service.append(&id, "added").await.unwrap();
 
@@ -662,7 +662,7 @@ mod tests {
         .headings[0]
             .id
             .clone();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let result = service
             .replace_section(&id, &section, "# Replacement\nnew")
@@ -682,7 +682,7 @@ mod tests {
     async fn modify_rejects_ambiguous_before_without_writing() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "same\n\nsame", "synced").await;
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let error = service
             .modify(NoteModifyInput {
@@ -706,7 +706,7 @@ mod tests {
     async fn archive_and_restore_target_the_explicit_note() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "body", "synced").await;
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let archived = service.archive(&id).await.unwrap();
         assert!(archived.archived);
@@ -726,7 +726,7 @@ mod tests {
             .move_note_to_project(&id, &project_id, None)
             .await
             .unwrap();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let notes = service
             .list(NoteListInput {
@@ -747,7 +747,7 @@ mod tests {
     async fn get_returns_editable_content_and_section_tree() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "## Part\nBody", "synced").await;
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let detail = service.get(&id, false).await.unwrap();
 
@@ -764,7 +764,7 @@ mod tests {
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let renamed = service
             .rename_section(&id, &section, "Renamed")
@@ -786,7 +786,7 @@ mod tests {
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         service
             .insert(&id, &section, InsertPosition::After, "## New\nnew")
@@ -808,7 +808,7 @@ mod tests {
             .set_note_extractions(&id, "::topic", &["Rust".to_string()])
             .await
             .unwrap();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let found = service
             .find(NoteFindInput {
@@ -845,7 +845,7 @@ mod tests {
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let result = service.get_section(&id, &section).await.unwrap();
 
@@ -858,7 +858,7 @@ mod tests {
     async fn get_section_accepts_an_id_returned_by_get_when_title_matches_heading() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "# Test note\nBody", "synced").await;
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
         let detail = service.get(&id, false).await.unwrap();
         let section_id = detail.sections[0].id.clone();
 
@@ -910,7 +910,7 @@ mod tests {
     #[tokio::test]
     async fn add_reports_structured_partial_when_summary_read_fails_after_create() {
         let backend = make_backend().await;
-        let error = NoteService::new(&backend)
+        let error = NoteService::new(&*backend)
             .add(
                 &DetachedCreator,
                 NoteAddInput {
@@ -943,10 +943,10 @@ mod tests {
     async fn add_normalizes_h1_before_calling_creator() {
         let backend = make_backend().await;
         let creator = DbCreator {
-            db: &backend,
+            db: &*backend,
             request: std::sync::Mutex::new(None),
         };
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let created = service
             .add(
@@ -974,11 +974,11 @@ mod tests {
     async fn add_only_treats_a_pure_http_value_as_a_link() {
         let backend = make_backend().await;
         let creator = DbCreator {
-            db: &backend,
+            db: &*backend,
             request: std::sync::Mutex::new(None),
         };
 
-        NoteService::new(&backend)
+        NoteService::new(&*backend)
             .add(
                 &creator,
                 NoteAddInput {
@@ -1013,7 +1013,7 @@ mod tests {
             )
             .unwrap();
         drop(writer);
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
         service.archive(&id).await.unwrap();
 
         let result = service
@@ -1079,7 +1079,7 @@ mod tests {
             .unwrap();
         drop(writer);
         let side_effects = FakeSideEffects::default();
-        let service = NoteService::new(&backend);
+        let service = NoteService::new(&*backend);
 
         let shared = service.share(&side_effects, &id).await.unwrap();
         assert_eq!(shared.url, format!("https://share.example/{id}"));

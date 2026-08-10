@@ -39,7 +39,7 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes = {
-              "powersync-0.0.7" = "sha256-HLnbt1qo7C7a0fCELefloSLSXFRg+cOMeWT8suRs4u4=";
+              "powersync-0.0.7" = "sha256-Ndeu/7054EsfgVHQwu0W7CjbjT1q/e15qX2V3A0XihA=";
             };
           };
 

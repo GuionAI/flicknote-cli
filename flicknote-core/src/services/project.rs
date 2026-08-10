@@ -133,7 +133,7 @@ mod tests {
     #[tokio::test]
     async fn add_get_modify_and_archive_share_one_typed_contract() {
         let backend = make_backend().await;
-        let service = ProjectService::new(&backend);
+        let service = ProjectService::new(&*backend);
 
         let created = service
             .add(ProjectAddInput {
@@ -196,7 +196,7 @@ mod tests {
         let backend = make_backend().await;
         let id = backend.create_project("work").await.unwrap();
         let gateway = FakeGateway::default();
-        let service = ProjectService::new(&backend);
+        let service = ProjectService::new(&*backend);
 
         assert_eq!(
             service.share(&gateway, &id).await.unwrap().url,
@@ -215,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn project_lookup_uses_domain_error_code() {
         let backend = make_backend().await;
-        let service = ProjectService::new(&backend);
+        let service = ProjectService::new(&*backend);
 
         let missing = service
             .get("550e8400-e29b-41d4-a716-446655440000")

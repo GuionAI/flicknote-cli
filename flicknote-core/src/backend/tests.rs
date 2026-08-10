@@ -1,6 +1,21 @@
 use super::*;
 use crate::TOPIC_EXTRACTION_KEY;
 use rusqlite::params;
+use std::ops::Deref;
+
+struct BackendFixture {
+    backend: LocalPowerSyncBackend,
+    _database: powersync::PowerSyncDatabase,
+    _directory: tempfile::TempDir,
+}
+
+impl Deref for BackendFixture {
+    type Target = LocalPowerSyncBackend;
+
+    fn deref(&self) -> &Self::Target {
+        &self.backend
+    }
+}
 
 async fn make_powersync_backend() -> (
     tempfile::TempDir,
@@ -113,10 +128,13 @@ async fn replacing_extractions_rolls_back_on_insert_failure() {
     );
 }
 
-async fn make_backend() -> LocalPowerSyncBackend {
-    let (directory, _db, backend) = make_powersync_backend().await;
-    std::mem::forget(directory);
-    backend
+async fn make_backend() -> BackendFixture {
+    let (directory, database, backend) = make_powersync_backend().await;
+    BackendFixture {
+        backend,
+        _database: database,
+        _directory: directory,
+    }
 }
 
 #[tokio::test]

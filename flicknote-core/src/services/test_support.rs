@@ -1,6 +1,21 @@
 use crate::backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb};
+use std::ops::Deref;
 
-pub(crate) async fn make_backend() -> LocalPowerSyncBackend {
+pub(crate) struct BackendFixture {
+    backend: LocalPowerSyncBackend,
+    _database: powersync::PowerSyncDatabase,
+    _directory: tempfile::TempDir,
+}
+
+impl Deref for BackendFixture {
+    type Target = LocalPowerSyncBackend;
+
+    fn deref(&self) -> &Self::Target {
+        &self.backend
+    }
+}
+
+pub(crate) async fn make_backend() -> BackendFixture {
     struct NoHttp;
 
     #[async_trait::async_trait]
@@ -22,8 +37,12 @@ pub(crate) async fn make_backend() -> LocalPowerSyncBackend {
         PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
     let db = PowerSyncDatabase::new(environment, crate::schema::app_schema());
     db.writer().await.unwrap();
-    std::mem::forget(directory);
-    LocalPowerSyncBackend::new(db, "test-user-id".to_string())
+    let backend = LocalPowerSyncBackend::new(db.clone(), "test-user-id".to_string());
+    BackendFixture {
+        backend,
+        _database: db,
+        _directory: directory,
+    }
 }
 
 pub(crate) async fn insert_normal_note(
