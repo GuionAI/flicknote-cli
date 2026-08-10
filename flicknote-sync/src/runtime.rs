@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::{
-    backend::{NoteDb, SqliteBackend},
+    backend::{LocalPowerSyncBackend, NoteDb},
     config::Config,
-    db::Database,
     schema::app_schema,
     services::ports::{NoteCreator, ShareGateway},
 };
@@ -108,7 +107,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let connector = build_connector(&db, &auth, &upload_guard, &config);
 
     startup_checkpoint(config.paths.db_file.clone()).await;
-    let backend = open_local_backend(&config).await?;
+    let backend = open_local_backend(&db, &config)?;
 
     log::info!("Sync daemon connecting (pid {})", std::process::id());
     let (trigger_tx, trigger_rx) = mpsc::channel::<()>(16);
@@ -169,14 +168,12 @@ async fn startup_checkpoint(db_path: PathBuf) {
     }
 }
 
-async fn open_local_backend(
+fn open_local_backend(
+    db: &PowerSyncDatabase,
     config: &Config,
 ) -> Result<Arc<dyn NoteDb>, Box<dyn std::error::Error>> {
     let user_id = flicknote_core::session::get_user_id(config)?;
-    Ok(Arc::new(SqliteBackend {
-        db: Database::open_local(config).await?,
-        user_id,
-    }))
+    Ok(Arc::new(LocalPowerSyncBackend::new(db.clone(), user_id)))
 }
 
 fn upload_worker(

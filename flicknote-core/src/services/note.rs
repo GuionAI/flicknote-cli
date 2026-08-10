@@ -1005,12 +1005,14 @@ mod tests {
     async fn source_reads_archived_notes_through_the_shared_parser() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "body", "synced").await;
-        sqlx::query("UPDATE notes SET source = ? WHERE id = ?")
-            .bind(r#"{"link":{"content":"one\ntwo"}}"#)
-            .bind(&id)
-            .execute(&backend.db.pool)
-            .await
+        let writer = backend.database().writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET source = ? WHERE id = ?",
+                rusqlite::params![r#"{"link":{"content":"one\ntwo"}}"#, id],
+            )
             .unwrap();
+        drop(writer);
         let service = NoteService::new(&backend);
         service.archive(&id).await.unwrap();
 
@@ -1068,11 +1070,14 @@ mod tests {
     async fn share_and_open_resolve_note_identity_before_side_effects() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "body", "synced").await;
-        sqlx::query("UPDATE notes SET short_id = 42 WHERE id = ?")
-            .bind(&id)
-            .execute(&backend.db.pool)
-            .await
+        let writer = backend.database().writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET short_id = ? WHERE id = ?",
+                rusqlite::params![42, id],
+            )
             .unwrap();
+        drop(writer);
         let side_effects = FakeSideEffects::default();
         let service = NoteService::new(&backend);
 

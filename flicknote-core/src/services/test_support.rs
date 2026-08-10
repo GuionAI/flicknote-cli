@@ -1,34 +1,33 @@
-use crate::backend::{InsertNoteReq, NoteDb, SqliteBackend};
-use crate::config::{Config, ConfigPaths};
-use crate::db::Database;
+use crate::backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb};
 
-pub(crate) async fn make_backend() -> SqliteBackend {
-    let directory = tempfile::tempdir().unwrap();
-    let config = Config {
-        supabase_url: String::new(),
-        supabase_anon_key: String::new(),
-        powersync_url: String::new(),
-        api_url: String::new(),
-        web_url: None,
-        paths: ConfigPaths {
-            config_dir: directory.path().to_path_buf(),
-            data_dir: directory.path().to_path_buf(),
-            config_file: directory.path().join("config.json"),
-            session_file: directory.path().join("session.json"),
-            db_file: directory.path().join("test.db"),
-            log_file: directory.path().join("test.log"),
-        },
-    };
-    let db = Database::open_local(&config).await.unwrap();
-    std::mem::forget(directory);
-    SqliteBackend {
-        db,
-        user_id: "test-user-id".to_string(),
+pub(crate) async fn make_backend() -> LocalPowerSyncBackend {
+    struct NoHttp;
+
+    #[async_trait::async_trait]
+    impl powersync::http::HttpClient for NoHttp {
+        async fn send(
+            &self,
+            _request: powersync::http::Request,
+        ) -> Result<powersync::http::Response, powersync::error::PowerSyncError> {
+            panic!("local service tests must not make HTTP requests")
+        }
     }
+
+    use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
+
+    PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let pool = ConnectionPool::open(directory.path().join("test.db")).unwrap();
+    let environment =
+        PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
+    let db = PowerSyncDatabase::new(environment, crate::schema::app_schema());
+    db.writer().await.unwrap();
+    std::mem::forget(directory);
+    LocalPowerSyncBackend::new(db, "test-user-id".to_string())
 }
 
 pub(crate) async fn insert_normal_note(
-    backend: &SqliteBackend,
+    backend: &LocalPowerSyncBackend,
     content: &str,
     status: &str,
 ) -> String {

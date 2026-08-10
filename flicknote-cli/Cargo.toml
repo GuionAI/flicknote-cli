@@ -42,6 +42,8 @@ httpdate = "1.0.3"
 
 [dev-dependencies]
 async-trait = { workspace = true }
+powersync = { workspace = true }
+rusqlite = { workspace = true }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 uuid = { workspace = true }
 

@@ -5,9 +5,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
+use flicknote_core::backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
-use flicknote_core::db::Database;
+use flicknote_core::schema::app_schema;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
@@ -17,6 +17,7 @@ use flicknote_sync::ipc::{
     AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo, read_request, serve_app,
     socket_path, write_response,
 };
+use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 
 struct UnusedCreator;
 
@@ -58,6 +59,26 @@ fn test_config(config_root: &std::path::Path, data_root: &std::path::Path) -> Co
             data_dir,
         },
     }
+}
+
+fn test_database(config: &Config) -> PowerSyncDatabase {
+    struct NoHttp;
+
+    #[async_trait]
+    impl powersync::http::HttpClient for NoHttp {
+        async fn send(
+            &self,
+            _request: powersync::http::Request,
+        ) -> Result<powersync::http::Response, powersync::error::PowerSyncError> {
+            panic!("CLI integration tests must not make PowerSync HTTP requests")
+        }
+    }
+
+    PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    let pool = ConnectionPool::open(&config.paths.db_file).unwrap();
+    let environment =
+        PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
+    PowerSyncDatabase::new(environment, app_schema())
 }
 
 struct DaemonGuard {
@@ -161,10 +182,10 @@ fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path)
             .build()
             .unwrap()
             .block_on(async move {
-                let backend = std::sync::Arc::new(SqliteBackend {
-                    db: Database::open_local(&config).await.unwrap(),
-                    user_id: "test-user".to_string(),
-                });
+                let backend = std::sync::Arc::new(LocalPowerSyncBackend::new(
+                    test_database(&config),
+                    "test-user".to_string(),
+                ));
                 let app = std::sync::Arc::new(Application::new(
                     backend,
                     std::sync::Arc::new(UnusedCreator),
@@ -215,11 +236,7 @@ async fn seed_workspace(
     write_session(config_root);
     let config = test_config(config_root, data_root);
     std::fs::create_dir_all(&config.paths.data_dir).unwrap();
-    let database = Database::open_local(&config).await.unwrap();
-    let backend = SqliteBackend {
-        db: database,
-        user_id: "test-user".to_string(),
-    };
+    let backend = LocalPowerSyncBackend::new(test_database(&config), "test-user".to_string());
     let project_id = backend.create_project("Legacy project").await.unwrap();
     let note_id = uuid::Uuid::new_v4().to_string();
     backend
