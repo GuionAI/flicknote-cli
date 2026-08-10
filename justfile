@@ -28,10 +28,6 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Refresh SQLx offline metadata.
-sqlx-prepare:
-    ./scripts/sqlx-prepare.sh
-
 # Install the Rust CLI and sync daemon.
 install: install-rust
 

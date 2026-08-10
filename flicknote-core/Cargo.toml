@@ -12,13 +12,13 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 powersync = { workspace = true, optional = true }
+rusqlite = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }
 dirs = { workspace = true }
 chrono = "0.4"
 uuid = { workspace = true }
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite", "uuid", "chrono", "json", "macros"] }
 pulldown-cmark = { version = "0.13.1", default-features = false }
 sha2 = "0.10"
 yaml_serde = "0.10"

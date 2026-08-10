@@ -1,7 +1,5 @@
 pub mod backend;
 pub mod config;
-#[cfg(feature = "powersync")]
-pub mod db;
 pub mod error;
 #[cfg(feature = "powersync")]
 pub mod schema;

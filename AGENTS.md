@@ -34,22 +34,12 @@ cargo fmt --all --check    # format check
 
 Or use the justfile: `just build`, `just test`, `just check`, `just install`
 
-### SQLx metadata
-
-After changing any `sqlx::query!`, `query_as!`, or `query_scalar!` macro, run
-`just sqlx-prepare` and commit the `.sqlx` changes. Do not hand-edit `.sqlx`
-files.
-
-`just sqlx-prepare` validates SQLite macros against the local fixture schema.
-Keep `scripts/sqlx-sqlite-schema.sql` in sync with SQLite macro-selected
-columns.
-
 ## Git Hooks (lefthook)
 
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).
 
 - **pre-commit** runs `cargo fmt --all --check` — validates formatting (does NOT auto-fix). If it fails, run `cargo fmt --all` then re-commit.
-- **pre-push** runs the workspace/all-target/all-feature SQLx offline check, clippy with warnings denied, and cargo deny. Requires `cargo install cargo-deny`.
+- **pre-push** runs the workspace/all-target/all-feature check, clippy with warnings denied, and cargo deny. Requires `cargo install cargo-deny`.
 
 Manual usage:
 
@@ -60,13 +50,12 @@ lefthook run pre-push    # run pre-push hooks
 
 ## Key Dependencies
 
-- **powersync** — local path dependency (SQLite sync engine)
+- **powersync** — Guion fork of the SQLite sync engine
 - **rusqlite** — SQLite with bundled + load_extension
 - **clap** — CLI framework (derive macros)
 - **tokio** — async runtime
 - **reqwest** — HTTP client (auth + PostgREST backend)
 - **serde/serde_json** — serialization
-- **sqlx** — typed local SQLite access pending migration to the shared PowerSync pool
 
 ## Project Conventions
 

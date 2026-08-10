@@ -11,8 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      SQLX_OFFLINE: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -39,8 +37,6 @@ jobs:
 
   lint:
     runs-on: ubuntu-latest
-    env:
-      SQLX_OFFLINE: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

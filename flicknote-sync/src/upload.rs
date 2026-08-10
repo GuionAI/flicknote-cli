@@ -1,19 +1,15 @@
-use std::future::Future;
-use std::path::Path;
 use std::sync::Arc;
 
 use flicknote_auth::client::GoTrueClient;
 use futures_lite::StreamExt;
 use powersync::{CrudEntry, PowerSyncDatabase, UpdateType, error::PowerSyncError};
 
-use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone};
-
 #[cfg(test)]
 mod tests;
 
 /// Helper to convert arbitrary errors into PowerSyncError.
 pub(crate) fn ps_err(msg: impl std::fmt::Display) -> PowerSyncError {
-    std::io::Error::other(msg.to_string()).into()
+    PowerSyncError::upload_error(std::io::Error::other(msg.to_string()))
 }
 
 /// Postgres/PostgREST error codes that will never succeed on retry.
@@ -89,7 +85,6 @@ async fn classify_response(
 pub(crate) struct FlickNoteConnector {
     pub(crate) db: PowerSyncDatabase,
     pub(crate) auth: Arc<GoTrueClient>,
-    pub(crate) upload_guard: Arc<tokio::sync::Mutex<()>>,
     pub(crate) http_client: reqwest::Client,
     pub(crate) powersync_url: String,
     pub(crate) supabase_url: String,
@@ -235,13 +230,6 @@ async fn upload_crud(
     Ok(classify_response(response, operation, &table, &id).await)
 }
 
-/// Inner upload logic shared by the BackendConnector and application-triggered drain.
-/// Caller is responsible for holding `upload_guard` before calling.
-///
-/// Returns `true` if at least one CRUD transaction was processed and committed,
-/// `false` if ps_crud was empty. Callers may use this to decide whether to
-/// run a WAL checkpoint after upload.
-///
 /// The token is fetched once per call by the caller. Supabase tokens are typically
 /// valid for 1 hour, so any realistic upload batch completes well within the window.
 pub(crate) async fn run_upload(
@@ -250,9 +238,8 @@ pub(crate) async fn run_upload(
     token: &str,
     supabase_url: &str,
     supabase_anon_key: &str,
-) -> Result<bool, PowerSyncError> {
+) -> Result<(), PowerSyncError> {
     let mut transactions = db.crud_transactions();
-    let mut did_upload = false;
 
     while let Some(mut tx) = transactions.try_next().await? {
         let mut fatal_msg: Option<String> = None;
@@ -283,7 +270,6 @@ pub(crate) async fn run_upload(
                     "Failed to discard fatal transaction (original: {msg}): {e}"
                 ))
             })?; // discard entire transaction atomically
-            did_upload = true;
             continue; // next transaction
         }
         if let Some(msg) = transient_msg {
@@ -296,104 +282,7 @@ pub(crate) async fn run_upload(
         // prior entries on the next cycle, causing phantom DELETEs (404) and
         // duplicate PUTs.
         tx.complete().await?;
-        did_upload = true;
     }
 
-    Ok(did_upload)
-}
-
-/// Acquire the upload guard, get a fresh token, run_upload, and checkpoint.
-/// Shared by the startup drain and application-triggered drain.
-/// `context` is used as a log prefix (e.g. "Startup upload", "Upload").
-///
-/// A PASSIVE checkpoint is run after a successful upload to reclaim WAL space
-/// freed by crud deletions. PASSIVE never acquires PENDING/EXCLUSIVE locks so it
-/// is safe to call alongside active pool connections and the download actor.
-///
-/// The checkpoint call uses `spawn_blocking` since `checkpoint_wal_standalone`
-/// does blocking I/O (rusqlite open).
-#[allow(clippy::too_many_arguments)]
-async fn try_upload_and_checkpoint(
-    db: &PowerSyncDatabase,
-    client: &reqwest::Client,
-    auth: &GoTrueClient,
-    guard: &tokio::sync::Mutex<()>,
-    supabase_url: &str,
-    supabase_anon_key: &str,
-    context: &str,
-    db_path: &Path,
-) -> bool {
-    let _guard = guard.lock().await;
-
-    let token = match auth.get_session().await {
-        Ok(s) => s.access_token,
-        Err(e) => {
-            log::warn!("{context}: auth error: {e}");
-            return false;
-        }
-    };
-    match run_upload(db, client, &token, supabase_url, supabase_anon_key).await {
-        Ok(_) => {
-            // Post-upload PASSIVE checkpoint: reclaim crud deletion frames without
-            // acquiring any locks that could contend with active pool connections.
-            let post_path = db_path.to_path_buf();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                checkpoint_wal_standalone(&post_path, "post-upload", WalCheckpointMode::Passive)
-            })
-            .await
-            {
-                log::error!("Post-upload WAL checkpoint task panicked: {e}");
-            }
-            true
-        }
-        Err(e) => {
-            log::warn!("{context}: upload failed: {e}");
-            false
-        }
-    }
-}
-
-async fn retry_with_backoff<F, Fut>(
-    mut attempt: F,
-    initial_delay: std::time::Duration,
-    maximum_delay: std::time::Duration,
-) where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = bool>,
-{
-    let mut delay = initial_delay;
-    while !attempt().await {
-        tokio::time::sleep(delay).await;
-        delay = delay.saturating_mul(2).min(maximum_delay);
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn retry_upload_until_success(
-    db: &PowerSyncDatabase,
-    client: &reqwest::Client,
-    auth: &GoTrueClient,
-    guard: &tokio::sync::Mutex<()>,
-    supabase_url: &str,
-    supabase_anon_key: &str,
-    context: &str,
-    db_path: &Path,
-) {
-    retry_with_backoff(
-        || {
-            try_upload_and_checkpoint(
-                db,
-                client,
-                auth,
-                guard,
-                supabase_url,
-                supabase_anon_key,
-                context,
-                db_path,
-            )
-        },
-        std::time::Duration::from_secs(1),
-        std::time::Duration::from_secs(30),
-    )
-    .await;
+    Ok(())
 }

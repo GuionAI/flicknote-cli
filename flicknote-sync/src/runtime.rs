@@ -3,20 +3,19 @@ use std::sync::Arc;
 
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::{
-    backend::{NoteDb, SqliteBackend},
+    backend::{LocalPowerSyncBackend, NoteDb},
     config::Config,
-    db::Database,
     schema::app_schema,
     services::ports::{NoteCreator, ShareGateway},
 };
 use powersync::{ConnectionPool, PowerSyncDatabase, SyncOptions, env::PowerSyncEnvironment};
-use tokio::{net::UnixListener, sync::mpsc};
+use tokio::net::UnixListener;
 
 use crate::app::Application;
 use crate::ipc;
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
 use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone};
-use crate::upload::{FlickNoteConnector, retry_upload_until_success};
+use crate::upload::FlickNoteConnector;
 
 fn pid_path(config: &Config) -> PathBuf {
     PathBuf::from(&config.paths.data_dir).join("sync.pid")
@@ -87,7 +86,6 @@ fn check_and_write_pid(path: &Path) -> Result<PidGuard, Box<dyn std::error::Erro
 }
 
 struct ActorHandles {
-    upload: tokio::task::JoinHandle<()>,
     checkpoint: tokio::task::JoinHandle<()>,
     socket: tokio::task::JoinHandle<()>,
 }
@@ -104,22 +102,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         &config.supabase_anon_key,
         &config.paths.session_file,
     ));
-    let upload_guard = Arc::new(tokio::sync::Mutex::new(()));
-    let connector = build_connector(&db, &auth, &upload_guard, &config);
+    let connector = build_connector(&db, &auth, &config);
 
     startup_checkpoint(config.paths.db_file.clone()).await;
-    let backend = open_local_backend(&config).await?;
+    let backend = open_local_backend(&db, &config)?;
 
     log::info!("Sync daemon connecting (pid {})", std::process::id());
-    let (trigger_tx, trigger_rx) = mpsc::channel::<()>(16);
-    let upload_worker = upload_worker(&connector, trigger_rx, config.paths.db_file.clone());
     db.connect(SyncOptions::new(connector)).await;
     log::info!("Sync daemon connected (pid {})", std::process::id());
 
     let mut actors = ActorHandles {
-        upload: tokio::spawn(upload_worker),
         checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
-        socket: spawn_socket_server(socket_listener, backend, &db, &auth, &config, trigger_tx),
+        socket: spawn_socket_server(socket_listener, backend, &db, &auth, &config),
     };
     let result = wait_for_shutdown(&mut actors).await;
     shutdown_daemon(&mut actors, &db, config.paths.db_file.clone()).await;
@@ -144,13 +138,11 @@ fn open_powersync_database(
 fn build_connector(
     db: &PowerSyncDatabase,
     auth: &Arc<GoTrueClient>,
-    upload_guard: &Arc<tokio::sync::Mutex<()>>,
     config: &Config,
 ) -> FlickNoteConnector {
     FlickNoteConnector {
         db: db.clone(),
         auth: Arc::clone(auth),
-        upload_guard: Arc::clone(upload_guard),
         http_client: reqwest::Client::new(),
         powersync_url: config.powersync_url.clone(),
         supabase_url: config.supabase_url.clone(),
@@ -169,70 +161,12 @@ async fn startup_checkpoint(db_path: PathBuf) {
     }
 }
 
-async fn open_local_backend(
+fn open_local_backend(
+    db: &PowerSyncDatabase,
     config: &Config,
 ) -> Result<Arc<dyn NoteDb>, Box<dyn std::error::Error>> {
     let user_id = flicknote_core::session::get_user_id(config)?;
-    Ok(Arc::new(SqliteBackend {
-        db: Database::open_local(config).await?,
-        user_id,
-    }))
-}
-
-fn upload_worker(
-    connector: &FlickNoteConnector,
-    mut trigger_rx: mpsc::Receiver<()>,
-    db_path: PathBuf,
-) -> impl std::future::Future<Output = ()> + Send + 'static {
-    let db = connector.db.clone();
-    let client = connector.http_client.clone();
-    let auth = Arc::clone(&connector.auth);
-    let guard = Arc::clone(&connector.upload_guard);
-    let supabase_url = connector.supabase_url.clone();
-    let anon_key = connector.supabase_anon_key.clone();
-    async move {
-        retry_upload_until_success(
-            &db,
-            &client,
-            &auth,
-            &guard,
-            &supabase_url,
-            &anon_key,
-            "Startup upload",
-            &db_path,
-        )
-        .await;
-
-        while wait_for_upload_trigger(&mut trigger_rx).await {
-            retry_upload_until_success(
-                &db,
-                &client,
-                &auth,
-                &guard,
-                &supabase_url,
-                &anon_key,
-                "Upload",
-                &db_path,
-            )
-            .await;
-        }
-    }
-}
-
-async fn wait_for_upload_trigger(trigger_rx: &mut mpsc::Receiver<()>) -> bool {
-    if trigger_rx.recv().await.is_none() {
-        return false;
-    }
-    loop {
-        tokio::select! {
-            _ = tokio::time::sleep(std::time::Duration::from_millis(200)) => return true,
-            value = trigger_rx.recv() => {
-                if value.is_none() {
-                    return false;
-                }
-            }
-        }
-    }
+    Ok(Arc::new(LocalPowerSyncBackend::new(db.clone(), user_id)))
 }
 
 fn spawn_checkpoint_worker(db_path: PathBuf) -> tokio::task::JoinHandle<()> {
@@ -259,7 +193,6 @@ fn spawn_socket_server(
     db: &PowerSyncDatabase,
     auth: &Arc<GoTrueClient>,
     config: &Arc<Config>,
-    trigger_tx: mpsc::Sender<()>,
 ) -> tokio::task::JoinHandle<()> {
     let http = reqwest::Client::new();
     let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator::new(
@@ -273,11 +206,8 @@ fn spawn_socket_server(
         Arc::clone(auth),
         Arc::clone(config),
     ));
-    let app = Arc::new(
-        Application::new(backend, creator, gateway)
-            .with_web_url(config.web_url.clone())
-            .with_write_signal(trigger_tx),
-    );
+    let app =
+        Arc::new(Application::new(backend, creator, gateway).with_web_url(config.web_url.clone()));
     tokio::spawn(async move {
         if let Err(error) = ipc::serve_app(listener, app, ipc::ServerInfo::current()).await {
             log::error!("Application socket server failed: {error}");
@@ -288,7 +218,6 @@ fn spawn_socket_server(
 async fn wait_for_shutdown(actors: &mut ActorHandles) -> Result<(), String> {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => Ok(()),
-        result = &mut actors.upload => result.map_err(|error| error.to_string()),
         result = &mut actors.checkpoint => {
             if let Err(error) = &result {
                 log::error!("Checkpoint task panicked: {error}");
@@ -309,7 +238,6 @@ async fn wait_for_shutdown(actors: &mut ActorHandles) -> Result<(), String> {
 }
 
 async fn shutdown_daemon(actors: &mut ActorHandles, db: &PowerSyncDatabase, db_path: PathBuf) {
-    actors.upload.abort();
     actors.checkpoint.abort();
     actors.socket.abort();
     db.disconnect().await;

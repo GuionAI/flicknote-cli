@@ -18,11 +18,12 @@
         nativeBuildInputs = with pkgs; [
           rust
           pkg-config
-          sqlx-cli
+          llvmPackages.libclang
           sqlite
         ];
 
         buildInputs = with pkgs; [
+          cacert
           openssl
           sqlite
         ] ++ lib.optionals stdenv.isDarwin [
@@ -38,15 +39,14 @@
           cargoLock = {
             lockFile = ./Cargo.lock;
             outputHashes = {
-              "powersync-0.0.5" = "sha256-vtzXdD54gQUn4TpG/XSUoGVF3H7zSApl85tjXvBEBlk=";
+              "powersync-0.0.7" = "sha256-Ndeu/7054EsfgVHQwu0W7CjbjT1q/e15qX2V3A0XihA=";
             };
           };
 
           nativeBuildInputs = nativeBuildInputs;
           buildInputs = buildInputs;
-
-          # sqlx offline mode — use checked-in query cache
-          SQLX_OFFLINE = "true";
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
           meta = with pkgs.lib; {
             description = "Local-first note management CLI with cloud sync";
@@ -65,8 +65,8 @@
 
         devShells.default = pkgs.mkShell {
           inherit nativeBuildInputs buildInputs;
-
-          SQLX_OFFLINE = "true";
+          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
 
           shellHook = ''
             echo "flicknote-cli dev shell (rust $(rustc --version | cut -d' ' -f2))"

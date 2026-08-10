@@ -2,16 +2,18 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use flicknote_core::backend::{InsertNoteReq, NoteDb, SqliteBackend};
+use flicknote_core::backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
-use flicknote_core::db::Database;
+use flicknote_core::schema::app_schema;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
 };
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{ServerInfo, serve_app, socket_path};
+use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 use rmcp::ServiceExt;
+use rusqlite::params;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
 use crate::mcp;
@@ -146,11 +148,32 @@ fn test_config(directory: &std::path::Path) -> Config {
     }
 }
 
-async fn seeded_backend(config: &Config) -> (Arc<SqliteBackend>, String, String) {
-    let backend = Arc::new(SqliteBackend {
-        db: Database::open_local(config).await.unwrap(),
-        user_id: "test-user".to_string(),
-    });
+fn test_database(config: &Config) -> PowerSyncDatabase {
+    struct NoHttp;
+
+    #[async_trait]
+    impl powersync::http::HttpClient for NoHttp {
+        async fn send(
+            &self,
+            _request: powersync::http::Request,
+        ) -> Result<powersync::http::Response, powersync::error::PowerSyncError> {
+            panic!("MCP tests must not make PowerSync HTTP requests")
+        }
+    }
+
+    PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    let pool = ConnectionPool::open(&config.paths.db_file).unwrap();
+    let environment =
+        PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
+    PowerSyncDatabase::new(environment, app_schema())
+}
+
+async fn seeded_backend(config: &Config) -> (Arc<LocalPowerSyncBackend>, String, String) {
+    let db = test_database(config);
+    let backend = Arc::new(LocalPowerSyncBackend::new(
+        db.clone(),
+        "test-user".to_string(),
+    ));
     let project_id = backend.create_project("MCP Project").await.unwrap();
     let note_uuid = uuid::Uuid::new_v4().to_string();
     backend
@@ -166,12 +189,14 @@ async fn seeded_backend(config: &Config) -> (Arc<SqliteBackend>, String, String)
         })
         .await
         .unwrap();
-    sqlx::query("UPDATE notes SET short_id = 42, source = ? WHERE id = ?")
-        .bind(r#"{"link":{"content":"one\ntwo\nthree"}}"#)
-        .bind(&note_uuid)
-        .execute(&backend.db.pool)
-        .await
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET short_id = 42, source = ? WHERE id = ?",
+            params![r#"{"link":{"content":"one\ntwo\nthree"}}"#, note_uuid],
+        )
         .unwrap();
+    drop(writer);
     let no_source_id = uuid::Uuid::new_v4().to_string();
     backend
         .insert_note(&InsertNoteReq {
@@ -186,11 +211,14 @@ async fn seeded_backend(config: &Config) -> (Arc<SqliteBackend>, String, String)
         })
         .await
         .unwrap();
-    sqlx::query("UPDATE notes SET short_id = 43 WHERE id = ?")
-        .bind(&no_source_id)
-        .execute(&backend.db.pool)
-        .await
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET short_id = 43 WHERE id = ?",
+            params![no_source_id],
+        )
         .unwrap();
+    drop(writer);
     let alpha_id = flicknote_core::services::markdown::parse_markdown(
         "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me.",
     )
