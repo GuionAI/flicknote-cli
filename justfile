@@ -35,13 +35,16 @@ install: install-rust
 install-rust:
     cargo install --path flicknote-cli
 
-# Reinstall both Rust binaries and restart FlickNote launchd services.
-reinstall: reinstall-rust
+# Restart FlickNote launchd services.
+restart:
     @for label in $(launchctl list 2>/dev/null | awk '/io\.guion\.flicknote/ {print $3}'); do \
         echo "Restarting $label..."; \
         launchctl kickstart -k "gui/$(id -u)/$label"; \
         echo "✓ $label restarted"; \
     done
+
+# Reinstall both Rust binaries and restart FlickNote launchd services.
+reinstall: reinstall-rust restart
 
 # Force-reinstall the Rust CLI.
 reinstall-rust:
