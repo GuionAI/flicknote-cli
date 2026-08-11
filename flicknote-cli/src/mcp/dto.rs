@@ -21,6 +21,16 @@ pub(super) struct McpNoteSummary {
     pub deleted_at: Option<String>,
 }
 
+/// Object-wrapped note list.
+///
+/// MCP 2025-era clients require `structuredContent` to be a JSON object
+/// (record), rejecting bare arrays. Wrapping the list keeps the result
+/// spec-compliant while preserving structured data.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpNoteListResult {
+    pub notes: Vec<McpNoteSummary>,
+}
+
 impl From<NoteSummary> for McpNoteSummary {
     fn from(note: NoteSummary) -> Self {
         Self {
@@ -97,6 +107,12 @@ pub(super) struct McpProjectDto {
     pub color: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
+}
+
+/// Object-wrapped project list; see `McpNoteListResult` for why.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpProjectListResult {
+    pub projects: Vec<McpProjectDto>,
 }
 
 impl From<ProjectDto> for McpProjectDto {
