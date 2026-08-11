@@ -19,8 +19,8 @@ use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
-    McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult,
-    McpNoteSummary, McpProjectDto, McpProjectListResult,
+    McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult, McpNoteSummary,
+    McpProjectDto, McpProjectListResult,
 };
 use super::error::tool_error;
 use super::note_tools::*;
