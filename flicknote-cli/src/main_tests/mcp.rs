@@ -352,7 +352,7 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     let listed = harness.call("note_list", serde_json::json!({})).await;
     assert_eq!(listed["result"]["isError"], false);
     assert_eq!(
-        listed["result"]["structuredContent"]
+        listed["result"]["structuredContent"]["notes"]
             .as_array()
             .unwrap()
             .len(),
@@ -430,7 +430,7 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         )
         .await;
     assert_eq!(
-        found["result"]["structuredContent"]
+        found["result"]["structuredContent"]["notes"]
             .as_array()
             .unwrap()
             .len(),
@@ -459,14 +459,14 @@ async fn mcp_project_and_source_contracts_are_preserved() {
     let mut harness = McpHarness::start().await;
     let projects = harness.call("project_list", serde_json::json!({})).await;
     assert_eq!(
-        projects["result"]["structuredContent"]
+        projects["result"]["structuredContent"]["projects"]
             .as_array()
             .unwrap()
             .len(),
         1
     );
     assert!(
-        projects["result"]["structuredContent"][0]
+        projects["result"]["structuredContent"]["projects"][0]
             .get("id")
             .is_none()
     );

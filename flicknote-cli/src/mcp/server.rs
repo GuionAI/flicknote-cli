@@ -13,13 +13,14 @@ use flicknote_core::services::source::SourceResult;
 use flicknote_sync::ipc::{AppRequest, AppResult, DaemonClient};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, Implementation, JsonObject, ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
 use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
-    McpNoteArchiveResult, McpNoteDetail, McpNoteMutationResult, McpNoteSummary, McpProjectDto,
+    McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult,
+    McpNoteSummary, McpProjectDto, McpProjectListResult,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -99,6 +100,22 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
     result.map(Json).map_err(|error| tool_error(&error))
 }
 
+/// Minimal, spec-compliant output schema (`type: "object"`).
+///
+/// MCP 2025-era clients validate `outputSchema.type` strictly and reject root
+/// types other than `"object"` (e.g. the `"array"` schemas derived from list
+/// return types, or the `oneOf` union derived from `SourceResult`). Each tool's
+/// description documents the actual result shape, so this declaration stays
+/// valid for strict clients without inventing structure.
+fn object_output_schema() -> Arc<JsonObject> {
+    let mut schema = JsonObject::new();
+    schema.insert(
+        "type".to_string(),
+        serde_json::Value::String("object".to_string()),
+    );
+    Arc::new(schema)
+}
+
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
     #[tool(
@@ -109,7 +126,7 @@ impl FlickNoteMcp {
     async fn note_list(
         &self,
         Parameters(params): Parameters<NoteListParams>,
-    ) -> Result<Json<Vec<McpNoteSummary>>, CallToolResult> {
+    ) -> Result<Json<McpNoteListResult>, CallToolResult> {
         structured(
             self.call::<Vec<NoteSummary>>(AppRequest::NoteList(NoteListInput {
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
@@ -118,7 +135,9 @@ impl FlickNoteMcp {
                 limit: params.limit,
             }))
             .await
-            .map(|notes| notes.into_iter().map(Into::into).collect()),
+            .map(|notes| McpNoteListResult {
+                notes: notes.into_iter().map(Into::into).collect(),
+            }),
         )
     }
 
@@ -130,7 +149,7 @@ impl FlickNoteMcp {
     async fn note_find(
         &self,
         Parameters(params): Parameters<NoteFindParams>,
-    ) -> Result<Json<Vec<McpNoteSummary>>, CallToolResult> {
+    ) -> Result<Json<McpNoteListResult>, CallToolResult> {
         structured(
             self.call::<Vec<NoteSummary>>(AppRequest::NoteFind(NoteFindInput {
                 keywords: params.keywords,
@@ -140,7 +159,9 @@ impl FlickNoteMcp {
                 limit: params.limit,
             }))
             .await
-            .map(|notes| notes.into_iter().map(Into::into).collect()),
+            .map(|notes| McpNoteListResult {
+                notes: notes.into_iter().map(Into::into).collect(),
+            }),
         )
     }
 
@@ -205,6 +226,7 @@ impl FlickNoteMcp {
     #[tool(
         name = "note_source",
         description = "Read stored source data as rendered content, raw JSON/text, or compact info. Normal notes often have no source data; use note_get for editable content. Use info then a 1-based range for large text or meeting sources.",
+        output_schema = object_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_source(
@@ -460,13 +482,15 @@ impl FlickNoteMcp {
     async fn project_list(
         &self,
         Parameters(params): Parameters<ProjectListParams>,
-    ) -> Result<Json<Vec<McpProjectDto>>, CallToolResult> {
+    ) -> Result<Json<McpProjectListResult>, CallToolResult> {
         structured(
             self.call::<Vec<ProjectDto>>(AppRequest::ProjectList {
                 include_archived: params.include_archived,
             })
             .await
-            .map(|projects| projects.into_iter().map(Into::into).collect()),
+            .map(|projects| McpProjectListResult {
+                projects: projects.into_iter().map(Into::into).collect(),
+            }),
         )
     }
 
