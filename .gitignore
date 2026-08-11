@@ -34,3 +34,7 @@ flicknote-tui/flicknote-tui
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Gas City
+.beads/*
+!.beads/identity.toml
