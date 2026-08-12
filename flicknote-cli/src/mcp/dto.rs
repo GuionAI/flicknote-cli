@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+
 use flicknote_core::services::dto::{
     ExtractionDto, NoteArchiveResult, NoteDetail, NoteMutationResult, NoteSummary, ProjectDto,
     SectionDto,
 };
-use rmcp::schemars::JsonSchema;
+use flicknote_core::services::source::SourceResult;
+use rmcp::schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -54,6 +57,7 @@ pub(super) struct McpNoteDetail {
     #[serde(flatten)]
     pub note: McpNoteSummary,
     pub content: String,
+    #[schemars(schema_with = "arbitrary_json_schema")]
     pub metadata: Option<serde_json::Value>,
     pub extractions: Vec<ExtractionDto>,
     pub sections: Vec<SectionDto>,
@@ -68,6 +72,82 @@ impl From<NoteDetail> for McpNoteDetail {
             extractions: detail.extractions,
             sections: detail.sections,
         }
+    }
+}
+
+/// Object-form JSON Schema term for arbitrary JSON values.
+///
+/// `serde_json::Value` derives a bare boolean schema term (`true`) that strict
+/// MCP clients reject. This term keeps arbitrary values unconstrained while
+/// remaining a parseable JSON Schema object. `null` is included because
+/// `Option<serde_json::Value>` fields serialize as `null` when absent.
+fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": ["array", "boolean", "integer", "null", "number", "object", "string"],
+    }))
+    .expect("arbitrary-json schema is valid JSON Schema")
+}
+
+/// MCP boundary result for source queries.
+///
+/// Serializes identically to `SourceResult` (a `view`-tagged union) while
+/// advertising an object-rooted JSON Schema whose variants describe each
+/// source view and use object-form terms for the arbitrary raw value, both of
+/// which strict MCP clients require.
+#[derive(Debug, Serialize)]
+#[serde(transparent)]
+pub(super) struct McpSourceResult(pub(super) SourceResult);
+
+impl From<SourceResult> for McpSourceResult {
+    fn from(result: SourceResult) -> Self {
+        Self(result)
+    }
+}
+
+impl JsonSchema for McpSourceResult {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("McpSourceResult")
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        serde_json::from_value(serde_json::json!({
+            "type": "object",
+            "oneOf": [
+                {
+                    "type": "object",
+                    "properties": {
+                        "view": {"type": "string", "enum": ["rendered"]},
+                        "source_type": {"type": "string"},
+                        "range_unit": {"type": "string"},
+                        "total_count": {"type": "integer", "format": "uint", "minimum": 0},
+                        "selected_start": {"type": "integer", "format": "uint", "minimum": 0},
+                        "selected_end": {"type": "integer", "format": "uint", "minimum": 0},
+                        "content": {"type": "string"}
+                    },
+                    "required": ["view", "source_type", "range_unit", "total_count", "selected_start", "selected_end", "content"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "view": {"type": "string", "enum": ["raw"]},
+                        "source_type": {"type": "string"},
+                        "value": {"type": ["array", "boolean", "integer", "null", "number", "object", "string"]}
+                    },
+                    "required": ["view", "source_type", "value"]
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "view": {"type": "string", "enum": ["info"]},
+                        "source_type": {"type": "string"},
+                        "range_unit": {"type": "string"},
+                        "count": {"type": "integer", "format": "uint", "minimum": 0}
+                    },
+                    "required": ["view", "source_type", "range_unit", "count"]
+                }
+            ]
+        }))
+        .expect("source-result schema is valid JSON Schema")
     }
 }
 

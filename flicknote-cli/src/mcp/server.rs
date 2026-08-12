@@ -13,14 +13,14 @@ use flicknote_core::services::source::SourceResult;
 use flicknote_sync::ipc::{AppRequest, AppResult, DaemonClient};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, Implementation, JsonObject, ServerCapabilities, ServerInfo};
+use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
 use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
     McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult, McpNoteSummary,
-    McpProjectDto, McpProjectListResult,
+    McpProjectDto, McpProjectListResult, McpSourceResult,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -100,22 +100,6 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
     result.map(Json).map_err(|error| tool_error(&error))
 }
 
-/// Minimal, spec-compliant output schema (`type: "object"`).
-///
-/// MCP 2025-era clients validate `outputSchema.type` strictly and reject root
-/// types other than `"object"` (e.g. the `"array"` schemas derived from list
-/// return types, or the `oneOf` union derived from `SourceResult`). Each tool's
-/// description documents the actual result shape, so this declaration stays
-/// valid for strict clients without inventing structure.
-fn object_output_schema() -> Arc<JsonObject> {
-    let mut schema = JsonObject::new();
-    schema.insert(
-        "type".to_string(),
-        serde_json::Value::String("object".to_string()),
-    );
-    Arc::new(schema)
-}
-
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
     #[tool(
@@ -189,7 +173,6 @@ impl FlickNoteMcp {
     #[tool(
         name = "note_get",
         description = "Get one note with editable content, metadata, extractions, and section tree.",
-        output_schema = object_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_get(
@@ -227,21 +210,21 @@ impl FlickNoteMcp {
     #[tool(
         name = "note_source",
         description = "Read stored source data as rendered content, raw JSON/text, or compact info. Normal notes often have no source data; use note_get for editable content. Use info then a 1-based range for large text or meeting sources.",
-        output_schema = object_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_source(
         &self,
         Parameters(params): Parameters<NoteSourceParams>,
-    ) -> Result<Json<SourceResult>, CallToolResult> {
+    ) -> Result<Json<McpSourceResult>, CallToolResult> {
         structured(
-            self.call(AppRequest::NoteSource {
+            self.call::<SourceResult>(AppRequest::NoteSource {
                 id: params.id.to_string(),
                 archived: params.archived,
                 view: params.view,
                 range: params.range,
             })
-            .await,
+            .await
+            .map(Into::into),
         )
     }
 

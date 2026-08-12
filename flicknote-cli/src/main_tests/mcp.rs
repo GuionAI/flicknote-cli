@@ -346,6 +346,49 @@ async fn mcp_server_exposes_stable_tool_contract() {
     assert!(project_get["inputSchema"]["properties"].get("id").is_none());
 }
 
+/// Fail if a schema position holds a bare boolean (e.g. `"metadata": true`).
+/// Boolean *keyword* values such as `additionalProperties: false` are not
+/// schema positions and are left untouched.
+fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
+    match schema {
+        serde_json::Value::Bool(_) => {
+            panic!("tool {tool}: outputSchema contains a boolean schema term")
+        }
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                let is_named_schemas =
+                    matches!(key.as_str(), "properties" | "patternProperties" | "$defs");
+                let is_schema_list =
+                    matches!(key.as_str(), "allOf" | "anyOf" | "oneOf" | "prefixItems");
+                let is_single_schema = matches!(
+                    key.as_str(),
+                    "items"
+                        | "propertyNames"
+                        | "contains"
+                        | "not"
+                        | "if"
+                        | "then"
+                        | "else"
+                        | "unevaluatedItems"
+                        | "unevaluatedProperties"
+                );
+                if is_named_schemas {
+                    for subschema in value.as_object().unwrap().values() {
+                        assert_no_boolean_schema_terms(subschema, tool);
+                    }
+                } else if is_schema_list {
+                    for subschema in value.as_array().unwrap() {
+                        assert_no_boolean_schema_terms(subschema, tool);
+                    }
+                } else if is_single_schema {
+                    assert_no_boolean_schema_terms(value, tool);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tokio::test]
 async fn mcp_tool_output_schemas_are_strict_client_compatible() {
     let mut harness = McpHarness::start().await;
@@ -358,15 +401,145 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
             serde_json::json!("object"),
             "tool {name}: outputSchema root type must be object"
         );
-        for (property, subschema) in output["properties"]
+        assert_no_boolean_schema_terms(output, name);
+    }
+
+    let list = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_list")
+        .unwrap();
+    assert!(
+        list["outputSchema"]["properties"]["notes"]["items"].is_object(),
+        "note_list outputSchema must advertise the notes array item schema"
+    );
+    let projects = tools
+        .iter()
+        .find(|tool| tool["name"] == "project_list")
+        .unwrap();
+    assert!(
+        projects["outputSchema"]["properties"]["projects"]["items"].is_object(),
+        "project_list outputSchema must advertise the projects array item schema"
+    );
+}
+
+#[tokio::test]
+async fn mcp_note_get_output_schema_advertises_detail_structure() {
+    let mut harness = McpHarness::start().await;
+    let tools = harness.tools().await;
+    let note_get = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_get")
+        .unwrap();
+    let output = &note_get["outputSchema"];
+    let properties = output["properties"].as_object().unwrap();
+    for required_property in ["content", "metadata", "extractions", "sections"] {
+        assert!(
+            properties.contains_key(required_property),
+            "note_get outputSchema must advertise {required_property}"
+        );
+    }
+    let required = output["required"].as_array().unwrap();
+    for required_field in ["content", "extractions", "sections"] {
+        assert!(
+            required.iter().any(|field| field == required_field),
+            "note_get outputSchema must require {required_field}"
+        );
+    }
+    let metadata = &properties["metadata"];
+    assert!(
+        metadata.is_object(),
+        "note_get metadata schema must be an object-form term, got {metadata}"
+    );
+    let metadata_types = metadata["type"].as_array().unwrap();
+    for json_type in ["null", "object", "array", "string", "number", "boolean"] {
+        assert!(
+            metadata_types.iter().any(|allowed| allowed == json_type),
+            "note_get metadata schema must represent arbitrary JSON including {json_type}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_note_source_output_schema_advertises_all_views() {
+    let mut harness = McpHarness::start().await;
+    let tools = harness.tools().await;
+    let note_source = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_source")
+        .unwrap();
+    let output = &note_source["outputSchema"];
+    assert_eq!(
+        output["type"],
+        serde_json::json!("object"),
+        "note_source outputSchema root type must be object"
+    );
+    let variants = output["oneOf"].as_array().unwrap();
+    assert_eq!(
+        variants.len(),
+        3,
+        "note_source must advertise rendered, raw, and info variants"
+    );
+    let mut views = BTreeSet::new();
+    let mut rendered_fields = BTreeSet::new();
+    let mut raw_value_types = Vec::new();
+    let mut info_fields = BTreeSet::new();
+    for variant in variants {
+        let view = variant["properties"]["view"]["enum"][0].as_str().unwrap();
+        views.insert(view.to_string());
+        assert!(
+            variant["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "view"),
+            "{view} variant must retain the view discriminator in required"
+        );
+        let fields: BTreeSet<String> = variant["properties"]
             .as_object()
-            .unwrap_or(&serde_json::Map::new())
-        {
-            assert!(
-                subschema.is_object(),
-                "tool {name}: outputSchema property {property} must be an object, got {subschema}"
-            );
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        match view {
+            "rendered" => rendered_fields = fields,
+            "raw" => {
+                raw_value_types = variant["properties"]["value"]["type"]
+                    .as_array()
+                    .unwrap()
+                    .clone()
+            }
+            "info" => info_fields = fields,
+            other => panic!("unexpected source view {other}"),
         }
+    }
+    assert_eq!(
+        views,
+        BTreeSet::from(["rendered", "raw", "info"].map(String::from))
+    );
+    for field in [
+        "view",
+        "source_type",
+        "range_unit",
+        "total_count",
+        "selected_start",
+        "selected_end",
+        "content",
+    ] {
+        assert!(
+            rendered_fields.contains(field),
+            "rendered variant must advertise {field}"
+        );
+    }
+    assert!(
+        raw_value_types.contains(&serde_json::json!("null"))
+            && raw_value_types.contains(&serde_json::json!("object")),
+        "raw variant value must represent arbitrary JSON including null"
+    );
+    for field in ["view", "source_type", "range_unit", "count"] {
+        assert!(
+            info_fields.contains(field),
+            "info variant must advertise {field}"
+        );
     }
 }
 
