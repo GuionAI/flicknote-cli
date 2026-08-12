@@ -20,7 +20,7 @@ use serde::Serialize;
 
 use super::dto::{
     McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult, McpNoteSummary,
-    McpProjectDto, McpProjectListResult, McpSourceResult,
+    McpProjectDto, McpProjectListResult, McpSourceResult, source_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -210,6 +210,7 @@ impl FlickNoteMcp {
     #[tool(
         name = "note_source",
         description = "Read stored source data as rendered content, raw JSON/text, or compact info. Normal notes often have no source data; use note_get for editable content. Use info then a 1-based range for large text or meeting sources.",
+        output_schema = source_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_source(

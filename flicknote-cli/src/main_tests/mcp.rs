@@ -484,7 +484,18 @@ async fn mcp_note_source_output_schema_advertises_all_views() {
     let mut raw_value_types = Vec::new();
     let mut info_fields = BTreeSet::new();
     for variant in variants {
-        let view = variant["properties"]["view"]["enum"][0].as_str().unwrap();
+        let view_schema = &variant["properties"]["view"];
+        let view = view_schema["const"]
+            .as_str()
+            .or_else(|| {
+                view_schema["enum"]
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(|value| value.as_str())
+            })
+            .unwrap_or_else(|| {
+                panic!("variant must declare its view discriminator via const or enum")
+            });
         views.insert(view.to_string());
         assert!(
             variant["required"]

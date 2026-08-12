@@ -1,10 +1,12 @@
-use std::borrow::Cow;
+use std::sync::Arc;
 
 use flicknote_core::services::dto::{
     ExtractionDto, NoteArchiveResult, NoteDetail, NoteMutationResult, NoteSummary, ProjectDto,
     SectionDto,
 };
 use flicknote_core::services::source::SourceResult;
+use rmcp::handler::server::tool::schema_for_output;
+use rmcp::model::JsonObject;
 use rmcp::schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
 
@@ -93,65 +95,79 @@ fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
 
 /// MCP boundary result for source queries.
 ///
-/// Serializes identically to `SourceResult` (a `view`-tagged union) while
-/// advertising an object-rooted JSON Schema whose variants describe each
-/// source view and use object-form terms for the arbitrary raw value, both of
-/// which strict MCP clients require.
-#[derive(Debug, Serialize)]
-#[serde(transparent)]
-pub(super) struct McpSourceResult(pub(super) SourceResult);
+/// Mirrors `SourceResult`'s `view`-tagged variants so that the advertised
+/// output schema and the serialized `structuredContent` evolve together. The
+/// raw `value` keeps an object-form arbitrary-JSON term (its only schema
+/// customization); the explicit object root is applied by
+/// [`source_output_schema`].
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "view", rename_all = "snake_case")]
+pub(super) enum McpSourceResult {
+    Rendered {
+        source_type: String,
+        range_unit: String,
+        total_count: usize,
+        selected_start: usize,
+        selected_end: usize,
+        content: String,
+    },
+    Raw {
+        source_type: String,
+        #[schemars(schema_with = "arbitrary_json_schema")]
+        value: serde_json::Value,
+    },
+    Info {
+        source_type: String,
+        range_unit: String,
+        count: usize,
+    },
+}
 
 impl From<SourceResult> for McpSourceResult {
     fn from(result: SourceResult) -> Self {
-        Self(result)
+        match result {
+            SourceResult::Rendered {
+                source_type,
+                range_unit,
+                total_count,
+                selected_start,
+                selected_end,
+                content,
+            } => Self::Rendered {
+                source_type,
+                range_unit,
+                total_count,
+                selected_start,
+                selected_end,
+                content,
+            },
+            SourceResult::Raw { source_type, value } => Self::Raw { source_type, value },
+            SourceResult::Info {
+                source_type,
+                range_unit,
+                count,
+            } => Self::Info {
+                source_type,
+                range_unit,
+                count,
+            },
+        }
     }
 }
 
-impl JsonSchema for McpSourceResult {
-    fn schema_name() -> Cow<'static, str> {
-        Cow::Borrowed("McpSourceResult")
-    }
-
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        serde_json::from_value(serde_json::json!({
-            "type": "object",
-            "oneOf": [
-                {
-                    "type": "object",
-                    "properties": {
-                        "view": {"type": "string", "enum": ["rendered"]},
-                        "source_type": {"type": "string"},
-                        "range_unit": {"type": "string"},
-                        "total_count": {"type": "integer", "format": "uint", "minimum": 0},
-                        "selected_start": {"type": "integer", "format": "uint", "minimum": 0},
-                        "selected_end": {"type": "integer", "format": "uint", "minimum": 0},
-                        "content": {"type": "string"}
-                    },
-                    "required": ["view", "source_type", "range_unit", "total_count", "selected_start", "selected_end", "content"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "view": {"type": "string", "enum": ["raw"]},
-                        "source_type": {"type": "string"},
-                        "value": {"type": ARBITRARY_JSON_TYPES}
-                    },
-                    "required": ["view", "source_type", "value"]
-                },
-                {
-                    "type": "object",
-                    "properties": {
-                        "view": {"type": "string", "enum": ["info"]},
-                        "source_type": {"type": "string"},
-                        "range_unit": {"type": "string"},
-                        "count": {"type": "integer", "format": "uint", "minimum": 0}
-                    },
-                    "required": ["view", "source_type", "range_unit", "count"]
-                }
-            ]
-        }))
-        .expect("source-result schema is valid JSON Schema")
-    }
+/// Object-rooted output schema for `McpSourceResult`.
+///
+/// Derives the union from the boundary DTO (so schema and serialization stay
+/// in sync) and applies the single local compatibility fix: internally tagged
+/// enum unions derive without an explicit root `type`, which strict MCP
+/// clients reject.
+pub(super) fn source_output_schema() -> Arc<JsonObject> {
+    let mut schema = (*schema_for_output::<McpSourceResult>()).clone();
+    schema.insert(
+        "type".to_string(),
+        serde_json::Value::String("object".to_string()),
+    );
+    Arc::new(schema)
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
