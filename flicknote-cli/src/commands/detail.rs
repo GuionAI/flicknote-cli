@@ -1,7 +1,6 @@
 use clap::Args;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteDetail;
-use flicknote_core::types::Note;
+use flicknote_core::services::dto::{NoteDetail, NoteRecord};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, note_json, print_section_tree};
@@ -40,7 +39,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<
         return Ok(());
     }
     if args.json {
-        let note: Note = daemon
+        let note: NoteRecord = daemon
             .call(AppRequest::NoteRecord {
                 id: detail.note.uuid.clone(),
                 archived: args.archived,

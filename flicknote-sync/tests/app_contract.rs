@@ -105,6 +105,29 @@ fn test_app(db: Arc<dyn NoteDb>) -> Application {
     app_with_creator(db, Arc::new(DetachedCreator))
 }
 
+fn assert_no_status_field(value: &serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_no_status_field(value);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            assert!(
+                !values.contains_key("status"),
+                "internal status leaked: {value}"
+            );
+            for value in values.values() {
+                assert_no_status_field(value);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
 #[tokio::test]
 async fn app_preserves_created_identity_when_editor_or_attachment_summary_fails() {
     let directory = tempfile::tempdir().unwrap();
@@ -169,6 +192,7 @@ async fn app_routes_note_list_and_append_through_services() {
     };
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0].uuid, NOTE_ID);
+    assert_no_status_field(&serde_json::to_value(&notes).unwrap());
 
     let raw = app
         .handle(AppRequest::NoteRecord {
@@ -181,6 +205,19 @@ async fn app_routes_note_list_and_append_through_services() {
         panic!("unexpected raw note response")
     };
     assert_eq!(raw.content.as_deref(), Some("Body"));
+    assert_no_status_field(&serde_json::to_value(&raw).unwrap());
+
+    let detailed = app
+        .handle(AppRequest::NoteGet {
+            id: NOTE_ID.to_string(),
+            archived: false,
+        })
+        .await
+        .unwrap();
+    let AppResponse::NoteDetail(detailed) = detailed else {
+        panic!("unexpected note detail response")
+    };
+    assert_no_status_field(&serde_json::to_value(&detailed).unwrap());
 
     let appended = app
         .handle(AppRequest::NoteAppend {
@@ -193,6 +230,7 @@ async fn app_routes_note_list_and_append_through_services() {
         panic!("unexpected append response")
     };
     assert_eq!(result.note.uuid, NOTE_ID);
+    assert_no_status_field(&serde_json::to_value(&result).unwrap());
     assert_eq!(
         backend.find_note_content(NOTE_ID).await.unwrap(),
         Some("Body\n\nMore".to_string())

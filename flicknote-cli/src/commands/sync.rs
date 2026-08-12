@@ -339,6 +339,6 @@ mod tests {
 
         assert!(line.contains("pid 42"));
         assert!(line.contains(env!("CARGO_PKG_VERSION")));
-        assert!(line.contains("protocol 2"));
+        assert!(line.contains("protocol 3"));
     }
 }

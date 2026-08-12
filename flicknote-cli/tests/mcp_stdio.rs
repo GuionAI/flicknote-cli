@@ -305,7 +305,6 @@ fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
         short_id: Some(77),
         uuid: "550e8400-e29b-41d4-a716-446655440000".to_string(),
         note_type: "normal".to_string(),
-        status: "synced".to_string(),
         title: Some("Adapter note".to_string()),
         project_id: None,
         project: None,
@@ -318,7 +317,10 @@ fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
     }
 }
 
-fn assert_legacy_note_shape(note: &serde_json::Value, project: &serde_json::Value) {
+fn assert_note_shape_without_internal_status(
+    note: &serde_json::Value,
+    project: &serde_json::Value,
+) {
     let object = note.as_object().unwrap();
     let keys = object
         .keys()
@@ -334,7 +336,6 @@ fn assert_legacy_note_shape(note: &serde_json::Value, project: &serde_json::Valu
             "is_flagged",
             "project",
             "project_id",
-            "status",
             "summary",
             "title",
             "type",
@@ -726,13 +727,13 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let listed = run_cli_json(&config_root, &data_root, &["list", "--json"]);
-    assert_legacy_note_shape(&listed[0], &serde_json::Value::Null);
+    assert_note_shape_without_internal_status(&listed[0], &serde_json::Value::Null);
 
     let found = run_cli_json(&config_root, &data_root, &["find", "stored", "--json"]);
-    assert_legacy_note_shape(&found[0], &serde_json::Value::Null);
+    assert_note_shape_without_internal_status(&found[0], &serde_json::Value::Null);
 
     let detailed = run_cli_json(&config_root, &data_root, &["detail", &note_id, "--json"]);
-    assert_legacy_note_shape(
+    assert_note_shape_without_internal_status(
         &detailed,
         &serde_json::Value::String("Legacy project".to_string()),
     );

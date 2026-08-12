@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
@@ -19,8 +20,9 @@ use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
-    McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult, McpNoteSummary,
-    McpProjectDto, McpProjectListResult, McpSourceResult, source_output_schema,
+    McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteDetail,
+    McpNoteListResult, McpNoteMutationResult, McpNoteSummary, McpProjectDto, McpProjectListResult,
+    McpSourceResult, McpTopicListResult, source_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -28,7 +30,8 @@ use super::project_tools::*;
 use crate::commands::open::SystemBrowserOpener;
 
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 25] = [
+pub(crate) const EXPECTED_TOOLS: [&str; 27] = [
+    "entity_list",
     "note_add",
     "note_append",
     "note_archive",
@@ -54,6 +57,7 @@ pub(crate) const EXPECTED_TOOLS: [&str; 25] = [
     "project_modify",
     "project_share",
     "project_unshare",
+    "topic_list",
 ];
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -168,6 +172,66 @@ impl FlickNoteMcp {
             .await
             .map(|count| CountResult { count }),
         )
+    }
+
+    #[tool(
+        name = "topic_list",
+        description = "List known topics extracted from active notes.",
+        annotations(read_only_hint = true)
+    )]
+    async fn topic_list(
+        &self,
+        Parameters(_params): Parameters<TopicListParams>,
+    ) -> Result<Json<McpTopicListResult>, CallToolResult> {
+        structured(
+            self.call::<Vec<String>>(AppRequest::ExtractionValues {
+                keys: vec![TOPIC_EXTRACTION_KEY.to_string()],
+                archived: false,
+            })
+            .await
+            .map(|topics| McpTopicListResult { topics }),
+        )
+    }
+
+    #[tool(
+        name = "entity_list",
+        description = "List known typed entities extracted from active notes, optionally filtered by type.",
+        annotations(read_only_hint = true)
+    )]
+    async fn entity_list(
+        &self,
+        Parameters(params): Parameters<EntityListParams>,
+    ) -> Result<Json<McpEntityListResult>, CallToolResult> {
+        let entity_types = params.entity_type.map_or_else(
+            || {
+                vec![
+                    McpEntityType::Person,
+                    McpEntityType::Company,
+                    McpEntityType::Location,
+                    McpEntityType::Product,
+                ]
+            },
+            |entity_type| vec![entity_type],
+        );
+        let result: Result<McpEntityListResult, ServiceError> = async {
+            let mut entities = Vec::new();
+            for entity_type in entity_types {
+                let values = self
+                    .call::<Vec<String>>(AppRequest::ExtractionValues {
+                        keys: vec![entity_type.extraction_key().to_string()],
+                        archived: false,
+                    })
+                    .await?;
+                entities.extend(
+                    values
+                        .into_iter()
+                        .map(|value| McpEntity { value, entity_type }),
+                );
+            }
+            Ok(McpEntityListResult { entities })
+        }
+        .await;
+        structured(result)
     }
 
     #[tool(

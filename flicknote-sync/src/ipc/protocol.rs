@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
@@ -191,7 +191,7 @@ pub enum AppResponse {
     NoteCount { count: u64 },
     NoteDetail(NoteDetail),
     EditableDocument(EditableDocument),
-    NoteRecord(Note),
+    NoteRecord(NoteRecord),
     NoteSection(NoteSectionResult),
     NoteMutation(NoteMutationResult),
     EditableSave(EditableSaveResult),
@@ -232,7 +232,7 @@ app_result!(NoteSummary, AppResponse::NoteSummary);
 app_result!(Vec<NoteSummary>, AppResponse::NoteSummaries);
 app_result!(NoteDetail, AppResponse::NoteDetail);
 app_result!(EditableDocument, AppResponse::EditableDocument);
-app_result!(Note, AppResponse::NoteRecord);
+app_result!(NoteRecord, AppResponse::NoteRecord);
 app_result!(NoteSectionResult, AppResponse::NoteSection);
 app_result!(NoteMutationResult, AppResponse::NoteMutation);
 app_result!(EditableSaveResult, AppResponse::EditableSave);

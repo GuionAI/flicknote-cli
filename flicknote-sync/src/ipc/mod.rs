@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use flicknote_core::config::Config;
 use flicknote_core::services::dto::{
     InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput,
-    NoteListInput, NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
+    NoteListInput, NoteModifyInput, NoteMutationResult, NoteRecord, NoteSectionResult, NoteSummary,
+    OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
 };
 use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::source::{SourceResult, SourceView};
-use flicknote_core::types::{Note, Project};
+use flicknote_core::types::Project;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;

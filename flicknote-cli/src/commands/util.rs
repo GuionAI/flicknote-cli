@@ -1,6 +1,5 @@
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteSummary, SectionDto};
-use flicknote_core::types::Note;
+use flicknote_core::services::dto::{NoteRecord, NoteSummary, SectionDto};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use std::io::{IsTerminal, Read};
 
@@ -10,12 +9,11 @@ pub(crate) fn display_summary_id(note: &NoteSummary) -> String {
         .unwrap_or_else(|| note.uuid.clone())
 }
 
-pub(crate) fn note_json(note: &Note, project_name: Option<&str>) -> serde_json::Value {
+pub(crate) fn note_json(note: &NoteRecord, project_name: Option<&str>) -> serde_json::Value {
     serde_json::json!({
         "id": note.short_id,
         "uuid": note.id,
-        "type": note.r#type,
-        "status": note.status,
+        "type": note.note_type,
         "title": note.title,
         "project": project_name,
         "project_id": note.project_id,
@@ -35,7 +33,7 @@ pub(crate) async fn note_summaries_json(
 ) -> Result<Vec<serde_json::Value>, CliError> {
     let mut values = Vec::with_capacity(notes.len());
     for summary in notes {
-        let note: Note = daemon
+        let note: NoteRecord = daemon
             .call(AppRequest::NoteRecord {
                 id: summary.uuid.clone(),
                 archived,
@@ -141,25 +139,4 @@ pub(crate) fn read_stdin_required() -> Result<String, CliError> {
         return Err(CliError::Other("No content provided".into()));
     }
     Ok(trimmed)
-}
-
-/// Read optional stdin content. Returns `Ok(None)` when stdin is a terminal or empty.
-pub(crate) fn try_read_stdin() -> Result<Option<String>, CliError> {
-    if std::io::stdin().is_terminal() {
-        return Ok(None);
-    }
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf)?;
-    Ok(classify_stdin_buf(&buf))
-}
-
-/// Classify a freshly-read stdin buffer. Pure helper, testable without a TTY.
-pub(crate) fn classify_stdin_buf(buf: &str) -> Option<String> {
-    let trimmed = buf.trim_end_matches(|c: char| c.is_ascii_whitespace());
-    let trimmed = trimmed.trim_end_matches(' ');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }

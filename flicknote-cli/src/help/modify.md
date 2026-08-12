@@ -1,24 +1,16 @@
-Edit mode reads one exact replacement block from stdin:
-  ===BEFORE===
-  old text exactly as it appears
-  ===AFTER===
-  new text
+`modify` changes note metadata for a human CLI workflow. Provide at least one
+metadata option; `--project` may be combined with either flagged option.
 
-Rules:
-  - Exact match, whitespace-sensitive.
-  - Unique match required; add surrounding context if the text appears more than once.
-  - Single block per call.
-  - `--section` scopes the match to the full section, including its heading.
-  - For a section overwrite, use `flicknote replace <id> --section <section-id>`.
+Options:
+  - `--project <name>` moves the note to a project.
+  - `--flagged` marks the note as flagged.
+  - `--unflagged` removes the flagged state.
+  - `--flagged` and `--unflagged` cannot be used together.
 
 Examples:
   flicknote modify 123 --project work
-  flicknote modify 123 --flagged
+  flicknote modify 123 --project work --flagged
+  flicknote modify 123 --unflagged
 
-Apply an exact replacement from stdin:
-cat <<'EOF' | flicknote modify 123
-===BEFORE===
-old text exactly as it appears
-===AFTER===
-new text
-EOF
+Content and section edits are available through the structured FlickNote MCP
+interface; this command does not read replacement documents from stdin.

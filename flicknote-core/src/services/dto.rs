@@ -62,7 +62,6 @@ pub struct NoteSummary {
     pub uuid: String,
     #[serde(rename = "type")]
     pub note_type: String,
-    pub status: String,
     pub title: Option<String>,
     pub project_id: Option<String>,
     pub project: Option<String>,
@@ -72,6 +71,45 @@ pub struct NoteSummary {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub deleted_at: Option<String>,
+}
+
+/// A status-free note record used at the daemon boundary for CLI detail JSON.
+///
+/// This intentionally projects the storage note instead of serializing the
+/// storage entity directly. Internal synchronization fields and data that the
+/// supported record consumer does not need stay inside the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteRecord {
+    pub id: String,
+    pub short_id: Option<i64>,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: Option<String>,
+    pub content: Option<String>,
+    pub summary: Option<String>,
+    pub is_flagged: Option<i64>,
+    pub project_id: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+impl From<crate::types::Note> for NoteRecord {
+    fn from(note: crate::types::Note) -> Self {
+        Self {
+            id: note.id,
+            short_id: note.short_id,
+            note_type: note.r#type,
+            title: note.title,
+            content: note.content,
+            summary: note.summary,
+            is_flagged: note.is_flagged,
+            project_id: note.project_id,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            deleted_at: note.deleted_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -251,7 +289,6 @@ mod tests {
             short_id: Some(42),
             uuid: "note-uuid".to_string(),
             note_type: "normal".to_string(),
-            status: "synced".to_string(),
             title: None,
             project_id: None,
             project: None,

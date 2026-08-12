@@ -18,10 +18,17 @@ Rust workspace with 4 crates:
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Daemon application host, typed RPC boundary, backend ownership, and PowerSync ↔ Supabase sync
 
-### modify vs replace
+### MCP interface
 
-- `flicknote modify <id>` — edit-mode: exact-string replace via `===BEFORE===`/`===AFTER===` blocks, plus metadata
-- `flicknote replace <id> --section <section-id>` — replaces one complete section subtree, including its heading; it does not change note metadata
+FlickNote MCP is the formal model interface for note operations. The CLI remains
+for human and operational workflows; content and section mutations are not CLI
+commands.
+
+Every MCP structured result must have an object root, and each advertised output
+schema must be precise and derived from its boundary DTO. Arbitrary JSON schema
+terms must use object form rather than bare boolean terms. Every MCP change must
+pass the repository-wide strict-client output-schema contract test.
+
 
 ## Build & Test
 
@@ -80,9 +87,9 @@ Commit scope: `ci`
 
 The `skills/` directory contains command reference docs for AI agents:
 
-- `skills/flicknote.md` — FlickNote CLI command reference
+- `skills/flicknote.md` — concise MCP-first FlickNote guidance
 
-Agent quick reference is deployed via `ttal sync` to the runtime agent rules.
+The bundled skill is installed with `flicknote skill install`.
 
 ## Commit Style
 
