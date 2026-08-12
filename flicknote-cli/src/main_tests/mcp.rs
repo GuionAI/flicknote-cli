@@ -346,9 +346,16 @@ async fn mcp_server_exposes_stable_tool_contract() {
     assert!(project_get["inputSchema"]["properties"].get("id").is_none());
 }
 
-/// Fail if a schema position holds a bare boolean (e.g. `"metadata": true`).
-/// Boolean *keyword* values such as `additionalProperties: false` are not
-/// schema positions and are left untouched.
+/// Fail if any schema position holds a bare boolean schema (e.g.
+/// `"metadata": true`).
+///
+/// JSON Schema itself allows booleans as schema shorthand — `true` accepts
+/// anything, `additionalProperties: false` forbids extra keys. This test is a
+/// proxy for strict MCP clients that reject boolean schema terms, so every
+/// schema position (including `additionalProperties` and
+/// `unevaluatedProperties`) must stay an object-form term. The walk covers the
+/// subschema keywords of JSON Schema 2020-12, skipping non-schema keywords
+/// such as `required`, `enum`, and `type`.
 fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
     match schema {
         serde_json::Value::Bool(_) => {
@@ -356,13 +363,21 @@ fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
         }
         serde_json::Value::Object(map) => {
             for (key, value) in map {
-                let is_named_schemas =
-                    matches!(key.as_str(), "properties" | "patternProperties" | "$defs");
+                let is_named_schemas = matches!(
+                    key.as_str(),
+                    "properties"
+                        | "patternProperties"
+                        | "$defs"
+                        | "definitions"
+                        | "dependentSchemas"
+                );
                 let is_schema_list =
                     matches!(key.as_str(), "allOf" | "anyOf" | "oneOf" | "prefixItems");
                 let is_single_schema = matches!(
                     key.as_str(),
                     "items"
+                        | "additionalProperties"
+                        | "unevaluatedProperties"
                         | "propertyNames"
                         | "contains"
                         | "not"
@@ -370,7 +385,7 @@ fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
                         | "then"
                         | "else"
                         | "unevaluatedItems"
-                        | "unevaluatedProperties"
+                        | "contentSchema"
                 );
                 if is_named_schemas {
                     for subschema in value.as_object().unwrap().values() {
