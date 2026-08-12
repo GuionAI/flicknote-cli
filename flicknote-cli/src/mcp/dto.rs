@@ -1,8 +1,13 @@
+use std::sync::Arc;
+
 use flicknote_core::services::dto::{
     ExtractionDto, NoteArchiveResult, NoteDetail, NoteMutationResult, NoteSummary, ProjectDto,
     SectionDto,
 };
-use rmcp::schemars::JsonSchema;
+use flicknote_core::services::source::SourceResult;
+use rmcp::handler::server::tool::schema_for_output;
+use rmcp::model::JsonObject;
+use rmcp::schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::Serialize;
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -54,6 +59,7 @@ pub(super) struct McpNoteDetail {
     #[serde(flatten)]
     pub note: McpNoteSummary,
     pub content: String,
+    #[schemars(schema_with = "arbitrary_json_schema")]
     pub metadata: Option<serde_json::Value>,
     pub extractions: Vec<ExtractionDto>,
     pub sections: Vec<SectionDto>,
@@ -69,6 +75,99 @@ impl From<NoteDetail> for McpNoteDetail {
             sections: detail.sections,
         }
     }
+}
+
+/// Every JSON value type plus `null` (for `Option` fields). Used wherever
+/// `serde_json::Value` appears so the schema stays an object-form term.
+const ARBITRARY_JSON_TYPES: [&str; 7] = [
+    "array", "boolean", "integer", "null", "number", "object", "string",
+];
+
+/// Object-form JSON Schema term for arbitrary JSON values.
+///
+/// `serde_json::Value` derives a bare boolean schema term (`true`) that strict
+/// MCP clients reject. This term keeps arbitrary values unconstrained while
+/// remaining a parseable JSON Schema object.
+fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
+    serde_json::from_value(serde_json::json!({ "type": ARBITRARY_JSON_TYPES }))
+        .expect("arbitrary-json schema is valid JSON Schema")
+}
+
+/// MCP boundary result for source queries.
+///
+/// Mirrors `SourceResult`'s `view`-tagged variants so that the advertised
+/// output schema and the serialized `structuredContent` evolve together. The
+/// raw `value` keeps an object-form arbitrary-JSON term (its only schema
+/// customization); the explicit object root is applied by
+/// [`source_output_schema`].
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(tag = "view", rename_all = "snake_case")]
+pub(super) enum McpSourceResult {
+    Rendered {
+        source_type: String,
+        range_unit: String,
+        total_count: usize,
+        selected_start: usize,
+        selected_end: usize,
+        content: String,
+    },
+    Raw {
+        source_type: String,
+        #[schemars(schema_with = "arbitrary_json_schema")]
+        value: serde_json::Value,
+    },
+    Info {
+        source_type: String,
+        range_unit: String,
+        count: usize,
+    },
+}
+
+impl From<SourceResult> for McpSourceResult {
+    fn from(result: SourceResult) -> Self {
+        match result {
+            SourceResult::Rendered {
+                source_type,
+                range_unit,
+                total_count,
+                selected_start,
+                selected_end,
+                content,
+            } => Self::Rendered {
+                source_type,
+                range_unit,
+                total_count,
+                selected_start,
+                selected_end,
+                content,
+            },
+            SourceResult::Raw { source_type, value } => Self::Raw { source_type, value },
+            SourceResult::Info {
+                source_type,
+                range_unit,
+                count,
+            } => Self::Info {
+                source_type,
+                range_unit,
+                count,
+            },
+        }
+    }
+}
+
+/// Object-rooted output schema for `McpSourceResult`.
+///
+/// Derives the union from the boundary DTO (so schema and serialization stay
+/// in sync) and applies the single local compatibility fix: internally tagged
+/// enum unions derive without an explicit root `type`, which strict MCP
+/// clients reject.
+pub(super) fn source_output_schema() -> Arc<JsonObject> {
+    let mut schema = (*schema_for_output::<McpSourceResult>()).clone();
+    schema.insert(
+        "type".to_string(),
+        serde_json::Value::String("object".to_string()),
+    );
+    Arc::new(schema)
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
