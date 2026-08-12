@@ -8,14 +8,50 @@ use flicknote_core::services::source::SourceResult;
 use rmcp::handler::server::tool::schema_for_output;
 use rmcp::model::JsonObject;
 use rmcp::schemars::{JsonSchema, Schema, SchemaGenerator};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum McpEntityType {
+    Person,
+    Company,
+    Location,
+    Product,
+}
+
+impl McpEntityType {
+    pub(super) const fn extraction_key(self) -> &'static str {
+        match self {
+            Self::Person => "::person",
+            Self::Company => "::company",
+            Self::Location => "::location",
+            Self::Product => "::product",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpTopicListResult {
+    pub topics: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpEntity {
+    pub value: String,
+    #[serde(rename = "type")]
+    pub entity_type: McpEntityType,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpEntityListResult {
+    pub entities: Vec<McpEntity>,
+}
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteSummary {
     pub id: Option<i64>,
     #[serde(rename = "type")]
     pub note_type: String,
-    pub status: String,
     pub title: Option<String>,
     pub project: Option<String>,
     pub topics: Vec<String>,
@@ -41,7 +77,6 @@ impl From<NoteSummary> for McpNoteSummary {
         Self {
             id: note.short_id,
             note_type: note.note_type,
-            status: note.status,
             title: note.title,
             project: note.project,
             topics: note.topics,

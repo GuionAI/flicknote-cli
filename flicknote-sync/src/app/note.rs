@@ -154,7 +154,7 @@ async fn note_record(
         app.db.find_note(&id).await
     }
     .map_err(Application::db_error)?;
-    Ok(AppResponse::NoteRecord(note))
+    Ok(AppResponse::NoteRecord(note.into()))
 }
 
 async fn open_note(app: &Application, id: &str) -> Result<AppResponse, WireError> {

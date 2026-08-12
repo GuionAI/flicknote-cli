@@ -197,6 +197,26 @@ async fn seeded_backend(config: &Config) -> (Arc<LocalPowerSyncBackend>, String,
         )
         .unwrap();
     drop(writer);
+    backend
+        .set_note_extractions(&note_uuid, "::topic", &["AI".to_string()])
+        .await
+        .unwrap();
+    backend
+        .set_note_extractions(&note_uuid, "::person", &["Ada Lovelace".to_string()])
+        .await
+        .unwrap();
+    backend
+        .set_note_extractions(&note_uuid, "::company", &["OpenAI".to_string()])
+        .await
+        .unwrap();
+    backend
+        .set_note_extractions(&note_uuid, "::location", &["London".to_string()])
+        .await
+        .unwrap();
+    backend
+        .set_note_extractions(&note_uuid, "::product", &["ChatGPT".to_string()])
+        .await
+        .unwrap();
     let no_source_id = uuid::Uuid::new_v4().to_string();
     backend
         .insert_note(&InsertNoteReq {
@@ -296,6 +316,29 @@ fn assert_json_does_not_contain_string(value: &serde_json::Value, excluded: &str
     }
 }
 
+fn assert_json_does_not_contain_key(value: &serde_json::Value, excluded: &str) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_json_does_not_contain_key(value, excluded);
+            }
+        }
+        serde_json::Value::Object(values) => {
+            assert!(
+                !values.contains_key(excluded),
+                "unexpected internal field {excluded}"
+            );
+            for value in values.values() {
+                assert_json_does_not_contain_key(value, excluded);
+            }
+        }
+        serde_json::Value::Null
+        | serde_json::Value::Bool(_)
+        | serde_json::Value::Number(_)
+        | serde_json::Value::String(_) => {}
+    }
+}
+
 #[tokio::test]
 async fn mcp_server_exposes_stable_tool_contract() {
     let mut harness = McpHarness::start().await;
@@ -333,7 +376,34 @@ async fn mcp_server_exposes_stable_tool_contract() {
             assert_eq!(schema["properties"]["id"]["type"], "integer");
         }
         assert!(!tool["outputSchema"].to_string().contains("uuid"));
+        assert!(!tool["outputSchema"].to_string().contains("status"));
     }
+    let topics = tools
+        .iter()
+        .find(|tool| tool["name"] == "topic_list")
+        .unwrap();
+    assert_eq!(
+        topics["outputSchema"]["properties"]["topics"]["type"],
+        "array"
+    );
+    assert_eq!(
+        topics["outputSchema"]["properties"]["topics"]["items"]["type"],
+        "string"
+    );
+    let entities = tools
+        .iter()
+        .find(|tool| tool["name"] == "entity_list")
+        .unwrap();
+    let entity_item = &entities["outputSchema"]["properties"]["entities"]["items"];
+    let entity_properties = entity_item
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        .map(|name| &entities["outputSchema"]["$defs"][name]["properties"])
+        .unwrap_or(&entity_item["properties"]);
+    assert!(entity_properties.get("value").is_some());
+    assert!(entity_properties.get("type").is_some());
+
     let project_get = tools
         .iter()
         .find(|tool| tool["name"] == "project_get")
@@ -570,6 +640,96 @@ async fn mcp_note_source_output_schema_advertises_all_views() {
 }
 
 #[tokio::test]
+async fn mcp_discovery_returns_object_wrapped_typed_results() {
+    let mut harness = McpHarness::start().await;
+
+    let topics = harness.call("topic_list", serde_json::json!({})).await;
+    assert_eq!(topics["result"]["isError"], false);
+    assert_eq!(
+        topics["result"]["structuredContent"],
+        serde_json::json!({
+            "topics": ["AI"]
+        })
+    );
+
+    let entities = harness.call("entity_list", serde_json::json!({})).await;
+    assert_eq!(entities["result"]["isError"], false);
+    assert_eq!(
+        entities["result"]["structuredContent"]["entities"],
+        serde_json::json!([
+            { "value": "Ada Lovelace", "type": "person" },
+            { "value": "OpenAI", "type": "company" },
+            { "value": "London", "type": "location" },
+            { "value": "ChatGPT", "type": "product" }
+        ])
+    );
+
+    let people = harness
+        .call("entity_list", serde_json::json!({ "type": "person" }))
+        .await;
+    assert_eq!(people["result"]["isError"], false);
+    assert_eq!(
+        people["result"]["structuredContent"]["entities"],
+        serde_json::json!([
+            { "value": "Ada Lovelace", "type": "person" }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn mcp_section_mutations_remain_behaviorally_available() {
+    let mut harness = McpHarness::start().await;
+    let section = harness.alpha_id.clone();
+
+    let inserted = harness
+        .call(
+            "note_insert",
+            serde_json::json!({
+                "id": 42,
+                "section": section,
+                "position": "before",
+                "content": "## Inserted\n\nInserted body."
+            }),
+        )
+        .await;
+    assert_eq!(inserted["result"]["isError"], false);
+
+    let renamed = harness
+        .call(
+            "note_rename_section",
+            serde_json::json!({ "id": 42, "section": harness.alpha_id, "name": "Renamed" }),
+        )
+        .await;
+    assert_eq!(renamed["result"]["isError"], false);
+    let renamed_section = renamed["result"]["structuredContent"]["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|section| section["title"] == "Renamed")
+        .and_then(|section| section["id"].as_str())
+        .expect("renamed section id")
+        .to_string();
+
+    let deleted = harness
+        .call(
+            "note_delete_section",
+            serde_json::json!({ "id": 42, "section": renamed_section }),
+        )
+        .await;
+    assert_eq!(deleted["result"]["isError"], false);
+
+    let fetched = harness
+        .call("note_get", serde_json::json!({ "id": 42 }))
+        .await;
+    let content = fetched["result"]["structuredContent"]["content"]
+        .as_str()
+        .unwrap();
+    assert!(content.contains("## Inserted"));
+    assert!(content.contains("## Beta"));
+    assert!(!content.contains("## Renamed"));
+}
+
+#[tokio::test]
 async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     let mut harness = McpHarness::start().await;
     let listed = harness.call("note_list", serde_json::json!({})).await;
@@ -582,11 +742,13 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
         2
     );
     assert_json_does_not_contain_string(&listed["result"]["structuredContent"], &harness.note_uuid);
+    assert_json_does_not_contain_key(&listed["result"]["structuredContent"], "status");
 
     let fetched = harness
         .call("note_get", serde_json::json!({ "id": 42 }))
         .await;
     assert!(fetched["result"]["structuredContent"].get("uuid").is_none());
+    assert_json_does_not_contain_key(&fetched["result"]["structuredContent"], "status");
     assert!(
         fetched["result"]["structuredContent"]
             .get("project_id")
@@ -627,6 +789,7 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         modified["result"]["structuredContent"]["note"]["flagged"],
         true
     );
+    assert_json_does_not_contain_key(&modified["result"]["structuredContent"], "status");
     let section = harness.alpha_id.clone();
     harness
         .call(
@@ -667,6 +830,7 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         )
         .await;
     assert_eq!(added["result"]["isError"], false);
+    assert_json_does_not_contain_key(&added["result"]["structuredContent"], "status");
     let archived = harness
         .call("note_archive", serde_json::json!({ "id": 42 }))
         .await;

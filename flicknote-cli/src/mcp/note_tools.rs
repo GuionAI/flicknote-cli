@@ -1,4 +1,6 @@
 use flicknote_core::services::dto::ExtractionFilterDto;
+
+use super::dto::McpEntityType;
 use flicknote_core::services::source::SourceView;
 use rmcp::schemars::JsonSchema;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
@@ -103,6 +105,15 @@ where
 
 fn default_limit() -> u32 {
     20
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct TopicListParams {}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct EntityListParams {
+    #[serde(rename = "type")]
+    pub entity_type: Option<McpEntityType>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]

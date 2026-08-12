@@ -37,10 +37,7 @@ fn install_default() -> Result<(), CliError> {
 }
 
 fn install_to_homes(home: &Path) -> Result<Vec<PathBuf>, CliError> {
-    install_to_bases([
-        home.join(".agents").join("skills"),
-        home.join(".claude").join("skills"),
-    ])
+    install_to_bases([home.join(".agents").join("skills")])
 }
 
 fn install_to_bases<I>(bases: I) -> Result<Vec<PathBuf>, CliError>
@@ -65,44 +62,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_to_bases_creates_flicknote_skill_files() {
+    fn install_to_bases_writes_only_the_standard_agent_skill_destination() {
         let temp = tempfile::tempdir().expect("temp dir");
         let agents = temp.path().join(".agents").join("skills");
-        let claude = temp.path().join(".claude").join("skills");
 
-        let installed = install_to_bases([agents.clone(), claude.clone()]).expect("install skill");
+        let installed = install_to_bases([agents.clone()]).expect("install skill");
 
-        assert_eq!(
-            installed,
-            vec![
-                agents.join("flicknote").join("SKILL.md"),
-                claude.join("flicknote").join("SKILL.md"),
-            ]
-        );
+        assert_eq!(installed, vec![agents.join("flicknote").join("SKILL.md")]);
         assert_eq!(
             fs::read_to_string(agents.join("flicknote").join("SKILL.md")).expect("agents skill"),
-            FLICKNOTE_SKILL
-        );
-        assert_eq!(
-            fs::read_to_string(claude.join("flicknote").join("SKILL.md")).expect("claude skill"),
             FLICKNOTE_SKILL
         );
     }
 
     #[test]
-    fn install_to_homes_creates_missing_skill_roots() {
+    fn install_to_homes_leaves_existing_claude_skill_untouched() {
         let temp = tempfile::tempdir().expect("temp dir");
+        let claude_skill = temp.path().join(".claude/skills/flicknote/SKILL.md");
+        fs::create_dir_all(claude_skill.parent().unwrap()).expect("claude skill dir");
+        fs::write(&claude_skill, "user-managed skill").expect("existing claude skill");
 
         install_to_homes(temp.path()).expect("install skill");
 
-        assert!(
-            temp.path()
-                .join(".agents/skills/flicknote/SKILL.md")
-                .exists()
+        assert_eq!(
+            fs::read_to_string(claude_skill).unwrap(),
+            "user-managed skill"
         );
         assert!(
             temp.path()
-                .join(".claude/skills/flicknote/SKILL.md")
+                .join(".agents/skills/flicknote/SKILL.md")
                 .exists()
         );
     }

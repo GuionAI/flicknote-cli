@@ -80,19 +80,34 @@ fn note_type_filters_accept_meeting_and_reject_voice() {
 }
 
 #[test]
-fn replace_requires_section() {
-    assert!(Cli::try_parse_from(["flicknote", "replace", "1"]).is_err());
-    assert!(Cli::try_parse_from(["flicknote", "replace", "1", "--section", "a1"]).is_ok());
+fn agent_content_mutation_commands_are_not_cli_commands() {
+    for command in ["replace", "insert", "rename"] {
+        assert!(
+            Cli::try_parse_from(["flicknote", command, "1"]).is_err(),
+            "accepted removed command {command}"
+        );
+    }
+    assert!(Cli::try_parse_from(["flicknote", "delete", "1", "--section", "a1"]).is_err());
 }
 
 #[test]
-fn replace_rejects_metadata_flags() {
-    for flag in ["--project", "--flagged", "--unflagged"] {
-        let mut argv = vec!["flicknote", "replace", "1", "--section", "a1", flag];
-        if flag == "--project" {
-            argv.push("work");
-        }
-        assert!(Cli::try_parse_from(argv).is_err(), "accepted {flag}");
+fn modify_requires_metadata_and_accepts_valid_combinations() {
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1"]).is_err());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--project", "work"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--flagged"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--unflagged"]).is_ok());
+    assert!(
+        Cli::try_parse_from(["flicknote", "modify", "1", "--project", "work", "--flagged"]).is_ok()
+    );
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--flagged", "--unflagged"]).is_err());
+}
+
+#[test]
+fn modify_rejects_content_editing_and_section_arguments() {
+    for argument in ["--before", "--after", "--section"] {
+        let mut argv = vec!["flicknote", "modify", "1", "--project", "work", argument];
+        argv.push("value");
+        assert!(Cli::try_parse_from(argv).is_err(), "accepted {argument}");
     }
 }
 

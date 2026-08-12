@@ -65,7 +65,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 2);
+    assert_eq!(PROTOCOL_VERSION, 3);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -232,13 +232,13 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v2_client_rejects_protocol_v1_server_info() {
+async fn protocol_v3_client_rejects_protocol_v2_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 1,
+            protocol: 2,
             version: "legacy".to_string(),
         }),
     )

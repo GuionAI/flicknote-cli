@@ -7,7 +7,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Add & capture notes** — text, URLs (auto-detected as links), files
 - **List & search notes** — filter by type, project, or keyword (`find`)
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
-- **Edit notes** — modify exact text, or replace, append, insert, remove, and rename sections by ID
+- **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
@@ -93,20 +93,13 @@ flicknote unshare <note-id>
 flicknote project share <project-id>
 flicknote project unshare <project-id>
 
-# Edit note content
-# Precision edit (exact-string replace)
-cat <<'EDIT' | flicknote modify <note-id>
-===BEFORE===
-typo here
-===AFTER===
-fixed here
-EDIT
+# Edit note metadata
+flicknote modify <note-id> --project myproject
+flicknote modify <note-id> --project myproject --flagged
+flicknote modify <note-id> --unflagged
 
-# Replace one section, including its heading and child sections
-echo "## Heading
-body" | flicknote replace <note-id> --section <section-id>
-
-# For a whole-note rewrite, archive the old note and create a new note.
+# Content and section mutations use the structured MCP interface. The MCP
+# schemas carry exact before/after fields and section-scoped operations.
 
 # Append
 echo "more content" | flicknote append <note-id>
@@ -140,14 +133,16 @@ start it as a subprocess:
 }
 ```
 
-The MCP server requires the local daemon. It exposes typed note, note-source,
-and project tools. Note content
-and exact `before`/`after` edits are JSON fields, so callers do not need shell
-heredocs. Note tools accept numeric short IDs and do not expose internal UUIDs;
-project tools use project names. `note_source` reads stored source data, while
-`note_get` reads editable note content. Every data tool uses the running daemon;
-the MCP process never opens SQLite. The server does not start the daemon
-automatically.
+The MCP server requires the local daemon. It exposes typed note, discovery,
+note-source, and project tools. Note content and exact `before`/`after` edits
+are structured JSON fields, so callers do not need shell heredocs. Note tools
+accept numeric short IDs and do not expose internal UUIDs; project tools use
+project names. `note_source` reads stored source data, while `note_get` reads
+editable note content. Every data tool uses the running daemon; the MCP process
+never opens SQLite. The server does not start the daemon automatically.
+
+The Gateway CLI command remains available for internal development and
+maintenance requests; it is not the formal agent interface.
 
 ## Configuration
 

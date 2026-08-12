@@ -1,112 +1,49 @@
 ---
 name: flicknote
-description: "FlickNote CLI for managing notes - add, find, detail, modify, and organize by project"
+description: "MCP-first interface for daemon-backed FlickNote notes and projects"
 ---
 
-# FlickNote CLI
+# FlickNote MCP
 
-Use FlickNote to save and retrieve daemon-backed, local-first notes from the command line.
-Run `flicknote <command> --help` for exact flags and examples.
+Use FlickNote MCP for normal note and project operations. The MCP schemas are
+the source of truth for tool names, arguments, and result fields; do not
+recreate them with shell commands or Gateway requests.
 
-## Project Use
+## Identifiers
 
-Use `--project <name>` when the note belongs to a known project. Follow the
-user's project name if they provide one; otherwise omit `--project`.
+Use the numeric short note ID returned by MCP. Do not substitute a UUID. Project
+operations identify projects by their names.
 
-## Common Commands
+## Exact edits
 
-```bash
-flicknote add "note text" --project <project>
-cat note.md | flicknote add --project <project>
-flicknote upload file.pdf --project <project>
-flicknote find "keyword"
-flicknote find "::topic::AI::person::瓜子"
-flicknote topic list
-flicknote entity list --type person
-flicknote source <id>
-flicknote source <id> 12:19
-flicknote source <id> --info
-flicknote list --project <project>
-flicknote detail <id>
-flicknote detail <id> --tree
-flicknote share <id>
-flicknote unshare <id>
-flicknote project share <project-id>
-flicknote project unshare <project-id>
-flicknote content <id>
-flicknote content <id> --section <section-id>
-flicknote gateway request --path /healthz
-```
+`note_modify` performs one exact, whitespace-sensitive `before`/`after`
+replacement. The `before` text must occur exactly once. Include more surrounding
+context when a match is ambiguous. Content-editing fields remain separate from
+metadata fields, so a project or flagged-state change can be combined with an
+exact edit when appropriate.
 
-Use the numeric short ID shown by `flicknote list`.
+## Section scope
 
-## Editing Rules
+Section mutation tools operate on a complete section subtree, including its
+heading and child sections. Read the section tree before replacing, inserting,
+renaming, or deleting a section. A section replacement must supply the complete
+replacement heading and subtree; section deletion is destructive.
 
-Use `modify` for precise edits or note metadata. Use `replace` only to replace
-one complete section subtree.
+## Lifecycle
 
-```bash
-cat <<'EDIT' | flicknote modify <id>
-===BEFORE===
-old text exactly as it appears
-===AFTER===
-new text
-EDIT
+Archiving is the normal soft-delete operation. Treat archive as destructive and
+use restore only when the user explicitly wants the identified archived note
+back. Do not assume processing or synchronization status is part of the public
+note contract.
 
-cat section.md | flicknote replace <id> --section <section-id>
-```
+## Recommended flow
 
-`modify` requires one exact, whitespace-sensitive `===BEFORE===` /
-`===AFTER===` block. The match must be unique. Add surrounding context if the
-text appears more than once.
+Discover with the topic/entity tools, list or find notes, read the selected note,
+then apply the smallest exact or section-scoped mutation. Verify the result with
+a follow-up read. The shell CLI remains for human and operational workflows;
+Gateway is internal development/maintenance tooling, not the agent interface.
 
-`replace` requires `--section`, and stdin must start with a heading. It cannot
-replace a whole note or change its project/flagged state. To replace a whole
-note, archive the old note and create a new one. For section IDs, run
-`flicknote detail <id> --tree`.
+## More help
 
-Mutating section commands print the updated tree after the change.
-
-## MCP Server
-
-`flicknote mcp` serves typed note, source, and project tools over local stdio
-and requires the local PowerSync daemon.
-Configure an MCP client to run `flicknote` with `args: ["mcp"]`. Content and
-exact `before`/`after` edits are JSON fields, so MCP callers do not use shell
-heredocs or edit-mode delimiters. Note tools use numeric short IDs and hide
-internal UUIDs; project tools use project names. Use `note_get` for editable
-content and `note_source` only for stored source data. Every data tool requires
-the running sync daemon; the CLI and MCP server never open the local database
-directly.
-
-`flicknote mcp` does not expose Gateway tools. Use the CLI command below for
-authenticated Gateway access.
-
-## Gateway Requests
-
-`flicknote gateway request` makes an authenticated request only to an absolute
-path on the Gateway origin configured by FlickNote. It refreshes the local
-session when needed and keeps credentials inside the process. Do not extract a
-JWT from `session.json`.
-
-```bash
-flicknote gateway request --method POST --path /some-authorized-path --json '{"key":"value"}'
-```
-
-Use `--json` without a value to read JSON from stdin. The response body,
-including SSE, is forwarded to stdout. Status and errors go to stderr. Full
-URLs, redirects, caller-supplied headers, and token output are not supported.
-
-## More Help
-
-```bash
-flicknote --help
-flicknote add --help
-flicknote upload --help
-flicknote list --help
-flicknote detail --help
-flicknote content --help
-flicknote modify --help
-flicknote replace --help
-flicknote project --help
-```
+The installed MCP schemas define the available tools, parameters, and result
+fields. Use them rather than duplicating a command reference here.

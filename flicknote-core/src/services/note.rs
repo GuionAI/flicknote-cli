@@ -578,7 +578,6 @@ impl<'a> NoteService<'a> {
             short_id: note.short_id,
             uuid: note.id,
             note_type: note.r#type,
-            status: note.status,
             title: note.title,
             project_id: note.project_id,
             project,

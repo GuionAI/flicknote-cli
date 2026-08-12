@@ -33,7 +33,7 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
-    /// Delete a note (soft-delete) or remove a section
+    /// Delete (archive) a note
     Delete(commands::delete::DeleteArgs),
     /// Edit a note in $EDITOR, or create a new note from editor
     Edit(commands::edit::EditArgs),
@@ -73,13 +73,7 @@ enum Commands {
     Skill(commands::skill::SkillArgs),
     /// Import markdown files as notes
     Import(commands::import::ImportArgs),
-    /// Rename a section heading in a note
-    Rename(commands::rename::RenameArgs),
-    /// Insert content before or after a section
-    Insert(commands::insert::InsertArgs),
-    /// Replace a whole section — for precision edits use modify
-    Replace(commands::replace::ReplaceArgs),
-    /// Modify note via ===BEFORE===/===AFTER=== blocks and/or update metadata
+    /// Modify note metadata
     Modify(commands::modify::ModifyArgs),
     /// Open a note in the browser
     Open(commands::open::OpenArgs),
@@ -150,9 +144,6 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Share(args) => commands::share::run_note(daemon, args).await,
         Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
         Commands::Project(args) => commands::project::run(daemon, args).await,
-        Commands::Rename(args) => commands::rename::run(daemon, args).await,
-        Commands::Insert(args) => commands::insert::run(daemon, args).await,
-        Commands::Replace(args) => commands::replace::run(daemon, args).await,
         Commands::Modify(args) => commands::modify::run(daemon, args).await,
         Commands::Open(args) => commands::open::run(daemon, args).await,
         Commands::Import(args) => commands::import::run(daemon, args).await,
