@@ -75,17 +75,20 @@ impl From<NoteDetail> for McpNoteDetail {
     }
 }
 
+/// Every JSON value type plus `null` (for `Option` fields). Used wherever
+/// `serde_json::Value` appears so the schema stays an object-form term.
+const ARBITRARY_JSON_TYPES: [&str; 7] = [
+    "array", "boolean", "integer", "null", "number", "object", "string",
+];
+
 /// Object-form JSON Schema term for arbitrary JSON values.
 ///
 /// `serde_json::Value` derives a bare boolean schema term (`true`) that strict
 /// MCP clients reject. This term keeps arbitrary values unconstrained while
-/// remaining a parseable JSON Schema object. `null` is included because
-/// `Option<serde_json::Value>` fields serialize as `null` when absent.
+/// remaining a parseable JSON Schema object.
 fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
-    serde_json::from_value(serde_json::json!({
-        "type": ["array", "boolean", "integer", "null", "number", "object", "string"],
-    }))
-    .expect("arbitrary-json schema is valid JSON Schema")
+    serde_json::from_value(serde_json::json!({ "type": ARBITRARY_JSON_TYPES }))
+        .expect("arbitrary-json schema is valid JSON Schema")
 }
 
 /// MCP boundary result for source queries.
@@ -131,7 +134,7 @@ impl JsonSchema for McpSourceResult {
                     "properties": {
                         "view": {"type": "string", "enum": ["raw"]},
                         "source_type": {"type": "string"},
-                        "value": {"type": ["array", "boolean", "integer", "null", "number", "object", "string"]}
+                        "value": {"type": ARBITRARY_JSON_TYPES}
                     },
                     "required": ["view", "source_type", "value"]
                 },
