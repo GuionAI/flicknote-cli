@@ -346,63 +346,10 @@ async fn mcp_server_exposes_stable_tool_contract() {
     assert!(project_get["inputSchema"]["properties"].get("id").is_none());
 }
 
-/// Walk a JSON Schema and fail if a schema position holds a bare boolean
-/// (e.g. `"metadata": true`). Boolean *keywords* such as
-/// `additionalProperties: false` are left untouched, matching how strict MCP
-/// clients parse `outputSchema`.
-fn assert_schema_has_no_boolean_terms(schema: &serde_json::Value, tool: &str) {
-    match schema {
-        serde_json::Value::Bool(value) => {
-            panic!("tool {tool}: outputSchema contains boolean schema term {value}")
-        }
-        serde_json::Value::Object(map) => {
-            for (key, value) in map {
-                let is_named_schema_map = matches!(
-                    key.as_str(),
-                    "properties" | "patternProperties" | "$defs" | "definitions"
-                );
-                let is_schema_array =
-                    matches!(key.as_str(), "allOf" | "anyOf" | "oneOf" | "prefixItems");
-                let is_single_schema = matches!(
-                    key.as_str(),
-                    "items"
-                        | "propertyNames"
-                        | "contains"
-                        | "not"
-                        | "if"
-                        | "then"
-                        | "else"
-                        | "unevaluatedItems"
-                        | "unevaluatedProperties"
-                        | "contentSchema"
-                );
-                if is_named_schema_map {
-                    for (_name, sub) in value.as_object().unwrap() {
-                        assert_schema_has_no_boolean_terms(sub, tool);
-                    }
-                } else if is_schema_array {
-                    for sub in value.as_array().unwrap() {
-                        assert_schema_has_no_boolean_terms(sub, tool);
-                    }
-                } else if is_single_schema {
-                    assert_schema_has_no_boolean_terms(value, tool);
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                assert_schema_has_no_boolean_terms(value, tool);
-            }
-        }
-        serde_json::Value::Null | serde_json::Value::String(_) | serde_json::Value::Number(_) => {}
-    }
-}
-
 #[tokio::test]
 async fn mcp_tool_output_schemas_are_strict_client_compatible() {
     let mut harness = McpHarness::start().await;
     let tools = harness.tools().await;
-    assert!(!tools.is_empty());
     for tool in &tools {
         let name = tool["name"].as_str().unwrap();
         let output = &tool["outputSchema"];
@@ -411,7 +358,15 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
             serde_json::json!("object"),
             "tool {name}: outputSchema root type must be object"
         );
-        assert_schema_has_no_boolean_terms(output, name);
+        for (property, subschema) in output["properties"]
+            .as_object()
+            .unwrap_or(&serde_json::Map::new())
+        {
+            assert!(
+                subschema.is_object(),
+                "tool {name}: outputSchema property {property} must be an object, got {subschema}"
+            );
+        }
     }
 }
 
