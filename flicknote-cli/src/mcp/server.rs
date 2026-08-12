@@ -189,6 +189,7 @@ impl FlickNoteMcp {
     #[tool(
         name = "note_get",
         description = "Get one note with editable content, metadata, extractions, and section tree.",
+        output_schema = object_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_get(
