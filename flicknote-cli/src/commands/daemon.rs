@@ -174,10 +174,10 @@ fn ensure_authenticated(config: &Config) -> Result<(), CliError> {
     flicknote_core::session::get_user_id(config).map(|_| ())
 }
 
-fn initialize_daemon_logging(config: &Config) -> Result<(), CliError> {
+fn initialize_daemon_logging(_config: &Config) -> Result<(), CliError> {
     #[cfg(target_os = "macos")]
     if std::env::var_os("FLICKNOTE_DAEMON_MANAGED").is_some() {
-        redirect_managed_daemon_output(config)?;
+        redirect_managed_daemon_output(_config)?;
     }
     let mut builder = env_logger::Builder::from_env(
         env_logger::Env::default().default_filter_or("flicknote_sync=info,powersync=debug"),
