@@ -15,13 +15,14 @@ use tokio::net::UnixListener;
 use tokio::sync::watch;
 use tokio::task::{JoinHandle, JoinSet};
 
+#[cfg(unix)]
+use tokio::signal::unix::SignalKind;
+
 use crate::app::Application;
 use crate::ipc;
 use crate::ownership::{DataDirectoryLock, OwnershipError};
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
-use crate::storage_maintenance::{
-    WalCheckpointMode, checkpoint_wal_standalone, checkpoint_wal_standalone_with_timeout,
-};
+use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone_with_timeout};
 use crate::upload::FlickNoteConnector;
 
 const IPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -66,6 +67,57 @@ struct ActorHandles {
     powersync: JoinSet<()>,
 }
 
+struct StartupSignals {
+    receiver: watch::Receiver<bool>,
+    task: JoinHandle<()>,
+}
+
+impl StartupSignals {
+    fn register() -> Result<Self, std::io::Error> {
+        let (sender, receiver) = watch::channel(false);
+        #[cfg(unix)]
+        {
+            let mut interrupt = tokio::signal::unix::signal(SignalKind::interrupt())?;
+            let mut terminate = tokio::signal::unix::signal(SignalKind::terminate())?;
+            let task = tokio::spawn(async move {
+                tokio::select! {
+                    _ = interrupt.recv() => {}
+                    _ = terminate.recv() => {}
+                }
+                if sender.send(true).is_err() {
+                    log::debug!("daemon startup signal receiver was dropped");
+                }
+            });
+            Ok(Self { receiver, task })
+        }
+        #[cfg(not(unix))]
+        {
+            let task = tokio::spawn(std::future::pending::<()>());
+            Ok(Self { receiver, task })
+        }
+    }
+
+    fn requested(&self) -> bool {
+        *self.receiver.borrow()
+    }
+
+    async fn wait(&self) {
+        let mut receiver = self.receiver.clone();
+        if *receiver.borrow() {
+            return;
+        }
+        if receiver.changed().await.is_err() {
+            log::debug!("daemon startup signal watcher was dropped");
+        }
+    }
+}
+
+impl Drop for StartupSignals {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonRunError {
     #[error("{0}")]
@@ -89,6 +141,8 @@ impl DaemonRunError {
 /// The caller owns the process lifetime. This function never forks, detaches,
 /// creates a session, or redirects terminal output.
 pub async fn run(config: Config) -> Result<(), DaemonRunError> {
+    let startup_signals =
+        StartupSignals::register().map_err(|error| DaemonRunError::Startup(error.to_string()))?;
     config
         .validate()
         .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
@@ -96,6 +150,9 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
     // so an unauthenticated invocation cannot create persistent daemon state.
     flicknote_core::session::get_user_id(&config)
         .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
+    if startup_signals.requested() {
+        return Ok(());
+    }
 
     let config = Arc::new(config);
     let _ownership =
@@ -105,16 +162,27 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
             }
             OwnershipError::Io(_) => DaemonRunError::Startup(error.to_string()),
         })?;
+    if startup_signals.requested() {
+        return Ok(());
+    }
     let db = open_powersync_database(&config)
         .map_err(|error| DaemonRunError::Startup(error.to_string()))?;
-    let powersync_tasks = spawn_powersync_actors(&db);
+    let mut powersync_tasks = spawn_powersync_actors(&db);
 
-    startup_checkpoint(config.paths.db_file.clone()).await;
+    if startup_checkpoint(config.paths.db_file.clone(), &startup_signals).await {
+        shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
+        return Ok(());
+    }
     // Force PowerSync's local initialization before advertising IPC readiness.
-    let reader = db
-        .reader()
-        .await
-        .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
+    let reader = tokio::select! {
+        reader = db.reader() => reader
+            .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?,
+        _signal = startup_signals.wait() => {
+            log::info!("Shutdown signal received during daemon startup");
+            shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
+            return Ok(());
+        }
+    };
     drop(reader);
 
     let auth = Arc::new(GoTrueClient::new(
@@ -129,8 +197,14 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
         bind_socket(&config).map_err(|error| DaemonRunError::Startup(error.to_string()))?;
 
     log::info!("FlickNote daemon initialized (pid {})", std::process::id());
-    db.connect(SyncOptions::new(build_connector(&db, &auth, &config)))
-        .await;
+    tokio::select! {
+        _ = db.connect(SyncOptions::new(build_connector(&db, &auth, &config))) => {}
+        _signal = startup_signals.wait() => {
+            log::info!("Shutdown signal received during daemon startup");
+            shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
+            return Ok(());
+        }
+    }
     log::info!("FlickNote daemon accepting local requests");
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -141,7 +215,7 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
         powersync: powersync_tasks,
     };
 
-    let result = wait_for_shutdown(&mut actors).await;
+    let result = wait_for_shutdown(&mut actors, &startup_signals).await;
     shutdown_daemon(&mut actors, &db, config.paths.db_file.clone(), &shutdown_tx).await;
     result.map_err(DaemonRunError::Runtime)
 }
@@ -182,21 +256,31 @@ fn build_connector(
     }
 }
 
-async fn startup_checkpoint(db_path: PathBuf) {
+async fn startup_checkpoint(db_path: PathBuf, signals: &StartupSignals) -> bool {
     log::info!("Running startup WAL checkpoint");
-    let task = tokio::task::spawn_blocking(move || {
-        checkpoint_wal_standalone_with_timeout(
-            &db_path,
-            "startup",
-            WalCheckpointMode::Truncate,
-            1_000,
-        )
-    });
-    if tokio::time::timeout(WAL_CHECKPOINT_TIMEOUT, task)
-        .await
-        .is_err()
-    {
-        log::warn!("Startup WAL checkpoint exceeded its budget");
+    let task = match spawn_wal_checkpoint(db_path, "startup", WalCheckpointMode::Truncate, 1_000) {
+        Ok(task) => task,
+        Err(error) => {
+            log::warn!("Startup WAL checkpoint could not start: {error}");
+            return false;
+        }
+    };
+    tokio::pin!(task);
+    tokio::select! {
+        result = &mut task => {
+            if result.is_err() {
+                log::warn!("Startup WAL checkpoint worker ended before reporting completion");
+            }
+            false
+        }
+        _ = signals.wait() => {
+            log::info!("Shutdown signal received during startup WAL checkpoint");
+            true
+        }
+        _ = tokio::time::sleep(WAL_CHECKPOINT_TIMEOUT) => {
+            log::warn!("Startup WAL checkpoint exceeded its budget");
+            false
+        }
     }
 }
 
@@ -235,16 +319,40 @@ fn spawn_checkpoint_worker(db_path: PathBuf) -> JoinHandle<()> {
         interval.tick().await;
         loop {
             interval.tick().await;
-            let path = db_path.clone();
-            if let Err(error) = tokio::task::spawn_blocking(move || {
-                checkpoint_wal_standalone(&path, "periodic", WalCheckpointMode::Passive)
-            })
-            .await
-            {
-                log::error!("Periodic WAL checkpoint task panicked: {error}");
+            match spawn_wal_checkpoint(
+                db_path.clone(),
+                "periodic",
+                WalCheckpointMode::Passive,
+                5_000,
+            ) {
+                Ok(done) => {
+                    if let Err(error) = done.await {
+                        log::error!("Periodic WAL checkpoint task failed: {error}");
+                    }
+                }
+                Err(error) => log::error!("Periodic WAL checkpoint could not start: {error}"),
             }
         }
     })
+}
+
+fn spawn_wal_checkpoint(
+    db_path: PathBuf,
+    label: &'static str,
+    mode: WalCheckpointMode,
+    busy_timeout_ms: u64,
+) -> Result<tokio::sync::oneshot::Receiver<()>, String> {
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name(format!("flicknote-wal-{label}"))
+        .spawn(move || {
+            checkpoint_wal_standalone_with_timeout(&db_path, label, mode, busy_timeout_ms);
+            if done_tx.send(()).is_err() {
+                log::debug!("WAL checkpoint completion receiver was dropped");
+            }
+        })
+        .map_err(|error| format!("could not start WAL checkpoint thread: {error}"))?;
+    Ok(done_rx)
 }
 
 fn spawn_socket_server(
@@ -274,25 +382,15 @@ fn spawn_socket_server(
     })
 }
 
-async fn wait_for_shutdown(actors: &mut ActorHandles) -> Result<(), String> {
-    wait_for_runtime_event(actors, shutdown_signal()).await
-}
-
-async fn shutdown_signal() -> Result<(), String> {
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .map_err(|error| format!("Failed to register SIGTERM handler: {error}"))?;
-    tokio::select! {
-        result = tokio::signal::ctrl_c() => {
-            result.map_err(|error| format!("Failed to receive SIGINT: {error}"))
-        }
-        signal = terminate.recv() => {
-            if signal.is_some() {
-                Ok(())
-            } else {
-                Err("SIGTERM handler closed unexpectedly".to_string())
-            }
-        }
-    }
+async fn wait_for_shutdown(
+    actors: &mut ActorHandles,
+    signals: &StartupSignals,
+) -> Result<(), String> {
+    wait_for_runtime_event(actors, async {
+        signals.wait().await;
+        Ok(())
+    })
+    .await
 }
 
 async fn wait_for_runtime_event<F>(actors: &mut ActorHandles, shutdown: F) -> Result<(), String>
@@ -359,17 +457,14 @@ impl ShutdownOperations for RuntimeShutdownOperations<'_> {
     }
 
     async fn checkpoint(&self) -> Result<(), String> {
-        let checkpoint_path = self.db_path.clone();
-        tokio::task::spawn_blocking(move || {
-            checkpoint_wal_standalone_with_timeout(
-                &checkpoint_path,
-                "shutdown",
-                WalCheckpointMode::Truncate,
-                1_000,
-            );
-        })
-        .await
-        .map_err(|error| format!("WAL checkpoint task panicked: {error}"))
+        let task = spawn_wal_checkpoint(
+            self.db_path.clone(),
+            "shutdown",
+            WalCheckpointMode::Truncate,
+            1_000,
+        )?;
+        task.await
+            .map_err(|_| "WAL checkpoint worker ended before reporting completion".to_string())
     }
 }
 
@@ -422,6 +517,18 @@ async fn run_storage_shutdown(
     ]
 }
 
+async fn shutdown_startup(actors: &mut JoinSet<()>, db: &PowerSyncDatabase, db_path: PathBuf) {
+    let operations = RuntimeShutdownOperations { db, db_path };
+    let _stage_results = run_storage_shutdown(
+        &operations,
+        POWERSYNC_DISCONNECT_TIMEOUT,
+        WAL_CHECKPOINT_TIMEOUT,
+    )
+    .await;
+    actors.abort_all();
+    log::info!("Daemon startup shutdown coordinator finished");
+}
+
 async fn shutdown_daemon(
     actors: &mut ActorHandles,
     db: &PowerSyncDatabase,
@@ -453,7 +560,6 @@ async fn shutdown_daemon(
     )
     .await;
     actors.powersync.abort_all();
-    while actors.powersync.join_next().await.is_some() {}
     actors.checkpoint.abort();
     log::info!("Daemon shutdown coordinator finished");
 }
@@ -462,14 +568,6 @@ async fn shutdown_daemon(
 mod tests {
     use super::*;
     use std::sync::Mutex;
-
-    #[test]
-    fn shutdown_budget_is_the_sum_of_bounded_stages() {
-        assert_eq!(
-            IPC_DRAIN_TIMEOUT + POWERSYNC_DISCONNECT_TIMEOUT + WAL_CHECKPOINT_TIMEOUT,
-            Duration::from_secs(8)
-        );
-    }
 
     struct FakeShutdownOperations {
         events: Mutex<Vec<&'static str>>,

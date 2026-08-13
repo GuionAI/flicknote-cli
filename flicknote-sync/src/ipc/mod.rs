@@ -29,8 +29,8 @@ pub use protocol::*;
 #[cfg(test)]
 pub(crate) use server::write_json;
 pub use server::{
-    ServerInfoProvider, read_request, serve_app, serve_app_once, serve_app_until,
-    serve_app_until_with_provider, write_response,
+    ServerInfoProvider, read_request, serve_app, serve_app_once, serve_app_until_with_provider,
+    write_response,
 };
 
 #[cfg(test)]

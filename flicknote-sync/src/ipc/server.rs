@@ -47,18 +47,8 @@ pub async fn serve_app(
     app: Arc<Application>,
     info: ServerInfo,
 ) -> Result<(), DaemonError> {
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let _keep_shutdown_sender_alive = shutdown_tx;
-    serve_app_until(listener, app, info, shutdown_rx).await
-}
-
-pub async fn serve_app_until(
-    listener: UnixListener,
-    app: Arc<Application>,
-    info: ServerInfo,
-    shutdown: watch::Receiver<bool>,
-) -> Result<(), DaemonError> {
-    serve_app_until_with_provider(listener, app, static_info_provider(info), shutdown).await
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    serve_app_until_with_provider(listener, app, static_info_provider(info), shutdown_rx).await
 }
 
 pub async fn serve_app_until_with_provider(

@@ -71,6 +71,24 @@ impl DaemonProcess {
         socket_path_for(&self.data_home)
     }
 
+    fn wait_for_lock(&mut self) {
+        for _ in 0..200 {
+            if self
+                .data_home
+                .join("flicknote")
+                .join("daemon.lock")
+                .exists()
+            {
+                return;
+            }
+            if let Some(status) = self.child.try_wait().unwrap() {
+                panic!("daemon exited before acquiring ownership: {status}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("daemon did not acquire ownership");
+    }
+
     fn wait_ready(&mut self) {
         for _ in 0..200 {
             if self.health() {
@@ -275,6 +293,17 @@ fn second_foreground_daemon_cannot_take_ownership_or_remove_the_socket() {
     assert!(first.socket().exists());
     assert!(first.signal(libc::SIGTERM).success());
     assert!(!first.socket().exists());
+}
+
+#[test]
+fn startup_signals_use_graceful_shutdown_before_ipc_readiness() {
+    for signal in [libc::SIGINT, libc::SIGTERM] {
+        let mut process = DaemonProcess::start();
+        process.wait_for_lock();
+        let exit = process.signal(signal);
+        assert!(exit.success());
+        assert!(!process.socket().exists());
+    }
 }
 
 #[test]

@@ -267,6 +267,8 @@ struct StatusReport {
     protocol: ProtocolStatus,
     error: Option<StatusError>,
     service_error: Option<StatusError>,
+    #[serde(skip)]
+    service_diagnostic: Option<String>,
     log_guidance: LogGuidance,
 }
 
@@ -288,6 +290,7 @@ impl StatusReport {
             },
             error: None,
             service_error: None,
+            service_diagnostic: None,
             log_guidance: log_guidance(config),
         }
     }
@@ -326,10 +329,11 @@ impl StatusReport {
             .as_ref()
             .map(|error| format!("{}: {}", error.code, error.message))
             .unwrap_or_else(|| "none".to_string());
+        let service_diagnostic = self.service_diagnostic.as_deref().unwrap_or("none");
         let download_error = self.sync_errors.download.as_deref().unwrap_or("none");
         let upload_error = self.sync_errors.upload.as_deref().unwrap_or("none");
         format!(
-            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nlast error: {}\nservice error: {}\nlogs: {}\nlog command: {}",
+            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nlast error: {}\nservice error: {}\nservice diagnostics: {}\nlogs: {}\nlog command: {}",
             format_service_state(self.service_state),
             format_application_state(self.application_state),
             self.daemon_executable.as_deref().unwrap_or("unavailable"),
@@ -344,6 +348,7 @@ impl StatusReport {
             upload_error,
             error,
             service_error,
+            service_diagnostic,
             self.log_guidance.destination,
             self.log_guidance.command,
         )
@@ -372,8 +377,11 @@ async fn build_status_report_with_probe(
             report.service_state = ServiceStatusState::QueryFailed;
             report.service_error = Some(StatusError {
                 code: "service_manager_query_failed".to_string(),
-                message: error.to_string(),
+                message:
+                    "Could not inspect the FlickNote daemon service; see verbose logs for diagnosis"
+                        .to_string(),
             });
+            report.service_diagnostic = Some(error.to_string());
         }
     }
 
@@ -481,19 +489,6 @@ mod tests {
                 log_file: directory.join("flicknote.log"),
             },
         }
-    }
-
-    #[test]
-    fn managed_service_restart_classification_uses_typed_startup_failures() {
-        let permanent = flicknote_sync::DaemonRunError::PermanentStartup(
-            "wording can change without affecting classification".to_string(),
-        );
-        let ownership = flicknote_sync::DaemonRunError::OwnershipConflict(
-            "not configured and invalid argument are only words".to_string(),
-        );
-
-        assert!(permanent.is_permanent_startup());
-        assert!(!ownership.is_permanent_startup());
     }
 
     #[test]

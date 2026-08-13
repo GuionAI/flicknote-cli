@@ -81,12 +81,11 @@ impl<'a> LifecycleController<'a> {
     }
 
     pub(crate) async fn install_and_wait(&self, config: &Config) -> Result<(), CliError> {
-        let state = self.service_state("query")?;
-        self.stop_running(config, state).await?;
+        self.stop_running(config, self.service_state("query")?)
+            .await?;
         self.service_call("install", |manager| manager.install(config))?;
         self.service_call("reload", |manager| manager.reload())?;
-        self.service_call("start", |manager| manager.start())?;
-        self.wait_for_ready(config, SERVICE_OPERATION_TIMEOUT).await
+        self.start_and_wait(config).await
     }
 
     pub(crate) async fn uninstall(&self, config: &Config) -> Result<ServiceCleanup, CliError> {
@@ -112,14 +111,8 @@ impl<'a> LifecycleController<'a> {
     }
 
     pub(crate) async fn start(&self, config: &Config) -> Result<(), CliError> {
-        if self.service_state("query")? == ServiceState::NotInstalled {
-            return Err(CliError::Other(
-                "FlickNote daemon service is not installed; run `flicknote daemon install`"
-                    .to_string(),
-            ));
-        }
-        self.service_call("start", |manager| manager.start())?;
-        self.wait_for_ready(config, SERVICE_OPERATION_TIMEOUT).await
+        self.ensure_installed("query")?;
+        self.start_and_wait(config).await
     }
 
     pub(crate) async fn stop(&self, config: &Config) -> Result<bool, CliError> {
@@ -128,14 +121,23 @@ impl<'a> LifecycleController<'a> {
     }
 
     pub(crate) async fn restart(&self, config: &Config) -> Result<(), CliError> {
-        let state = self.service_state("query")?;
+        self.stop_running(config, self.ensure_installed("query")?)
+            .await?;
+        self.start_and_wait(config).await
+    }
+
+    fn ensure_installed(&self, action: &'static str) -> Result<ServiceState, CliError> {
+        let state = self.service_state(action)?;
         if state == ServiceState::NotInstalled {
             return Err(CliError::Other(
                 "FlickNote daemon service is not installed; run `flicknote daemon install`"
                     .to_string(),
             ));
         }
-        self.stop_running(config, state).await?;
+        Ok(state)
+    }
+
+    async fn start_and_wait(&self, config: &Config) -> Result<(), CliError> {
         self.service_call("start", |manager| manager.start())?;
         self.wait_for_ready(config, SERVICE_OPERATION_TIMEOUT).await
     }
@@ -236,8 +238,16 @@ impl<'a> LifecycleController<'a> {
 }
 
 pub(crate) fn lifecycle_error(action: &str, error: &ServiceManagerError) -> CliError {
+    log::error!("FlickNote daemon service {action} operation failed: {error}");
+    let guidance = match action {
+        "start" | "install" => {
+            "run `flicknote daemon status --verbose` and retry `flicknote daemon install`"
+        }
+        "stop" | "uninstall" => "run `flicknote daemon status --verbose` before retrying cleanup",
+        _ => "run `flicknote daemon status --verbose`",
+    };
     CliError::Other(format!(
-        "Could not {action} the FlickNote daemon service: {error}; run `flicknote daemon status --verbose` for diagnosis"
+        "Could not {action} the FlickNote daemon service; {guidance}"
     ))
 }
 
@@ -246,7 +256,39 @@ mod tests {
     use super::*;
     use flicknote_core::services::error::ServiceError;
     use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, Once};
+
+    static TEST_LOGGER: LifecycleTestLogger = LifecycleTestLogger;
+    static TEST_LOGGER_INIT: Once = Once::new();
+    static TEST_LOG_RECORDS: Mutex<Vec<(log::Level, String)>> = Mutex::new(Vec::new());
+
+    struct LifecycleTestLogger;
+
+    impl log::Log for LifecycleTestLogger {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.level() == log::Level::Error
+                && metadata.target().ends_with("commands::daemon_lifecycle")
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                TEST_LOG_RECORDS
+                    .lock()
+                    .unwrap()
+                    .push((record.level(), record.args().to_string()));
+            }
+        }
+
+        fn flush(&self) {}
+    }
+
+    fn enable_test_logger() {
+        TEST_LOGGER_INIT.call_once(|| {
+            log::set_logger(&TEST_LOGGER)
+                .expect("test logger should be the first logger installed");
+            log::set_max_level(log::LevelFilter::Error);
+        });
+    }
 
     struct FakeManager {
         state: Mutex<ServiceState>,
@@ -642,7 +684,8 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_errors_preserve_platform_diagnostics() {
+    fn lifecycle_errors_use_flicknote_guidance_and_log_platform_diagnostics() {
+        enable_test_logger();
         let platform = ServiceManagerError::new(
             "start",
             "launchctl bootstrap failed: Input/output error (code 5)",
@@ -650,9 +693,15 @@ mod tests {
 
         let message = lifecycle_error("start", &platform).to_string();
 
-        assert!(message.contains("launchctl bootstrap failed"));
-        assert!(message.contains("Input/output error (code 5)"));
-        assert!(message.contains("flicknote daemon status --verbose"));
+        assert_eq!(
+            message,
+            "Could not start the FlickNote daemon service; run `flicknote daemon status --verbose` and retry `flicknote daemon install`"
+        );
+        assert!(TEST_LOG_RECORDS.lock().unwrap().iter().any(|record| {
+            record.0 == log::Level::Error
+                && record.1.contains("launchctl bootstrap failed")
+                && record.1.contains("Input/output error (code 5)")
+        }));
     }
 
     #[tokio::test]

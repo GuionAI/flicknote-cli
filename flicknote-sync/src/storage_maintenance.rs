@@ -1,7 +1,7 @@
 use std::fmt;
 use std::path::Path;
 
-/// WAL checkpoint mode passed to [`checkpoint_wal_standalone`].
+/// WAL checkpoint mode passed to [`checkpoint_wal_standalone_with_timeout`].
 #[derive(Clone, Copy)]
 pub(crate) enum WalCheckpointMode {
     /// Checkpoints frames up to the oldest active reader's mark without waiting.
@@ -19,15 +19,9 @@ impl fmt::Display for WalCheckpointMode {
     }
 }
 
-/// Run the normal WAL checkpoint with the maintenance timeout used by periodic
-/// and startup checkpoints.
-pub(crate) fn checkpoint_wal_standalone(db_path: &Path, label: &str, mode: WalCheckpointMode) {
-    checkpoint_wal_standalone_with_timeout(db_path, label, mode, 5_000);
-}
-
 /// Run a WAL checkpoint with an explicit SQLite busy timeout.
 ///
-/// The synchronous operation is always called from a blocking task by async
+/// The synchronous operation is called from a detached worker thread by async
 /// callers. The shutdown coordinator uses a short timeout so a busy database
 /// cannot hold process exit open.
 pub(crate) fn checkpoint_wal_standalone_with_timeout(
