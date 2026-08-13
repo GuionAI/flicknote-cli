@@ -1,11 +1,31 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncConnectionState {
+    Connected,
+    Connecting,
+    Offline,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PowerSyncErrors {
+    pub download: Option<String>,
+    pub upload: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerInfo {
     pub protocol: u16,
     pub version: String,
+    pub executable: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync: Option<SyncConnectionState>,
+    #[serde(default)]
+    pub sync_errors: PowerSyncErrors,
 }
 
 impl ServerInfo {
@@ -13,8 +33,31 @@ impl ServerInfo {
         Self {
             protocol: PROTOCOL_VERSION,
             version: env!("CARGO_PKG_VERSION").to_string(),
+            executable: current_executable(),
+            sync: None,
+            sync_errors: PowerSyncErrors::default(),
         }
     }
+
+    pub fn with_sync_status(
+        mut self,
+        sync: SyncConnectionState,
+        sync_errors: PowerSyncErrors,
+    ) -> Self {
+        self.sync = Some(sync);
+        self.sync_errors = sync_errors;
+        self
+    }
+}
+
+fn current_executable() -> String {
+    std::env::current_exe()
+        .ok()
+        .or_else(|| std::env::args_os().next().map(std::path::PathBuf::from))
+        .map_or_else(
+            || "unavailable".to_string(),
+            |path| path.display().to_string(),
+        )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -347,7 +390,7 @@ impl fmt::Display for DaemonError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unavailable { path, message } => {
-                write!(f, "Sync daemon is not available at {path}: {message}")
+                write!(f, "FlickNote daemon is not available at {path}: {message}")
             }
             Self::PartialCreate { message, .. }
             | Self::AmbiguousCreate { message, .. }

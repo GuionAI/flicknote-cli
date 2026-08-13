@@ -112,6 +112,28 @@ fn modify_rejects_content_editing_and_section_arguments() {
 }
 
 #[test]
+fn daemon_command_family_parses_and_legacy_sync_is_rejected() {
+    for command in ["install", "uninstall", "start", "stop", "restart", "run"] {
+        assert!(
+            Cli::try_parse_from(["flicknote", "daemon", command]).is_ok(),
+            "daemon {command} should parse"
+        );
+    }
+    assert!(Cli::try_parse_from(["flicknote", "daemon", "status"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "daemon", "status", "--verbose"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "daemon", "status", "--json"]).is_ok());
+    assert!(
+        Cli::try_parse_from(["flicknote", "daemon", "logs", "--lines", "25", "--follow"]).is_ok()
+    );
+    assert!(Cli::try_parse_from(["flicknote", "sync", "start"]).is_err());
+}
+
+#[test]
+fn logout_force_option_parses() {
+    assert!(Cli::try_parse_from(["flicknote", "logout", "--force"]).is_ok());
+}
+
+#[test]
 fn mcp_subcommand_parses() {
     assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_ok());
 }

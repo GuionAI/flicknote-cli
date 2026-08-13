@@ -31,6 +31,8 @@ futures-lite = "2"
 anyhow = "1"
 toml = "0.8"
 dirs = "6"
+service-manager = "0.11"
+fs4 = "1.1"
 
 [workspace.lints.rust]
 unsafe_code = "warn"

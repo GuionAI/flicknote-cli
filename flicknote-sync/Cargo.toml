@@ -2,7 +2,7 @@
 name = "flicknote-sync"
 version.workspace = true
 edition = "2024"
-description = "Background sync daemon for FlickNote CLI"
+description = "Daemon application host for FlickNote CLI"
 homepage = "https://github.com/guionai/flicknote-cli"
 repository = "https://github.com/guionai/flicknote-cli"
 license = "MIT"
@@ -22,12 +22,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 futures-lite = { workspace = true }
 log = "0.4"
-libc = "0.2.182"
 uuid = { workspace = true }
 chrono = "0.4"
+fs4 = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }

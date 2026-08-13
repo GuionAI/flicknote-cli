@@ -11,7 +11,7 @@ ci = "github"
 installers = ["homebrew"]
 # A GitHub repo to push Homebrew formulas to
 tap = "GuionAI/homebrew-tap"
-# Only flicknote-cli is distributed; it bundles both flicknote and flicknote-sync.
+# Only the unified flicknote executable is distributed.
 packages = ["flicknote-cli"]
 # Whether to install an updater program
 install-updater = false

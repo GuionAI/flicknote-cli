@@ -11,7 +11,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **MCP server** — typed local note, source, and project tools over stdio
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
-- **Background sync** — daemon process with launchd integration (macOS)
+- **User daemon service** — foreground daemon managed by launchd (macOS) or systemd (Linux)
 
 ## Build
 
@@ -47,7 +47,7 @@ cargo install --path flicknote-cli
 brew install GuionAI/tap/flicknote
 ```
 
-Installs both `flicknote` and `flicknote-sync`.
+Installs the unified `flicknote` executable.
 
 ## Release
 
@@ -107,15 +107,39 @@ echo "more content" | flicknote append <note-id>
 # Delete
 flicknote delete <note-id>
 
-# Manage sync daemon
-flicknote sync start
-# Reports the running daemon and protocol version
-flicknote sync status
-flicknote sync stop
+# Manage the user daemon service
+flicknote daemon install
+flicknote daemon status
+flicknote daemon logs --lines 100
+flicknote daemon stop
 
-# Install as launchd service (macOS)
-flicknote sync install
+# Foreground diagnosis (runs synchronously and keeps terminal output)
+flicknote daemon run
+
+# Reconcile/start the service after an upgrade
+flicknote daemon restart
 ```
+
+## Daemon lifecycle
+
+`flicknote login` authenticates and then installs, starts, and verifies the user daemon.
+`flicknote logout` stops and uninstalls it before clearing the session and local database.
+Use `--force` only for explicit recovery when cleanup cannot be confirmed:
+
+```bash
+flicknote login --force
+flicknote logout --force
+```
+
+The public lifecycle commands are `daemon install`, `uninstall`, `start`, `stop`,
+`restart`, `status`, `logs`, and `run`. `status --verbose` separates service
+state, application readiness, IPC protocol/version, PowerSync connectivity, and
+log guidance. `status --json` emits a stable object for automation. Data commands
+and MCP never start services or open SQLite directly; if the daemon is unavailable,
+run `flicknote daemon status` and `flicknote daemon start`.
+
+See [docs/daemon.md](docs/daemon.md) for macOS/Linux service details and the
+pre-upgrade uninstall boundary for installations using the old lifecycle.
 
 ## MCP server
 
@@ -161,7 +185,7 @@ Rust workspace with 4 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `flicknote-cli` | binary | Thin CLI/MCP clients and installable daemon binary |
+| `flicknote-cli` | binary | Unified CLI/MCP client and foreground daemon executable |
 | `flicknote-core` | library | Database, config, shared services, DTOs, types, schema |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |

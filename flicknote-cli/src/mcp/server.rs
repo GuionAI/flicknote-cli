@@ -295,7 +295,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_add",
-        description = "Create a note through the sync daemon. A leading H1 becomes the title; a pure HTTP(S) value becomes a link note.",
+        description = "Create a note through the FlickNote daemon. A leading H1 becomes the title; a pure HTTP(S) value becomes a link note.",
         annotations(open_world_hint = true)
     )]
     async fn note_add(
@@ -469,7 +469,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_share",
-        description = "Get or create a note share URL through the sync daemon.",
+        description = "Get or create a note share URL through the FlickNote daemon.",
         annotations(open_world_hint = true)
     )]
     async fn note_share(
@@ -486,7 +486,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_unshare",
-        description = "Revoke a note share URL through the sync daemon.",
+        description = "Revoke a note share URL through the FlickNote daemon.",
         annotations(open_world_hint = true)
     )]
     async fn note_unshare(
@@ -623,7 +623,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "project_share",
-        description = "Get or create a project share URL through the sync daemon.",
+        description = "Get or create a project share URL through the FlickNote daemon.",
         annotations(open_world_hint = true)
     )]
     async fn project_share(
@@ -639,7 +639,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "project_unshare",
-        description = "Revoke a project share URL through the sync daemon.",
+        description = "Revoke a project share URL through the FlickNote daemon.",
         annotations(open_world_hint = true)
     )]
     async fn project_unshare(

@@ -1,4 +1,4 @@
-Data commands require the FlickNote daemon. Start it with `flicknote sync start`.
+Data commands require the FlickNote daemon. Start it with `flicknote daemon start`.
 The daemon owns the local PowerSync database and remote synchronization.
 Run `flicknote <command> --help` for exact flags and examples.
 

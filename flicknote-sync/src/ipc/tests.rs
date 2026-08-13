@@ -16,7 +16,7 @@ fn test_config(directory: &std::path::Path) -> Config {
             config_file: directory.join("config.json"),
             session_file: directory.join("session.json"),
             db_file: directory.join("flicknote.db"),
-            log_file: directory.join("sync.log"),
+            log_file: directory.join("daemon.log"),
         },
     }
 }
@@ -56,16 +56,16 @@ fn socket_path_lives_in_data_dir() {
             config_file: dir.join("config.json"),
             session_file: dir.join("session.json"),
             db_file: dir.join("flicknote.db"),
-            log_file: dir.join("sync.log"),
+            log_file: dir.join("daemon.log"),
         },
     };
 
-    assert_eq!(socket_path(&config), dir.join("sync.sock"));
+    assert_eq!(socket_path(&config), dir.join("daemon.sock"));
 }
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 3);
+    assert_eq!(PROTOCOL_VERSION, 4);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -94,15 +94,21 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
 }
 
 #[test]
-fn server_info_only_reports_protocol_and_version() {
+fn server_info_reports_precise_runtime_status_contract() {
     let info = ServerInfo::current();
     assert_eq!(info.protocol, PROTOCOL_VERSION);
     assert!(!info.version.is_empty());
+    assert!(!info.executable.is_empty());
     assert_eq!(
         serde_json::to_value(&info).unwrap(),
         json!({
             "protocol": PROTOCOL_VERSION,
             "version": env!("CARGO_PKG_VERSION"),
+            "executable": info.executable,
+            "sync_errors": {
+                "download": null,
+                "upload": null,
+            },
         })
     );
 }
@@ -130,7 +136,8 @@ async fn daemon_client_maps_missing_socket_to_retryable_unavailable() {
 
     assert_eq!(error.code(), "daemon_unavailable");
     assert!(error.retryable());
-    assert!(error.to_string().contains("flicknote sync start"));
+    assert!(error.to_string().contains("flicknote daemon start"));
+    assert!(!error.to_string().contains("daemon.sock"));
 }
 
 #[tokio::test]
@@ -226,13 +233,13 @@ async fn health_rejects_unexpected_daemon_responses() {
     )
     .await;
     let error = DaemonClient::new(&config).health().await.unwrap_err();
-    assert_eq!(error.code(), "daemon_protocol_mismatch");
-    assert!(error.to_string().contains("sync stop"));
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
+    assert!(error.to_string().contains("daemon restart"));
     server.await.unwrap();
 }
 
 #[tokio::test]
-async fn protocol_v3_client_rejects_protocol_v2_server_info() {
+async fn protocol_v4_client_rejects_protocol_v2_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
@@ -240,14 +247,54 @@ async fn protocol_v3_client_rejects_protocol_v2_server_info() {
         DaemonResponse::ServerInfo(ServerInfo {
             protocol: 2,
             version: "legacy".to_string(),
+            executable: "/opt/legacy/flicknote".to_string(),
+            sync: None,
+            sync_errors: PowerSyncErrors::default(),
         }),
     )
     .await;
 
     let error = DaemonClient::new(&config).health().await.unwrap_err();
 
-    assert_eq!(error.code(), "daemon_protocol_mismatch");
-    assert!(error.to_string().contains("sync stop"));
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
+    let message = error.to_string();
+    assert!(message.contains("CLI version 1.0.0 protocol 4"));
+    assert!(message.contains("daemon executable /opt/legacy/flicknote"));
+    assert!(message.contains("daemon version legacy protocol 2"));
+    assert!(message.contains("daemon restart"));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn health_preserves_protocol_mismatch_details_from_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let server = serve_response(
+        &config,
+        DaemonResponse::AppError(WireError {
+            code: PROTOCOL_MISMATCH_CODE.to_string(),
+            message: "old daemon".to_string(),
+            retryable: false,
+            details: Some(json!({
+                "daemon_executable": "/usr/local/bin/flicknote",
+                "daemon_version": "0.8.0",
+                "daemon_protocol": 2
+            })),
+        }),
+    )
+    .await;
+
+    let error = DaemonClient::new(&config).health().await.unwrap_err();
+
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
+    match error {
+        ServiceError::Remote { details, .. } => {
+            let details = details.unwrap();
+            assert_eq!(details["daemon_executable"], "/usr/local/bin/flicknote");
+            assert_eq!(details["daemon_version"], "0.8.0");
+        }
+        other => panic!("expected remote protocol details, got {other:?}"),
+    }
     server.await.unwrap();
 }
 
@@ -274,7 +321,7 @@ async fn application_maps_unknown_envelope_to_protocol_mismatch() {
         .await
         .unwrap_err();
 
-    assert_eq!(error.code(), "daemon_protocol_mismatch");
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     assert!(!error.retryable());
     server.await.unwrap();
 }
@@ -360,7 +407,7 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(error.code(), "daemon_protocol_mismatch");
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     server.await.unwrap();
 
     let directory = tempfile::tempdir().unwrap();
@@ -419,9 +466,9 @@ async fn health_maps_legacy_daemon_error_to_protocol_mismatch() {
 
     let error = DaemonClient::new(&config).health().await.unwrap_err();
 
-    assert_eq!(error.code(), "daemon_protocol_mismatch");
+    assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     assert!(!error.retryable());
-    assert!(error.to_string().contains("sync stop"));
+    assert!(error.to_string().contains("daemon restart"));
     assert!(matches!(
         server.await.unwrap(),
         DaemonRequest::Health { .. }

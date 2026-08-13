@@ -3,4 +3,4 @@ Examples:
   flicknote share <note-uuid>
 
 Returns the existing share URL, or creates a permanent share link when none exists.
-Uses the sync daemon and current authenticated session.
+Uses the FlickNote daemon and current authenticated session.

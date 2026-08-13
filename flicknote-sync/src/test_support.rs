@@ -204,6 +204,7 @@ pub(crate) fn spawn_disconnected_then_retry_responses(
             let Some((mut stream, _)) = accept() else {
                 break;
             };
+            stream.set_nonblocking(false).unwrap();
             let count = stream.read(&mut buffer).unwrap();
             requests.push(
                 String::from_utf8_lossy(&buffer[..count])

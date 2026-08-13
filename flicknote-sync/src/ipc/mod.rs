@@ -28,7 +28,10 @@ pub use client::{DaemonClient, send_request, socket_path};
 pub use protocol::*;
 #[cfg(test)]
 pub(crate) use server::write_json;
-pub use server::{read_request, serve_app, serve_app_once, write_response};
+pub use server::{
+    ServerInfoProvider, read_request, serve_app, serve_app_once, serve_app_until,
+    serve_app_until_with_provider, write_response,
+};
 
 #[cfg(test)]
 mod tests;

@@ -3,4 +3,4 @@ Examples:
   flicknote unshare <note-uuid>
 
 Revokes the note's current share link.
-Uses the sync daemon and current authenticated session.
+Uses the FlickNote daemon and current authenticated session.
