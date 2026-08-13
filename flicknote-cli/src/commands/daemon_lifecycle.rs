@@ -138,8 +138,17 @@ impl<'a> LifecycleController<'a> {
     }
 
     async fn start_and_wait(&self, config: &Config) -> Result<(), CliError> {
+        self.start_and_wait_with_timeout(config, SERVICE_OPERATION_TIMEOUT)
+            .await
+    }
+
+    async fn start_and_wait_with_timeout(
+        &self,
+        config: &Config,
+        timeout: Duration,
+    ) -> Result<(), CliError> {
         self.service_call("start", |manager| manager.start())?;
-        self.wait_for_ready(config, SERVICE_OPERATION_TIMEOUT).await
+        self.wait_for_ready(config, timeout).await
     }
 
     async fn stop_running(&self, config: &Config, state: ServiceState) -> Result<bool, CliError> {
@@ -183,10 +192,11 @@ impl<'a> LifecycleController<'a> {
                 match self.service_state("confirm running")? {
                     ServiceState::Running => {}
                     ServiceState::Stopped => {
-                        return Err(CliError::Other(
-                            "FlickNote daemon service stopped before becoming ready; run `flicknote daemon status --verbose`"
-                                .to_string(),
-                        ));
+                        // launchd can report a freshly submitted agent as stopped
+                        // while it is still being scheduled; keep polling within
+                        // the operation timeout instead of failing immediately.
+                        tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
+                        continue;
                     }
                     ServiceState::NotInstalled => {
                         return Err(CliError::Other(
@@ -256,6 +266,7 @@ mod tests {
     use super::*;
     use flicknote_core::services::error::ServiceError;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex, Once};
 
     static TEST_LOGGER: LifecycleTestLogger = LifecycleTestLogger;
@@ -295,6 +306,7 @@ mod tests {
         start_state: Mutex<ServiceState>,
         calls: Mutex<Vec<&'static str>>,
         fail: Mutex<Option<&'static str>>,
+        status_sequence: Mutex<VecDeque<ServiceState>>,
     }
 
     impl FakeManager {
@@ -304,6 +316,7 @@ mod tests {
                 start_state: Mutex::new(ServiceState::Running),
                 calls: Mutex::new(Vec::new()),
                 fail: Mutex::new(None),
+                status_sequence: Mutex::new(VecDeque::new()),
             }
         }
 
@@ -323,7 +336,12 @@ mod tests {
     impl ServiceManagerAdapter for FakeManager {
         fn status(&self) -> Result<ServiceState, ServiceManagerError> {
             self.operation("status")?;
-            Ok(*self.state.lock().unwrap())
+            Ok(self
+                .status_sequence
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(*self.state.lock().unwrap()))
         }
 
         fn install(&self, _config: &Config) -> Result<(), ServiceManagerError> {
@@ -357,19 +375,26 @@ mod tests {
 
     struct FakeHealth {
         results: Mutex<VecDeque<Result<ServerInfo, ServiceError>>>,
+        polls: AtomicUsize,
     }
 
     impl FakeHealth {
         fn new(results: impl IntoIterator<Item = Result<ServerInfo, ServiceError>>) -> Self {
             Self {
                 results: Mutex::new(results.into_iter().collect()),
+                polls: AtomicUsize::new(0),
             }
+        }
+
+        fn polls(&self) -> usize {
+            self.polls.load(Ordering::SeqCst)
         }
     }
 
     #[async_trait]
     impl DaemonHealthProbe for FakeHealth {
         async fn health(&self, _config: &Config) -> Result<ServerInfo, ServiceError> {
+            self.polls.fetch_add(1, Ordering::SeqCst);
             self.results
                 .lock()
                 .unwrap()
@@ -481,12 +506,112 @@ mod tests {
         let health = FakeHealth::new([Ok(ServerInfo::current())]);
 
         let error = LifecycleController::new(&factory, &health)
-            .start(&config)
+            .start_and_wait_with_timeout(&config, Duration::from_millis(250))
             .await
             .unwrap_err();
 
-        assert!(error.to_string().contains("service stopped"));
-        assert_eq!(manager.calls(), vec!["status", "start", "status"]);
+        assert!(error.to_string().contains("did not become ready"));
+        assert_eq!(health.polls(), 0);
+        assert!(manager.calls().starts_with(&["start", "status"]));
+    }
+
+    #[tokio::test]
+    async fn install_tolerates_transient_stopped_and_retryable_ipc_failure_before_readiness() {
+        let (_directory, config) = test_config();
+        let manager = Arc::new(FakeManager::new(ServiceState::Stopped));
+        *manager.status_sequence.lock().unwrap() = VecDeque::from([
+            ServiceState::Stopped,
+            ServiceState::Stopped,
+            ServiceState::Stopped,
+        ]);
+        let factory = FakeFactory(Arc::clone(&manager));
+        let health = FakeHealth::new([
+            Err(unavailable()),
+            Err(unavailable()),
+            Ok(ServerInfo::current()),
+            Ok(ServerInfo::current()),
+        ]);
+
+        LifecycleController::new(&factory, &health)
+            .install_and_wait(&config)
+            .await
+            .unwrap();
+
+        assert!(
+            manager
+                .calls()
+                .starts_with(&["status", "install", "reload", "start"])
+        );
+        assert!(
+            manager
+                .calls()
+                .iter()
+                .filter(|call| **call == "status")
+                .count()
+                >= 4,
+            "readiness polling must keep observing transient states within the timeout"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_treats_not_installed_as_terminal_after_start() {
+        let (_directory, config) = test_config();
+        let manager = Arc::new(FakeManager::new(ServiceState::Running));
+        *manager.status_sequence.lock().unwrap() =
+            VecDeque::from([ServiceState::Stopped, ServiceState::NotInstalled]);
+        let factory = FakeFactory(Arc::clone(&manager));
+        let health = FakeHealth::new([]);
+
+        let error = LifecycleController::new(&factory, &health)
+            .start_and_wait_with_timeout(&config, Duration::from_millis(500))
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("was removed before becoming ready")
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_treats_protocol_mismatch_as_terminal() {
+        let (_directory, config) = test_config();
+        let manager = Arc::new(FakeManager::new(ServiceState::Running));
+        let factory = FakeFactory(Arc::clone(&manager));
+        let mismatch = ServiceError::Remote {
+            code: PROTOCOL_MISMATCH_CODE.to_string(),
+            message: "daemon protocol mismatch: CLI v4 vs daemon v3".to_string(),
+            retryable: true,
+            details: None,
+        };
+        let health = FakeHealth::new([Err(mismatch)]);
+
+        let error = LifecycleController::new(&factory, &health)
+            .start_and_wait_with_timeout(&config, Duration::from_millis(500))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("protocol mismatch"));
+        assert_eq!(manager.calls(), vec!["start", "status"]);
+    }
+
+    #[tokio::test]
+    async fn wait_for_ready_returns_non_retryable_ipc_errors_immediately() {
+        let (_directory, config) = test_config();
+        let manager = Arc::new(FakeManager::new(ServiceState::Running));
+        let factory = FakeFactory(Arc::clone(&manager));
+        let health = FakeHealth::new([Err(ServiceError::Daemon(
+            "IPC socket closed unexpectedly".to_string(),
+        ))]);
+
+        let error = LifecycleController::new(&factory, &health)
+            .start_and_wait_with_timeout(&config, Duration::from_millis(500))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("IPC socket closed unexpectedly"));
+        assert_eq!(manager.calls(), vec!["start", "status"]);
     }
 
     #[tokio::test]
