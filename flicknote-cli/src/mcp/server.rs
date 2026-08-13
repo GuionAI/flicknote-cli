@@ -111,17 +111,30 @@ impl FlickNoteMcp {
     }
 }
 
-/// Remove generator-specific format labels from advertised MCP schemas.
+/// Return whether `format` is one of Schemars' unsigned Rust primitive labels.
+fn is_schemars_unsigned_integer_format(format: &str) -> bool {
+    matches!(
+        format,
+        "uint" | "uint8" | "uint16" | "uint32" | "uint64" | "uint128"
+    )
+}
+
+/// Remove Schemars' nonportable unsigned-integer labels from MCP schemas.
 ///
-/// JSON Schema's `format` is annotation-only and Schemars emits Rust integer
-/// implementation details such as `uint` and `uint64`. MCP clients need only
-/// the existing `integer` type and numeric bounds; omitting every format avoids
-/// client-specific format registries without changing serialization or validation.
+/// These Rust implementation details are not JSON Schema-defined formats and
+/// strict clients may reject them. Keep semantic formats such as `uuid`, `uri`,
+/// and `date-time`, which clients can use as annotations.
 fn normalize_schema_formats(schema: &mut serde_json::Map<String, serde_json::Value>) {
     fn visit(value: &mut serde_json::Value) {
         match value {
             serde_json::Value::Object(object) => {
-                object.remove("format");
+                if object
+                    .get("format")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(is_schemars_unsigned_integer_format)
+                {
+                    object.remove("format");
+                }
                 for value in object.values_mut() {
                     visit(value);
                 }

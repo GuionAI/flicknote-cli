@@ -474,20 +474,27 @@ fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
     }
 }
 
-fn assert_no_schema_formats(schema: &serde_json::Value, tool: &str) {
+fn assert_no_unsigned_integer_formats(schema: &serde_json::Value, tool: &str) {
     match schema {
         serde_json::Value::Object(map) => {
             assert!(
-                !map.contains_key("format"),
-                "tool {tool}: schema contains an implementation-specific format: {schema}"
+                !map.get("format")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|format| {
+                        matches!(
+                            format,
+                            "uint" | "uint8" | "uint16" | "uint32" | "uint64" | "uint128"
+                        )
+                    }),
+                "tool {tool}: schema contains a nonportable unsigned-integer format: {schema}"
             );
             for value in map.values() {
-                assert_no_schema_formats(value, tool);
+                assert_no_unsigned_integer_formats(value, tool);
             }
         }
         serde_json::Value::Array(values) => {
             for value in values {
-                assert_no_schema_formats(value, tool);
+                assert_no_unsigned_integer_formats(value, tool);
             }
         }
         _ => {}
@@ -507,8 +514,8 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
             "tool {name}: outputSchema root type must be object"
         );
         assert_no_boolean_schema_terms(output, name);
-        assert_no_schema_formats(output, name);
-        assert_no_schema_formats(&tool["inputSchema"], name);
+        assert_no_unsigned_integer_formats(output, name);
+        assert_no_unsigned_integer_formats(&tool["inputSchema"], name);
     }
 
     let list = tools
