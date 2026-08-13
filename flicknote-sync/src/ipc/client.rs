@@ -6,7 +6,7 @@ const IPC_HEALTH_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::fr
 const IPC_APP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub fn socket_path(config: &Config) -> PathBuf {
-    config.paths.data_dir.join("sync.sock")
+    config.paths.data_dir.join("daemon.sock")
 }
 
 pub(crate) fn unavailable(path: &std::path::Path, stage: &str) -> DaemonError {
@@ -26,8 +26,7 @@ pub(crate) fn request_timeout_error(
     }
     DaemonError::Other {
         message: format!(
-            "Timed out while {stage} from the sync daemon at {}; the application request outcome is unknown. Do not retry it automatically.",
-            path.display()
+            "Timed out while {stage}; the application request outcome is unknown. Do not retry it automatically."
         ),
     }
 }
@@ -52,8 +51,8 @@ pub async fn send_request(
     request: &DaemonRequest,
 ) -> Result<DaemonResponse, DaemonError> {
     let path = socket_path(config);
-    let request_bytes = serde_json::to_vec(request).map_err(|e| DaemonError::Other {
-        message: format!("Failed to serialize daemon request: {e}"),
+    let request_bytes = serde_json::to_vec(request).map_err(|error| DaemonError::Other {
+        message: format!("Failed to serialize daemon request: {error}"),
     })?;
     let mut stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(&path))
         .await
@@ -89,18 +88,20 @@ pub async fn send_request(
         }
         None => stream.read_to_end(&mut buf).await,
     }
-    .map_err(|e| DaemonError::PostConnectTransport {
-        message: format!("Failed to read daemon response: {e}"),
+    .map_err(|error| DaemonError::PostConnectTransport {
+        message: format!("Failed to read daemon response: {error}"),
     })?;
-    serde_json::from_slice(&buf).map_err(|e| {
-        if e.is_eof() {
+    serde_json::from_slice(&buf).map_err(|error| {
+        if error.is_eof() {
             return DaemonError::IncompleteResponse {
-                message: format!("Daemon closed the connection before a complete response: {e}"),
+                message: format!(
+                    "Daemon closed the connection before a complete response: {error}"
+                ),
             };
         }
         match serde_json::from_slice::<serde_json::Value>(&buf) {
             Ok(_) => DaemonError::InvalidResponse {
-                message: format!("Daemon returned an incompatible response: {e}"),
+                message: format!("Daemon returned an incompatible response: {error}"),
             },
             Err(raw_error) => DaemonError::MalformedResponse {
                 message: format!("Daemon returned a malformed response: {raw_error}"),
@@ -123,17 +124,19 @@ impl<'a> DaemonClient<'a> {
         send_request(self.config, &request)
             .await
             .map_err(|error| match error {
-                DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(format!(
-                    "{error}. Start it with `flicknote sync start`."
-                )),
+                DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(
+                    "Check `flicknote daemon status` and start it with `flicknote daemon start`."
+                        .to_string(),
+                ),
                 DaemonError::IncompleteResponse { .. }
                 | DaemonError::MalformedResponse { .. }
                 | DaemonError::PostConnectTransport { .. }
                     if !is_mutating =>
                 {
-                    ServiceError::DaemonUnavailable(format!(
-                        "Sync daemon is not ready: {error}. Start it with `flicknote sync start`."
-                    ))
+                    ServiceError::DaemonUnavailable(
+                        "The FlickNote daemon is not ready. Check `flicknote daemon status` and start it with `flicknote daemon start`."
+                            .to_string(),
+                    )
                 }
                 DaemonError::IncompleteResponse { message }
                 | DaemonError::MalformedResponse { message }
@@ -143,7 +146,7 @@ impl<'a> DaemonClient<'a> {
                 {
                     Self::outcome_unknown(message)
                 }
-                DaemonError::InvalidResponse { .. } => Self::protocol_mismatch(),
+                DaemonError::InvalidResponse { .. } => Self::protocol_mismatch(None),
                 other => ServiceError::Daemon(other.to_string()),
             })
     }
@@ -156,8 +159,12 @@ impl<'a> DaemonClient<'a> {
             .await?
         {
             DaemonResponse::ServerInfo(info) if info.protocol == PROTOCOL_VERSION => Ok(info),
+            DaemonResponse::ServerInfo(info) => Err(Self::protocol_mismatch(Some(&info))),
+            DaemonResponse::AppError(error) if error.code == PROTOCOL_MISMATCH_CODE => {
+                Err(Self::protocol_mismatch_from_details(error.details.as_ref()))
+            }
             DaemonResponse::AppError(error) => Err(Self::remote_error(error)),
-            _ => Err(Self::protocol_mismatch()),
+            _ => Err(Self::protocol_mismatch(None)),
         }
     }
 
@@ -176,7 +183,7 @@ impl<'a> DaemonClient<'a> {
                 "The daemon returned an unexpected envelope after a mutating request; the operation outcome is unknown."
                     .to_string(),
             )),
-            _ => Err(Self::protocol_mismatch()),
+            _ => Err(Self::protocol_mismatch(None)),
         }
     }
 
@@ -189,7 +196,7 @@ impl<'a> DaemonClient<'a> {
                     "The daemon returned an unexpected response after a mutating request; the operation outcome is unknown.".to_string(),
                 )
             } else {
-                Self::protocol_mismatch()
+                Self::protocol_mismatch(None)
             }
         })
     }
@@ -203,12 +210,49 @@ impl<'a> DaemonClient<'a> {
         }
     }
 
-    fn protocol_mismatch() -> ServiceError {
+    fn protocol_mismatch(info: Option<&ServerInfo>) -> ServiceError {
+        let details = info.map(|info| {
+            serde_json::json!({
+                "daemon_executable": info.executable,
+                "daemon_version": info.version,
+                "daemon_protocol": info.protocol,
+            })
+        });
+        Self::protocol_mismatch_from_details(details.as_ref())
+    }
+
+    fn protocol_mismatch_from_details(details: Option<&serde_json::Value>) -> ServiceError {
+        let daemon_executable = details
+            .and_then(|value| value.get("daemon_executable"))
+            .and_then(serde_json::Value::as_str);
+        let daemon_version = details
+            .and_then(|value| value.get("daemon_version"))
+            .and_then(serde_json::Value::as_str);
+        let daemon_protocol = details
+            .and_then(|value| value.get("daemon_protocol"))
+            .and_then(serde_json::Value::as_u64);
+        let daemon_diagnostics = match (daemon_executable, daemon_version, daemon_protocol) {
+            (Some(executable), Some(version), Some(protocol)) => format!(
+                "daemon executable {executable}, daemon version {version} protocol {protocol}"
+            ),
+            _ => "daemon executable/version/protocol unavailable".to_string(),
+        };
+        let message = format!(
+            "The running FlickNote daemon is incompatible: CLI version {} protocol {}; {daemon_diagnostics}. Restart it with `flicknote daemon restart`.",
+            env!("CARGO_PKG_VERSION"),
+            PROTOCOL_VERSION,
+        );
         ServiceError::Remote {
-            code: "daemon_protocol_mismatch".to_string(),
-            message: "The running sync daemon uses an incompatible protocol. Restart it with `flicknote sync stop && flicknote sync start`.".to_string(),
+            code: PROTOCOL_MISMATCH_CODE.to_string(),
+            message,
             retryable: false,
-            details: None,
+            details: Some(serde_json::json!({
+                "cli_version": env!("CARGO_PKG_VERSION"),
+                "cli_protocol": PROTOCOL_VERSION,
+                "daemon_executable": daemon_executable,
+                "daemon_version": daemon_version,
+                "daemon_protocol": daemon_protocol,
+            })),
         }
     }
 

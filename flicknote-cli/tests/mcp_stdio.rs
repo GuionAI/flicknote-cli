@@ -844,7 +844,7 @@ fn mcp_requires_daemon_before_protocol_output() {
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("FlickNote daemon is unavailable"));
 }
 
 #[test]
@@ -859,7 +859,7 @@ fn data_commands_require_the_daemon() {
 
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("Sync daemon is unavailable"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("FlickNote daemon is unavailable"));
 }
 
 #[test]

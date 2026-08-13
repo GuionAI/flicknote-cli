@@ -36,6 +36,10 @@ use restore only when the user explicitly wants the identified archived note
 back. Do not assume processing or synchronization status is part of the public
 note contract.
 
+## Daemon recovery
+
+The MCP server is daemon-backed and never starts services implicitly. If startup or a tool reports an unavailable daemon, recommend `flicknote daemon status` and then `flicknote daemon start`; do not open the PowerSync database directly. A ready local daemon can remain usable while remote PowerSync is offline.
+
 ## Recommended flow
 
 Discover with the topic/entity tools, list or find notes, read the selected note,

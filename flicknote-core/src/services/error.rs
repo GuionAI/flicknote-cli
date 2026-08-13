@@ -22,9 +22,9 @@ pub enum ServiceError {
     NoSource,
     #[error("Nothing to modify")]
     NothingToModify,
-    #[error("Sync daemon is unavailable: {0}")]
+    #[error("FlickNote daemon is unavailable: {0}")]
     DaemonUnavailable(String),
-    #[error("Sync daemon request failed: {0}")]
+    #[error("FlickNote daemon request failed: {0}")]
     Daemon(String),
     #[error("{message}")]
     Remote {

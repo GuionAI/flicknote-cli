@@ -65,10 +65,10 @@ enum Commands {
     Project(commands::project::ProjectArgs),
     /// Authenticate with FlickNote
     Login(commands::login::LoginArgs),
-    /// Log out — remove saved session
-    Logout,
+    /// Log out — remove the daemon, session, and local data
+    Logout(commands::logout::LogoutArgs),
     /// Manage the FlickNote daemon
-    Sync(commands::sync::SyncArgs),
+    Daemon(commands::daemon::DaemonArgs),
     /// Install agent skills
     Skill(commands::skill::SkillArgs),
     /// Import markdown files as notes
@@ -81,8 +81,14 @@ enum Commands {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    if let Err(e) = run().await {
-        eprintln!("Error: {e:#}");
+    if let Err(error) = run().await {
+        if std::env::var_os("FLICKNOTE_DAEMON_MANAGED").is_some()
+            && matches!(error, CliError::Json(_))
+        {
+            eprintln!("Permanent daemon startup failure: {error:#}");
+            return;
+        }
+        eprintln!("Error: {error:#}");
         std::process::exit(1);
     }
 }
@@ -101,8 +107,8 @@ async fn run() -> Result<(), CliError> {
     if let Some(ref cmd) = cli.command {
         match cmd {
             Commands::Login(args) => return commands::login::run(&config, args).await,
-            Commands::Logout => return commands::logout::run(&config).await,
-            Commands::Sync(args) => return commands::sync::run(&config, args).await,
+            Commands::Logout(args) => return commands::logout::run(&config, args).await,
+            Commands::Daemon(args) => return commands::daemon::run(&config, args).await,
             Commands::Skill(args) => return commands::skill::run(args),
             Commands::Gateway(args) => return commands::gateway::run(&config, args).await,
             _ => {}
@@ -147,8 +153,8 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Modify(args) => commands::modify::run(daemon, args).await,
         Commands::Open(args) => commands::open::run(daemon, args).await,
         Commands::Import(args) => commands::import::run(daemon, args).await,
-        // Login/Logout/Sync/Skill are handled before dispatch() is called
-        Commands::Login(_) | Commands::Logout | Commands::Sync(_) | Commands::Skill(_) => {
+        // Login/Logout/Daemon/Skill are handled before dispatch() is called
+        Commands::Login(_) | Commands::Logout(_) | Commands::Daemon(_) | Commands::Skill(_) => {
             unreachable!()
         }
     }

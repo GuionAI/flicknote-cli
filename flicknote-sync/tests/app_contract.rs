@@ -11,8 +11,8 @@ use flicknote_core::services::ports::{
 };
 use flicknote_sync::app::Application;
 use flicknote_sync::ipc::{
-    AppRequest, AppResponse, DaemonClient, DaemonRequest, DaemonResponse, ServerInfo,
-    serve_app_once, socket_path,
+    AppRequest, AppResponse, DaemonClient, DaemonRequest, DaemonResponse, PROTOCOL_MISMATCH_CODE,
+    ServerInfo, serve_app_once, socket_path,
 };
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 
@@ -29,7 +29,7 @@ fn test_config(directory: &std::path::Path) -> Config {
             config_file: directory.join("config.json"),
             session_file: directory.join("session.json"),
             db_file: directory.join("flicknote.db"),
-            log_file: directory.join("sync.log"),
+            log_file: directory.join("daemon.log"),
         },
     }
 }
@@ -338,7 +338,18 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
     let DaemonResponse::AppError(error) = response else {
         panic!("expected protocol mismatch")
     };
-    assert_eq!(error.code, "daemon_protocol_mismatch");
+    assert_eq!(error.code, PROTOCOL_MISMATCH_CODE);
+    let details = error.details.unwrap();
+    assert!(
+        details["daemon_executable"]
+            .as_str()
+            .is_some_and(|path| !path.is_empty())
+    );
+    assert_eq!(details["daemon_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        details["daemon_protocol"],
+        flicknote_sync::ipc::PROTOCOL_VERSION
+    );
     server.await.unwrap().unwrap();
 }
 

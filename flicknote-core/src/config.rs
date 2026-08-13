@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Config {
     pub supabase_url: String,
     pub supabase_anon_key: String,
@@ -10,6 +11,7 @@ pub struct Config {
     pub paths: ConfigPaths,
 }
 
+#[derive(Clone)]
 pub struct ConfigPaths {
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,

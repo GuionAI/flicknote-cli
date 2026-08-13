@@ -28,22 +28,18 @@ fmt:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Install the Rust CLI and sync daemon.
+# Install the unified Rust CLI and daemon.
 install: install-rust
 
 # Install the Rust CLI.
 install-rust:
     cargo install --path flicknote-cli
 
-# Restart FlickNote launchd services.
+# Restart the installed FlickNote user daemon service.
 restart:
-    @for label in $(launchctl list 2>/dev/null | awk '/io\.guion\.flicknote/ {print $3}'); do \
-        echo "Restarting $label..."; \
-        launchctl kickstart -k "gui/$(id -u)/$label"; \
-        echo "✓ $label restarted"; \
-    done
+    flicknote daemon restart
 
-# Reinstall both Rust binaries and restart FlickNote launchd services.
+# Reinstall the unified executable and restart the FlickNote user daemon service.
 reinstall: reinstall-rust restart
 
 # Force-reinstall the Rust CLI.
