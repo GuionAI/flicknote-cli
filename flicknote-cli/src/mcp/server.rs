@@ -75,8 +75,19 @@ impl FlickNoteMcp {
     pub(crate) fn new(config: Arc<Config>) -> Self {
         Self {
             config,
-            tool_router: Self::tool_router(),
+            tool_router: Self::normalized_tool_router(),
         }
+    }
+
+    fn normalized_tool_router() -> ToolRouter<Self> {
+        let mut router = Self::tool_router();
+        for route in router.map.values_mut() {
+            normalize_schema_formats(Arc::make_mut(&mut route.attr.input_schema));
+            if let Some(output_schema) = &mut route.attr.output_schema {
+                normalize_schema_formats(Arc::make_mut(output_schema));
+            }
+        }
+        router
     }
 
     async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
@@ -97,6 +108,35 @@ impl FlickNoteMcp {
         })
         .await
         .map(|project| project.id)
+    }
+}
+
+/// Remove generator-specific format labels from advertised MCP schemas.
+///
+/// JSON Schema's `format` is annotation-only and Schemars emits Rust integer
+/// implementation details such as `uint` and `uint64`. MCP clients need only
+/// the existing `integer` type and numeric bounds; omitting every format avoids
+/// client-specific format registries without changing serialization or validation.
+fn normalize_schema_formats(schema: &mut serde_json::Map<String, serde_json::Value>) {
+    fn visit(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                object.remove("format");
+                for value in object.values_mut() {
+                    visit(value);
+                }
+            }
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    visit(value);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for value in schema.values_mut() {
+        visit(value);
     }
 }
 

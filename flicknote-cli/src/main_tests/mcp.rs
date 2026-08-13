@@ -474,6 +474,26 @@ fn assert_no_boolean_schema_terms(schema: &serde_json::Value, tool: &str) {
     }
 }
 
+fn assert_no_schema_formats(schema: &serde_json::Value, tool: &str) {
+    match schema {
+        serde_json::Value::Object(map) => {
+            assert!(
+                !map.contains_key("format"),
+                "tool {tool}: schema contains an implementation-specific format: {schema}"
+            );
+            for value in map.values() {
+                assert_no_schema_formats(value, tool);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                assert_no_schema_formats(value, tool);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[tokio::test]
 async fn mcp_tool_output_schemas_are_strict_client_compatible() {
     let mut harness = McpHarness::start().await;
@@ -487,6 +507,8 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
             "tool {name}: outputSchema root type must be object"
         );
         assert_no_boolean_schema_terms(output, name);
+        assert_no_schema_formats(output, name);
+        assert_no_schema_formats(&tool["inputSchema"], name);
     }
 
     let list = tools
