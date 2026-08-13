@@ -258,7 +258,10 @@ async fn protocol_v4_client_rejects_protocol_v2_server_info() {
 
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
-    assert!(message.contains("CLI version 1.0.0 protocol 4"));
+    assert!(message.contains(&format!(
+        "CLI version {} protocol 4",
+        env!("CARGO_PKG_VERSION")
+    )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
     assert!(message.contains("daemon version legacy protocol 2"));
     assert!(message.contains("daemon restart"));
