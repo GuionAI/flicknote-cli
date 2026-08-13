@@ -25,9 +25,13 @@ for human and operational workflows; content and section mutations are not CLI
 commands.
 
 Every MCP structured result must have an object root, and each advertised output
-schema must be precise and derived from its boundary DTO. Arbitrary JSON schema
-terms must use object form rather than bare boolean terms. Every MCP change must
-pass the repository-wide strict-client output-schema contract test.
+schema must be precise and derived from its boundary DTO's serialized JSON
+contract: fields, requiredness, JSON types, value and structural constraints,
+and references. `format` annotations are intentionally omitted: client support
+is nonportable, so they do not establish a client-facing validation or UI
+contract; server-side validation is authoritative. Arbitrary JSON schema terms
+must use object form rather than bare boolean terms. Every MCP change must pass
+the repository-wide strict-client output-schema contract test.
 
 
 ## Build & Test
