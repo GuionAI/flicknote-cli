@@ -62,12 +62,13 @@ pub(crate) async fn insert_marked_note(db: &PowerSyncDatabase) {
     insert_note_with_metadata(db, REMOTE_COMMITTED_INSERT_METADATA).await;
 }
 
-pub(crate) fn test_config(api_url: String) -> Config {
+pub(crate) fn test_config(api_url: String, gateway_url: String) -> Config {
     Config {
         supabase_url: String::new(),
         supabase_anon_key: String::new(),
         powersync_url: String::new(),
         api_url,
+        gateway_url,
         web_url: None,
         paths: ConfigPaths {
             config_dir: PathBuf::new(),
@@ -78,6 +79,10 @@ pub(crate) fn test_config(api_url: String) -> Config {
             log_file: PathBuf::new(),
         },
     }
+}
+
+pub(crate) fn empty_test_config() -> Config {
+    test_config(String::new(), String::new())
 }
 
 pub(crate) fn spawn_server(

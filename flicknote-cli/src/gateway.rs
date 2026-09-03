@@ -70,6 +70,7 @@ impl std::error::Error for GatewayRequestError {}
 
 impl GatewayClient {
     pub(crate) fn new(config: &Config) -> Result<Self, CliError> {
+        config.validate_gateway()?;
         let http = Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -82,7 +83,7 @@ impl GatewayClient {
                 &config.paths.session_file,
             )
             .map_err(|_| CliError::Http("Failed to configure Gateway authentication".into()))?,
-            gateway_origin: gateway_origin(&config.api_url)?,
+            gateway_origin: gateway_origin(&config.gateway_url)?,
             http,
         })
     }
@@ -189,26 +190,26 @@ fn valid_retry_after(value: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-fn gateway_url(api_url: &str, path: &str) -> Result<Url, CliError> {
-    let origin = gateway_origin(api_url)?;
+fn gateway_url(gateway_url: &str, path: &str) -> Result<Url, CliError> {
+    let origin = gateway_origin(gateway_url)?;
     gateway_path_url(&origin, path)
 }
 
-fn gateway_origin(api_url: &str) -> Result<Url, CliError> {
-    let api_url = Url::parse(api_url).map_err(|_| {
-        CliError::Other("Configured Gateway API URL is invalid; update apiUrl".into())
+fn gateway_origin(gateway_url: &str) -> Result<Url, CliError> {
+    let gateway_url = Url::parse(gateway_url).map_err(|_| {
+        CliError::Other("Configured Gateway URL is invalid; update gatewayUrl".into())
     })?;
-    if !matches!(api_url.scheme(), "http" | "https")
-        || api_url.host_str().is_none()
-        || !api_url.username().is_empty()
-        || api_url.password().is_some()
+    if !matches!(gateway_url.scheme(), "http" | "https")
+        || gateway_url.host_str().is_none()
+        || !gateway_url.username().is_empty()
+        || gateway_url.password().is_some()
     {
         return Err(CliError::Other(
-            "Configured Gateway API URL must be an HTTP(S) origin without credentials".into(),
+            "Configured Gateway URL must be an HTTP(S) origin without credentials".into(),
         ));
     }
 
-    let mut origin = api_url;
+    let mut origin = gateway_url;
     origin.set_path("/");
     origin.set_query(None);
     origin.set_fragment(None);
@@ -240,12 +241,13 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    fn config(api_url: String, session_file: std::path::PathBuf) -> Config {
+    fn config(gateway_url: String, session_file: std::path::PathBuf) -> Config {
         Config {
             supabase_url: "https://auth.example.test".to_string(),
             supabase_anon_key: "anon-key".to_string(),
             powersync_url: String::new(),
-            api_url,
+            api_url: String::new(),
+            gateway_url,
             web_url: None,
             paths: ConfigPaths {
                 config_dir: std::path::PathBuf::new(),
@@ -304,10 +306,10 @@ mod tests {
 
     #[test]
     fn gateway_url_uses_only_the_configured_origin_and_rejects_external_paths() {
-        let api_url = "https://dev-gw.flicknote.app/api/v1";
+        let configured_gateway_url = "https://dev-gw.flicknote.app";
 
         assert_eq!(
-            gateway_url(api_url, "/web/v1/search?query=flicknote")
+            gateway_url(configured_gateway_url, "/web/v1/search?query=flicknote")
                 .unwrap()
                 .as_str(),
             "https://dev-gw.flicknote.app/web/v1/search?query=flicknote"
@@ -318,7 +320,10 @@ mod tests {
             "//example.com/web/v1/search",
             "web/v1/search",
         ] {
-            assert!(gateway_url(api_url, path).is_err(), "accepted {path}");
+            assert!(
+                gateway_url(configured_gateway_url, path).is_err(),
+                "accepted {path}"
+            );
         }
     }
 

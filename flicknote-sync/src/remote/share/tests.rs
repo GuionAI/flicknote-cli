@@ -35,7 +35,10 @@ async fn returns_existing_note_share_without_replacing_it() {
         "200 OK",
         r#"{"token":"existing","url":"https://flicknote.app/s/existing"}"#,
     )]);
-    let config = test_config(format!("{api_origin}/api/v1"));
+    let config = test_config(
+        format!("{api_origin}/api/v1"),
+        "http://127.0.0.1:1".to_string(),
+    );
     let request = ShareRequest {
         resource: ShareResource::Note,
         id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -65,7 +68,7 @@ async fn creates_project_share_when_none_exists() {
             r#"{"token":"new-token","url":"https://flicknote.app/p/new-token"}"#,
         ),
     ]);
-    let config = test_config(api_url);
+    let config = test_config(api_url, "http://127.0.0.1:1".to_string());
     let request = ShareRequest {
         resource: ShareResource::Project,
         id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
@@ -89,7 +92,7 @@ async fn creates_project_share_when_none_exists() {
 #[tokio::test]
 async fn revokes_existing_note_share() {
     let (api_url, server) = spawn_server(vec![("200 OK", r#"{"success":true}"#)]);
-    let config = test_config(api_url);
+    let config = test_config(api_url, "http://127.0.0.1:1".to_string());
     let request = ShareRequest {
         resource: ShareResource::Note,
         id: "550e8400-e29b-41d4-a716-446655440000".to_string(),

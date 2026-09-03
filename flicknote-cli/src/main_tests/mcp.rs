@@ -135,7 +135,8 @@ fn test_config(directory: &std::path::Path) -> Config {
         supabase_url: "https://auth.example.test".to_string(),
         supabase_anon_key: "anon-key".to_string(),
         powersync_url: String::new(),
-        api_url: "https://gateway.example.test/api/v1".to_string(),
+        api_url: String::new(),
+        gateway_url: "https://gateway.example.test".to_string(),
         web_url: Some("https://app.example".to_string()),
         paths: ConfigPaths {
             config_dir: directory.to_path_buf(),
