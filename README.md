@@ -173,9 +173,15 @@ maintenance requests; it is not the formal agent interface.
 Config file: `~/.config/flicknote/config.json`
 
 Environment variables:
+
 - `FLICKNOTE_SUPABASE_URL`
 - `FLICKNOTE_SUPABASE_KEY`
 - `FLICKNOTE_POWERSYNC_URL`
+- `FLICKNOTE_API_URL` — API Worker base URL for share links
+- `FLICKNOTE_GATEWAY_URL` — Gateway origin for attachment operations and `gateway request`
+
+`apiUrl` and `gatewayUrl` can also be set in `config.json`. After changing either
+value, restart the daemon with `flicknote daemon restart`.
 
 Data directory: `~/.local/share/flicknote/`
 

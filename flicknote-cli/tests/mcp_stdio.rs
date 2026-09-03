@@ -49,6 +49,7 @@ fn test_config(config_root: &std::path::Path, data_root: &std::path::Path) -> Co
         supabase_anon_key: String::new(),
         powersync_url: String::new(),
         api_url: String::new(),
+        gateway_url: String::new(),
         web_url: None,
         paths: ConfigPaths {
             config_file: config_dir.join("config.json"),
@@ -437,7 +438,7 @@ fn gateway_request_writes_a_chunked_sse_response_to_stdout_without_exposing_its_
         ])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", &origin)
         .output()
         .unwrap();
 
@@ -475,7 +476,7 @@ fn gateway_request_forwards_piped_request_body_without_rewriting_it() {
         ])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", &origin)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -519,7 +520,7 @@ fn gateway_request_rejects_invalid_piped_json_before_sending_it() {
         ])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", "http://127.0.0.1:9/api/v1")
+        .env("FLICKNOTE_GATEWAY_URL", "http://127.0.0.1:9")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -554,7 +555,7 @@ fn gateway_request_bypasses_system_proxies() {
         .args(["gateway", "request", "--path", "/healthz"])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", origin)
         .env("HTTP_PROXY", &proxy)
         .env("http_proxy", &proxy)
         .env_remove("HTTPS_PROXY")
@@ -598,7 +599,7 @@ fn gateway_request_refreshes_sessions_without_using_system_proxies() {
         .args(["gateway", "request", "--path", "/healthz"])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", &origin)
         .env("FLICKNOTE_SUPABASE_URL", &origin)
         .env("HTTP_PROXY", &proxy)
         .env("http_proxy", &proxy)
@@ -637,7 +638,7 @@ fn gateway_request_does_not_forward_session_refresh_to_redirect_target() {
         .args(["gateway", "request", "--path", "/healthz"])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", &origin)
         .env("FLICKNOTE_SUPABASE_URL", &origin)
         .output()
         .unwrap();
@@ -674,7 +675,7 @@ fn gateway_request_does_not_echo_an_upstream_error_body() {
         ])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", origin)
         .output()
         .unwrap();
 
@@ -701,7 +702,7 @@ fn gateway_request_reports_http_date_retry_after() {
         .args(["gateway", "request", "--path", "/healthz"])
         .env("XDG_CONFIG_HOME", &config_root)
         .env("XDG_DATA_HOME", &data_root)
-        .env("FLICKNOTE_API_URL", format!("{origin}/api/v1"))
+        .env("FLICKNOTE_GATEWAY_URL", origin)
         .output()
         .unwrap();
 

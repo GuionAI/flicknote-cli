@@ -1,5 +1,25 @@
+use serde::Deserialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConfigFileValues {
+    supabase_url: String,
+    supabase_anon_key: String,
+    powersync_url: String,
+    api_url: String,
+    gateway_url: String,
+    web_url: Option<String>,
+}
+
+struct EndpointDefaults {
+    supabase_url: &'static str,
+    supabase_anon_key: &'static str,
+    powersync_url: &'static str,
+    api_url: &'static str,
+    gateway_url: &'static str,
+}
 
 #[derive(Clone)]
 pub struct Config {
@@ -7,6 +27,7 @@ pub struct Config {
     pub supabase_anon_key: String,
     pub powersync_url: String,
     pub api_url: String,
+    pub gateway_url: String,
     pub web_url: Option<String>,
     pub paths: ConfigPaths,
 }
@@ -49,32 +70,14 @@ impl Config {
         let db_file = data_dir.join("flicknote.db");
         let log_file = data_dir.join("flicknote.log");
 
-        let mut supabase_url = String::new();
-        let mut supabase_anon_key = String::new();
-        let mut powersync_url = String::new();
-        let mut api_url = String::new();
-        let mut web_url: Option<String> = None;
-
-        if config_file.exists()
-            && let Ok(raw) = fs::read_to_string(&config_file)
-            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&raw)
-        {
-            if let Some(v) = json.get("supabaseUrl").and_then(|v| v.as_str()) {
-                supabase_url = v.to_string();
-            }
-            if let Some(v) = json.get("supabaseAnonKey").and_then(|v| v.as_str()) {
-                supabase_anon_key = v.to_string();
-            }
-            if let Some(v) = json.get("powersyncUrl").and_then(|v| v.as_str()) {
-                powersync_url = v.to_string();
-            }
-            if let Some(v) = json.get("apiUrl").and_then(|v| v.as_str()) {
-                api_url = v.to_string();
-            }
-            if let Some(v) = json.get("webUrl").and_then(|v| v.as_str()) {
-                web_url = Some(v.to_string());
-            }
-        }
+        let ConfigFileValues {
+            mut supabase_url,
+            mut supabase_anon_key,
+            mut powersync_url,
+            mut api_url,
+            mut gateway_url,
+            mut web_url,
+        } = read_config_file(&config_file);
 
         if let Ok(v) = std::env::var("FLICKNOTE_SUPABASE_URL") {
             supabase_url = v;
@@ -88,6 +91,9 @@ impl Config {
         if let Ok(v) = std::env::var("FLICKNOTE_API_URL") {
             api_url = v;
         }
+        if let Ok(v) = std::env::var("FLICKNOTE_GATEWAY_URL") {
+            gateway_url = v;
+        }
         if let Ok(v) = std::env::var("FLICKNOTE_WEB_URL") {
             web_url = Some(v);
         }
@@ -100,20 +106,24 @@ impl Config {
             || supabase_anon_key.is_empty()
             || powersync_url.is_empty()
             || api_url.is_empty()
+            || gateway_url.is_empty()
         {
             let env = std::env::var("FLICKNOTE_ENV").unwrap_or_else(|_| "dev".into());
-            let (s_url, s_key, ps_url, a_url) = builtin_defaults(&env);
+            let defaults = builtin_defaults(&env);
             if supabase_url.is_empty() {
-                supabase_url = s_url.into();
+                supabase_url = defaults.supabase_url.into();
             }
             if supabase_anon_key.is_empty() {
-                supabase_anon_key = s_key.into();
+                supabase_anon_key = defaults.supabase_anon_key.into();
             }
             if powersync_url.is_empty() {
-                powersync_url = ps_url.into();
+                powersync_url = defaults.powersync_url.into();
             }
             if api_url.is_empty() {
-                api_url = a_url.into();
+                api_url = defaults.api_url.into();
+            }
+            if gateway_url.is_empty() {
+                gateway_url = defaults.gateway_url.into();
             }
         }
 
@@ -131,6 +141,7 @@ impl Config {
             supabase_anon_key,
             powersync_url,
             api_url,
+            gateway_url,
             web_url,
             paths,
         })
@@ -141,6 +152,17 @@ impl Config {
         if self.api_url.is_empty() {
             return Err(crate::error::CliError::Other(
                 "apiUrl is not configured — set it in config.json or FLICKNOTE_API_URL".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate that gateway_url is set. Call before Gateway operations.
+    pub fn validate_gateway(&self) -> Result<(), crate::error::CliError> {
+        if self.gateway_url.is_empty() {
+            return Err(crate::error::CliError::Other(
+                "gatewayUrl is not configured — set it in config.json or FLICKNOTE_GATEWAY_URL"
+                    .into(),
             ));
         }
         Ok(())
@@ -172,20 +194,36 @@ impl Config {
     }
 }
 
-fn builtin_defaults(env: &str) -> (&'static str, &'static str, &'static str, &'static str) {
-    match env {
+fn read_config_file(config_file: &Path) -> ConfigFileValues {
+    fs::read_to_string(config_file)
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn builtin_defaults(env: &str) -> EndpointDefaults {
+    let (supabase_url, supabase_anon_key, powersync_url, api_url, gateway_url) = match env {
         "prod" => (
             "https://auth.flicknote.app",
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFocGNqYW1maGJpb3BqZG5laW5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA0NTc1NDIsImV4cCI6MjA2NjAzMzU0Mn0.g6B2UohS8Zw_mrsDljAB7n6feUTvpmMVvvsf7VMRXA4",
             "https://sync.flicknote.app",
-            "https://gw.flicknote.app/api/v1",
+            "https://api.flicknote.app/api/v1",
+            "https://gw.flicknote.app",
         ),
         _ => (
             "https://dev-auth.flicknote.app",
             "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1NTM1NTg4LCJleHAiOjE5MjMyMTU1ODh9.7ErMPvghlVm6mew-IKjSShP1Lf6wTCbNgs9ufuh3yqo",
             "https://dev-sync.flicknote.app",
-            "https://dev-gw.flicknote.app/api/v1",
+            "https://dev-api.flicknote.app/api/v1",
+            "https://dev-gw.flicknote.app",
         ),
+    };
+    EndpointDefaults {
+        supabase_url,
+        supabase_anon_key,
+        powersync_url,
+        api_url,
+        gateway_url,
     }
 }
 
@@ -206,6 +244,7 @@ mod tests {
             "FLICKNOTE_SUPABASE_KEY",
             "FLICKNOTE_POWERSYNC_URL",
             "FLICKNOTE_API_URL",
+            "FLICKNOTE_GATEWAY_URL",
             "FLICKNOTE_WEB_URL",
         ];
         let saved: Vec<_> = keys.iter().map(|k| std::env::var(k).ok()).collect();
@@ -229,26 +268,28 @@ mod tests {
 
     #[test]
     fn test_builtin_defaults_dev() {
-        let (url, key, ps, api) = builtin_defaults("dev");
-        assert_eq!(url, "https://dev-auth.flicknote.app");
-        assert_eq!(ps, "https://dev-sync.flicknote.app");
-        assert_eq!(api, "https://dev-gw.flicknote.app/api/v1");
-        assert!(!key.is_empty());
+        let defaults = builtin_defaults("dev");
+        assert_eq!(defaults.supabase_url, "https://dev-auth.flicknote.app");
+        assert_eq!(defaults.powersync_url, "https://dev-sync.flicknote.app");
+        assert_eq!(defaults.api_url, "https://dev-api.flicknote.app/api/v1");
+        assert_eq!(defaults.gateway_url, "https://dev-gw.flicknote.app");
+        assert!(!defaults.supabase_anon_key.is_empty());
     }
 
     #[test]
     fn test_builtin_defaults_prod() {
-        let (url, key, ps, api) = builtin_defaults("prod");
-        assert_eq!(url, "https://auth.flicknote.app");
-        assert_eq!(ps, "https://sync.flicknote.app");
-        assert_eq!(api, "https://gw.flicknote.app/api/v1");
-        assert!(!key.is_empty());
+        let defaults = builtin_defaults("prod");
+        assert_eq!(defaults.supabase_url, "https://auth.flicknote.app");
+        assert_eq!(defaults.powersync_url, "https://sync.flicknote.app");
+        assert_eq!(defaults.api_url, "https://api.flicknote.app/api/v1");
+        assert_eq!(defaults.gateway_url, "https://gw.flicknote.app");
+        assert!(!defaults.supabase_anon_key.is_empty());
     }
 
     #[test]
     fn test_builtin_defaults_unknown_falls_back_to_dev() {
-        let (url, _, _, _) = builtin_defaults("staging");
-        assert_eq!(url, "https://dev-auth.flicknote.app");
+        let defaults = builtin_defaults("staging");
+        assert_eq!(defaults.supabase_url, "https://dev-auth.flicknote.app");
     }
 
     #[test]
@@ -287,7 +328,7 @@ mod tests {
             let cfg_file = cfg_dir.join("config.json");
             std::fs::write(
                 &cfg_file,
-                r#"{"supabaseUrl":"https://file.example.com","supabaseAnonKey":"key","powersyncUrl":"https://ps.example.com","apiUrl":"https://api.example.com/v1"}"#,
+                r#"{"supabaseUrl":"https://file.example.com","supabaseAnonKey":"key","powersyncUrl":"https://ps.example.com","apiUrl":"https://api.example.com/v1","gatewayUrl":"https://gateway.example.com"}"#,
             )
             .unwrap();
             unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
@@ -302,6 +343,8 @@ mod tests {
             };
             let cfg = Config::load().expect("Config::load should succeed");
             assert_eq!(cfg.supabase_url, "https://file.example.com");
+            assert_eq!(cfg.api_url, "https://api.example.com/v1");
+            assert_eq!(cfg.gateway_url, "https://gateway.example.com");
         });
     }
 }

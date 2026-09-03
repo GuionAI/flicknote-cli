@@ -165,6 +165,7 @@ mod tests {
             supabase_anon_key: "key".to_string(),
             powersync_url: "http://127.0.0.1:9".to_string(),
             api_url: "http://127.0.0.1:9".to_string(),
+            gateway_url: "http://127.0.0.1:9".to_string(),
             web_url: None,
             paths: flicknote_core::config::ConfigPaths {
                 config_dir: directory.to_path_buf(),

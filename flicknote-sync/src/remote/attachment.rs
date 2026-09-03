@@ -21,11 +21,12 @@ struct UploadUrlResponse {
     content_type: String,
 }
 
-pub(super) fn validate_api_url(config: &Config) -> Result<(), DaemonError> {
-    if config.api_url.is_empty() {
+pub(super) fn validate_gateway_url(config: &Config) -> Result<(), DaemonError> {
+    if config.gateway_url.is_empty() {
         return Err(DaemonError::Other {
-            message: "apiUrl is not configured — set it in config.json or FLICKNOTE_API_URL"
-                .to_string(),
+            message:
+                "gatewayUrl is not configured — set it in config.json or FLICKNOTE_GATEWAY_URL"
+                    .to_string(),
         });
     }
     Ok(())
@@ -38,7 +39,7 @@ pub(super) async fn upload_attachment(
     note_id: &str,
     file_path: &Path,
 ) -> Result<(), DaemonError> {
-    validate_api_url(config)?;
+    validate_gateway_url(config)?;
     let filename = file_path
         .file_name()
         .and_then(|n| n.to_str())
@@ -48,7 +49,7 @@ pub(super) async fn upload_attachment(
         .to_string();
 
     let resp = http
-        .post(attachment_endpoint(&config.api_url, "upload-url"))
+        .post(attachment_endpoint(&config.gateway_url, "upload-url"))
         .bearer_auth(access_token)
         .json(&serde_json::json!({ "noteId": note_id, "filename": filename }))
         .send()
@@ -99,9 +100,9 @@ pub(super) async fn delete_attachment(
     access_token: &str,
     note_id: &str,
 ) -> Result<(), DaemonError> {
-    validate_api_url(config)?;
+    validate_gateway_url(config)?;
     let resp = http
-        .delete(attachment_endpoint(&config.api_url, note_id))
+        .delete(attachment_endpoint(&config.gateway_url, note_id))
         .bearer_auth(access_token)
         .send()
         .await
@@ -117,4 +118,35 @@ pub(super) async fn delete_attachment(
     Err(DaemonError::Other {
         message: format!("Delete failed: {body}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flicknote_core::config::{Config, ConfigPaths};
+
+    #[test]
+    fn attachment_requests_use_the_gateway_url() {
+        let config = Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: "https://api.example.test/api/v1".to_string(),
+            gateway_url: "https://gateway.example.test".to_string(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: Default::default(),
+                data_dir: Default::default(),
+                config_file: Default::default(),
+                session_file: Default::default(),
+                db_file: Default::default(),
+                log_file: Default::default(),
+            },
+        };
+
+        assert_eq!(
+            attachment_endpoint(&config.gateway_url, "upload-url"),
+            "https://gateway.example.test/api/v1/attachments/upload-url"
+        );
+    }
 }
