@@ -181,7 +181,8 @@ Environment variables:
 - `FLICKNOTE_GATEWAY_URL` — Gateway origin for attachment operations and `gateway request`
 
 `apiUrl` and `gatewayUrl` can also be set in `config.json`. After changing either
-value, restart the daemon with `flicknote daemon restart`.
+value, restart the daemon with `flicknote daemon restart`. Configure the two
+endpoint values together; setting only one is rejected.
 
 Data directory: `~/.local/share/flicknote/`
 

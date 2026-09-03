@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 struct ConfigFileValues {
     supabase_url: String,
     supabase_anon_key: String,
@@ -96,6 +96,12 @@ impl Config {
         }
         if let Ok(v) = std::env::var("FLICKNOTE_WEB_URL") {
             web_url = Some(v);
+        }
+
+        if api_url.is_empty() != gateway_url.is_empty() {
+            return Err(crate::error::CliError::Other(
+                "apiUrl and gatewayUrl must be configured together — set both in config.json or via FLICKNOTE_API_URL and FLICKNOTE_GATEWAY_URL".into(),
+            ));
         }
 
         // Fallback: per-field built-in defaults if nothing else configured that field.
@@ -246,6 +252,8 @@ mod tests {
             "FLICKNOTE_API_URL",
             "FLICKNOTE_GATEWAY_URL",
             "FLICKNOTE_WEB_URL",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
         ];
         let saved: Vec<_> = keys.iter().map(|k| std::env::var(k).ok()).collect();
 
@@ -345,6 +353,28 @@ mod tests {
             assert_eq!(cfg.supabase_url, "https://file.example.com");
             assert_eq!(cfg.api_url, "https://api.example.com/v1");
             assert_eq!(cfg.gateway_url, "https://gateway.example.com");
+        });
+    }
+
+    #[test]
+    fn test_config_file_rejects_an_unpaired_endpoint_url() {
+        with_clean_env(None, || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let cfg_dir = tmp.path().join("flicknote");
+            std::fs::create_dir_all(&cfg_dir).unwrap();
+            std::fs::write(
+                cfg_dir.join("config.json"),
+                r#"{"apiUrl":"https://api.example.com/v1"}"#,
+            )
+            .unwrap();
+            unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+            unsafe { std::env::set_var("XDG_DATA_HOME", tmp.path().join("data")) };
+
+            let error = match Config::load() {
+                Ok(_) => panic!("unpaired endpoints must be rejected"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("must be configured together"));
         });
     }
 }
