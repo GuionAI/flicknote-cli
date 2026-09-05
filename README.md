@@ -184,13 +184,13 @@ Environment variables:
 - `FLICKNOTE_API_URL` — API Worker base URL for share links
 - `FLICKNOTE_GATEWAY_URL` — Gateway origin for attachment operations and `gateway request`
 
-For the default `dev` environment, `FLICKNOTE_SUPABASE_KEY` uses the opaque
-cnsupa publishable key
-(`sb_publishable_4VEs5DX9YlkHuViFbmRMQb_f_LPrdOR`), not the retired JWT-shaped
-anon key. The value is sent through Supabase's existing `apikey` header.
-Existing dev users must upgrade and run `flicknote login --force` once to
-replace the old session before normal sync; explicit config-file and environment
-key overrides continue to work for custom environments.
+For the default `dev` environment, the built-in `FLICKNOTE_SUPABASE_KEY` value
+in the [runtime configuration](flicknote-core/src/config.rs) is an opaque cnsupa
+publishable key, not the retired JWT-shaped anon key. The value is sent through
+Supabase's existing `apikey` header. Existing dev users must upgrade and run
+`flicknote login --force` once to replace the old session before normal sync;
+explicit config-file and environment key overrides continue to work for custom
+environments.
 
 `apiUrl` and `gatewayUrl` can also be set in `config.json`. After changing either
 value, restart the daemon with `flicknote daemon restart`. Configure the two

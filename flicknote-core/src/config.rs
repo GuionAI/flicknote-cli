@@ -288,6 +288,28 @@ mod tests {
     }
 
     #[test]
+    fn test_config_load_uses_dev_defaults_without_config() {
+        with_clean_env(None, || {
+            let config_home = tempfile::tempdir().expect("config tempdir");
+            let data_home = tempfile::tempdir().expect("data tempdir");
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+                std::env::set_var("XDG_DATA_HOME", data_home.path());
+            }
+
+            let config = Config::load().expect("Config::load should use dev defaults");
+            assert_eq!(config.supabase_url, "https://dev-auth.flicknote.app");
+            assert_eq!(
+                config.supabase_anon_key,
+                "sb_publishable_4VEs5DX9YlkHuViFbmRMQb_f_LPrdOR"
+            );
+            assert_eq!(config.powersync_url, "https://dev-sync.flicknote.app");
+            assert_eq!(config.api_url, "https://dev-api.flicknote.app/api/v1");
+            assert_eq!(config.gateway_url, "https://dev-gw.flicknote.app");
+        });
+    }
+
+    #[test]
     fn test_builtin_defaults_prod() {
         let defaults = builtin_defaults("prod");
         assert_eq!(defaults.supabase_url, "https://auth.flicknote.app");
