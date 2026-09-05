@@ -218,7 +218,7 @@ fn builtin_defaults(env: &str) -> EndpointDefaults {
         ),
         _ => (
             "https://dev-auth.flicknote.app",
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzY1NTM1NTg4LCJleHAiOjE5MjMyMTU1ODh9.7ErMPvghlVm6mew-IKjSShP1Lf6wTCbNgs9ufuh3yqo",
+            "sb_publishable_4VEs5DX9YlkHuViFbmRMQb_f_LPrdOR",
             "https://dev-sync.flicknote.app",
             "https://dev-api.flicknote.app/api/v1",
             "https://dev-gw.flicknote.app",
@@ -281,7 +281,32 @@ mod tests {
         assert_eq!(defaults.powersync_url, "https://dev-sync.flicknote.app");
         assert_eq!(defaults.api_url, "https://dev-api.flicknote.app/api/v1");
         assert_eq!(defaults.gateway_url, "https://dev-gw.flicknote.app");
-        assert!(!defaults.supabase_anon_key.is_empty());
+        assert_eq!(
+            defaults.supabase_anon_key,
+            "sb_publishable_4VEs5DX9YlkHuViFbmRMQb_f_LPrdOR"
+        );
+    }
+
+    #[test]
+    fn test_config_load_uses_dev_defaults_without_config() {
+        with_clean_env(None, || {
+            let config_home = tempfile::tempdir().expect("config tempdir");
+            let data_home = tempfile::tempdir().expect("data tempdir");
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+                std::env::set_var("XDG_DATA_HOME", data_home.path());
+            }
+
+            let config = Config::load().expect("Config::load should use dev defaults");
+            assert_eq!(config.supabase_url, "https://dev-auth.flicknote.app");
+            assert_eq!(
+                config.supabase_anon_key,
+                "sb_publishable_4VEs5DX9YlkHuViFbmRMQb_f_LPrdOR"
+            );
+            assert_eq!(config.powersync_url, "https://dev-sync.flicknote.app");
+            assert_eq!(config.api_url, "https://dev-api.flicknote.app/api/v1");
+            assert_eq!(config.gateway_url, "https://dev-gw.flicknote.app");
+        });
     }
 
     #[test]
@@ -304,6 +329,7 @@ mod tests {
     fn test_env_var_overrides_builtin() {
         with_clean_env(None, || {
             unsafe { std::env::set_var("FLICKNOTE_SUPABASE_URL", "https://custom.example.com") };
+            unsafe { std::env::set_var("FLICKNOTE_SUPABASE_KEY", "custom-publishable-key") };
             unsafe {
                 std::env::set_var(
                     "XDG_CONFIG_HOME",
@@ -324,6 +350,7 @@ mod tests {
             };
             let cfg = Config::load().expect("Config::load should succeed");
             assert_eq!(cfg.supabase_url, "https://custom.example.com");
+            assert_eq!(cfg.supabase_anon_key, "custom-publishable-key");
         });
     }
 
@@ -351,6 +378,7 @@ mod tests {
             };
             let cfg = Config::load().expect("Config::load should succeed");
             assert_eq!(cfg.supabase_url, "https://file.example.com");
+            assert_eq!(cfg.supabase_anon_key, "key");
             assert_eq!(cfg.api_url, "https://api.example.com/v1");
             assert_eq!(cfg.gateway_url, "https://gateway.example.com");
         });

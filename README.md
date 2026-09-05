@@ -124,7 +124,11 @@ flicknote daemon restart
 
 `flicknote login` authenticates and then installs, starts, and verifies the user daemon.
 `flicknote logout` stops and uninstalls it before clearing the session and local database.
-Use `--force` only for explicit recovery when cleanup cannot be confirmed:
+After upgrading an existing dev installation for the cnsupa authentication cutover,
+run `flicknote login --force` once. This stops and uninstalls the existing daemon,
+replaces the old session, and installs, starts, and verifies the daemon again. It
+does not delete the local database. `flicknote logout --force` is reserved for
+explicit recovery when service cleanup cannot be confirmed:
 
 ```bash
 flicknote login --force
@@ -179,6 +183,14 @@ Environment variables:
 - `FLICKNOTE_POWERSYNC_URL`
 - `FLICKNOTE_API_URL` — API Worker base URL for share links
 - `FLICKNOTE_GATEWAY_URL` — Gateway origin for attachment operations and `gateway request`
+
+For the default `dev` environment, the built-in `FLICKNOTE_SUPABASE_KEY` value
+in the [runtime configuration](flicknote-core/src/config.rs) is an opaque cnsupa
+publishable key, not the retired JWT-shaped anon key. The value is sent through
+Supabase's existing `apikey` header. Existing dev users must upgrade and run
+`flicknote login --force` once to replace the old session before normal sync;
+explicit config-file and environment key overrides continue to work for custom
+environments.
 
 `apiUrl` and `gatewayUrl` can also be set in `config.json`. After changing either
 value, restart the daemon with `flicknote daemon restart`. Configure the two
