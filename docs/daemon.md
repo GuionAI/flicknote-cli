@@ -42,6 +42,12 @@ local state while reporting the unresolved service cleanup.
 removing the old session. A failed forced authentication does not restore the
 old session or service.
 
+After upgrading an existing dev installation for the cnsupa cutover, run
+`flicknote login --force` once before normal sync. The forced login then
+authenticates with the opaque publishable key and installs, starts, and verifies
+the daemon through the existing lifecycle. It does not automatically delete the
+local PowerSync database or perform a release or deployment.
+
 ## Service commands
 
 The same commands select a user-level launchd service on macOS and a user-level
