@@ -790,6 +790,16 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
     let fixture = make_backend().await;
     let project_id = fixture.create_project("Recall project").await.unwrap();
     drop(
+        insert_recall_note(
+            &fixture.backend,
+            "Outside project entity",
+            "2026-09-10T09:00:00Z",
+            Some(20),
+            "Project Ada",
+        )
+        .await,
+    );
+    drop(
         insert_recall_note_in_project(
             &fixture.backend,
             "Project-only entity",

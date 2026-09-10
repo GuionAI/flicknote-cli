@@ -77,10 +77,58 @@ struct ConfigSource {
     path: PathBuf,
     scope: Scope,
     document: Value,
-    servers: ServerMap,
+    servers: RawServerMap,
 }
 
 type ServerMap = BTreeMap<String, ServerDefinition>;
+type RawServerMap = BTreeMap<String, RawServerDefinition>;
+
+#[derive(Debug, Clone, Default)]
+struct RawServerDefinition {
+    command: Option<String>,
+    args: Option<Vec<String>>,
+    enabled: Option<bool>,
+    enabled_tools: Option<Vec<String>>,
+    disabled_tools: Option<Vec<String>>,
+}
+
+impl RawServerDefinition {
+    fn merged_with(&self, overrides: &Self) -> Self {
+        Self {
+            command: overrides.command.clone().or_else(|| self.command.clone()),
+            args: overrides.args.clone().or_else(|| self.args.clone()),
+            enabled: overrides.enabled.or(self.enabled),
+            enabled_tools: overrides
+                .enabled_tools
+                .clone()
+                .or_else(|| self.enabled_tools.clone()),
+            disabled_tools: overrides
+                .disabled_tools
+                .clone()
+                .or_else(|| self.disabled_tools.clone()),
+        }
+    }
+
+    fn effective(&self) -> ServerDefinition {
+        let flicknote = match (&self.command, &self.args) {
+            (Some(command), Some(args)) => is_flicknote_command(command, args),
+            _ => false,
+        };
+        let note_recall_available = self
+            .enabled_tools
+            .as_ref()
+            .is_none_or(|tools| tools.iter().any(|tool| tool == RECALL_TOOL))
+            && self
+                .disabled_tools
+                .as_ref()
+                .is_none_or(|tools| !tools.iter().any(|tool| tool == RECALL_TOOL));
+        ServerDefinition {
+            flicknote,
+            enabled: self.enabled.unwrap_or(true),
+            note_recall_available,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ServerDefinition {
@@ -219,16 +267,21 @@ fn install_codex(scope: Scope, paths: &InstallPaths) -> Result<InstallResult, Cl
         )?);
     }
     if let Some(root) = global_json.as_ref() {
-        matches.extend(find_json_matches(
-            root,
-            &paths.global_hooks,
-            &resolution.global,
-        )?);
+        let servers = if scope == Scope::Local {
+            &resolution.local
+        } else {
+            &resolution.global
+        };
+        matches.extend(find_json_matches(root, &paths.global_hooks, servers)?);
     }
     for source in &sources {
-        let servers = match source.scope {
-            Scope::Global => &resolution.global,
-            Scope::Local => &resolution.local,
+        let servers = if scope == Scope::Local {
+            &resolution.local
+        } else {
+            match source.scope {
+                Scope::Global => &resolution.global,
+                Scope::Local => &resolution.local,
+            }
         };
         matches.extend(find_inline_matches(&source.document, source, servers)?);
     }
@@ -407,17 +460,17 @@ fn reject_disabled_hooks(sources: &[ConfigSource]) -> Result<(), CliError> {
 }
 
 fn resolve_server(scope: Scope, sources: &[ConfigSource]) -> Result<ServerResolution, CliError> {
-    let mut global = ServerMap::new();
-    let mut local = ServerMap::new();
+    let mut global_raw = RawServerMap::new();
+    let mut local_raw = RawServerMap::new();
     for source in sources {
         match source.scope {
-            Scope::Global => global.extend(source.servers.clone()),
-            Scope::Local => local.extend(source.servers.clone()),
+            Scope::Global => global_raw.extend(source.servers.clone()),
+            Scope::Local => local_raw.extend(source.servers.clone()),
         }
     }
 
-    let mut effective_local = global.clone();
-    effective_local.extend(local);
+    let global = effective_server_map(&global_raw);
+    let effective_local = merge_server_maps(&global_raw, &local_raw);
     let effective = match scope {
         Scope::Global => &global,
         Scope::Local => &effective_local,
@@ -445,8 +498,26 @@ fn resolve_server(scope: Scope, sources: &[ConfigSource]) -> Result<ServerResolu
     })
 }
 
-fn configured_servers(document: &Value, path: &Path) -> Result<ServerMap, CliError> {
-    let mut servers = ServerMap::new();
+fn effective_server_map(servers: &RawServerMap) -> ServerMap {
+    servers
+        .iter()
+        .map(|(name, server)| (name.clone(), server.effective()))
+        .collect()
+}
+
+fn merge_server_maps(global: &RawServerMap, local: &RawServerMap) -> ServerMap {
+    let mut merged = global.clone();
+    for (name, server) in local {
+        merged
+            .entry(name.clone())
+            .and_modify(|global| *global = global.merged_with(server))
+            .or_insert_with(|| server.clone());
+    }
+    effective_server_map(&merged)
+}
+
+fn configured_servers(document: &Value, path: &Path) -> Result<RawServerMap, CliError> {
+    let mut servers = RawServerMap::new();
     for key in MCP_SERVERS_KEYS {
         let Some(value) = document.get(key) else {
             continue;
@@ -468,7 +539,7 @@ fn configured_servers(document: &Value, path: &Path) -> Result<ServerMap, CliErr
             let command = server
                 .get("command")
                 .map(|value| {
-                    value.as_str().ok_or_else(|| {
+                    value.as_str().map(str::to_string).ok_or_else(|| {
                         CliError::Other(format!(
                             "invalid command for Codex MCP server {name:?} in {}",
                             path.display()
@@ -492,8 +563,7 @@ fn configured_servers(document: &Value, path: &Path) -> Result<ServerMap, CliErr
                         ))
                     })
                 })
-                .transpose()?
-                .unwrap_or(true);
+                .transpose()?;
             let enabled_tools = string_array(server.get("enabled_tools"), || {
                 format!(
                     "invalid enabled_tools for Codex MCP server {name:?} in {}",
@@ -506,21 +576,14 @@ fn configured_servers(document: &Value, path: &Path) -> Result<ServerMap, CliErr
                     path.display()
                 )
             })?;
-            let note_recall_available = enabled_tools
-                .as_ref()
-                .is_none_or(|tools| tools.iter().any(|tool| tool == RECALL_TOOL))
-                && disabled_tools
-                    .as_ref()
-                    .is_none_or(|tools| !tools.iter().any(|tool| tool == RECALL_TOOL));
-
             servers.insert(
                 name.clone(),
-                ServerDefinition {
-                    flicknote: command.is_some_and(|command| {
-                        is_flicknote_command(command, args.as_deref().unwrap_or_default())
-                    }),
+                RawServerDefinition {
+                    command,
+                    args,
                     enabled,
-                    note_recall_available,
+                    enabled_tools,
+                    disabled_tools,
                 },
             );
         }
@@ -1217,6 +1280,120 @@ args = ["mcp"]
             "unexpected error: {error}"
         );
         assert!(!paths.local_hooks.exists());
+    }
+
+    #[test]
+    fn local_server_inherits_unspecified_global_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        write_config(&context, false, "fn");
+        let paths = context.paths();
+        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.local_config,
+            r#"
+[mcp_servers.fn]
+enabled_tools = ["note_recall"]
+"#,
+        )
+        .unwrap();
+
+        let result = install_codex(Scope::Local, &paths).unwrap();
+        assert_eq!(
+            result,
+            InstallResult::Installed {
+                path: paths.local_hooks.clone(),
+                updated: false,
+            }
+        );
+        let installed: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
+        assert_eq!(
+            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["server"],
+            "fn"
+        );
+    }
+
+    #[test]
+    fn locally_shadowed_global_hook_does_not_block_local_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        write_config(&context, false, "fn");
+        let paths = context.paths();
+        fs::create_dir_all(paths.global_hooks.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.global_hooks,
+            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "fn", "tool": RECALL_TOOL}]}]}}).to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.local_config,
+            r#"
+[mcp_servers.fn]
+command = "other-mcp"
+args = ["mcp"]
+
+[mcp_servers.project_flicknote]
+command = "flicknote"
+args = ["mcp"]
+"#,
+        )
+        .unwrap();
+
+        let result = install_codex(Scope::Local, &paths).unwrap();
+        assert_eq!(
+            result,
+            InstallResult::Installed {
+                path: paths.local_hooks.clone(),
+                updated: false,
+            }
+        );
+        let installed: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
+        assert_eq!(
+            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["server"],
+            "project_flicknote"
+        );
+    }
+
+    #[test]
+    fn global_repeat_uses_global_server_definition_after_local_disable() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        write_config(&context, false, "fn");
+        let paths = context.paths();
+        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.local_config,
+            r#"
+[mcp_servers.fn]
+enabled = false
+"#,
+        )
+        .unwrap();
+        fs::create_dir_all(paths.global_hooks.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.global_hooks,
+            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "fn", "tool": RECALL_TOOL, "timeout": 30}]}]}}).to_string(),
+        )
+        .unwrap();
+
+        let result = install_codex(Scope::Global, &paths).unwrap();
+        assert_eq!(
+            result,
+            InstallResult::Installed {
+                path: paths.global_hooks.clone(),
+                updated: true,
+            }
+        );
+        let installed: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.global_hooks).unwrap()).unwrap();
+        assert_eq!(installed["hooks"][HOOK_EVENT].as_array().unwrap().len(), 1);
+        assert_eq!(
+            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["timeout"],
+            RECALL_TIMEOUT_SECONDS
+        );
     }
 
     #[test]
