@@ -35,11 +35,9 @@ the repository-wide strict-client output-schema contract test.
 
 `note_recall` is a read-only, host-triggered tool for Codex's synchronous
 `UserPromptSubmit` hook. It offers bounded historical candidates by numeric
-short ID from literal matches of complete extracted topic names and entity
-names; it does not read note bodies or write notes. Multiword values are not
-split, and the matching rules do not translate, alias, stem, or infer semantic
-relationships. The Codex hook installer is `flicknote hook install codex
-[--local|--global]`. It resolves the existing FlickNote MCP registration from
+short ID; it does not read note bodies or write notes. The Codex hook installer
+is `flicknote hook install codex [--local|--global]`. It resolves the existing
+FlickNote MCP registration from
 Codex TOML, preserves unrelated configuration, and must not start the daemon or
 modify hook trust. Failures leave the host conversation usable without
 fabricated context; use `note_get` to inspect a candidate and verify it before

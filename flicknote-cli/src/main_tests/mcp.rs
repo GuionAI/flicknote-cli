@@ -766,10 +766,10 @@ async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication()
         recalled["result"]["structuredContent"]["hookSpecificOutput"]["hookEventName"],
         "UserPromptSubmit"
     );
-    assert!(context.contains("当前时间："));
+    assert!(context.contains("Current time: "));
     assert!(context.contains("\"id\":42"));
     assert!(context.contains("MCP Note"));
-    assert!(context.contains("历史笔记候选结束"));
+    assert!(context.contains("[Historical note candidates end]"));
     assert!(!context.contains(&harness.note_uuid));
 
     let topic_recalled = harness

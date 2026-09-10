@@ -176,37 +176,32 @@ never opens SQLite. The server does not start the daemon automatically.
 
 ### Codex recall hook
 
-With the FlickNote MCP server already registered in Codex, install the hook with
-`flicknote hook install codex`. On a terminal it shows the actual project-local
-(`.codex/hooks.json`) and user (`CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`)
-destinations; `--local` and `--global` select a scope for automation. The
-installer resolves the registered FlickNote MCP server name from Codex's
-`config.toml`, preserves unrelated hooks, and does not start the daemon or
-change hook trust. A missing or ambiguous registration, an invalid config, or
-an explicit hooks disable is reported without overwriting files. Existing hooks
-in another active scope are reported rather than duplicated or moved.
+The recall hook gives Codex relevant historical notes as you send messages.
+Register the FlickNote MCP server in Codex first, then start the daemon and
+install the hook:
 
-After installation, review and trust the definition in Codex with `/hooks`.
-Project-local hooks also require a trusted project. The generated synchronous
-`UserPromptSubmit` MCP hook sends the current prompt to `note_recall` with a
-one-second timeout. Recall checks the current user's active notes only, matches
-complete stored extracted topic names and person/company/location/product names
-literally, returns at most five numeric-ID candidates, and does not read note
-bodies or generate summaries. Multiword values are matched as a whole, so
-`Memory Systems` matches as a topic while `Memory` does not. A value whose
-first or last character is an ASCII letter, digit, or underscore must sit on an
-ASCII token edge; for example, `age` does not match `Management`, `age2`, or
-`my_age`, but it does
-match `(age)` and `用age加密`. Chinese-only values retain substring matching.
-Topics are not translated, stemmed, aliased, or split. Matching is ASCII
-case-insensitive and literal, so semantic matches and complete Unicode case
-folding are not inferred. Titles, summaries, and the complete context are
-bounded. If the daemon is unavailable or the recall fails, Codex continues
-without injected candidates; the hook never writes notes or starts services
-implicitly. Use `note_get` with a returned ID to read a candidate and verify
-historical information before any independently authorized edit. See the
+```bash
+flicknote daemon start
+flicknote hook install codex
+```
+
+The installer asks whether to enable the hook for the current project or your
+user account. Use `--local` or `--global` to choose directly. It preserves
+unrelated configuration and does not start the daemon or grant hook trust.
+
+In Codex, open `/hooks` to review and trust the installed hook. Project-local
+hooks also require a trusted project.
+
+When you send a message, the hook supplies up to five historical note candidates
+for Codex to consider. Codex can read a relevant candidate with `note_get` and
+check it against the current task. Recall is read-only: it does not modify your
+notes. Messages with no matches receive no extra context; if recall is
+unavailable, the conversation continues.
+
+If the hook is not working, check `flicknote daemon status`, the FlickNote MCP
+connection, and the hook's enabled and trusted state in `/hooks`. See the
 [Codex hooks documentation](https://developers.openai.com/codex/hooks) for host
-trust and MCP hook behavior.
+setup and trust requirements.
 
 The Gateway CLI command remains available for internal development and
 maintenance requests; it is not the formal agent interface.
