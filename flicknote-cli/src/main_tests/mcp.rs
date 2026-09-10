@@ -121,6 +121,11 @@ impl McpHarness {
             .unwrap()
             .clone()
     }
+
+    async fn stop_daemon(&mut self) {
+        self.daemon.abort();
+        drop((&mut self.daemon).await);
+    }
 }
 
 impl Drop for McpHarness {
@@ -763,6 +768,12 @@ async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication()
     assert!(context.contains("历史笔记候选结束"));
     assert!(!context.contains(&harness.note_uuid));
 
+    let candidate = harness
+        .call("note_get", serde_json::json!({ "id": 42 }))
+        .await;
+    assert_eq!(candidate["result"]["isError"], false);
+    assert_eq!(candidate["result"]["structuredContent"]["id"], 42);
+
     let empty_prompt = harness
         .call("note_recall", serde_json::json!({ "prompt": "   " }))
         .await;
@@ -782,6 +793,29 @@ async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication()
     assert_eq!(
         no_match["result"]["structuredContent"],
         serde_json::json!({})
+    );
+}
+
+#[tokio::test]
+async fn mcp_recall_reports_daemon_failure_without_fabricated_context() {
+    let mut harness = McpHarness::start().await;
+    harness.stop_daemon().await;
+
+    let unavailable = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Ada Lovelace" }),
+        )
+        .await;
+    assert_eq!(unavailable["result"]["isError"], true);
+    assert_eq!(
+        unavailable["result"]["structuredContent"]["code"],
+        "daemon_unavailable"
+    );
+    assert!(
+        unavailable["result"]["structuredContent"]
+            .get("hookSpecificOutput")
+            .is_none()
     );
 }
 

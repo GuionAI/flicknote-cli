@@ -545,6 +545,17 @@ async fn insert_recall_note(
     short_id: Option<i64>,
     entity: &str,
 ) -> String {
+    insert_recall_note_in_project(backend, title, timestamp, short_id, entity, None).await
+}
+
+async fn insert_recall_note_in_project(
+    backend: &LocalPowerSyncBackend,
+    title: &str,
+    timestamp: &str,
+    short_id: Option<i64>,
+    entity: &str,
+    project_id: Option<&str>,
+) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     backend
         .insert_note(&InsertNoteReq {
@@ -554,7 +565,7 @@ async fn insert_recall_note(
             title: Some(title),
             content: Some("body"),
             metadata: None,
-            project_id: None,
+            project_id,
             now: timestamp,
         })
         .await
@@ -698,6 +709,148 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
             .iter()
             .all(|candidate| candidate.id == 1)
     );
+}
+
+#[tokio::test]
+async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes() {
+    let fixture = make_backend().await;
+    for (title, timestamp, short_id, entity) in [
+        ("Ada one", "2026-09-10T02:00:00Z", 10, "Ada Lovelace"),
+        ("OpenAI one", "2026-09-10T00:00:00Z", 11, "OpenAI"),
+        ("Ada two", "2026-09-10T00:00:00Z", 12, "Ada Lovelace"),
+    ] {
+        drop(insert_recall_note(&fixture.backend, title, timestamp, Some(short_id), entity).await);
+    }
+    drop(
+        insert_recall_note(
+            &fixture.backend,
+            "Whitespace entity",
+            "2026-09-10T08:00:00Z",
+            Some(16),
+            "\n\t\u{3000}",
+        )
+        .await,
+    );
+
+    let results = fixture
+        .recall_notes(
+            "Ada Lovelace and OpenAI\n\t\u{3000}",
+            &NoteFilter {
+                project_id: None,
+                note_type: None,
+                archived: false,
+                limit: 3,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>(),
+        vec![10, 11, 12]
+    );
+
+    let multi_id = insert_recall_note(
+        &fixture.backend,
+        "Multiple entities",
+        "2026-09-10T09:00:00Z",
+        Some(17),
+        "Ada Lovelace",
+    )
+    .await;
+    fixture
+        .set_note_extractions(&multi_id, "::company", &["OpenAI".to_string()])
+        .await
+        .unwrap();
+    let multi_results = fixture
+        .recall_notes(
+            "Ada Lovelace and OpenAI",
+            &NoteFilter {
+                project_id: None,
+                note_type: None,
+                archived: false,
+                limit: 20,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        multi_results
+            .iter()
+            .filter(|candidate| candidate.id == 17)
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn local_backend_recall_respects_project_filter_and_missing_summary() {
+    let fixture = make_backend().await;
+    let project_id = fixture.create_project("Recall project").await.unwrap();
+    drop(
+        insert_recall_note_in_project(
+            &fixture.backend,
+            "Project-only entity",
+            "2026-09-10T10:00:00Z",
+            Some(18),
+            "Project Ada",
+            Some(&project_id),
+        )
+        .await,
+    );
+    let project_results = fixture
+        .recall_notes(
+            "Project Ada",
+            &NoteFilter {
+                project_id: Some(&project_id),
+                note_type: None,
+                archived: false,
+                limit: 20,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        project_results
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>(),
+        vec![18]
+    );
+
+    let no_summary_id = insert_recall_note(
+        &fixture.backend,
+        "Missing summary",
+        "2026-09-10T11:00:00Z",
+        Some(19),
+        "No summary entity",
+    )
+    .await;
+    let writer = fixture.database().writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET summary = NULL WHERE id = ?",
+            params![no_summary_id],
+        )
+        .unwrap();
+    drop(writer);
+    let no_summary = fixture
+        .recall_notes(
+            "No summary entity",
+            &NoteFilter {
+                project_id: None,
+                note_type: None,
+                archived: false,
+                limit: 20,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(no_summary.len(), 1);
+    assert_eq!(no_summary[0].id, 19);
+    assert_eq!(no_summary[0].summary, None);
 }
 
 #[tokio::test]

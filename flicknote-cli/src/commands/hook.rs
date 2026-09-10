@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
 use flicknote_core::error::CliError;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -77,6 +77,28 @@ struct ConfigSource {
     path: PathBuf,
     scope: Scope,
     document: Value,
+    servers: ServerMap,
+}
+
+type ServerMap = BTreeMap<String, ServerDefinition>;
+
+#[derive(Debug, Clone)]
+struct ServerDefinition {
+    flicknote: bool,
+    enabled: bool,
+    note_recall_available: bool,
+}
+
+struct ServerResolution {
+    selected: String,
+    global: ServerMap,
+    local: ServerMap,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum HookFormat {
+    Json,
+    Toml,
 }
 
 #[derive(Debug, Clone)]
@@ -184,27 +206,31 @@ fn requested_scope(
 fn install_codex(scope: Scope, paths: &InstallPaths) -> Result<InstallResult, CliError> {
     let sources = read_config_sources(paths)?;
     reject_disabled_hooks(&sources)?;
-    let (server, known_servers) = resolve_server(scope, &sources)?;
+    let resolution = resolve_server(scope, &sources)?;
 
     let local_json = read_hooks_json(&paths.local_hooks)?;
     let global_json = read_hooks_json(&paths.global_hooks)?;
     let mut matches = Vec::new();
     if let Some(root) = local_json.as_ref() {
-        matches.extend(find_json_matches(root, &paths.local_hooks, &known_servers)?);
+        matches.extend(find_json_matches(
+            root,
+            &paths.local_hooks,
+            &resolution.local,
+        )?);
     }
     if let Some(root) = global_json.as_ref() {
         matches.extend(find_json_matches(
             root,
             &paths.global_hooks,
-            &known_servers,
+            &resolution.global,
         )?);
     }
     for source in &sources {
-        matches.extend(find_inline_matches(
-            &source.document,
-            source,
-            &known_servers,
-        )?);
+        let servers = match source.scope {
+            Scope::Global => &resolution.global,
+            Scope::Local => &resolution.local,
+        };
+        matches.extend(find_inline_matches(&source.document, source, servers)?);
     }
 
     let target_path = match scope {
@@ -233,10 +259,10 @@ fn install_codex(scope: Scope, paths: &InstallPaths) -> Result<InstallResult, Cl
     };
     let original_root = root.clone();
     let updated = if target_file_matches == 1 {
-        update_existing_json_match(&mut root, &server)?;
+        update_existing_json_match(&mut root, &resolution.selected)?;
         true
     } else if target_file_matches == 0 {
-        add_json_hook(&mut root, &server)?;
+        add_json_hook(&mut root, &resolution.selected)?;
         false
     } else {
         return Ok(InstallResult::AlreadyConfigured {
@@ -324,10 +350,13 @@ fn read_config_sources(paths: &InstallPaths) -> Result<Vec<ConfigSource>, CliErr
                 path.display()
             ))
         })?;
+        let document = toml_to_json(document);
+        let servers = configured_servers(&document, path)?;
         sources.push(ConfigSource {
             path: path.clone(),
             scope,
-            document: toml_to_json(document),
+            document,
+            servers,
         });
     }
     Ok(sources)
@@ -377,99 +406,189 @@ fn reject_disabled_hooks(sources: &[ConfigSource]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn resolve_server(
-    scope: Scope,
-    sources: &[ConfigSource],
-) -> Result<(String, BTreeSet<String>), CliError> {
-    let mut global = BTreeSet::new();
-    let mut local = BTreeSet::new();
+fn resolve_server(scope: Scope, sources: &[ConfigSource]) -> Result<ServerResolution, CliError> {
+    let mut global = ServerMap::new();
+    let mut local = ServerMap::new();
     for source in sources {
-        let names = flicknote_servers(&source.document, &source.path)?;
         match source.scope {
-            Scope::Global => global.extend(names),
-            Scope::Local => local.extend(names),
+            Scope::Global => global.extend(source.servers.clone()),
+            Scope::Local => local.extend(source.servers.clone()),
         }
     }
-    let chosen = match scope {
-        Scope::Global => {
-            if global.is_empty() && !local.is_empty() {
-                return Err(CliError::Other(
-                    "cannot install a global Codex hook: the FlickNote MCP registration exists only in the current project's config.toml".into(),
-                ));
-            }
-            global.clone()
-        }
-        Scope::Local => global.union(&local).cloned().collect(),
+
+    let mut effective_local = global.clone();
+    effective_local.extend(local);
+    let effective = match scope {
+        Scope::Global => &global,
+        Scope::Local => &effective_local,
     };
-    if chosen.is_empty() {
-        return Err(CliError::Other(
-            "could not find a FlickNote MCP registration in Codex config.toml; add an mcp_servers entry whose command is flicknote with the mcp argument, then retry".into(),
-        ));
+    let candidates = live_servers(effective);
+    if candidates.is_empty() {
+        if scope == Scope::Global && !live_servers(&effective_local).is_empty() {
+            return Err(CliError::Other(
+                "cannot install a global Codex hook: the enabled FlickNote MCP registration with note_recall exists only in the current project's config.toml".into(),
+            ));
+        }
+        return Err(no_available_server_error(scope, effective));
     }
-    if chosen.len() != 1 {
+    if candidates.len() != 1 {
         return Err(CliError::Other(format!(
             "ambiguous FlickNote MCP registrations in Codex config.toml: {}",
-            chosen.iter().cloned().collect::<Vec<_>>().join(", ")
+            candidates.join(", ")
         )));
     }
-    Ok((chosen.iter().next().cloned().unwrap(), chosen))
+
+    Ok(ServerResolution {
+        selected: candidates[0].clone(),
+        global,
+        local: effective_local,
+    })
 }
 
-fn flicknote_servers(document: &Value, path: &Path) -> Result<BTreeSet<String>, CliError> {
-    let mut names = BTreeSet::new();
+fn configured_servers(document: &Value, path: &Path) -> Result<ServerMap, CliError> {
+    let mut servers = ServerMap::new();
     for key in MCP_SERVERS_KEYS {
         let Some(value) = document.get(key) else {
             continue;
         };
-        let Some(servers) = value.as_object() else {
+        let Some(server_entries) = value.as_object() else {
             return Err(CliError::Other(format!(
                 "invalid Codex [{key}] table in {}",
                 path.display()
             )));
         };
-        for (name, server) in servers {
+        for (name, server) in server_entries {
             let Some(server) = server.as_object() else {
                 return Err(CliError::Other(format!(
                     "invalid Codex MCP server {name:?} in {}",
                     path.display()
                 )));
             };
-            let Some(command) = server.get("command") else {
-                continue;
-            };
-            let Some(command) = command.as_str() else {
-                return Err(CliError::Other(format!(
-                    "invalid command for Codex MCP server {name:?} in {}",
-                    path.display()
-                )));
-            };
-            let args = match server.get("args") {
-                None => Vec::new(),
-                Some(value) => value
-                    .as_array()
-                    .ok_or_else(|| {
+
+            let command = server
+                .get("command")
+                .map(|value| {
+                    value.as_str().ok_or_else(|| {
                         CliError::Other(format!(
-                            "invalid args for Codex MCP server {name:?} in {}",
+                            "invalid command for Codex MCP server {name:?} in {}",
                             path.display()
                         ))
-                    })?
-                    .iter()
-                    .map(|value| {
-                        value.as_str().map(str::to_string).ok_or_else(|| {
-                            CliError::Other(format!(
-                                "invalid args for Codex MCP server {name:?} in {}",
-                                path.display()
-                            ))
-                        })
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
-            };
-            if is_flicknote_command(command, &args) {
-                names.insert(name.clone());
-            }
+                })
+                .transpose()?;
+            let args = string_array(server.get("args"), || {
+                format!(
+                    "invalid args for Codex MCP server {name:?} in {}",
+                    path.display()
+                )
+            })?;
+            let enabled = server
+                .get("enabled")
+                .map(|value| {
+                    value.as_bool().ok_or_else(|| {
+                        CliError::Other(format!(
+                            "invalid enabled value for Codex MCP server {name:?} in {}",
+                            path.display()
+                        ))
+                    })
+                })
+                .transpose()?
+                .unwrap_or(true);
+            let enabled_tools = string_array(server.get("enabled_tools"), || {
+                format!(
+                    "invalid enabled_tools for Codex MCP server {name:?} in {}",
+                    path.display()
+                )
+            })?;
+            let disabled_tools = string_array(server.get("disabled_tools"), || {
+                format!(
+                    "invalid disabled_tools for Codex MCP server {name:?} in {}",
+                    path.display()
+                )
+            })?;
+            let note_recall_available = enabled_tools
+                .as_ref()
+                .is_none_or(|tools| tools.iter().any(|tool| tool == RECALL_TOOL))
+                && disabled_tools
+                    .as_ref()
+                    .is_none_or(|tools| !tools.iter().any(|tool| tool == RECALL_TOOL));
+
+            servers.insert(
+                name.clone(),
+                ServerDefinition {
+                    flicknote: command.is_some_and(|command| {
+                        is_flicknote_command(command, args.as_deref().unwrap_or_default())
+                    }),
+                    enabled,
+                    note_recall_available,
+                },
+            );
         }
     }
-    Ok(names)
+    Ok(servers)
+}
+
+fn string_array<F>(value: Option<&Value>, message: F) -> Result<Option<Vec<String>>, CliError>
+where
+    F: Fn() -> String,
+{
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let values = value.as_array().ok_or_else(|| CliError::Other(message()))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_string)
+                .ok_or_else(|| CliError::Other(message()))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn live_servers(servers: &ServerMap) -> Vec<String> {
+    servers
+        .iter()
+        .filter(|(_, server)| server.flicknote && server.enabled && server.note_recall_available)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+fn no_available_server_error(scope: Scope, servers: &ServerMap) -> CliError {
+    let flicknote_names = servers
+        .iter()
+        .filter(|(_, server)| server.flicknote)
+        .map(|(name, server)| {
+            let status = match (server.enabled, server.note_recall_available) {
+                (false, _) => "disabled",
+                (_, false) => "note_recall unavailable",
+                (true, true) => "available",
+            };
+            format!("{name} ({status})")
+        })
+        .collect::<Vec<_>>();
+    let scope_hint = if scope == Scope::Local {
+        " in the effective user/project configuration"
+    } else {
+        " in the current user's configuration"
+    };
+    let detail = if flicknote_names.is_empty() {
+        if servers.is_empty() {
+            "add an mcp_servers entry whose command is flicknote with the mcp argument".to_string()
+        } else {
+            "the effective configuration contains no usable FlickNote entry; a project server may be shadowing a user entry, or add an mcp_servers entry whose command is flicknote with the mcp argument".to_string()
+        }
+    } else {
+        format!(
+            "the discovered registrations are not usable: {}",
+            flicknote_names.join(", ")
+        )
+    };
+    CliError::Other(format!(
+        "could not find an enabled FlickNote MCP registration with note_recall available{scope_hint}; {detail}, then retry"
+    ))
 }
 
 fn is_flicknote_command(command: &str, args: &[String]) -> bool {
@@ -503,84 +622,47 @@ fn read_hooks_json(path: &Path) -> Result<Option<Value>, CliError> {
 fn find_json_matches(
     root: &Value,
     path: &Path,
-    servers: &BTreeSet<String>,
+    servers: &ServerMap,
+) -> Result<Vec<HookMatch>, CliError> {
+    find_hook_matches(
+        root,
+        &path.display().to_string(),
+        Some(path),
+        HookFormat::Json,
+        servers,
+    )
+}
+
+fn find_inline_matches(
+    document: &Value,
+    source: &ConfigSource,
+    servers: &ServerMap,
+) -> Result<Vec<HookMatch>, CliError> {
+    find_hook_matches(
+        document,
+        &source.path.display().to_string(),
+        None,
+        HookFormat::Toml,
+        servers,
+    )
+}
+
+fn find_hook_matches(
+    root: &Value,
+    source_label: &str,
+    path: Option<&Path>,
+    format: HookFormat,
+    servers: &ServerMap,
 ) -> Result<Vec<HookMatch>, CliError> {
     let Some(hooks) = root.get("hooks") else {
         return Ok(Vec::new());
     };
     let Some(hooks) = hooks.as_object() else {
         return Err(CliError::Other(format!(
-            "Codex hooks in {} must be an object",
-            path.display()
-        )));
-    };
-    let Some(events) = hooks.get(HOOK_EVENT) else {
-        return Ok(Vec::new());
-    };
-    let Some(groups) = events.as_array() else {
-        return Err(CliError::Other(format!(
-            "Codex hooks.{HOOK_EVENT} in {} must be an array",
-            path.display()
-        )));
-    };
-    let mut matches = Vec::new();
-    for (group_index, group) in groups.iter().enumerate() {
-        let Some(group) = group.as_object() else {
-            return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}] in {} must be an object",
-                path.display()
-            )));
-        };
-        let Some(handlers) = group.get("hooks") else {
-            return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}] in {} has no hooks array",
-                path.display()
-            )));
-        };
-        let Some(handlers) = handlers.as_array() else {
-            return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}].hooks in {} must be an array",
-                path.display()
-            )));
-        };
-        for (handler_index, handler) in handlers.iter().enumerate() {
-            let Some(handler) = handler.as_object() else {
-                return Err(CliError::Other(format!(
-                    "Codex hook handler {path:?} group {group_index} item {handler_index} must be an object"
-                )));
-            };
-            if matches_handler(handler, servers)? {
-                if handler_disabled(handler) {
-                    return Err(CliError::Other(format!(
-                        "FlickNote recall hook at {} is explicitly disabled; no file was changed",
-                        path.display()
-                    )));
-                }
-                matches.push(HookMatch {
-                    location: format!(
-                        "{} hooks.{HOOK_EVENT}[{group_index}].hooks[{handler_index}]",
-                        path.display()
-                    ),
-                    path: Some(path.to_path_buf()),
-                });
-            }
-        }
-    }
-    Ok(matches)
-}
-
-fn find_inline_matches(
-    document: &Value,
-    source: &ConfigSource,
-    servers: &BTreeSet<String>,
-) -> Result<Vec<HookMatch>, CliError> {
-    let Some(hooks) = document.get("hooks") else {
-        return Ok(Vec::new());
-    };
-    let Some(hooks) = hooks.as_object() else {
-        return Err(CliError::Other(format!(
-            "Codex [hooks] in {} must be a table",
-            source.path.display()
+            "Codex {} in {} must be an {}",
+            hooks_name(format),
+            source_label,
+            object_name(format)
         )));
     };
     let Some(groups) = hooks.get(HOOK_EVENT) else {
@@ -588,50 +670,61 @@ fn find_inline_matches(
     };
     let Some(groups) = groups.as_array() else {
         return Err(CliError::Other(format!(
-            "Codex [[hooks.{HOOK_EVENT}]] in {} must be an array",
-            source.path.display()
+            "Codex {}.{HOOK_EVENT} in {} must be an array",
+            hooks_name(format),
+            source_label
         )));
     };
     let mut matches = Vec::new();
     for (group_index, group) in groups.iter().enumerate() {
         let Some(group) = group.as_object() else {
             return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}] in {} must be a table",
-                source.path.display()
+                "Codex {}.{HOOK_EVENT}[{group_index}] in {} must be an {}",
+                hooks_name(format),
+                source_label,
+                object_name(format)
             )));
         };
         let Some(handlers) = group.get("hooks") else {
             return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}] in {} has no hooks array",
-                source.path.display()
+                "Codex {}.{HOOK_EVENT}[{group_index}] in {} has no hooks array",
+                hooks_name(format),
+                source_label
             )));
         };
         let Some(handlers) = handlers.as_array() else {
             return Err(CliError::Other(format!(
-                "Codex hooks.{HOOK_EVENT}[{group_index}].hooks in {} must be an array",
-                source.path.display()
+                "Codex {}.{HOOK_EVENT}[{group_index}].hooks in {} must be an array",
+                hooks_name(format),
+                source_label
             )));
         };
         for (handler_index, handler) in handlers.iter().enumerate() {
             let Some(handler) = handler.as_object() else {
                 return Err(CliError::Other(format!(
-                    "Codex hook handler in {} group {group_index} item {handler_index} must be a table",
-                    source.path.display()
+                    "Codex hook handler in {} group {group_index} item {handler_index} must be an {}",
+                    source_label,
+                    object_name(format)
                 )));
             };
             if matches_handler(handler, servers)? {
                 if handler_disabled(handler) {
                     return Err(CliError::Other(format!(
                         "FlickNote recall hook at {} is explicitly disabled; no file was changed",
-                        source.path.display()
+                        source_label
                     )));
                 }
                 matches.push(HookMatch {
                     location: format!(
-                        "{} inline hooks.{HOOK_EVENT}[{group_index}].hooks[{handler_index}]",
-                        source.path.display()
+                        "{}{} hooks.{HOOK_EVENT}[{group_index}].hooks[{handler_index}]",
+                        source_label,
+                        if matches!(format, HookFormat::Toml) {
+                            " inline"
+                        } else {
+                            ""
+                        }
                     ),
-                    path: None,
+                    path: path.map(Path::to_path_buf),
                 });
             }
         }
@@ -639,10 +732,21 @@ fn find_inline_matches(
     Ok(matches)
 }
 
-fn matches_handler(
-    handler: &Map<String, Value>,
-    servers: &BTreeSet<String>,
-) -> Result<bool, CliError> {
+fn hooks_name(format: HookFormat) -> &'static str {
+    match format {
+        HookFormat::Json => "hooks",
+        HookFormat::Toml => "[hooks]",
+    }
+}
+
+fn object_name(format: HookFormat) -> &'static str {
+    match format {
+        HookFormat::Json => "object",
+        HookFormat::Toml => "table",
+    }
+}
+
+fn matches_handler(handler: &Map<String, Value>, servers: &ServerMap) -> Result<bool, CliError> {
     if handler.get("type").and_then(Value::as_str) != Some(HOOK_TYPE) {
         return Ok(false);
     }
@@ -656,7 +760,10 @@ fn matches_handler(
             "Codex mcp_tool hook is missing its tool name; no file was changed".into(),
         ));
     };
-    Ok(tool == RECALL_TOOL && (servers.is_empty() || servers.contains(server)))
+    Ok(tool == RECALL_TOOL
+        && servers.get(server).is_some_and(|definition| {
+            definition.flicknote && definition.enabled && definition.note_recall_available
+        }))
 }
 
 fn handler_disabled(handler: &Map<String, Value>) -> bool {
@@ -1035,5 +1142,99 @@ hooks = false
         let error = install_codex(Scope::Local, &paths).unwrap_err();
         assert!(error.to_string().contains("explicitly disabled"));
         assert!(!paths.local_hooks.exists());
+    }
+
+    #[test]
+    fn disabled_mcp_server_is_not_selected() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        let paths = context.paths();
+        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.global_config,
+            r#"
+[mcp_servers.flicknote]
+command = "flicknote"
+args = ["mcp"]
+enabled = false
+"#,
+        )
+        .unwrap();
+
+        let error = install_codex(Scope::Local, &paths).unwrap_err();
+        assert!(
+            error.to_string().contains("disabled"),
+            "unexpected error: {error}"
+        );
+        assert!(!paths.local_hooks.exists());
+    }
+
+    #[test]
+    fn mcp_server_without_recall_tool_is_not_selected() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        let paths = context.paths();
+        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.global_config,
+            r#"
+[mcp_servers.flicknote]
+command = "flicknote"
+args = ["mcp"]
+enabled_tools = ["note_get"]
+"#,
+        )
+        .unwrap();
+
+        let error = install_codex(Scope::Local, &paths).unwrap_err();
+        assert!(
+            error.to_string().contains("note_recall unavailable"),
+            "unexpected error: {error}"
+        );
+        assert!(!paths.local_hooks.exists());
+    }
+
+    #[test]
+    fn local_server_overrides_same_name_global_server() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        write_config(&context, false, "flicknote");
+        let paths = context.paths();
+        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.local_config,
+            r#"
+[mcp_servers.flicknote]
+command = "other-mcp"
+args = ["mcp"]
+"#,
+        )
+        .unwrap();
+
+        let error = install_codex(Scope::Local, &paths).unwrap_err();
+        assert!(
+            error.to_string().contains("shadowing"),
+            "unexpected error: {error}"
+        );
+        assert!(!paths.local_hooks.exists());
+    }
+
+    #[test]
+    fn live_local_hook_with_a_different_server_name_blocks_global_install() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        write_config(&context, false, "global_flicknote");
+        write_config(&context, true, "project_flicknote");
+        let paths = context.paths();
+        fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.local_hooks,
+            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "project_flicknote", "tool": RECALL_TOOL}]}]}}).to_string(),
+        )
+        .unwrap();
+
+        let result = install_codex(Scope::Global, &paths).unwrap();
+        assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
+        assert!(!paths.global_hooks.exists());
     }
 }

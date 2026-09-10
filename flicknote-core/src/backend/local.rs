@@ -113,8 +113,25 @@ const SQ_RECALL: &str = r#"
         WHERE e.user_id = n.user_id
           AND e.note_id = n.id
           AND e.key IN ('::person', '::company', '::location', '::product')
-          AND trim(e.value) <> ''
-          AND instr(lower(?), lower(trim(e.value))) > 0
+          AND trim(
+                e.value,
+                char(
+                    9, 10, 11, 12, 13, 32, 133, 160, 5760,
+                    8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+                    8232, 8233, 8239, 8287, 12288
+                )
+              ) <> ''
+          AND instr(
+                lower(?),
+                lower(trim(
+                    e.value,
+                    char(
+                        9, 10, 11, 12, 13, 32, 133, 160, 5760,
+                        8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+                        8232, 8233, 8239, 8287, 12288
+                    )
+                ))
+              ) > 0
       )
     ORDER BY n.updated_at DESC, n.short_id ASC
     LIMIT ?
