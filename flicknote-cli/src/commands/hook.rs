@@ -33,7 +33,7 @@ pub(crate) struct HookInstallArgs {
 
 #[derive(Subcommand)]
 enum HookInstallTarget {
-    /// Install the read-only entity recall hook for Codex
+    /// Install the read-only recall hook for Codex
     Codex(CodexInstallArgs),
 }
 
@@ -230,10 +230,7 @@ fn requested_scope(
         ));
     }
 
-    writeln!(
-        output,
-        "Choose where to install the Codex entity recall hook:"
-    )?;
+    writeln!(output, "Choose where to install the Codex recall hook:")?;
     writeln!(output, "  1) local  {}", paths.local_hooks.display())?;
     writeln!(output, "  2) global {}", paths.global_hooks.display())?;
     write!(output, "Enter 1 or 2 (blank cancels): ")?;
@@ -342,16 +339,12 @@ fn print_result(
     match result {
         InstallResult::Installed { path, updated } => {
             let action = if updated { "Updated" } else { "Installed" };
-            writeln!(
-                output,
-                "{action} Codex entity recall hook in {}",
-                path.display()
-            )?;
+            writeln!(output, "{action} Codex recall hook in {}", path.display())?;
         }
         InstallResult::AlreadyConfigured { locations } => {
             writeln!(
                 output,
-                "Codex entity recall hook is already configured; no file was changed."
+                "Codex recall hook is already configured; no file was changed."
             )?;
             for location in locations {
                 writeln!(output, "  {location}")?;

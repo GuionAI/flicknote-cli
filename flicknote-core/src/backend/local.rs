@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use powersync::PowerSyncDatabase;
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
+use std::collections::HashSet;
 
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
@@ -100,42 +101,102 @@ const SQ_INSERT_EXTRACTION: &str =
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
+// This query is a coarse literal prefilter. Boundary matching, deduplication,
+// and the final limit must stay after the query so an embedded hit cannot hide
+// a later standalone hit or consume a candidate slot.
 const SQ_RECALL: &str = r#"
-    SELECT n.short_id, n.title, n.summary, n.updated_at
+    SELECT n.id, n.short_id, n.title, n.summary, n.updated_at,
+           trim(
+               e.value,
+               char(
+                   9, 10, 11, 12, 13, 32, 133, 160, 5760,
+                   8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+                   8232, 8233, 8239, 8287, 12288
+               )
+           ) AS extraction_value
     FROM notes AS n
+    JOIN note_extractions AS e
+      ON e.user_id = n.user_id
+     AND e.note_id = n.id
     WHERE n.user_id = ?
       AND n.deleted_at IS NULL
       AND (? IS NULL OR n.project_id = ?)
       AND n.short_id IS NOT NULL
-      AND EXISTS (
-        SELECT 1
-        FROM note_extractions AS e
-        WHERE e.user_id = n.user_id
-          AND e.note_id = n.id
-          AND e.key IN ('::person', '::company', '::location', '::product')
-          AND trim(
+      AND e.key IN ('::topic', '::person', '::company', '::location', '::product')
+      AND trim(
+            e.value,
+            char(
+                9, 10, 11, 12, 13, 32, 133, 160, 5760,
+                8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
+                8232, 8233, 8239, 8287, 12288
+            )
+          ) <> ''
+      AND instr(
+            lower(?),
+            lower(trim(
                 e.value,
                 char(
                     9, 10, 11, 12, 13, 32, 133, 160, 5760,
                     8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
                     8232, 8233, 8239, 8287, 12288
                 )
-              ) <> ''
-          AND instr(
-                lower(?),
-                lower(trim(
-                    e.value,
-                    char(
-                        9, 10, 11, 12, 13, 32, 133, 160, 5760,
-                        8192, 8193, 8194, 8195, 8196, 8197, 8198, 8199, 8200, 8201, 8202,
-                        8232, 8233, 8239, 8287, 12288
-                    )
-                ))
-              ) > 0
-      )
+            ))
+          ) > 0
     ORDER BY n.updated_at DESC, n.short_id ASC
-    LIMIT ?
     "#;
+
+fn is_ascii_token_char(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+#[cfg(test)]
+pub(super) fn contains_recall_value(prompt: &str, value: &str) -> bool {
+    let prompt = prompt.to_ascii_lowercase();
+    contains_lowercased_recall_value(&prompt, value)
+}
+
+fn contains_lowercased_recall_value(prompt: &str, value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+
+    // SQLite's existing lower() call provides ASCII case-insensitive matching.
+    // `to_ascii_lowercase` on the extraction value preserves the byte offsets
+    // used for boundary checks and intentionally does not add Unicode case
+    // folding. The prompt is lowercased once by the caller for the row scan.
+    let value = value.to_ascii_lowercase();
+    let value_bytes = value.as_bytes();
+    let require_left_edge = value_bytes
+        .first()
+        .is_some_and(|byte| is_ascii_token_char(*byte));
+    let require_right_edge = value_bytes
+        .last()
+        .is_some_and(|byte| is_ascii_token_char(*byte));
+
+    let mut search_from = 0;
+    while let Some(relative_start) = prompt[search_from..].find(&value) {
+        let start = search_from + relative_start;
+        let end = start + value.len();
+        let left_edge_matches =
+            !require_left_edge || start == 0 || !is_ascii_token_char(prompt.as_bytes()[start - 1]);
+        let right_edge_matches = !require_right_edge
+            || end == prompt.len()
+            || !is_ascii_token_char(prompt.as_bytes()[end]);
+        if left_edge_matches && right_edge_matches {
+            return true;
+        }
+
+        // Advance by one character, not by the value length, so an invalid
+        // occurrence cannot hide a later overlapping standalone occurrence.
+        search_from = start
+            + prompt[start..]
+                .chars()
+                .next()
+                .expect("a found occurrence has a non-empty start")
+                .len_utf8();
+    }
+    false
+}
 async fn resolve_sqlite_uuid_id(
     db: &PowerSyncDatabase,
     sql: &str,
@@ -503,28 +564,46 @@ impl NoteDb for LocalPowerSyncBackend {
         prompt: &str,
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<RecallCandidate>, CliError> {
-        let limit = i64::from(filter.limit);
+        if filter.limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let prompt_lower = prompt.to_ascii_lowercase();
         let reader = self.db.reader().await?;
         let mut statement = reader.prepare(SQ_RECALL)?;
-        Ok(statement
-            .query_map(
-                params![
-                    self.user_id,
-                    filter.project_id,
-                    filter.project_id,
-                    prompt,
-                    limit,
-                ],
-                |row| {
-                    Ok(RecallCandidate {
-                        id: row.get(0)?,
-                        title: row.get(1)?,
-                        summary: row.get(2)?,
-                        updated_at: row.get(3)?,
-                    })
-                },
-            )?
-            .collect::<Result<Vec<_>, _>>()?)
+        let rows = statement.query_map(
+            params![self.user_id, filter.project_id, filter.project_id, prompt],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )?;
+        let mut matched_note_ids = HashSet::new();
+        let mut candidates = Vec::new();
+        for row in rows {
+            let (note_id, id, title, summary, updated_at, extraction_value) = row?;
+            if !contains_lowercased_recall_value(&prompt_lower, &extraction_value)
+                || !matched_note_ids.insert(note_id)
+            {
+                continue;
+            }
+            candidates.push(RecallCandidate {
+                id,
+                title,
+                summary,
+                updated_at,
+            });
+            if candidates.len() == filter.limit as usize {
+                break;
+            }
+        }
+        Ok(candidates)
     }
 
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {

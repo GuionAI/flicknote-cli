@@ -101,7 +101,7 @@ impl FlickNoteMcp {
                 DaemonClient::new(&self.config).call(request),
             )
             .await
-            .map_err(|_| ServiceError::DaemonUnavailable("entity recall timed out".to_string()))?;
+            .map_err(|_| ServiceError::DaemonUnavailable("recall timed out".to_string()))?;
         }
         DaemonClient::new(&self.config).call(request).await
     }
@@ -205,7 +205,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_recall",
-        description = "Recall up to five active notes whose extracted person, company, location, or product entity appears in the prompt. This is read-only host context; use note_get with a returned ID to inspect a candidate.",
+        description = "Recall up to five active notes whose full extracted topic or person, company, location, or product value appears literally in the prompt (multiword values are not split; values with an ASCII letter, digit, or underscore at an edge use ASCII token edges). This is read-only host context; use note_get with a returned ID to inspect a candidate.",
         annotations(read_only_hint = true)
     )]
     async fn note_recall(

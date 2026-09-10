@@ -587,6 +587,197 @@ async fn insert_recall_note_in_project(
     id
 }
 
+async fn insert_recall_note_with_extractions(
+    backend: &LocalPowerSyncBackend,
+    title: &str,
+    timestamp: &str,
+    short_id: i64,
+    project_id: Option<&str>,
+    extractions: &[(&str, &[&str])],
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "synced",
+            title: Some(title),
+            content: Some("body"),
+            metadata: None,
+            project_id,
+            now: timestamp,
+        })
+        .await
+        .unwrap();
+    for (key, values) in extractions {
+        let values = values
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>();
+        backend
+            .set_note_extractions(&id, key, &values)
+            .await
+            .unwrap();
+    }
+    let writer = backend.database().writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET short_id = ?, summary = ? WHERE id = ?",
+            params![short_id, format!("Summary {short_id}"), id],
+        )
+        .unwrap();
+    drop(writer);
+    id
+}
+
+async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i64> {
+    fixture
+        .recall_notes(
+            prompt,
+            &NoteFilter {
+                project_id: None,
+                note_type: None,
+                archived: false,
+                limit,
+            },
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|candidate| candidate.id)
+        .collect()
+}
+
+#[test]
+fn recall_matching_requires_ascii_token_edges_and_checks_all_occurrences() {
+    for (value, prompt) in [
+        ("PATH", "Karpathy"),
+        ("age", "Management"),
+        ("age", "age2"),
+        ("age", "my_age"),
+        ("2FA", "x2FA"),
+        ("2FA", "2FAx"),
+        ("_id", "x_id"),
+    ] {
+        assert!(
+            !super::local::contains_recall_value(prompt, value),
+            "{value:?} must not match inside {prompt:?}"
+        );
+    }
+
+    for (value, prompt) in [
+        ("age", "用age加密"),
+        ("age", "(age)"),
+        ("age", "Management age"),
+        ("2FA", "(2FA)"),
+        ("_id", "(_id)"),
+        ("鸵鸟蛋", "用鸵鸟蛋测试"),
+        ("OpenAI", "openai"),
+        ("%_", "literal %_ value"),
+        ("x-x-", "ax-x-x-"),
+        ("Memory Systems", "Memory Systems design"),
+    ] {
+        assert!(
+            super::local::contains_recall_value(prompt, value),
+            "{value:?} must match in {prompt:?}"
+        );
+    }
+    assert!(!super::local::contains_recall_value(
+        "Memory design",
+        "Memory Systems"
+    ));
+}
+
+async fn seed_boundary_recall_notes(fixture: &BackendFixture) {
+    for (title, timestamp, short_id, key, value) in [
+        (
+            "Embedded PATH",
+            "2026-09-10T13:00:00Z",
+            30,
+            "::person",
+            "PATH",
+        ),
+        (
+            "Standalone age",
+            "2026-09-10T12:00:00Z",
+            31,
+            "::person",
+            "age",
+        ),
+        (
+            "Memory Systems topic",
+            "2026-09-10T11:00:00Z",
+            32,
+            "::topic",
+            "Memory Systems",
+        ),
+        (
+            "Chinese entity",
+            "2026-09-10T10:00:00Z",
+            33,
+            "::person",
+            "鸵鸟蛋",
+        ),
+    ] {
+        drop(
+            insert_recall_note_with_extractions(
+                &fixture.backend,
+                title,
+                timestamp,
+                short_id,
+                None,
+                &[(key, &[value])],
+            )
+            .await,
+        );
+    }
+    drop(
+        insert_recall_note_with_extractions(
+            &fixture.backend,
+            "Topic and entity",
+            "2026-09-10T09:00:00Z",
+            34,
+            None,
+            &[
+                ("::topic", &["Memory Systems"]),
+                ("::person", &["Ada Lovelace"]),
+            ],
+        )
+        .await,
+    );
+}
+
+#[tokio::test]
+async fn local_backend_recall_matches_topics_and_filters_boundaries_before_limit() {
+    let fixture = make_backend().await;
+    seed_boundary_recall_notes(&fixture).await;
+    for prompt in ["Karpathy", "Management", "age2", "my_age"] {
+        assert!(recall_ids(&fixture, prompt, 20).await.is_empty());
+    }
+
+    for prompt in ["用age加密", "(age)", "Management age"] {
+        assert_eq!(recall_ids(&fixture, prompt, 20).await, vec![31]);
+    }
+
+    assert_eq!(
+        recall_ids(&fixture, "Design Memory Systems", 20).await,
+        vec![32, 34]
+    );
+    assert!(recall_ids(&fixture, "Memory", 20).await.is_empty());
+
+    assert_eq!(recall_ids(&fixture, "用鸵鸟蛋测试", 20).await, vec![33]);
+
+    let deduped_results = recall_ids(&fixture, "Ada Lovelace and Memory Systems", 20).await;
+    assert_eq!(deduped_results, vec![32, 34]);
+
+    let pre_limit = recall_ids(&fixture, "Karpathy age", 1).await;
+    assert_eq!(
+        pre_limit,
+        vec![31],
+        "embedded PATH must not consume the limit ahead of standalone age"
+    );
+}
+
 async fn seed_recall_notes(fixture: &BackendFixture) {
     for (title, timestamp, short_id, entity) in [
         (
@@ -829,7 +1020,6 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             .collect::<Vec<_>>(),
         vec![18]
     );
-
     let no_summary_id = insert_recall_note(
         &fixture.backend,
         "Missing summary",
@@ -861,6 +1051,57 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
     assert_eq!(no_summary.len(), 1);
     assert_eq!(no_summary[0].id, 19);
     assert_eq!(no_summary[0].summary, None);
+}
+
+#[tokio::test]
+async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
+    let fixture = make_backend().await;
+    let project_id = fixture
+        .create_project("Recall topic project")
+        .await
+        .unwrap();
+    drop(
+        insert_recall_note_with_extractions(
+            &fixture.backend,
+            "Outside project topic",
+            "2026-09-10T09:30:00Z",
+            21,
+            None,
+            &[("::topic", &["Project topic"])],
+        )
+        .await,
+    );
+    drop(
+        insert_recall_note_with_extractions(
+            &fixture.backend,
+            "Project-only topic",
+            "2026-09-10T10:30:00Z",
+            22,
+            Some(&project_id),
+            &[("::topic", &["Project topic"])],
+        )
+        .await,
+    );
+
+    let results = fixture
+        .recall_notes(
+            "Project topic",
+            &NoteFilter {
+                project_id: Some(&project_id),
+                note_type: None,
+                archived: false,
+                limit: 20,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        results
+            .iter()
+            .map(|candidate| candidate.id)
+            .collect::<Vec<_>>(),
+        vec![22]
+    );
 }
 
 #[tokio::test]
