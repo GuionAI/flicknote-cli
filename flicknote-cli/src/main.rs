@@ -51,6 +51,8 @@ enum Commands {
     Entity(commands::entity::EntityArgs),
     /// Make a safe authenticated request to the configured Gateway
     Gateway(commands::gateway::GatewayArgs),
+    /// Install host lifecycle hooks
+    Hook(commands::hook::HookArgs),
     /// Inspect raw note sources
     Source(commands::source::SourceArgs),
     /// Show note details with full metadata
@@ -101,6 +103,10 @@ async fn run() -> Result<(), CliError> {
             .map_err(|error| CliError::Other(error.to_string()))?;
         return Ok(());
     }
+
+    if let Some(Commands::Hook(args)) = cli.command.as_ref() {
+        return commands::hook::run(args);
+    }
     let config = Config::load()?;
 
     // Commands that don't need a database connection or session
@@ -144,6 +150,7 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Topic(args) => commands::topic::run(daemon, args).await,
         Commands::Entity(args) => commands::entity::run(daemon, args).await,
         Commands::Gateway(_) => unreachable!("Gateway is dispatched before database setup"),
+        Commands::Hook(_) => unreachable!("Hook is dispatched before configuration setup"),
         Commands::Source(args) => commands::source::run(daemon, args).await,
         Commands::Detail(args) => commands::detail::run(daemon, args).await,
         Commands::Content(args) => commands::content::run(daemon, args).await,

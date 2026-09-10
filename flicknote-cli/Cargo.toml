@@ -31,6 +31,7 @@ libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "stream", "charset", "http2", "rustls-tls"] }
 futures-util = "0.3"
 serde = { workspace = true }
+toml = { workspace = true }
 open = "5"
 tempfile = "3"
 env_logger = "0.11"

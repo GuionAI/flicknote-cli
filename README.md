@@ -9,6 +9,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
+- **Codex entity recall** — a read-only `UserPromptSubmit` hook that offers bounded historical note candidates before a prompt is sent
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **User daemon service** — foreground daemon managed by launchd (macOS) or systemd (Linux)
@@ -118,6 +119,10 @@ flicknote daemon run
 
 # Reconcile/start the service after an upgrade
 flicknote daemon restart
+
+# Install the Codex entity recall hook (choose interactively, or pass a scope)
+flicknote hook install codex
+flicknote hook install codex --global
 ```
 
 ## Daemon lifecycle
@@ -162,12 +167,39 @@ start it as a subprocess:
 ```
 
 The MCP server requires the local daemon. It exposes typed note, discovery,
-note-source, and project tools. Note content and exact `before`/`after` edits
+note-source, project, and read-only entity-recall tools. Note content and exact `before`/`after` edits
 are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data, while `note_get` reads
 editable note content. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
+
+### Codex entity recall hook
+
+With the FlickNote MCP server already registered in Codex, install the hook with
+`flicknote hook install codex`. On a terminal it shows the actual project-local
+(`.codex/hooks.json`) and user (`CODEX_HOME/hooks.json`, or `~/.codex/hooks.json`)
+destinations; `--local` and `--global` select a scope for automation. The
+installer resolves the registered FlickNote MCP server name from Codex's
+`config.toml`, preserves unrelated hooks, and does not start the daemon or
+change hook trust. A missing or ambiguous registration, an invalid config, or
+an explicit hooks disable is reported without overwriting files. Existing hooks
+in another active scope are reported rather than duplicated or moved.
+
+After installation, review and trust the definition in Codex with `/hooks`.
+Project-local hooks also require a trusted project. The generated synchronous
+`UserPromptSubmit` MCP hook sends the current prompt to `note_recall` with a
+one-second timeout. Recall checks the current user's active notes only, matches
+literal extracted person/company/location/product names, returns at most five
+numeric-ID candidates, and does not read note bodies or generate summaries.
+Titles, summaries, and the complete context are bounded; ASCII case-insensitive
+matching follows SQLite's behavior, so aliases, semantic matches, and complete
+Unicode case folding are not inferred. If the daemon is unavailable or the
+recall fails, Codex continues without injected candidates; the hook never writes
+notes or starts services implicitly. Use `note_get` with a returned ID to read a
+candidate and verify historical information before any independently authorized
+edit. See the [Codex hooks documentation](https://developers.openai.com/codex/hooks)
+for host trust and MCP hook behavior.
 
 The Gateway CLI command remains available for internal development and
 maintenance requests; it is not the formal agent interface.

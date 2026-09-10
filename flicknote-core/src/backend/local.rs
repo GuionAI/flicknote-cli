@@ -4,6 +4,7 @@ use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
+use crate::services::dto::RecallCandidate;
 use crate::types::{Note, Project};
 
 use super::{
@@ -99,6 +100,25 @@ const SQ_INSERT_EXTRACTION: &str =
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
+const SQ_RECALL: &str = r#"
+    SELECT n.short_id, n.title, n.summary, n.updated_at
+    FROM notes AS n
+    WHERE n.user_id = ?
+      AND n.deleted_at IS NULL
+      AND (? IS NULL OR n.project_id = ?)
+      AND n.short_id IS NOT NULL
+      AND EXISTS (
+        SELECT 1
+        FROM note_extractions AS e
+        WHERE e.user_id = n.user_id
+          AND e.note_id = n.id
+          AND e.key IN ('::person', '::company', '::location', '::product')
+          AND trim(e.value) <> ''
+          AND instr(lower(?), lower(trim(e.value))) > 0
+      )
+    ORDER BY n.updated_at DESC, n.short_id ASC
+    LIMIT ?
+    "#;
 async fn resolve_sqlite_uuid_id(
     db: &PowerSyncDatabase,
     sql: &str,
@@ -459,6 +479,35 @@ impl NoteDb for LocalPowerSyncBackend {
                 limit,
             ],
         )
+    }
+
+    async fn recall_notes(
+        &self,
+        prompt: &str,
+        filter: &NoteFilter<'_>,
+    ) -> Result<Vec<RecallCandidate>, CliError> {
+        let limit = i64::from(filter.limit);
+        let reader = self.db.reader().await?;
+        let mut statement = reader.prepare(SQ_RECALL)?;
+        Ok(statement
+            .query_map(
+                params![
+                    self.user_id,
+                    filter.project_id,
+                    filter.project_id,
+                    prompt,
+                    limit,
+                ],
+                |row| {
+                    Ok(RecallCandidate {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        summary: row.get(2)?,
+                        updated_at: row.get(3)?,
+                    })
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?)
     }
 
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {

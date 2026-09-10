@@ -22,6 +22,10 @@ pub(super) async fn handle_read(
         AppRequest::NoteFind(input) => {
             service_result(notes.find(input).await, AppResponse::NoteSummaries)
         }
+        AppRequest::NoteRecall { prompt, project } => service_result(
+            notes.recall(&prompt, project.as_deref()).await,
+            AppResponse::NoteRecall,
+        ),
         AppRequest::NoteCount(input) => notes
             .count(input)
             .await

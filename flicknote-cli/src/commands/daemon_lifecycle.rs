@@ -582,7 +582,7 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let mismatch = ServiceError::Remote {
             code: PROTOCOL_MISMATCH_CODE.to_string(),
-            message: "daemon protocol mismatch: CLI v4 vs daemon v3".to_string(),
+            message: "daemon protocol mismatch: CLI v5 vs daemon v3".to_string(),
             retryable: true,
             details: None,
         };

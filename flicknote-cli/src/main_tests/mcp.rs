@@ -417,6 +417,45 @@ async fn mcp_server_exposes_stable_tool_contract() {
     assert!(project_get["inputSchema"]["properties"].get("id").is_none());
 }
 
+#[tokio::test]
+async fn mcp_recall_output_schema_advertises_codex_hook_contract() {
+    let mut harness = McpHarness::start().await;
+    let recall = harness
+        .tools()
+        .await
+        .into_iter()
+        .find(|tool| tool["name"] == "note_recall")
+        .unwrap();
+    assert_eq!(
+        recall["inputSchema"]["properties"]["prompt"]["type"],
+        "string"
+    );
+    let hook_output = &recall["outputSchema"]["properties"]["hookSpecificOutput"];
+    let hook_output = hook_output
+        .get("anyOf")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|variants| {
+            variants
+                .iter()
+                .find(|variant| variant.get("$ref").is_some())
+        })
+        .unwrap_or(hook_output);
+    let hook_output = hook_output
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        .map(|name| &recall["outputSchema"]["$defs"][name])
+        .unwrap_or(hook_output);
+    assert_eq!(
+        hook_output["properties"]["hookEventName"]["const"],
+        "UserPromptSubmit"
+    );
+    assert_eq!(
+        hook_output["properties"]["additionalContext"]["type"],
+        "string"
+    );
+}
+
 /// Fail if any schema position holds a bare boolean schema (e.g.
 /// `"metadata": true`).
 ///
@@ -696,6 +735,53 @@ async fn mcp_discovery_returns_object_wrapped_typed_results() {
         serde_json::json!([
             { "value": "Ada Lovelace", "type": "person" }
         ])
+    );
+}
+
+#[tokio::test]
+async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication() {
+    let mut harness = McpHarness::start().await;
+
+    let recalled = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Discuss Ada Lovelace and OpenAI" }),
+        )
+        .await;
+    assert_eq!(recalled["result"]["isError"], false);
+    let context =
+        recalled["result"]["structuredContent"]["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+    assert_eq!(
+        recalled["result"]["structuredContent"]["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(context.contains("当前时间："));
+    assert!(context.contains("\"id\":42"));
+    assert!(context.contains("MCP Note"));
+    assert!(context.contains("历史笔记候选结束"));
+    assert!(!context.contains(&harness.note_uuid));
+
+    let empty_prompt = harness
+        .call("note_recall", serde_json::json!({ "prompt": "   " }))
+        .await;
+    assert_eq!(empty_prompt["result"]["isError"], false);
+    assert_eq!(
+        empty_prompt["result"]["structuredContent"],
+        serde_json::json!({})
+    );
+
+    let no_match = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "A subject with no known entity" }),
+        )
+        .await;
+    assert_eq!(no_match["result"]["isError"], false);
+    assert_eq!(
+        no_match["result"]["structuredContent"],
+        serde_json::json!({})
     );
 }
 

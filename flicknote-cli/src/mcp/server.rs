@@ -6,7 +6,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
     NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput, NoteListInput,
     NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
@@ -27,10 +27,13 @@ use super::dto::{
 use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
+use super::recall::{McpRecallResult, current_time};
 use crate::commands::open::SystemBrowserOpener;
 
+const RECALL_HOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 27] = [
+pub(crate) const EXPECTED_TOOLS: [&str; 28] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -45,6 +48,7 @@ pub(crate) const EXPECTED_TOOLS: [&str; 27] = [
     "note_modify",
     "note_open",
     "note_rename_section",
+    "note_recall",
     "note_replace_section",
     "note_restore",
     "note_share",
@@ -91,6 +95,14 @@ impl FlickNoteMcp {
     }
 
     async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
+        if matches!(&request, AppRequest::NoteRecall { .. }) {
+            return tokio::time::timeout(
+                RECALL_HOOK_TIMEOUT,
+                DaemonClient::new(&self.config).call(request),
+            )
+            .await
+            .map_err(|_| ServiceError::DaemonUnavailable("entity recall timed out".to_string()))?;
+        }
         DaemonClient::new(&self.config).call(request).await
     }
 
@@ -188,6 +200,25 @@ impl FlickNoteMcp {
             .map(|notes| McpNoteListResult {
                 notes: notes.into_iter().map(Into::into).collect(),
             }),
+        )
+    }
+
+    #[tool(
+        name = "note_recall",
+        description = "Recall up to five active notes whose extracted person, company, location, or product entity appears in the prompt. This is read-only host context; use note_get with a returned ID to inspect a candidate.",
+        annotations(read_only_hint = true)
+    )]
+    async fn note_recall(
+        &self,
+        Parameters(params): Parameters<NoteRecallParams>,
+    ) -> Result<Json<McpRecallResult>, CallToolResult> {
+        structured(
+            self.call::<Vec<RecallCandidate>>(AppRequest::NoteRecall {
+                prompt: params.prompt,
+                project: Self::effective_project(params.project),
+            })
+            .await
+            .map(|candidates| McpRecallResult::from_candidates(&candidates, current_time())),
         )
     }
 
