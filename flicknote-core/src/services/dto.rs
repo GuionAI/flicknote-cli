@@ -204,6 +204,18 @@ pub struct NoteFindInput {
     pub limit: u32,
 }
 
+/// A bounded, read-only note projection used by host-triggered entity recall.
+///
+/// The internal note UUID and body are intentionally absent so a recall can
+/// offer a candidate without preloading or exposing editable note content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RecallCandidate {
+    pub id: i64,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub updated_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NoteAddInput {
     pub content: String,

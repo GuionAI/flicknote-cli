@@ -2,6 +2,7 @@ mod dto;
 mod error;
 mod note_tools;
 mod project_tools;
+mod recall;
 mod server;
 
 pub(crate) use server::serve;

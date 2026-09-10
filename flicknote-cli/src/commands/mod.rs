@@ -10,6 +10,7 @@ pub(crate) mod edit;
 pub(crate) mod entity;
 pub(crate) mod find;
 pub(crate) mod gateway;
+pub(crate) mod hook;
 pub(crate) mod import;
 pub(crate) mod list;
 pub(crate) mod login;

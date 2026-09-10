@@ -3,6 +3,7 @@ use super::*;
 const IPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_HEALTH_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+const IPC_RECALL_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_APP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub fn socket_path(config: &Config) -> PathBuf {
@@ -38,6 +39,11 @@ pub(crate) fn is_mutating_app_request(request: &DaemonRequest) -> bool {
 pub(crate) fn response_timeout_for(request: &DaemonRequest) -> Option<std::time::Duration> {
     match request {
         DaemonRequest::Health { .. } => Some(IPC_HEALTH_RESPONSE_TIMEOUT),
+        DaemonRequest::App { request, .. }
+            if matches!(request.as_ref(), AppRequest::NoteRecall { .. }) =>
+        {
+            Some(IPC_RECALL_RESPONSE_TIMEOUT)
+        }
         // Once a write request may have reached the daemon, a transport timeout cannot tell
         // whether it committed. Keep waiting for the authoritative response until the protocol
         // has durable operation IDs and status reconciliation (tracked as FlickNote #1785).

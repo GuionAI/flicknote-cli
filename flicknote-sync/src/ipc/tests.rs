@@ -67,7 +67,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -180,6 +180,22 @@ fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
     assert_eq!(response_timeout_for(&request), None);
 }
 
+#[test]
+fn recall_application_requests_have_a_bounded_response_timeout() {
+    let request = DaemonRequest::App {
+        protocol: PROTOCOL_VERSION,
+        request: Box::new(AppRequest::NoteRecall {
+            prompt: "Ada".to_string(),
+            project: None,
+        }),
+    };
+
+    assert_eq!(
+        response_timeout_for(&request),
+        Some(std::time::Duration::from_secs(1))
+    );
+}
+
 #[tokio::test]
 async fn daemon_client_preserves_versioned_app_results_and_errors() {
     let directory = tempfile::tempdir().unwrap();
@@ -241,7 +257,7 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v4_client_rejects_protocol_v2_server_info() {
+async fn protocol_v5_client_rejects_protocol_v2_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
@@ -261,7 +277,7 @@ async fn protocol_v4_client_rejects_protocol_v2_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 4",
+        "CLI version {} protocol 5",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));

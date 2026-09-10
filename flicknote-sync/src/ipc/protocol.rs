@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,6 +75,11 @@ pub enum AppRequest {
     },
     NoteList(NoteListInput),
     NoteFind(NoteFindInput),
+    NoteRecall {
+        prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+    },
     NoteCount(NoteCountInput),
     NoteGet {
         id: String,
@@ -175,6 +180,7 @@ impl AppRequest {
         match self {
             Self::NoteList(_)
             | Self::NoteFind(_)
+            | Self::NoteRecall { .. }
             | Self::NoteCount(_)
             | Self::NoteGet { .. }
             | Self::NoteLoadEditable { .. }
@@ -231,6 +237,7 @@ pub(crate) enum AppRequestKind {
 pub enum AppResponse {
     NoteSummary(NoteSummary),
     NoteSummaries(Vec<NoteSummary>),
+    NoteRecall(Vec<RecallCandidate>),
     NoteCount { count: u64 },
     NoteDetail(NoteDetail),
     EditableDocument(EditableDocument),
@@ -273,6 +280,7 @@ macro_rules! app_result {
 
 app_result!(NoteSummary, AppResponse::NoteSummary);
 app_result!(Vec<NoteSummary>, AppResponse::NoteSummaries);
+app_result!(Vec<RecallCandidate>, AppResponse::NoteRecall);
 app_result!(NoteDetail, AppResponse::NoteDetail);
 app_result!(EditableDocument, AppResponse::EditableDocument);
 app_result!(NoteRecord, AppResponse::NoteRecord);

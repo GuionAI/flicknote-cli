@@ -137,3 +137,21 @@ fn logout_force_option_parses() {
 fn mcp_subcommand_parses() {
     assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_ok());
 }
+
+#[test]
+fn codex_hook_install_command_parses_and_scope_flags_conflict() {
+    assert!(Cli::try_parse_from(["flicknote", "hook", "install", "codex"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "hook", "install", "codex", "--local"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "hook", "install", "codex", "--global"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "hook",
+            "install",
+            "codex",
+            "--local",
+            "--global"
+        ])
+        .is_err()
+    );
+}
