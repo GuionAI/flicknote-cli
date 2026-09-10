@@ -9,7 +9,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
-- **Codex entity recall** — a read-only `UserPromptSubmit` hook that offers bounded historical note candidates before a prompt is sent
+- **Codex recall** — a read-only `UserPromptSubmit` hook that offers bounded historical note candidates from extracted topics and entities before a prompt is sent
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **User daemon service** — foreground daemon managed by launchd (macOS) or systemd (Linux)
@@ -120,7 +120,7 @@ flicknote daemon run
 # Reconcile/start the service after an upgrade
 flicknote daemon restart
 
-# Install the Codex entity recall hook (choose interactively, or pass a scope)
+# Install the Codex recall hook (choose interactively, or pass a scope)
 flicknote hook install codex
 flicknote hook install codex --global
 ```
@@ -167,14 +167,14 @@ start it as a subprocess:
 ```
 
 The MCP server requires the local daemon. It exposes typed note, discovery,
-note-source, project, and read-only entity-recall tools. Note content and exact `before`/`after` edits
+note-source, project, and read-only recall tools. Note content and exact `before`/`after` edits
 are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data, while `note_get` reads
 editable note content. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
 
-### Codex entity recall hook
+### Codex recall hook
 
 With the FlickNote MCP server already registered in Codex, install the hook with
 `flicknote hook install codex`. On a terminal it shows the actual project-local
@@ -190,16 +190,23 @@ After installation, review and trust the definition in Codex with `/hooks`.
 Project-local hooks also require a trusted project. The generated synchronous
 `UserPromptSubmit` MCP hook sends the current prompt to `note_recall` with a
 one-second timeout. Recall checks the current user's active notes only, matches
-literal extracted person/company/location/product names, returns at most five
-numeric-ID candidates, and does not read note bodies or generate summaries.
-Titles, summaries, and the complete context are bounded; ASCII case-insensitive
-matching follows SQLite's behavior, so aliases, semantic matches, and complete
-Unicode case folding are not inferred. If the daemon is unavailable or the
-recall fails, Codex continues without injected candidates; the hook never writes
-notes or starts services implicitly. Use `note_get` with a returned ID to read a
-candidate and verify historical information before any independently authorized
-edit. See the [Codex hooks documentation](https://developers.openai.com/codex/hooks)
-for host trust and MCP hook behavior.
+complete stored extracted topic names and person/company/location/product names
+literally, returns at most five numeric-ID candidates, and does not read note
+bodies or generate summaries. Multiword values are matched as a whole, so
+`Memory Systems` matches as a topic while `Memory` does not. A value whose
+first or last character is an ASCII letter, digit, or underscore must sit on an
+ASCII token edge; for example, `age` does not match `Management`, `age2`, or
+`my_age`, but it does
+match `(age)` and `用age加密`. Chinese-only values retain substring matching.
+Topics are not translated, stemmed, aliased, or split. Matching is ASCII
+case-insensitive and literal, so semantic matches and complete Unicode case
+folding are not inferred. Titles, summaries, and the complete context are
+bounded. If the daemon is unavailable or the recall fails, Codex continues
+without injected candidates; the hook never writes notes or starts services
+implicitly. Use `note_get` with a returned ID to read a candidate and verify
+historical information before any independently authorized edit. See the
+[Codex hooks documentation](https://developers.openai.com/codex/hooks) for host
+trust and MCP hook behavior.
 
 The Gateway CLI command remains available for internal development and
 maintenance requests; it is not the formal agent interface.

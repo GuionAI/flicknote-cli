@@ -245,6 +245,10 @@ async fn seeded_backend(config: &Config) -> (Arc<LocalPowerSyncBackend>, String,
         )
         .unwrap();
     drop(writer);
+    backend
+        .set_note_extractions(&no_source_id, "::topic", &["Memory Systems".to_string()])
+        .await
+        .unwrap();
     let alpha_id = flicknote_core::services::markdown::parse_markdown(
         "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me.",
     )
@@ -715,7 +719,7 @@ async fn mcp_discovery_returns_object_wrapped_typed_results() {
     assert_eq!(
         topics["result"]["structuredContent"],
         serde_json::json!({
-            "topics": ["AI"]
+            "topics": ["AI", "Memory Systems"]
         })
     );
 
@@ -767,6 +771,20 @@ async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication()
     assert!(context.contains("MCP Note"));
     assert!(context.contains("历史笔记候选结束"));
     assert!(!context.contains(&harness.note_uuid));
+
+    let topic_recalled = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Design Memory Systems" }),
+        )
+        .await;
+    assert_eq!(topic_recalled["result"]["isError"], false);
+    let topic_context =
+        topic_recalled["result"]["structuredContent"]["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+    assert!(topic_context.contains("\"id\":43"));
+    assert!(topic_context.contains("No source note"));
 
     let candidate = harness
         .call("note_get", serde_json::json!({ "id": 42 }))
