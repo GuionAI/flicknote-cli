@@ -200,8 +200,10 @@ ASCII token edge; for example, `age` does not match `Management`, `age2`, or
 match `(age)` and `用age加密`. Chinese-only values retain substring matching.
 Topics are not translated, stemmed, aliased, or split. Matching is ASCII
 case-insensitive and literal, so semantic matches and complete Unicode case
-folding are not inferred. Titles, summaries, and the complete context are
-bounded. If the daemon is unavailable or the recall fails, Codex continues
+folding are not inferred. The hook's generated instructions, labels, and
+truncation notices are in English; candidate titles and summaries retain their
+original language. Titles, summaries, and the complete context are bounded.
+If the daemon is unavailable or the recall fails, Codex continues
 without injected candidates; the hook never writes notes or starts services
 implicitly. Use `note_get` with a returned ID to read a candidate and verify
 historical information before any independently authorized edit. See the
