@@ -46,12 +46,15 @@ Install the command hook with `flicknote hook install codex [--local|--global]`.
 Installation does not require an MCP registration, daemon access, or trust
 changes. It writes a static shell-quoted absolute CLI command with a one-second
 synchronous timeout, preserves unrelated hook configuration, and replaces or
-coalesces identifiable FlickNote recall entries only in the selected hooks
-file. An active recall entry in another scope or inline source is reported
-instead of duplicated. Review and trust the result in Codex with `/hooks` (and
-trust the project for a local hook). Hook failures are nonblocking and must not
-fabricate context; use `note_get` to inspect a candidate and verify it before
-any separately authorized edit.
+coalesces only recognizable `command` handlers for `flicknote recall --hook` in
+the selected hooks file. Old MCP `mcp_tool` hooks are ignored and preserved
+unchanged; they never block command-hook installation. If an old MCP hook is
+still enabled, remove it manually to avoid duplicate recall. An active command
+recall entry in another scope or inline source is reported instead of
+duplicated. Review and trust the result in Codex with `/hooks` (and trust the
+project for a local hook). Hook failures are nonblocking and must not fabricate
+context; use `note_get` to inspect a candidate and verify it before any
+separately authorized edit.
 
 
 ## Build & Test

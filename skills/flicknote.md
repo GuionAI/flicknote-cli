@@ -59,7 +59,10 @@ For human recall, use `flicknote recall QUERY`. An explicit empty query is
 valid and returns no candidates. Hook installation is
 `flicknote hook install codex [--local|--global]`; it does not require an MCP
 registration or a running daemon. Review and trust the installed command in
-Codex with `/hooks`.
+Codex with `/hooks`. Reinstalling replaces or coalesces only the installed
+command-hook form. Older MCP `mcp_tool` recall hooks are left untouched and do
+not block installation; remove them manually if they would cause duplicate
+recall.
 
 For installation and troubleshooting, see the
 [Codex recall hook guide](https://github.com/GuionAI/flicknote-cli#codex-recall-hook).

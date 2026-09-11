@@ -195,10 +195,12 @@ flicknote hook install codex
 The installer asks whether to enable the hook for the current project or your
 user account. Use `--local` or `--global` to choose directly. It preserves
 unrelated configuration, does not contact the daemon, and does not grant hook
-trust. Repeating the installation replaces and coalesces identifiable
-FlickNote recall entries in the selected hooks file. If an active recall entry
-is already in the other scope or an inline configuration source, the installer
-reports its location instead of creating another entry.
+trust. Repeating the installation replaces and coalesces recognizable command
+recall entries in the selected hooks file. Old MCP `mcp_tool` recall hooks are
+left untouched and do not block installation; remove an old MCP hook manually
+if it remains enabled, otherwise recall may run twice. If an active command
+recall entry is already in the other scope or an inline configuration source,
+the installer reports its location instead of creating another entry.
 
 The installed handler runs `flicknote recall --hook`. Codex supplies one
 `UserPromptSubmit` event as JSON on stdin; the command validates the event and

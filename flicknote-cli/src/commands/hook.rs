@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 const HOOK_EVENT: &str = "UserPromptSubmit";
-const MCP_HOOK_TYPE: &str = "mcp_tool";
 const COMMAND_HOOK_TYPE: &str = "command";
-const RECALL_TOOL: &str = "note_recall";
 const RECALL_TIMEOUT_SECONDS: u64 = 1;
 const RECALL_COMMAND_SUFFIX: &str = " recall --hook";
 
@@ -279,6 +277,10 @@ fn print_result(
     )?;
     writeln!(
         output,
+        "Existing MCP recall hooks are left untouched; remove old MCP hooks manually if they would duplicate recall."
+    )?;
+    writeln!(
+        output,
         "Review and trust the hook in Codex with /hooks{}.",
         if scope == Scope::Local {
             "; project-local hooks also require a trusted project"
@@ -515,14 +517,11 @@ fn object_name(format: HookFormat) -> &'static str {
 }
 
 fn matches_handler(handler: &Map<String, Value>) -> bool {
-    match handler.get("type").and_then(Value::as_str) {
-        Some(MCP_HOOK_TYPE) => handler.get("tool").and_then(Value::as_str) == Some(RECALL_TOOL),
-        Some(COMMAND_HOOK_TYPE) => handler
+    handler.get("type").and_then(Value::as_str) == Some(COMMAND_HOOK_TYPE)
+        && handler
             .get("command")
             .and_then(Value::as_str)
-            .is_some_and(is_recall_command),
-        _ => false,
-    }
+            .is_some_and(is_recall_command)
 }
 
 fn is_recall_command(command: &str) -> bool {
@@ -756,11 +755,23 @@ mod tests {
     }
 
     #[test]
-    fn repeated_install_replaces_mcp_and_command_matches_and_coalesces_duplicates() {
+    fn repeated_install_preserves_old_mcp_and_coalesces_new_command_duplicates() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
         let paths = context.paths();
         fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
+        let old_flicknote_mcp = json!({
+            "type": "mcp_tool",
+            "server": "flicknote",
+            "tool": "note_recall",
+            "input": {"prompt": "old"}
+        });
+        let old_unrelated_mcp = json!({
+            "type": "mcp_tool",
+            "server": "other",
+            "tool": "note_recall",
+            "marker": "preserve"
+        });
         let old_command = format!(
             "{} recall --hook",
             shell_quote(Path::new("/old path/flicknote")).unwrap()
@@ -771,7 +782,8 @@ mod tests {
                 "hooks": {HOOK_EVENT: [{
                     "matcher": "keep",
                     "hooks": [
-                        {"type": MCP_HOOK_TYPE, "server": "flicknote", "tool": RECALL_TOOL, "input": {"prompt": "old"}},
+                        old_flicknote_mcp.clone(),
+                        old_unrelated_mcp.clone(),
                         {"type": COMMAND_HOOK_TYPE, "command": old_command, "timeout": 99},
                         {"type": "command", "command": "unrelated"}
                     ]
@@ -795,9 +807,11 @@ mod tests {
         let handlers = installed["hooks"][HOOK_EVENT][0]["hooks"]
             .as_array()
             .unwrap();
-        assert_eq!(handlers.len(), 2);
-        assert_eq!(handlers[0], desired_handler(&executable).unwrap());
-        assert_eq!(handlers[1]["command"], "unrelated");
+        assert_eq!(handlers.len(), 4);
+        assert_eq!(handlers[0], old_flicknote_mcp);
+        assert_eq!(handlers[1], old_unrelated_mcp);
+        assert_eq!(handlers[2], desired_handler(&executable).unwrap());
+        assert_eq!(handlers[3]["command"], "unrelated");
 
         let result = install_codex_with_executable(Scope::Local, &paths, &executable).unwrap();
         assert_eq!(
@@ -831,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_recall_handler_is_reported_without_an_mcp_registration() {
+    fn inline_old_mcp_recall_is_ignored_and_command_is_installed() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
         let paths = context.paths();
@@ -850,8 +864,24 @@ tool = "note_recall"
         let result =
             install_codex_with_executable(Scope::Local, &paths, &test_executable(temp.path()))
                 .unwrap();
-        assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
-        assert!(!paths.local_hooks.exists());
+        assert_eq!(
+            result,
+            InstallResult::Installed {
+                path: paths.local_hooks.clone(),
+                updated: false,
+            }
+        );
+        assert!(paths.local_hooks.exists());
+        let installed: Value =
+            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
+        assert_eq!(
+            installed_handler(&installed),
+            &desired_handler(&test_executable(temp.path())).unwrap()
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.global_config).unwrap(),
+            "\n[[hooks.UserPromptSubmit]]\n[[hooks.UserPromptSubmit.hooks]]\ntype = \"mcp_tool\"\ntool = \"note_recall\"\n"
+        );
     }
 
     #[test]
