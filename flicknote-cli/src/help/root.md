@@ -8,6 +8,8 @@ Common workflows:
   flicknote import notes/ --project work
   flicknote find "keyword"
   flicknote find "::topic::AI::person::瓜子"
+  flicknote recall "current need"
+  flicknote recall --hook < user-prompt-submit.json
   flicknote topic list
   flicknote entity list --type person
   flicknote source <id>

@@ -13,7 +13,7 @@ A subject assigned to a note, such as Memory Systems or Knowledge Management. It
 _Avoid_: Entity, named object
 
 **Recall query**:
-The current message text used to look for connections to existing notes. It expresses the current need, but need not contain the names or subjects recorded on those notes.
+Text supplied by a person or the current conversation to look for connections to existing notes. It expresses the current need, but need not contain the names or subjects recorded on those notes.
 _Avoid_: Extracted entity, answer
 
 **Entity recall**:

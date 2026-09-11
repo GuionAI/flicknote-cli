@@ -1,17 +1,17 @@
 use clap::{Args, Subcommand};
 use flicknote_core::error::CliError;
 use serde_json::{Map, Value, json};
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
 const HOOK_EVENT: &str = "UserPromptSubmit";
-const HOOK_TYPE: &str = "mcp_tool";
+const MCP_HOOK_TYPE: &str = "mcp_tool";
+const COMMAND_HOOK_TYPE: &str = "command";
 const RECALL_TOOL: &str = "note_recall";
 const RECALL_TIMEOUT_SECONDS: u64 = 1;
-const MCP_SERVERS_KEYS: [&str; 2] = ["mcp_servers", "mcpServers"];
+const RECALL_COMMAND_SUFFIX: &str = " recall --hook";
 
 #[derive(Args)]
 pub(crate) struct HookArgs {
@@ -75,72 +75,7 @@ enum InstallResult {
 
 struct ConfigSource {
     path: PathBuf,
-    scope: Scope,
     document: Value,
-    servers: RawServerMap,
-}
-
-type ServerMap = BTreeMap<String, ServerDefinition>;
-type RawServerMap = BTreeMap<String, RawServerDefinition>;
-
-#[derive(Debug, Clone, Default)]
-struct RawServerDefinition {
-    command: Option<String>,
-    args: Option<Vec<String>>,
-    enabled: Option<bool>,
-    enabled_tools: Option<Vec<String>>,
-    disabled_tools: Option<Vec<String>>,
-}
-
-impl RawServerDefinition {
-    fn merged_with(&self, overrides: &Self) -> Self {
-        Self {
-            command: overrides.command.clone().or_else(|| self.command.clone()),
-            args: overrides.args.clone().or_else(|| self.args.clone()),
-            enabled: overrides.enabled.or(self.enabled),
-            enabled_tools: overrides
-                .enabled_tools
-                .clone()
-                .or_else(|| self.enabled_tools.clone()),
-            disabled_tools: overrides
-                .disabled_tools
-                .clone()
-                .or_else(|| self.disabled_tools.clone()),
-        }
-    }
-
-    fn effective(&self) -> ServerDefinition {
-        let flicknote = match (&self.command, &self.args) {
-            (Some(command), Some(args)) => is_flicknote_command(command, args),
-            _ => false,
-        };
-        let note_recall_available = self
-            .enabled_tools
-            .as_ref()
-            .is_none_or(|tools| tools.iter().any(|tool| tool == RECALL_TOOL))
-            && self
-                .disabled_tools
-                .as_ref()
-                .is_none_or(|tools| !tools.iter().any(|tool| tool == RECALL_TOOL));
-        ServerDefinition {
-            flicknote,
-            enabled: self.enabled.unwrap_or(true),
-            note_recall_available,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct ServerDefinition {
-    flicknote: bool,
-    enabled: bool,
-    note_recall_available: bool,
-}
-
-struct ServerResolution {
-    selected: String,
-    global: ServerMap,
-    local: ServerMap,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -249,38 +184,29 @@ fn requested_scope(
 }
 
 fn install_codex(scope: Scope, paths: &InstallPaths) -> Result<InstallResult, CliError> {
+    let executable = current_executable()?;
+    install_codex_with_executable(scope, paths, &executable)
+}
+
+fn install_codex_with_executable(
+    scope: Scope,
+    paths: &InstallPaths,
+    executable: &Path,
+) -> Result<InstallResult, CliError> {
     let sources = read_config_sources(paths)?;
     reject_disabled_hooks(&sources)?;
-    let resolution = resolve_server(scope, &sources)?;
 
     let local_json = read_hooks_json(&paths.local_hooks)?;
     let global_json = read_hooks_json(&paths.global_hooks)?;
     let mut matches = Vec::new();
     if let Some(root) = local_json.as_ref() {
-        matches.extend(find_json_matches(
-            root,
-            &paths.local_hooks,
-            &resolution.local,
-        )?);
+        matches.extend(find_json_matches(root, &paths.local_hooks)?);
     }
     if let Some(root) = global_json.as_ref() {
-        let servers = if scope == Scope::Local {
-            &resolution.local
-        } else {
-            &resolution.global
-        };
-        matches.extend(find_json_matches(root, &paths.global_hooks, servers)?);
+        matches.extend(find_json_matches(root, &paths.global_hooks)?);
     }
     for source in &sources {
-        let servers = if scope == Scope::Local {
-            &resolution.local
-        } else {
-            match source.scope {
-                Scope::Global => &resolution.global,
-                Scope::Local => &resolution.local,
-            }
-        };
-        matches.extend(find_inline_matches(&source.document, source, servers)?);
+        matches.extend(find_inline_matches(&source.document, source)?);
     }
 
     let target_path = match scope {
@@ -308,16 +234,12 @@ fn install_codex(scope: Scope, paths: &InstallPaths) -> Result<InstallResult, Cl
         Scope::Global => global_json.unwrap_or_else(|| json!({})),
     };
     let original_root = root.clone();
-    let updated = if target_file_matches == 1 {
-        update_existing_json_match(&mut root, &resolution.selected)?;
+    let updated = if target_file_matches > 0 {
+        update_existing_json_matches(&mut root, executable)?;
         true
-    } else if target_file_matches == 0 {
-        add_json_hook(&mut root, &resolution.selected)?;
-        false
     } else {
-        return Ok(InstallResult::AlreadyConfigured {
-            locations: matches.into_iter().map(|item| item.location).collect(),
-        });
+        add_json_hook(&mut root, executable)?;
+        false
     };
 
     let bytes = serde_json::to_vec_pretty(&root)?;
@@ -353,7 +275,7 @@ fn print_result(
     }
     writeln!(
         output,
-        "Prerequisite: the FlickNote MCP server must already be connected to Codex."
+        "Installation uses the FlickNote CLI command and does not require an MCP registration or a running daemon."
     )?;
     writeln!(
         output,
@@ -365,6 +287,14 @@ fn print_result(
         }
     )?;
     Ok(())
+}
+
+fn current_executable() -> Result<PathBuf, CliError> {
+    let executable = std::env::current_exe()?;
+    if executable.is_absolute() {
+        return Ok(executable);
+    }
+    fs::canonicalize(executable).map_err(CliError::Io)
 }
 
 fn find_project_root(current_dir: &Path) -> PathBuf {
@@ -382,10 +312,7 @@ fn find_project_root(current_dir: &Path) -> PathBuf {
 
 fn read_config_sources(paths: &InstallPaths) -> Result<Vec<ConfigSource>, CliError> {
     let mut sources = Vec::new();
-    for (scope, path) in [
-        (Scope::Global, &paths.global_config),
-        (Scope::Local, &paths.local_config),
-    ] {
+    for path in [&paths.global_config, &paths.local_config] {
         if !path.exists() {
             continue;
         }
@@ -396,13 +323,9 @@ fn read_config_sources(paths: &InstallPaths) -> Result<Vec<ConfigSource>, CliErr
                 path.display()
             ))
         })?;
-        let document = toml_to_json(document);
-        let servers = configured_servers(&document, path)?;
         sources.push(ConfigSource {
-            path: path.clone(),
-            scope,
-            document,
-            servers,
+            path: path.to_path_buf(),
+            document: toml_to_json(document),
         });
     }
     Ok(sources)
@@ -452,209 +375,6 @@ fn reject_disabled_hooks(sources: &[ConfigSource]) -> Result<(), CliError> {
     Ok(())
 }
 
-fn resolve_server(scope: Scope, sources: &[ConfigSource]) -> Result<ServerResolution, CliError> {
-    let mut global_raw = RawServerMap::new();
-    let mut local_raw = RawServerMap::new();
-    for source in sources {
-        match source.scope {
-            Scope::Global => global_raw.extend(source.servers.clone()),
-            Scope::Local => local_raw.extend(source.servers.clone()),
-        }
-    }
-
-    let global = effective_server_map(&global_raw);
-    let effective_local = merge_server_maps(&global_raw, &local_raw);
-    let effective = match scope {
-        Scope::Global => &global,
-        Scope::Local => &effective_local,
-    };
-    let candidates = live_servers(effective);
-    if candidates.is_empty() {
-        if scope == Scope::Global && !live_servers(&effective_local).is_empty() {
-            return Err(CliError::Other(
-                "cannot install a global Codex hook: the enabled FlickNote MCP registration with note_recall exists only in the current project's config.toml".into(),
-            ));
-        }
-        return Err(no_available_server_error(scope, effective));
-    }
-    if candidates.len() != 1 {
-        return Err(CliError::Other(format!(
-            "ambiguous FlickNote MCP registrations in Codex config.toml: {}",
-            candidates.join(", ")
-        )));
-    }
-
-    Ok(ServerResolution {
-        selected: candidates[0].clone(),
-        global,
-        local: effective_local,
-    })
-}
-
-fn effective_server_map(servers: &RawServerMap) -> ServerMap {
-    servers
-        .iter()
-        .map(|(name, server)| (name.clone(), server.effective()))
-        .collect()
-}
-
-fn merge_server_maps(global: &RawServerMap, local: &RawServerMap) -> ServerMap {
-    let mut merged = global.clone();
-    for (name, server) in local {
-        merged
-            .entry(name.clone())
-            .and_modify(|global| *global = global.merged_with(server))
-            .or_insert_with(|| server.clone());
-    }
-    effective_server_map(&merged)
-}
-
-fn configured_servers(document: &Value, path: &Path) -> Result<RawServerMap, CliError> {
-    let mut servers = RawServerMap::new();
-    for key in MCP_SERVERS_KEYS {
-        let Some(value) = document.get(key) else {
-            continue;
-        };
-        let Some(server_entries) = value.as_object() else {
-            return Err(CliError::Other(format!(
-                "invalid Codex [{key}] table in {}",
-                path.display()
-            )));
-        };
-        for (name, server) in server_entries {
-            let Some(server) = server.as_object() else {
-                return Err(CliError::Other(format!(
-                    "invalid Codex MCP server {name:?} in {}",
-                    path.display()
-                )));
-            };
-
-            let command = server
-                .get("command")
-                .map(|value| {
-                    value.as_str().map(str::to_string).ok_or_else(|| {
-                        CliError::Other(format!(
-                            "invalid command for Codex MCP server {name:?} in {}",
-                            path.display()
-                        ))
-                    })
-                })
-                .transpose()?;
-            let args = string_array(server.get("args"), || {
-                format!(
-                    "invalid args for Codex MCP server {name:?} in {}",
-                    path.display()
-                )
-            })?;
-            let enabled = server
-                .get("enabled")
-                .map(|value| {
-                    value.as_bool().ok_or_else(|| {
-                        CliError::Other(format!(
-                            "invalid enabled value for Codex MCP server {name:?} in {}",
-                            path.display()
-                        ))
-                    })
-                })
-                .transpose()?;
-            let enabled_tools = string_array(server.get("enabled_tools"), || {
-                format!(
-                    "invalid enabled_tools for Codex MCP server {name:?} in {}",
-                    path.display()
-                )
-            })?;
-            let disabled_tools = string_array(server.get("disabled_tools"), || {
-                format!(
-                    "invalid disabled_tools for Codex MCP server {name:?} in {}",
-                    path.display()
-                )
-            })?;
-            servers.insert(
-                name.clone(),
-                RawServerDefinition {
-                    command,
-                    args,
-                    enabled,
-                    enabled_tools,
-                    disabled_tools,
-                },
-            );
-        }
-    }
-    Ok(servers)
-}
-
-fn string_array<F>(value: Option<&Value>, message: F) -> Result<Option<Vec<String>>, CliError>
-where
-    F: Fn() -> String,
-{
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let values = value.as_array().ok_or_else(|| CliError::Other(message()))?;
-    values
-        .iter()
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_string)
-                .ok_or_else(|| CliError::Other(message()))
-        })
-        .collect::<Result<Vec<_>, _>>()
-        .map(Some)
-}
-
-fn live_servers(servers: &ServerMap) -> Vec<String> {
-    servers
-        .iter()
-        .filter(|(_, server)| server.flicknote && server.enabled && server.note_recall_available)
-        .map(|(name, _)| name.clone())
-        .collect()
-}
-
-fn no_available_server_error(scope: Scope, servers: &ServerMap) -> CliError {
-    let flicknote_names = servers
-        .iter()
-        .filter(|(_, server)| server.flicknote)
-        .map(|(name, server)| {
-            let status = match (server.enabled, server.note_recall_available) {
-                (false, _) => "disabled",
-                (_, false) => "note_recall unavailable",
-                (true, true) => "available",
-            };
-            format!("{name} ({status})")
-        })
-        .collect::<Vec<_>>();
-    let scope_hint = if scope == Scope::Local {
-        " in the effective user/project configuration"
-    } else {
-        " in the current user's configuration"
-    };
-    let detail = if flicknote_names.is_empty() {
-        if servers.is_empty() {
-            "add an mcp_servers entry whose command is flicknote with the mcp argument".to_string()
-        } else {
-            "the effective configuration contains no usable FlickNote entry; a project server may be shadowing a user entry, or add an mcp_servers entry whose command is flicknote with the mcp argument".to_string()
-        }
-    } else {
-        format!(
-            "the discovered registrations are not usable: {}",
-            flicknote_names.join(", ")
-        )
-    };
-    CliError::Other(format!(
-        "could not find an enabled FlickNote MCP registration with note_recall available{scope_hint}; {detail}, then retry"
-    ))
-}
-
-fn is_flicknote_command(command: &str, args: &[String]) -> bool {
-    let name = Path::new(command)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(command);
-    (name == "flicknote" || name == "flicknote.exe") && args.iter().any(|arg| arg == "mcp")
-}
-
 fn read_hooks_json(path: &Path) -> Result<Option<Value>, CliError> {
     if !path.exists() {
         return Ok(None);
@@ -675,31 +395,24 @@ fn read_hooks_json(path: &Path) -> Result<Option<Value>, CliError> {
     Ok(Some(value))
 }
 
-fn find_json_matches(
-    root: &Value,
-    path: &Path,
-    servers: &ServerMap,
-) -> Result<Vec<HookMatch>, CliError> {
+fn find_json_matches(root: &Value, path: &Path) -> Result<Vec<HookMatch>, CliError> {
     find_hook_matches(
         root,
         &path.display().to_string(),
         Some(path),
         HookFormat::Json,
-        servers,
     )
 }
 
 fn find_inline_matches(
     document: &Value,
     source: &ConfigSource,
-    servers: &ServerMap,
 ) -> Result<Vec<HookMatch>, CliError> {
     find_hook_matches(
         document,
         &source.path.display().to_string(),
         None,
         HookFormat::Toml,
-        servers,
     )
 }
 
@@ -708,7 +421,6 @@ fn find_hook_matches(
     source_label: &str,
     path: Option<&Path>,
     format: HookFormat,
-    servers: &ServerMap,
 ) -> Result<Vec<HookMatch>, CliError> {
     let Some(hooks) = root.get("hooks") else {
         return Ok(Vec::new());
@@ -763,7 +475,7 @@ fn find_hook_matches(
                     object_name(format)
                 )));
             };
-            if matches_handler(handler, servers)? {
+            if matches_handler(handler) {
                 if handler_disabled(handler) {
                     return Err(CliError::Other(format!(
                         "FlickNote recall hook at {} is explicitly disabled; no file was changed",
@@ -802,24 +514,69 @@ fn object_name(format: HookFormat) -> &'static str {
     }
 }
 
-fn matches_handler(handler: &Map<String, Value>, servers: &ServerMap) -> Result<bool, CliError> {
-    if handler.get("type").and_then(Value::as_str) != Some(HOOK_TYPE) {
-        return Ok(false);
+fn matches_handler(handler: &Map<String, Value>) -> bool {
+    match handler.get("type").and_then(Value::as_str) {
+        Some(MCP_HOOK_TYPE) => handler.get("tool").and_then(Value::as_str) == Some(RECALL_TOOL),
+        Some(COMMAND_HOOK_TYPE) => handler
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(is_recall_command),
+        _ => false,
     }
-    let Some(server) = handler.get("server").and_then(Value::as_str) else {
-        return Err(CliError::Other(
-            "Codex mcp_tool hook is missing its server name; no file was changed".into(),
-        ));
+}
+
+fn is_recall_command(command: &str) -> bool {
+    let Some(executable) = command
+        .strip_suffix(RECALL_COMMAND_SUFFIX)
+        .map(str::trim_end)
+    else {
+        return false;
     };
-    let Some(tool) = handler.get("tool").and_then(Value::as_str) else {
-        return Err(CliError::Other(
-            "Codex mcp_tool hook is missing its tool name; no file was changed".into(),
-        ));
+    let Some(executable) = shell_unquote(executable) else {
+        return false;
     };
-    Ok(tool == RECALL_TOOL
-        && servers.get(server).is_some_and(|definition| {
-            definition.flicknote && definition.enabled && definition.note_recall_available
-        }))
+    Path::new(&executable)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "flicknote" || name == "flicknote.exe")
+}
+
+fn shell_quote(path: &Path) -> Result<String, CliError> {
+    let path = path.to_str().ok_or_else(|| {
+        CliError::Other(format!(
+            "current executable path is not valid UTF-8: {}",
+            path.display()
+        ))
+    })?;
+    Ok(format!("'{}'", path.replace('\'', "'\\''")))
+}
+
+fn shell_unquote(value: &str) -> Option<String> {
+    if value.len() < 2 || !value.starts_with('\'') || !value.ends_with('\'') {
+        return if value.chars().any(char::is_whitespace) {
+            None
+        } else {
+            Some(value.to_string())
+        };
+    }
+    let inner = &value[1..value.len() - 1];
+    let escaped_quote = "'\\''";
+    let mut remaining = inner;
+    let mut decoded = String::with_capacity(inner.len());
+    while let Some(index) = remaining.find(escaped_quote) {
+        let prefix = &remaining[..index];
+        if prefix.contains('\'') {
+            return None;
+        }
+        decoded.push_str(prefix);
+        decoded.push('\'');
+        remaining = &remaining[index + escaped_quote.len()..];
+    }
+    if remaining.contains('\'') {
+        return None;
+    }
+    decoded.push_str(remaining);
+    Some(decoded)
 }
 
 fn handler_disabled(handler: &Map<String, Value>) -> bool {
@@ -827,17 +584,15 @@ fn handler_disabled(handler: &Map<String, Value>) -> bool {
         || handler.get("disabled").and_then(Value::as_bool) == Some(true)
 }
 
-fn desired_handler(server: &str) -> Value {
-    json!({
-        "type": HOOK_TYPE,
-        "server": server,
-        "tool": RECALL_TOOL,
-        "input": { "prompt": "${prompt}" },
+fn desired_handler(executable: &Path) -> Result<Value, CliError> {
+    Ok(json!({
+        "type": COMMAND_HOOK_TYPE,
+        "command": format!("{}{}", shell_quote(executable)?, RECALL_COMMAND_SUFFIX),
         "timeout": RECALL_TIMEOUT_SECONDS,
-    })
+    }))
 }
 
-fn add_json_hook(root: &mut Value, server: &str) -> Result<(), CliError> {
+fn add_json_hook(root: &mut Value, executable: &Path) -> Result<(), CliError> {
     let object = root_object_mut(root)?;
     let hooks = object
         .entry("hooks")
@@ -853,11 +608,11 @@ fn add_json_hook(root: &mut Value, server: &str) -> Result<(), CliError> {
             "Codex hooks.{HOOK_EVENT} must be an array; no file was changed"
         ))
     })?;
-    events.push(json!({ "hooks": [desired_handler(server)] }));
+    events.push(json!({ "hooks": [desired_handler(executable)?] }));
     Ok(())
 }
 
-fn update_existing_json_match(root: &mut Value, server: &str) -> Result<(), CliError> {
+fn update_existing_json_matches(root: &mut Value, executable: &Path) -> Result<(), CliError> {
     let object = root_object_mut(root)?;
     let hooks = object
         .get_mut("hooks")
@@ -873,6 +628,8 @@ fn update_existing_json_match(root: &mut Value, server: &str) -> Result<(), CliE
                 "Codex hooks.{HOOK_EVENT} must be an array; no file was changed"
             ))
         })?;
+    let desired = desired_handler(executable)?;
+    let mut replaced = false;
     for group in events {
         let Some(group) = group.as_object_mut() else {
             continue;
@@ -880,28 +637,24 @@ fn update_existing_json_match(root: &mut Value, server: &str) -> Result<(), CliE
         let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
             continue;
         };
-        for handler in handlers {
-            let Some(handler) = handler.as_object_mut() else {
-                continue;
-            };
-            if handler.get("type").and_then(Value::as_str) != Some(HOOK_TYPE)
-                || handler.get("tool").and_then(Value::as_str) != Some(RECALL_TOOL)
-                || handler.get("server").and_then(Value::as_str) != Some(server)
-            {
+        let mut index = 0;
+        while index < handlers.len() {
+            let is_match = handlers[index].as_object().is_some_and(matches_handler);
+            if !is_match {
+                index += 1;
                 continue;
             }
-            let desired = desired_handler(server);
-            let desired = desired.as_object().unwrap();
-            for key in ["type", "server", "tool", "input", "timeout"] {
-                handler.insert(key.to_string(), desired[key].clone());
+            if replaced {
+                handlers.remove(index);
+                continue;
             }
-            if handler.get("async").and_then(Value::as_bool) == Some(true) {
-                handler.insert("async".to_string(), Value::Bool(false));
-            } else {
-                handler.remove("async");
-            }
-            return Ok(());
+            handlers[index] = desired.clone();
+            replaced = true;
+            index += 1;
         }
+    }
+    if replaced {
+        return Ok(());
     }
     Err(CliError::Other(
         "could not update the identified Codex recall hook; no file was changed".into(),
@@ -949,21 +702,6 @@ mod tests {
         }
     }
 
-    fn write_config(context: &InstallContext, local: bool, name: &str) {
-        let paths = context.paths();
-        let path = if local {
-            &paths.local_config
-        } else {
-            &paths.global_config
-        };
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(
-            path,
-            format!("[mcp_servers.{name}]\ncommand = \"flicknote\"\nargs = [\"mcp\"]\n"),
-        )
-        .unwrap();
-    }
-
     fn setup_context(temp: &tempfile::TempDir) -> InstallContext {
         let root = temp.path();
         fs::create_dir_all(root.join("repo/.git")).unwrap();
@@ -971,11 +709,18 @@ mod tests {
         context(root)
     }
 
+    fn test_executable(root: &Path) -> PathBuf {
+        root.join("bin with spaces").join("flicknote")
+    }
+
+    fn installed_handler(root: &Value) -> &Value {
+        &root["hooks"][HOOK_EVENT][0]["hooks"][0]
+    }
+
     #[test]
-    fn local_install_uses_git_root_and_preserves_other_hooks() {
+    fn local_install_needs_no_mcp_registration_and_preserves_other_hooks() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
-        write_config(&context, false, "custom_flicknote");
         let paths = context.paths();
         fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
         fs::write(
@@ -983,8 +728,9 @@ mod tests {
             r#"{"description":"keep","hooks":{"Stop":[{"hooks":[{"type":"command","command":"keep"}]}]}}"#,
         )
         .unwrap();
+        let executable = test_executable(temp.path());
 
-        let result = install_codex(Scope::Local, &paths).unwrap();
+        let result = install_codex_with_executable(Scope::Local, &paths, &executable).unwrap();
         assert_eq!(
             result,
             InstallResult::Installed {
@@ -996,95 +742,148 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
         assert_eq!(installed["description"], "keep");
         assert_eq!(installed["hooks"]["Stop"][0]["hooks"][0]["command"], "keep");
-        assert_eq!(installed["hooks"][HOOK_EVENT].as_array().unwrap().len(), 1);
+        assert_eq!(installed_handler(&installed)["type"], COMMAND_HOOK_TYPE);
         assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["server"],
-            "custom_flicknote"
+            installed_handler(&installed)["command"],
+            format!("{} recall --hook", shell_quote(&executable).unwrap())
         );
         assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["input"]["prompt"],
-            "${prompt}"
+            installed_handler(&installed)["timeout"],
+            RECALL_TIMEOUT_SECONDS
         );
+        assert!(installed_handler(&installed).get("input").is_none());
+        assert!(installed_handler(&installed).get("server").is_none());
     }
 
     #[test]
-    fn repeated_install_updates_one_match_without_duplicating_it() {
+    fn repeated_install_replaces_mcp_and_command_matches_and_coalesces_duplicates() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
-        write_config(&context, false, "flicknote");
         let paths = context.paths();
         fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
+        let old_command = format!(
+            "{} recall --hook",
+            shell_quote(Path::new("/old path/flicknote")).unwrap()
+        );
         fs::write(
             &paths.local_hooks,
-            json!({"hooks": {HOOK_EVENT: [{"matcher": "ignored", "hooks": [{"type": HOOK_TYPE, "server": "flicknote", "tool": RECALL_TOOL, "timeout": 30, "input": {"prompt": "old"}}]}]}}).to_string(),
+            json!({
+                "hooks": {HOOK_EVENT: [{
+                    "matcher": "keep",
+                    "hooks": [
+                        {"type": MCP_HOOK_TYPE, "server": "flicknote", "tool": RECALL_TOOL, "input": {"prompt": "old"}},
+                        {"type": COMMAND_HOOK_TYPE, "command": old_command, "timeout": 99},
+                        {"type": "command", "command": "unrelated"}
+                    ]
+                }]}
+            })
+            .to_string(),
         )
         .unwrap();
-        install_codex(Scope::Local, &paths).unwrap();
-        let before = fs::read_to_string(&paths.local_hooks).unwrap();
-        let result = install_codex(Scope::Local, &paths).unwrap();
+        let executable = test_executable(temp.path());
+
+        let result = install_codex_with_executable(Scope::Local, &paths, &executable).unwrap();
         assert_eq!(
             result,
             InstallResult::Installed {
                 path: paths.local_hooks.clone(),
-                updated: true
+                updated: true,
             }
         );
-        let installed: Value =
-            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
-        assert_eq!(installed["hooks"][HOOK_EVENT].as_array().unwrap().len(), 1);
+        let before = fs::read_to_string(&paths.local_hooks).unwrap();
+        let installed: Value = serde_json::from_str(&before).unwrap();
+        let handlers = installed["hooks"][HOOK_EVENT][0]["hooks"]
+            .as_array()
+            .unwrap();
+        assert_eq!(handlers.len(), 2);
+        assert_eq!(handlers[0], desired_handler(&executable).unwrap());
+        assert_eq!(handlers[1]["command"], "unrelated");
+
+        let result = install_codex_with_executable(Scope::Local, &paths, &executable).unwrap();
         assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["timeout"],
-            RECALL_TIMEOUT_SECONDS
-        );
-        assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["input"]["prompt"],
-            "${prompt}"
+            result,
+            InstallResult::Installed {
+                path: paths.local_hooks.clone(),
+                updated: true,
+            }
         );
         assert_eq!(before, fs::read_to_string(&paths.local_hooks).unwrap());
     }
 
     #[test]
-    fn cross_scope_hook_is_reported_without_writing_target() {
+    fn another_scope_is_reported_without_writing_the_target() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
-        write_config(&context, false, "flicknote");
         let paths = context.paths();
         fs::create_dir_all(paths.global_hooks.parent().unwrap()).unwrap();
         fs::write(
             &paths.global_hooks,
-            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "flicknote", "tool": RECALL_TOOL}]}]}}).to_string(),
+            json!({"hooks": {HOOK_EVENT: [{"hooks": [desired_handler(&test_executable(temp.path())).unwrap()]}]}})
+                .to_string(),
         )
         .unwrap();
-        let result = install_codex(Scope::Local, &paths).unwrap();
+
+        let result =
+            install_codex_with_executable(Scope::Local, &paths, &test_executable(temp.path()))
+                .unwrap();
         assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
         assert!(!paths.local_hooks.exists());
     }
 
     #[test]
-    fn global_install_rejects_local_only_registration() {
+    fn inline_recall_handler_is_reported_without_an_mcp_registration() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
-        write_config(&context, true, "flicknote");
         let paths = context.paths();
-        let error = install_codex(Scope::Global, &paths).unwrap_err();
-        assert!(
-            error.to_string().contains("current project's"),
-            "unexpected error: {error}"
-        );
-        assert!(!paths.global_hooks.exists());
+        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
+        fs::write(
+            &paths.global_config,
+            r#"
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "mcp_tool"
+tool = "note_recall"
+"#,
+        )
+        .unwrap();
+
+        let result =
+            install_codex_with_executable(Scope::Local, &paths, &test_executable(temp.path()))
+                .unwrap();
+        assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
+        assert!(!paths.local_hooks.exists());
     }
 
     #[test]
     fn invalid_target_json_is_not_replaced() {
         let temp = tempfile::tempdir().unwrap();
         let context = setup_context(&temp);
-        write_config(&context, false, "flicknote");
         let paths = context.paths();
         fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
         fs::write(&paths.local_hooks, "not json").unwrap();
-        let error = install_codex(Scope::Local, &paths).unwrap_err();
+        let error =
+            install_codex_with_executable(Scope::Local, &paths, &test_executable(temp.path()))
+                .unwrap_err();
         assert!(error.to_string().contains("invalid Codex hooks JSON"));
         assert_eq!(fs::read_to_string(&paths.local_hooks).unwrap(), "not json");
+    }
+
+    #[test]
+    fn invalid_inline_configuration_is_not_overwritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = setup_context(&temp);
+        let paths = context.paths();
+        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
+        fs::write(&paths.global_config, "[hooks\n").unwrap();
+        let error =
+            install_codex_with_executable(Scope::Local, &paths, &test_executable(temp.path()))
+                .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("invalid Codex TOML configuration")
+        );
+        assert!(!paths.local_hooks.exists());
     }
 
     #[test]
@@ -1150,261 +949,57 @@ mod tests {
     }
 
     #[test]
-    fn inline_hook_is_reported_without_writing_a_file_hook() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        let paths = context.paths();
-        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.global_config,
-            r#"
-[mcp_servers.flicknote]
-command = "flicknote"
-args = ["mcp"]
-
-[[hooks.UserPromptSubmit]]
-[[hooks.UserPromptSubmit.hooks]]
-type = "mcp_tool"
-server = "flicknote"
-tool = "note_recall"
-"#,
-        )
-        .unwrap();
-
-        let result = install_codex(Scope::Local, &paths).unwrap();
-        assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
-        assert!(!paths.local_hooks.exists());
-    }
-
-    #[test]
-    fn disabled_hooks_are_reported_without_writing_a_file() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        let paths = context.paths();
-        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.global_config,
-            r#"
-[mcp_servers.flicknote]
-command = "flicknote"
-args = ["mcp"]
-
-[features]
-hooks = false
-"#,
-        )
-        .unwrap();
-
-        let error = install_codex(Scope::Local, &paths).unwrap_err();
-        assert!(error.to_string().contains("explicitly disabled"));
-        assert!(!paths.local_hooks.exists());
-    }
-
-    #[test]
-    fn disabled_mcp_server_is_not_selected() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        let paths = context.paths();
-        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.global_config,
-            r#"
-[mcp_servers.flicknote]
-command = "flicknote"
-args = ["mcp"]
-enabled = false
-"#,
-        )
-        .unwrap();
-
-        let error = install_codex(Scope::Local, &paths).unwrap_err();
-        assert!(
-            error.to_string().contains("disabled"),
-            "unexpected error: {error}"
-        );
-        assert!(!paths.local_hooks.exists());
-    }
-
-    #[test]
-    fn mcp_server_without_recall_tool_is_not_selected() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        let paths = context.paths();
-        fs::create_dir_all(paths.global_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.global_config,
-            r#"
-[mcp_servers.flicknote]
-command = "flicknote"
-args = ["mcp"]
-enabled_tools = ["note_get"]
-"#,
-        )
-        .unwrap();
-
-        let error = install_codex(Scope::Local, &paths).unwrap_err();
-        assert!(
-            error.to_string().contains("note_recall unavailable"),
-            "unexpected error: {error}"
-        );
-        assert!(!paths.local_hooks.exists());
-    }
-
-    #[test]
-    fn local_server_overrides_same_name_global_server() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        write_config(&context, false, "flicknote");
-        let paths = context.paths();
-        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.local_config,
-            r#"
-[mcp_servers.flicknote]
-command = "other-mcp"
-args = ["mcp"]
-"#,
-        )
-        .unwrap();
-
-        let error = install_codex(Scope::Local, &paths).unwrap_err();
-        assert!(
-            error.to_string().contains("shadowing"),
-            "unexpected error: {error}"
-        );
-        assert!(!paths.local_hooks.exists());
-    }
-
-    #[test]
-    fn local_server_inherits_unspecified_global_fields() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        write_config(&context, false, "fn");
-        let paths = context.paths();
-        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.local_config,
-            r#"
-[mcp_servers.fn]
-enabled_tools = ["note_recall"]
-"#,
-        )
-        .unwrap();
-
-        let result = install_codex(Scope::Local, &paths).unwrap();
+    fn shell_quote_matches_flicknote_commands_with_spaces_and_quotes() {
+        let executable = Path::new("/tmp/with spaces/neil's/flicknote");
+        let command = format!("{} recall --hook", shell_quote(executable).unwrap());
+        assert!(is_recall_command(&command));
         assert_eq!(
-            result,
-            InstallResult::Installed {
-                path: paths.local_hooks.clone(),
-                updated: false,
-            }
-        );
-        let installed: Value =
-            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
-        assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["server"],
-            "fn"
+            command,
+            "'/tmp/with spaces/neil'\\''s/flicknote' recall --hook"
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn locally_shadowed_global_hook_does_not_block_local_install() {
+    fn generated_command_delivers_adversarial_stdin_without_shell_interpolation() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::process::{Command, Stdio};
+
         let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        write_config(&context, false, "fn");
-        let paths = context.paths();
-        fs::create_dir_all(paths.global_hooks.parent().unwrap()).unwrap();
+        let executable = test_executable(temp.path());
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
         fs::write(
-            &paths.global_hooks,
-            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "fn", "tool": RECALL_TOOL}]}]}}).to_string(),
+            &executable,
+            "#!/bin/sh\ncat > \"$FLICKNOTE_TEST_CAPTURE\"\n",
         )
         .unwrap();
-        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.local_config,
-            r#"
-[mcp_servers.fn]
-command = "other-mcp"
-args = ["mcp"]
+        let mut permissions = fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&executable, permissions).unwrap();
+        let capture = temp.path().join("captured.json");
+        let prompt = r#"{"hook_event_name":"UserPromptSubmit","prompt":"$(touch SHOULD_NOT_EXIST); `touch ALSO_NOT`; \"quoted\""}"#;
+        let command = desired_handler(&executable).unwrap()["command"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
-[mcp_servers.project_flicknote]
-command = "flicknote"
-args = ["mcp"]
-"#,
-        )
-        .unwrap();
-
-        let result = install_codex(Scope::Local, &paths).unwrap();
-        assert_eq!(
-            result,
-            InstallResult::Installed {
-                path: paths.local_hooks.clone(),
-                updated: false,
-            }
-        );
-        let installed: Value =
-            serde_json::from_str(&fs::read_to_string(&paths.local_hooks).unwrap()).unwrap();
-        assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["server"],
-            "project_flicknote"
-        );
-    }
-
-    #[test]
-    fn global_repeat_uses_global_server_definition_after_local_disable() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        write_config(&context, false, "fn");
-        let paths = context.paths();
-        fs::create_dir_all(paths.local_config.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.local_config,
-            r#"
-[mcp_servers.fn]
-enabled = false
-"#,
-        )
-        .unwrap();
-        fs::create_dir_all(paths.global_hooks.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.global_hooks,
-            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "fn", "tool": RECALL_TOOL, "timeout": 30}]}]}}).to_string(),
-        )
-        .unwrap();
-
-        let result = install_codex(Scope::Global, &paths).unwrap();
-        assert_eq!(
-            result,
-            InstallResult::Installed {
-                path: paths.global_hooks.clone(),
-                updated: true,
-            }
-        );
-        let installed: Value =
-            serde_json::from_str(&fs::read_to_string(&paths.global_hooks).unwrap()).unwrap();
-        assert_eq!(installed["hooks"][HOOK_EVENT].as_array().unwrap().len(), 1);
-        assert_eq!(
-            installed["hooks"][HOOK_EVENT][0]["hooks"][0]["timeout"],
-            RECALL_TIMEOUT_SECONDS
-        );
-    }
-
-    #[test]
-    fn live_local_hook_with_a_different_server_name_blocks_global_install() {
-        let temp = tempfile::tempdir().unwrap();
-        let context = setup_context(&temp);
-        write_config(&context, false, "global_flicknote");
-        write_config(&context, true, "project_flicknote");
-        let paths = context.paths();
-        fs::create_dir_all(paths.local_hooks.parent().unwrap()).unwrap();
-        fs::write(
-            &paths.local_hooks,
-            json!({"hooks": {HOOK_EVENT: [{"hooks": [{"type": HOOK_TYPE, "server": "project_flicknote", "tool": RECALL_TOOL}]}]}}).to_string(),
-        )
-        .unwrap();
-
-        let result = install_codex(Scope::Global, &paths).unwrap();
-        assert!(matches!(result, InstallResult::AlreadyConfigured { .. }));
-        assert!(!paths.global_hooks.exists());
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .env("FLICKNOTE_TEST_CAPTURE", &capture)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(prompt.as_bytes())
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert_eq!(fs::read_to_string(capture).unwrap(), prompt);
+        assert!(!temp.path().join("SHOULD_NOT_EXIST").exists());
+        assert!(!temp.path().join("ALSO_NOT").exists());
     }
 }

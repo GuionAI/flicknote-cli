@@ -18,6 +18,7 @@ pub(crate) mod logout;
 pub(crate) mod modify;
 pub(crate) mod open;
 pub(crate) mod project;
+pub(crate) mod recall;
 pub(crate) mod restore;
 pub(crate) mod service_manager;
 pub(crate) mod share;

@@ -9,6 +9,7 @@ pub(crate) const RECALL_TITLE_MAX_CHARS: usize = 160;
 pub(crate) const RECALL_SUMMARY_MAX_CHARS: usize = 400;
 pub(crate) const RECALL_MAX_CANDIDATES: usize = 5;
 pub(crate) const RECALL_HOOK_EVENT: &str = "UserPromptSubmit";
+pub(crate) const RECALL_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
 const TRUNCATION_MARKER: &str = "…[truncated]";
 const BUDGET_NOTICE: &str = "(Some candidates were omitted to fit the context limit.)";
@@ -142,7 +143,7 @@ fn format_timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
-fn normalize_timestamp(value: &str) -> Option<String> {
+pub(crate) fn normalize_timestamp(value: &str) -> Option<String> {
     DateTime::parse_from_rfc3339(value).ok().map(|parsed| {
         parsed
             .with_timezone(&Utc)
