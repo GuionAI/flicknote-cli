@@ -155,6 +155,7 @@ mod tests {
         AppResponse, DaemonResponse, read_request, socket_path, write_response,
     };
     use tokio::net::UnixListener;
+    use tokio::sync::oneshot;
 
     use super::*;
 
@@ -177,16 +178,22 @@ mod tests {
         }
     }
 
-    fn delayed_recall_daemon(config: &Config, delay: Duration) -> tokio::task::JoinHandle<()> {
+    fn delayed_recall_daemon(
+        config: &Config,
+        delay: Duration,
+    ) -> (tokio::task::JoinHandle<()>, oneshot::Receiver<()>) {
         let path = socket_path(config);
         let listener = UnixListener::bind(path).unwrap();
-        tokio::spawn(async move {
+        let (ready_sender, ready_receiver) = oneshot::channel();
+        let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             read_request(&mut stream).await.unwrap();
+            ready_sender.send(()).unwrap();
             tokio::time::sleep(delay).await;
             let response = DaemonResponse::App(Box::new(AppResponse::NoteRecall(Vec::new())));
             drop(write_response(&mut stream, &response).await);
-        })
+        });
+        (server, ready_receiver)
     }
 
     fn candidate(
@@ -262,18 +269,26 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn recall_entrypoints_keep_their_independent_daemon_budgets() {
         let human_directory = tempfile::tempdir().unwrap();
         let human_config = test_config(human_directory.path());
-        let human_server = delayed_recall_daemon(&human_config, Duration::from_millis(100));
-        let human_result = recall_candidates(
+        let (human_server, human_ready) =
+            delayed_recall_daemon(&human_config, Duration::from_secs(4));
+        let mut human_call = Box::pin(recall_candidates(
             &human_config,
             "human query",
             None,
-            Duration::from_millis(200),
-        )
-        .await;
+            RECALL_HUMAN_TIMEOUT,
+        ));
+        tokio::select! {
+            result = &mut human_call => panic!("human recall completed before fixture was ready: {result:?}"),
+            ready = human_ready => ready.unwrap(),
+        }
+        tokio::time::advance(Duration::from_secs(4)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        let human_result = human_call.await;
         assert!(
             human_result.is_ok(),
             "human recall failed: {human_result:?}"
@@ -282,45 +297,62 @@ mod tests {
 
         let hook_directory = tempfile::tempdir().unwrap();
         let hook_config = test_config(hook_directory.path());
-        let hook_server = delayed_recall_daemon(&hook_config, Duration::from_millis(50));
-        let hook_result = recall_candidates(
+        let (hook_server, hook_ready) = delayed_recall_daemon(&hook_config, Duration::from_secs(2));
+        let mut hook_call = Box::pin(recall_candidates(
             &hook_config,
             "hook prompt",
             None,
-            Duration::from_millis(100),
-        )
-        .await;
+            RECALL_HOOK_TIMEOUT,
+        ));
+        tokio::select! {
+            result = &mut hook_call => panic!("hook recall completed before fixture was ready: {result:?}"),
+            ready = hook_ready => ready.unwrap(),
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        let hook_result = hook_call.await;
         assert!(hook_result.is_ok(), "hook recall failed: {hook_result:?}");
         hook_server.await.unwrap();
 
         let hook_timeout_directory = tempfile::tempdir().unwrap();
         let hook_timeout_config = test_config(hook_timeout_directory.path());
-        let hook_timeout_server =
-            delayed_recall_daemon(&hook_timeout_config, Duration::from_millis(200));
-        let hook_error = recall_candidates(
+        let (hook_timeout_server, hook_timeout_ready) =
+            delayed_recall_daemon(&hook_timeout_config, Duration::from_secs(4));
+        let mut hook_timeout_call = Box::pin(recall_candidates(
             &hook_timeout_config,
             "slow hook prompt",
             None,
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap_err();
+            RECALL_HOOK_TIMEOUT,
+        ));
+        tokio::select! {
+            result = &mut hook_timeout_call => panic!("hook timeout completed before fixture was ready: {result:?}"),
+            ready = hook_timeout_ready => ready.unwrap(),
+        }
+        tokio::time::advance(RECALL_HOOK_TIMEOUT).await;
+        let hook_error = hook_timeout_call.await.unwrap_err();
         assert!(hook_error.to_string().contains("timed out"));
-        hook_timeout_server.await.unwrap();
+        hook_timeout_server.abort();
+        hook_timeout_server.await.unwrap_err();
 
         let human_timeout_directory = tempfile::tempdir().unwrap();
         let human_timeout_config = test_config(human_timeout_directory.path());
-        let human_timeout_server =
-            delayed_recall_daemon(&human_timeout_config, Duration::from_millis(300));
-        let human_error = recall_candidates(
+        let (human_timeout_server, human_timeout_ready) =
+            delayed_recall_daemon(&human_timeout_config, Duration::from_secs(6));
+        let mut human_timeout_call = Box::pin(recall_candidates(
             &human_timeout_config,
             "slow human query",
             None,
-            Duration::from_millis(200),
-        )
-        .await
-        .unwrap_err();
+            RECALL_HUMAN_TIMEOUT,
+        ));
+        tokio::select! {
+            result = &mut human_timeout_call => panic!("human timeout completed before fixture was ready: {result:?}"),
+            ready = human_timeout_ready => ready.unwrap(),
+        }
+        tokio::time::advance(RECALL_HUMAN_TIMEOUT).await;
+        let human_error = human_timeout_call.await.unwrap_err();
         assert!(human_error.to_string().contains("timed out"));
-        human_timeout_server.await.unwrap();
+        human_timeout_server.abort();
+        human_timeout_server.await.unwrap_err();
     }
 }

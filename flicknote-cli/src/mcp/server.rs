@@ -753,10 +753,15 @@ mod tests {
 
     use flicknote_core::config::{Config, ConfigPaths};
     use flicknote_core::services::dto::RecallCandidate;
-    use flicknote_sync::ipc::{AppRequest, DaemonRequest, read_request, socket_path};
+    use flicknote_sync::ipc::{
+        AppRequest, AppResponse, DaemonRequest, DaemonResponse, read_request, socket_path,
+        write_response,
+    };
+    use rmcp::handler::server::wrapper::Parameters;
     use tokio::net::UnixListener;
+    use tokio::sync::oneshot;
 
-    use super::FlickNoteMcp;
+    use super::{FlickNoteMcp, NoteRecallParams};
 
     fn assert_send<T: Send>(_: T) {}
     fn assert_send_sync<T: Send + Sync>() {}
@@ -804,6 +809,51 @@ mod tests {
                 log_file: directory.join("daemon.log"),
             },
         }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delayed_mcp_recall_succeeds_before_three_second_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let (ready_sender, ready_receiver) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await.unwrap();
+            assert!(
+                matches!(request, DaemonRequest::App { request, .. } if matches!(*request, AppRequest::NoteRecall { .. }))
+            );
+            ready_sender.send(()).unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let response =
+                DaemonResponse::App(Box::new(AppResponse::NoteRecall(vec![RecallCandidate {
+                    id: 42,
+                    title: Some("Delayed recall".to_string()),
+                    summary: Some("Returned after two seconds".to_string()),
+                    updated_at: Some("2026-09-11T00:00:00Z".to_string()),
+                }])));
+            write_response(&mut stream, &response).await.unwrap();
+        });
+
+        let service = FlickNoteMcp::new(Arc::new(config));
+        let mut recall = Box::pin(service.note_recall(Parameters(NoteRecallParams {
+            prompt: "delayed response".to_string(),
+            project: None,
+        })));
+        tokio::select! {
+            _ = &mut recall => panic!("MCP recall completed before fixture was ready"),
+            ready = ready_receiver => ready.unwrap(),
+        }
+        tokio::time::advance(Duration::from_secs(2)).await;
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+
+        let result = recall.await.unwrap();
+        let output = result.0.hook_specific_output.unwrap();
+        assert_eq!(output.hook_event_name, "UserPromptSubmit");
+        assert!(output.additional_context.contains(r#""id":42"#));
+        assert!(output.additional_context.contains("Delayed recall"));
+        server.await.unwrap();
     }
 
     #[tokio::test(start_paused = true)]
