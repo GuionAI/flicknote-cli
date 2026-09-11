@@ -101,9 +101,11 @@ const SQ_INSERT_EXTRACTION: &str =
 const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
-// This query is a coarse literal prefilter. Boundary matching, deduplication,
-// and the final limit must stay after the query so an embedded hit cannot hide
-// a later standalone hit or consume a candidate slot.
+// This query is a coarse literal prefilter. Extraction rows are the outer loop
+// so note rows (which can contain large bodies) are looked up by primary key.
+// Boundary matching, deduplication, and the final limit must stay after the
+// query so an embedded hit cannot hide a later standalone hit or consume a
+// candidate slot.
 const SQ_RECALL: &str = r#"
     SELECT n.id, n.short_id, n.title, n.summary, n.updated_at,
            trim(
@@ -114,8 +116,8 @@ const SQ_RECALL: &str = r#"
                    8232, 8233, 8239, 8287, 12288
                )
            ) AS extraction_value
-    FROM notes AS n
-    JOIN note_extractions AS e
+    FROM note_extractions AS e
+    CROSS JOIN notes AS n
       ON e.user_id = n.user_id
      AND e.note_id = n.id
     WHERE n.user_id = ?

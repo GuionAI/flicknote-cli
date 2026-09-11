@@ -45,6 +45,7 @@ async-trait = { workspace = true }
 powersync = { workspace = true }
 rusqlite = { workspace = true }
 uuid = { workspace = true }
+tokio = { workspace = true, features = ["process", "test-util"] }
 
 [lints]
 workspace = true

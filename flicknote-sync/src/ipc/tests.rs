@@ -181,7 +181,7 @@ fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
 }
 
 #[test]
-fn recall_application_requests_have_a_bounded_response_timeout() {
+fn recall_application_requests_use_the_long_generic_transport_guard() {
     let request = DaemonRequest::App {
         protocol: PROTOCOL_VERSION,
         request: Box::new(AppRequest::NoteRecall {
@@ -192,7 +192,7 @@ fn recall_application_requests_have_a_bounded_response_timeout() {
 
     assert_eq!(
         response_timeout_for(&request),
-        Some(std::time::Duration::from_secs(1))
+        Some(std::time::Duration::from_secs(300))
     );
 }
 

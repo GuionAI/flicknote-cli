@@ -24,6 +24,8 @@ pub enum ServiceError {
     NothingToModify,
     #[error("FlickNote daemon is unavailable: {0}")]
     DaemonUnavailable(String),
+    #[error("{0}")]
+    Timeout(String),
     #[error("FlickNote daemon request failed: {0}")]
     Daemon(String),
     #[error("{message}")]
@@ -56,6 +58,7 @@ impl ServiceError {
             Self::NoSource => "no_source",
             Self::NothingToModify => "nothing_to_modify",
             Self::DaemonUnavailable(_) => "daemon_unavailable",
+            Self::Timeout(_) => "timeout",
             Self::Daemon(_) => "daemon_error",
             Self::Remote { code, .. } => code,
             Self::ConfigMissing(_) => "config_missing",
@@ -67,6 +70,7 @@ impl ServiceError {
     pub const fn retryable(&self) -> bool {
         match self {
             Self::DaemonUnavailable(_) => true,
+            Self::Timeout(_) => true,
             Self::Remote { retryable, .. } => *retryable,
             _ => false,
         }
@@ -107,5 +111,9 @@ mod tests {
         let invalid = ServiceError::InvalidArgument("bad range".to_string());
         assert_eq!(invalid.code(), "invalid_argument");
         assert!(!invalid.retryable());
+
+        let timeout = ServiceError::Timeout("recall timed out".to_string());
+        assert_eq!(timeout.code(), "timeout");
+        assert!(timeout.retryable());
     }
 }
