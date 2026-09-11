@@ -139,6 +139,17 @@ fn mcp_subcommand_parses() {
 }
 
 #[test]
+fn recall_requires_one_positional_query_unless_hook_mode_is_selected() {
+    assert!(Cli::try_parse_from(["flicknote", "recall", "Ada"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "recall", ""]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "recall", "--hook"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "recall", "--hook", "--project", "work"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "recall"]).is_err());
+    assert!(Cli::try_parse_from(["flicknote", "recall", "Ada", "--hook"]).is_err());
+    assert!(Cli::try_parse_from(["flicknote", "recall", "--stdin"]).is_err());
+}
+
+#[test]
 fn codex_hook_install_command_parses_and_scope_flags_conflict() {
     assert!(Cli::try_parse_from(["flicknote", "hook", "install", "codex"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "hook", "install", "codex", "--local"]).is_ok());

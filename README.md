@@ -9,7 +9,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
-- **Codex recall** — a read-only `UserPromptSubmit` hook that offers bounded historical note candidates from extracted topics and entities before a prompt is sent
+- **Codex recall** — human-readable `recall QUERY` results and a read-only `UserPromptSubmit` hook with bounded historical note candidates
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **User daemon service** — foreground daemon managed by launchd (macOS) or systemd (Linux)
@@ -82,6 +82,8 @@ flicknote list
 flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
+flicknote recall "Memory Systems"        # show matching historical candidates
+flicknote recall ""                       # an explicit empty query returns no candidates
 
 # Note IDs are numeric short IDs from list/detail. Full UUIDs are also accepted
 # for compatibility.
@@ -176,18 +178,39 @@ never opens SQLite. The server does not start the daemon automatically.
 
 ### Codex recall hook
 
-The recall hook gives Codex relevant historical notes as you send messages.
-Register the FlickNote MCP server in Codex first, then start the daemon and
-install the hook:
+`flicknote recall QUERY` is the human entrance for recall. It sends the text to
+the daemon and prints up to five matching active-note candidates with their
+numeric short IDs, titles, available summaries, and modification times. An
+empty or unmatched query prints an empty-result message; it never lists every
+note. Use `--project NAME` or `FLICKNOTE_PROJECT` with the same precedence as
+the other note queries.
+
+The Codex entrance is a synchronous command hook. Install it without an MCP
+registration or a running daemon:
 
 ```bash
-flicknote daemon start
 flicknote hook install codex
 ```
 
 The installer asks whether to enable the hook for the current project or your
 user account. Use `--local` or `--global` to choose directly. It preserves
-unrelated configuration and does not start the daemon or grant hook trust.
+unrelated configuration, does not contact the daemon, and does not grant hook
+trust. Repeating the installation replaces and coalesces recognizable command
+recall entries in the selected hooks file. Old MCP `mcp_tool` recall hooks are
+left untouched and do not block installation; remove an old MCP hook manually
+if it remains enabled, otherwise recall may run twice. If an active command
+recall entry is already in the other scope or an inline configuration source,
+the installer reports its location instead of creating another entry.
+
+The installed handler runs `flicknote recall --hook`. Codex supplies one
+`UserPromptSubmit` event as JSON on stdin; the command validates the event and
+string `prompt`, then emits the existing `hookSpecificOutput` JSON contract.
+The command is static: prompt text is delivered through stdin and is never
+interpolated into shell code. It uses the same five-candidate and 6000-byte
+context bounds as the MCP `note_recall` tool. The hook needs the FlickNote
+daemon when a prompt arrives; malformed input, an unavailable daemon, or a
+timeout emits diagnostics on stderr and no context on stdout, with a
+non-blocking failure.
 
 In Codex, open `/hooks` to review and trust the installed hook. Project-local
 hooks also require a trusted project.
@@ -198,8 +221,10 @@ check it against the current task. Recall is read-only: it does not modify your
 notes. Messages with no matches receive no extra context; if recall is
 unavailable, the conversation continues.
 
-If the hook is not working, check `flicknote daemon status`, the FlickNote MCP
-connection, and the hook's enabled and trusted state in `/hooks`. See the
+If the hook is not working, check `flicknote daemon status` and the hook's
+enabled and trusted state in `/hooks`. The command hook does not depend on the
+FlickNote MCP connection. The MCP `note_recall` tool remains available for MCP
+clients that use it directly. See the
 [Codex hooks documentation](https://developers.openai.com/codex/hooks) for host
 setup and trust requirements.
 

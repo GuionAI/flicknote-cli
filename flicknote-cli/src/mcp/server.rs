@@ -27,10 +27,8 @@ use super::dto::{
 use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
-use super::recall::{McpRecallResult, current_time};
 use crate::commands::open::SystemBrowserOpener;
-
-const RECALL_HOOK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+use crate::recall::{McpRecallResult, RECALL_QUERY_TIMEOUT, current_time};
 
 #[cfg(test)]
 pub(crate) const EXPECTED_TOOLS: [&str; 28] = [
@@ -97,7 +95,7 @@ impl FlickNoteMcp {
     async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
         if matches!(&request, AppRequest::NoteRecall { .. }) {
             return tokio::time::timeout(
-                RECALL_HOOK_TIMEOUT,
+                RECALL_QUERY_TIMEOUT,
                 DaemonClient::new(&self.config).call(request),
             )
             .await

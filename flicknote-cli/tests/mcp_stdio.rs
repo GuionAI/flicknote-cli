@@ -237,7 +237,8 @@ async fn seed_workspace(
     write_session(config_root);
     let config = test_config(config_root, data_root);
     std::fs::create_dir_all(&config.paths.data_dir).unwrap();
-    let backend = LocalPowerSyncBackend::new(test_database(&config), "test-user".to_string());
+    let db = test_database(&config);
+    let backend = LocalPowerSyncBackend::new(db.clone(), "test-user".to_string());
     let project_id = backend.create_project("Legacy project").await.unwrap();
     let note_id = uuid::Uuid::new_v4().to_string();
     backend
@@ -251,6 +252,18 @@ async fn seed_workspace(
             project_id: Some(&project_id),
             now: "2026-08-06T00:00:00Z",
         })
+        .await
+        .unwrap();
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET short_id = 77, summary = ? WHERE id = ?",
+            rusqlite::params!["Recall summary", note_id],
+        )
+        .unwrap();
+    drop(writer);
+    backend
+        .set_note_extractions(&note_id, "::topic", &["Recall topic".to_string()])
         .await
         .unwrap();
     backend.update_note_flagged(&note_id, true).await.unwrap();
@@ -267,6 +280,7 @@ fn run_cli_json(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
+        .env_remove("FLICKNOTE_PROJECT")
         .output()
         .unwrap();
     assert!(
@@ -287,6 +301,7 @@ fn run_cli_with_input(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
+        .env_remove("FLICKNOTE_PROJECT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -752,6 +767,135 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     assert!(project.contains_key("user_id"));
     assert!(project.contains_key("is_archived"));
     assert!(!project.contains_key("archived"));
+}
+
+#[tokio::test]
+async fn recall_command_lists_candidates_and_keeps_empty_queries_bounded() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    seed_workspace(&config_root, &data_root).await;
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
+
+    let populated = run_cli_with_input(&config_root, &data_root, &["recall", "Recall topic"], "");
+    assert!(
+        populated.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&populated.stderr)
+    );
+    let populated = String::from_utf8(populated.stdout).unwrap();
+    assert!(populated.contains("Recall candidates (1):"));
+    assert!(populated.contains("#77 — Legacy JSON"));
+    assert!(populated.contains("Summary: Recall summary"));
+    assert!(populated.contains("Modified:"));
+    assert!(!populated.contains("stored body"));
+
+    let empty = run_cli_with_input(&config_root, &data_root, &["recall", ""], "");
+    assert!(empty.status.success());
+    assert_eq!(
+        String::from_utf8(empty.stdout).unwrap(),
+        "No recall candidates found for an empty query.\n"
+    );
+}
+
+#[test]
+fn cli_hook_emits_the_shared_context_and_sends_only_prompt_and_cli_project() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        ServerInfo::current(),
+        |_request| {
+            DaemonResponse::App(Box::new(AppResponse::NoteRecall(vec![
+                flicknote_core::services::dto::RecallCandidate {
+                    id: 42,
+                    title: Some("Hook candidate".to_string()),
+                    summary: Some("Hook summary".to_string()),
+                    updated_at: Some("2026-09-10T04:00:00Z".to_string()),
+                },
+            ])))
+        },
+    );
+    let prompt = "quotes ' \" and $(touch SHOULD_NOT_EXIST)\n下一步";
+    let input = serde_json::json!({
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": prompt,
+        "cwd": "/ignored",
+        "project": "host metadata must not override selection"
+    })
+    .to_string();
+
+    let output = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["recall", "--hook", "--project", "cli"],
+        &input,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let hook: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        hook["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(
+        hook["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .contains(r#""id":42"#)
+    );
+    let requests = daemon.requests();
+    assert!(matches!(
+        requests.as_slice(),
+        [AppRequest::NoteRecall {
+            prompt: actual,
+            project: Some(project),
+        }] if actual == prompt
+            && project == "cli"
+    ));
+    assert!(!directory.path().join("SHOULD_NOT_EXIST").exists());
+}
+
+#[test]
+fn cli_hook_failures_are_nonblocking_and_do_not_start_a_daemon() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+
+    let malformed = run_cli_with_input(&config_root, &data_root, &["recall", "--hook"], "not json");
+    assert_eq!(malformed.status.code(), Some(1));
+    assert!(malformed.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&malformed.stderr).contains("invalid Codex hook input"));
+    assert!(!data_root.join("flicknote").join("daemon.sock").exists());
+
+    let unavailable = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["recall", "--hook"],
+        &serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "daemon unavailable"
+        })
+        .to_string(),
+    );
+    assert_eq!(unavailable.status.code(), Some(1));
+    assert!(unavailable.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unavailable.stderr).contains("daemon"));
+
+    let argument_error = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["recall", "--hook", "--unexpected"],
+        "{}",
+    );
+    assert_eq!(argument_error.status.code(), Some(1));
+    assert!(argument_error.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&argument_error.stderr).contains("unexpected argument"));
 }
 
 #[test]
