@@ -1,15 +1,19 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use flicknote_core::services::dto::RecallCandidate;
+use flicknote_core::services::error::ServiceError;
 use rmcp::schemars::{Schema, SchemaGenerator};
 use serde::Serialize;
 use serde_json::{Map, Value};
+use std::future::Future;
+use std::time::Duration;
 
 pub(crate) const RECALL_CONTEXT_MAX_BYTES: usize = 6_000;
 pub(crate) const RECALL_TITLE_MAX_CHARS: usize = 160;
 pub(crate) const RECALL_SUMMARY_MAX_CHARS: usize = 400;
 pub(crate) const RECALL_MAX_CANDIDATES: usize = 5;
 pub(crate) const RECALL_HOOK_EVENT: &str = "UserPromptSubmit";
-pub(crate) const RECALL_QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+pub(crate) const RECALL_HUMAN_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const RECALL_HOOK_TIMEOUT: Duration = Duration::from_secs(3);
 
 const TRUNCATION_MARKER: &str = "…[truncated]";
 const BUDGET_NOTICE: &str = "(Some candidates were omitted to fit the context limit.)";
@@ -49,6 +53,22 @@ impl McpRecallResult {
 
 pub(crate) fn current_time() -> DateTime<Utc> {
     Utc::now()
+}
+
+pub(crate) fn recall_timeout_message(timeout: Duration) -> String {
+    format!(
+        "FlickNote recall timed out after {} seconds",
+        timeout.as_secs()
+    )
+}
+
+pub(crate) async fn recall_call_with_timeout<T>(
+    timeout: Duration,
+    operation: impl Future<Output = Result<T, ServiceError>>,
+) -> Result<T, ServiceError> {
+    tokio::time::timeout(timeout, operation)
+        .await
+        .map_err(|_| ServiceError::Timeout(recall_timeout_message(timeout)))?
 }
 
 fn user_prompt_submit_schema(_generator: &mut SchemaGenerator) -> Schema {
@@ -233,5 +253,51 @@ mod tests {
             .additional_context;
         assert!(!context.contains("not-a-timestamp"));
         assert!(!context.contains("updated_at"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recall_call_uses_human_and_hook_budgets_for_the_whole_operation() {
+        assert_eq!(RECALL_HUMAN_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(RECALL_HOOK_TIMEOUT, Duration::from_secs(3));
+
+        let hook_result = recall_call_with_timeout(RECALL_HOOK_TIMEOUT, async {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            Ok::<_, ServiceError>("hook completed")
+        })
+        .await
+        .unwrap();
+        assert_eq!(hook_result, "hook completed");
+
+        let human_result = recall_call_with_timeout(RECALL_HUMAN_TIMEOUT, async {
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            Ok::<_, ServiceError>("human completed")
+        })
+        .await
+        .unwrap();
+        assert_eq!(human_result, "human completed");
+
+        let hook_error = recall_call_with_timeout(
+            RECALL_HOOK_TIMEOUT,
+            std::future::pending::<Result<(), ServiceError>>(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(hook_error.code(), "timeout");
+        assert_eq!(
+            hook_error.to_string(),
+            "FlickNote recall timed out after 3 seconds"
+        );
+
+        let human_error = recall_call_with_timeout(
+            RECALL_HUMAN_TIMEOUT,
+            std::future::pending::<Result<(), ServiceError>>(),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(human_error.code(), "timeout");
+        assert_eq!(
+            human_error.to_string(),
+            "FlickNote recall timed out after 5 seconds"
+        );
     }
 }

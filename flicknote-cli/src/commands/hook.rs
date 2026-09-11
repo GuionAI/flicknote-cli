@@ -6,9 +6,10 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
+use crate::recall::RECALL_HOOK_TIMEOUT;
+
 const HOOK_EVENT: &str = "UserPromptSubmit";
 const COMMAND_HOOK_TYPE: &str = "command";
-const RECALL_TIMEOUT_SECONDS: u64 = 1;
 const RECALL_COMMAND_SUFFIX: &str = " recall --hook";
 
 #[derive(Args)]
@@ -587,7 +588,7 @@ fn desired_handler(executable: &Path) -> Result<Value, CliError> {
     Ok(json!({
         "type": COMMAND_HOOK_TYPE,
         "command": format!("{}{}", shell_quote(executable)?, RECALL_COMMAND_SUFFIX),
-        "timeout": RECALL_TIMEOUT_SECONDS,
+        "timeout": RECALL_HOOK_TIMEOUT.as_secs(),
     }))
 }
 
@@ -748,7 +749,7 @@ mod tests {
         );
         assert_eq!(
             installed_handler(&installed)["timeout"],
-            RECALL_TIMEOUT_SECONDS
+            RECALL_HOOK_TIMEOUT.as_secs()
         );
         assert!(installed_handler(&installed).get("input").is_none());
         assert!(installed_handler(&installed).get("server").is_none());

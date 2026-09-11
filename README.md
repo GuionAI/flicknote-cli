@@ -182,8 +182,9 @@ never opens SQLite. The server does not start the daemon automatically.
 the daemon and prints up to five matching active-note candidates with their
 numeric short IDs, titles, available summaries, and modification times. An
 empty or unmatched query prints an empty-result message; it never lists every
-note. Use `--project NAME` or `FLICKNOTE_PROJECT` with the same precedence as
-the other note queries.
+note. Human recall gives the complete daemon call five seconds, including IPC
+connection and response work. Use `--project NAME` or `FLICKNOTE_PROJECT` with
+the same precedence as the other note queries.
 
 The Codex entrance is a synchronous command hook. Install it without an MCP
 registration or a running daemon:
@@ -207,10 +208,22 @@ The installed handler runs `flicknote recall --hook`. Codex supplies one
 string `prompt`, then emits the existing `hookSpecificOutput` JSON contract.
 The command is static: prompt text is delivered through stdin and is never
 interpolated into shell code. It uses the same five-candidate and 6000-byte
-context bounds as the MCP `note_recall` tool. The hook needs the FlickNote
-daemon when a prompt arrives; malformed input, an unavailable daemon, or a
-timeout emits diagnostics on stderr and no context on stdout, with a
-non-blocking failure.
+context bounds as the MCP `note_recall` tool. Hook and MCP recall allow three
+seconds for the complete daemon call, and the installed command hook has a
+three-second synchronous host timeout. That host timeout also bounds an input
+stream that never reaches EOF. The hook needs the FlickNote daemon when a
+prompt arrives; malformed input, an unavailable daemon, or a response timeout
+emits diagnostics on stderr and no context on stdout, with a non-blocking
+failure. A response timeout is distinct from an unavailable daemon: only the
+latter calls for `flicknote daemon status` and `flicknote daemon start`.
+
+Existing installed hooks keep their generated host timeout until explicitly
+reinstalled. After upgrading, run `flicknote hook install codex --local` or
+`flicknote hook install codex --global` for the selected scope; reinstalling
+updates only the recognizable command-hook entry. The recall query improvement
+is in the daemon, so an updated daemon must be running for it to take effect.
+Synthetic measurements compare query variants and do not establish a universal
+200–300 ms SLA.
 
 In Codex, open `/hooks` to review and trust the installed hook. Project-local
 hooks also require a trusted project.

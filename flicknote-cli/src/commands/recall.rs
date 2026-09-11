@@ -5,10 +5,12 @@ use flicknote_core::services::dto::RecallCandidate;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use serde::Deserialize;
 use std::io::{self, Read, Write};
+use std::time::Duration;
 
 use super::util::resolve_project_arg;
 use crate::recall::{
-    McpRecallResult, RECALL_HOOK_EVENT, RECALL_QUERY_TIMEOUT, current_time, normalize_timestamp,
+    McpRecallResult, RECALL_HOOK_EVENT, RECALL_HOOK_TIMEOUT, RECALL_HUMAN_TIMEOUT, current_time,
+    normalize_timestamp, recall_call_with_timeout,
 };
 
 const HOOK_INPUT_MAX_BYTES: usize = 1024 * 1024;
@@ -50,14 +52,14 @@ pub(crate) async fn run(config: &Config, args: &RecallArgs) -> Result<(), CliErr
     {
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
-    let candidates = recall_candidates(config, query, project).await?;
+    let candidates = recall_candidates(config, query, project, RECALL_HUMAN_TIMEOUT).await?;
     println!("{}", render_human_candidates(query, &candidates));
     Ok(())
 }
 
 async fn run_hook(config: &Config, project: Option<String>) -> Result<(), CliError> {
     let event = read_hook_event(&mut io::stdin().lock())?;
-    let candidates = recall_candidates(config, &event.prompt, project).await?;
+    let candidates = recall_candidates(config, &event.prompt, project, RECALL_HOOK_TIMEOUT).await?;
     let output = serde_json::to_string(&McpRecallResult::from_candidates(
         &candidates,
         current_time(),
@@ -72,16 +74,16 @@ async fn recall_candidates(
     config: &Config,
     prompt: &str,
     project: Option<String>,
+    timeout: Duration,
 ) -> Result<Vec<RecallCandidate>, CliError> {
-    tokio::time::timeout(
-        RECALL_QUERY_TIMEOUT,
+    recall_call_with_timeout(
+        timeout,
         DaemonClient::new(config).call(AppRequest::NoteRecall {
             prompt: prompt.to_string(),
             project,
         }),
     )
     .await
-    .map_err(|_| CliError::Other("FlickNote recall timed out".to_string()))?
     .map_err(CliError::from)
 }
 
@@ -146,7 +148,46 @@ fn single_line(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use flicknote_core::config::{Config, ConfigPaths};
+    use flicknote_sync::ipc::{
+        AppResponse, DaemonResponse, read_request, socket_path, write_response,
+    };
+    use tokio::net::UnixListener;
+
     use super::*;
+
+    fn test_config(directory: &Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            gateway_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: directory.to_path_buf(),
+                data_dir: directory.to_path_buf(),
+                config_file: directory.join("config.json"),
+                session_file: directory.join("session.json"),
+                db_file: directory.join("flicknote.db"),
+                log_file: directory.join("daemon.log"),
+            },
+        }
+    }
+
+    fn delayed_recall_daemon(config: &Config, delay: Duration) -> tokio::task::JoinHandle<()> {
+        let path = socket_path(config);
+        let listener = UnixListener::bind(path).unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            read_request(&mut stream).await.unwrap();
+            tokio::time::sleep(delay).await;
+            let response = DaemonResponse::App(Box::new(AppResponse::NoteRecall(Vec::new())));
+            drop(write_response(&mut stream, &response).await);
+        })
+    }
 
     fn candidate(
         id: i64,
@@ -219,5 +260,67 @@ mod tests {
             render_human_candidates("none", &[]),
             "No recall candidates found."
         );
+    }
+
+    #[tokio::test]
+    async fn recall_entrypoints_keep_their_independent_daemon_budgets() {
+        let human_directory = tempfile::tempdir().unwrap();
+        let human_config = test_config(human_directory.path());
+        let human_server = delayed_recall_daemon(&human_config, Duration::from_millis(100));
+        let human_result = recall_candidates(
+            &human_config,
+            "human query",
+            None,
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(
+            human_result.is_ok(),
+            "human recall failed: {human_result:?}"
+        );
+        human_server.await.unwrap();
+
+        let hook_directory = tempfile::tempdir().unwrap();
+        let hook_config = test_config(hook_directory.path());
+        let hook_server = delayed_recall_daemon(&hook_config, Duration::from_millis(50));
+        let hook_result = recall_candidates(
+            &hook_config,
+            "hook prompt",
+            None,
+            Duration::from_millis(100),
+        )
+        .await;
+        assert!(hook_result.is_ok(), "hook recall failed: {hook_result:?}");
+        hook_server.await.unwrap();
+
+        let hook_timeout_directory = tempfile::tempdir().unwrap();
+        let hook_timeout_config = test_config(hook_timeout_directory.path());
+        let hook_timeout_server =
+            delayed_recall_daemon(&hook_timeout_config, Duration::from_millis(200));
+        let hook_error = recall_candidates(
+            &hook_timeout_config,
+            "slow hook prompt",
+            None,
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        assert!(hook_error.to_string().contains("timed out"));
+        hook_timeout_server.await.unwrap();
+
+        let human_timeout_directory = tempfile::tempdir().unwrap();
+        let human_timeout_config = test_config(human_timeout_directory.path());
+        let human_timeout_server =
+            delayed_recall_daemon(&human_timeout_config, Duration::from_millis(300));
+        let human_error = recall_candidates(
+            &human_timeout_config,
+            "slow human query",
+            None,
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap_err();
+        assert!(human_error.to_string().contains("timed out"));
+        human_timeout_server.await.unwrap();
     }
 }

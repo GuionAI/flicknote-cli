@@ -28,7 +28,7 @@ use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
 use crate::commands::open::SystemBrowserOpener;
-use crate::recall::{McpRecallResult, RECALL_QUERY_TIMEOUT, current_time};
+use crate::recall::{McpRecallResult, RECALL_HOOK_TIMEOUT, current_time, recall_call_with_timeout};
 
 #[cfg(test)]
 pub(crate) const EXPECTED_TOOLS: [&str; 28] = [
@@ -94,12 +94,11 @@ impl FlickNoteMcp {
 
     async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
         if matches!(&request, AppRequest::NoteRecall { .. }) {
-            return tokio::time::timeout(
-                RECALL_QUERY_TIMEOUT,
+            return recall_call_with_timeout(
+                RECALL_HOOK_TIMEOUT,
                 DaemonClient::new(&self.config).call(request),
             )
-            .await
-            .map_err(|_| ServiceError::DaemonUnavailable("recall timed out".to_string()))?;
+            .await;
         }
         DaemonClient::new(&self.config).call(request).await
     }
@@ -748,9 +747,14 @@ pub(crate) async fn serve(config: Arc<Config>) -> Result<(), CliError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
     use std::sync::Arc;
+    use std::time::Duration;
 
-    use flicknote_core::config::Config;
+    use flicknote_core::config::{Config, ConfigPaths};
+    use flicknote_core::services::dto::RecallCandidate;
+    use flicknote_sync::ipc::{AppRequest, DaemonRequest, read_request, socket_path};
+    use tokio::net::UnixListener;
 
     use super::FlickNoteMcp;
 
@@ -781,5 +785,53 @@ mod tests {
             FlickNoteMcp::select_project(None, Some(String::new())),
             None
         );
+    }
+
+    fn test_config(directory: &Path) -> Config {
+        Config {
+            supabase_url: String::new(),
+            supabase_anon_key: String::new(),
+            powersync_url: String::new(),
+            api_url: String::new(),
+            gateway_url: String::new(),
+            web_url: None,
+            paths: ConfigPaths {
+                config_dir: directory.to_path_buf(),
+                data_dir: directory.to_path_buf(),
+                config_file: directory.join("config.json"),
+                session_file: directory.join("session.json"),
+                db_file: directory.join("flicknote.db"),
+                log_file: directory.join("daemon.log"),
+            },
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn recall_response_timeout_is_typed_as_timeout_not_daemon_unavailable() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = test_config(directory.path());
+        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await.unwrap();
+            assert!(
+                matches!(request, DaemonRequest::App { request, .. } if matches!(*request, AppRequest::NoteRecall { .. }))
+            );
+            tokio::time::sleep(Duration::from_secs(4)).await;
+        });
+
+        let service = FlickNoteMcp::new(Arc::new(config));
+        let error = service
+            .call::<Vec<RecallCandidate>>(AppRequest::NoteRecall {
+                prompt: "slow response".to_string(),
+                project: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "timeout");
+        assert!(error.to_string().contains("3 seconds"));
+        assert!(error.retryable());
+        server.await.unwrap();
     }
 }
