@@ -1,10 +1,10 @@
 use clap::Args;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteAddInput, NoteSummary};
+use flicknote_core::services::dto::{NoteAddInput, NoteCreateResult};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use std::io::{IsTerminal, Read};
 
-use super::util::{display_summary_id, resolve_project_arg};
+use super::util::resolve_project_arg;
 
 const ADD_HELP: &str = include_str!("../help/add.md");
 
@@ -16,6 +16,9 @@ pub(crate) struct AddArgs {
     /// Assign to project by name
     #[arg(long)]
     project: Option<String>,
+    /// Output the created note ID as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(), CliError> {
@@ -38,7 +41,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(),
     };
 
     let project = resolve_project_arg(&args.project);
-    let note: NoteSummary = daemon
+    let note: NoteCreateResult = daemon
         .call(AppRequest::NoteAdd(NoteAddInput {
             content,
             project: project.clone(),
@@ -47,12 +50,13 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(),
             created_at: None,
         }))
         .await?;
-    match project.as_deref() {
-        Some(name) => println!(
-            "Created note {} in project \"{name}\".",
-            display_summary_id(&note)
-        ),
-        None => println!("Created note {}.", display_summary_id(&note)),
+    if args.json {
+        println!("{}", serde_json::to_string(&note).map_err(CliError::Json)?);
+    } else {
+        match project.as_deref() {
+            Some(name) => println!("Created note {} in project \"{name}\".", note.id),
+            None => println!("Created note {}.", note.id),
+        }
     }
     Ok(())
 }

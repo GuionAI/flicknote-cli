@@ -333,7 +333,37 @@ fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
     }
 }
 
-fn assert_note_shape_without_internal_status(
+fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json::Value) {
+    let object = note.as_object().unwrap();
+    let keys = object
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        [
+            "created_at",
+            "deleted_at",
+            "flagged",
+            "id",
+            "project",
+            "summary",
+            "title",
+            "topics",
+            "type",
+            "updated_at",
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(note["title"], "Legacy JSON");
+    assert_eq!(note["summary"], "Recall summary");
+    assert_eq!(note["topics"], serde_json::json!(["Recall topic"]));
+    assert_eq!(note["flagged"], true);
+    assert_eq!(&note["project"], project);
+}
+
+fn assert_detail_shape_without_internal_status(
     note: &serde_json::Value,
     project: &serde_json::Value,
 ) {
@@ -743,7 +773,7 @@ fn gateway_request_reports_http_date_retry_after() {
 }
 
 #[tokio::test]
-async fn cli_json_commands_preserve_the_existing_machine_contracts() {
+async fn cli_json_commands_expose_lightweight_discovery_items() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
@@ -751,13 +781,19 @@ async fn cli_json_commands_preserve_the_existing_machine_contracts() {
     let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let listed = run_cli_json(&config_root, &data_root, &["list", "--json"]);
-    assert_note_shape_without_internal_status(&listed[0], &serde_json::Value::Null);
+    assert_discovery_item_contract(
+        &listed[0],
+        &serde_json::Value::String("Legacy project".to_string()),
+    );
 
     let found = run_cli_json(&config_root, &data_root, &["find", "stored", "--json"]);
-    assert_note_shape_without_internal_status(&found[0], &serde_json::Value::Null);
+    assert_discovery_item_contract(
+        &found[0],
+        &serde_json::Value::String("Legacy project".to_string()),
+    );
 
     let detailed = run_cli_json(&config_root, &data_root, &["detail", &note_id, "--json"]);
-    assert_note_shape_without_internal_status(
+    assert_detail_shape_without_internal_status(
         &detailed,
         &serde_json::Value::String("Legacy project".to_string()),
     );
@@ -899,6 +935,94 @@ fn cli_hook_failures_are_nonblocking_and_do_not_start_a_daemon() {
 }
 
 #[test]
+fn cli_add_json_emits_only_the_public_note_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
+                    flicknote_core::services::dto::NoteCreateResult { id: 88 },
+                ))),
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+
+    let output = run_cli_with_input(&config_root, &data_root, &["add", "--json"], "new note\n");
+
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({ "id": 88 })
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::NoteAdd(input)]
+            if input.content == "new note"
+                && input.project.is_none()
+                && !input.interpret_as_url
+    ));
+}
+
+#[test]
+fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let item = flicknote_core::services::dto::NoteListItem {
+        id: Some(77),
+        note_type: "normal".to_string(),
+        title: Some("Adapter note".to_string()),
+        project: Some("orientation".to_string()),
+        topics: vec!["CLI".to_string()],
+        summary: Some("A lightweight item".to_string()),
+        flagged: true,
+        created_at: Some("2026-09-21T00:00:00Z".to_string()),
+        updated_at: Some("2026-09-21T01:00:00Z".to_string()),
+        deleted_at: None,
+    };
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        ServerInfo::current(),
+        move |request| match request {
+            AppRequest::NoteList(_) | AppRequest::NoteFind(_) => {
+                DaemonResponse::App(Box::new(AppResponse::NoteListItems(vec![item.clone()])))
+            }
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
+
+    let expected = serde_json::json!([
+        {
+            "id": 77,
+            "type": "normal",
+            "title": "Adapter note",
+            "project": "orientation",
+            "topics": ["CLI"],
+            "summary": "A lightweight item",
+            "flagged": true,
+            "created_at": "2026-09-21T00:00:00Z",
+            "updated_at": "2026-09-21T01:00:00Z",
+            "deleted_at": null
+        }
+    ]);
+    assert_eq!(
+        run_cli_json(&config_root, &data_root, &["list", "--json"]),
+        expected
+    );
+    assert_eq!(
+        run_cli_json(&config_root, &data_root, &["find", "adapter", "--json"]),
+        expected
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::NoteList(_), AppRequest::NoteFind(_)]
+    ));
+}
+
+#[test]
 fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
@@ -929,6 +1053,67 @@ fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
         requests.as_slice(),
         [AppRequest::NoteAppend { id, content }]
             if id == "77" && content == "new paragraph"
+    ));
+}
+
+#[test]
+fn detail_tree_json_serializes_the_shared_section_tree() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::NoteGet { .. } => DaemonResponse::App(Box::new(
+                    AppResponse::NoteDetail(flicknote_core::services::dto::NoteDetail {
+                        note: fake_note_summary(),
+                        content: "## Current section".to_string(),
+                        metadata: None,
+                        extractions: Vec::new(),
+                        sections: vec![flicknote_core::services::dto::SectionDto {
+                            id: "current".to_string(),
+                            level: 2,
+                            title: "Current section".to_string(),
+                            children: vec![flicknote_core::services::dto::SectionDto {
+                                id: "child".to_string(),
+                                level: 3,
+                                title: "Child section".to_string(),
+                                children: Vec::new(),
+                            }],
+                        }],
+                    }),
+                )),
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+
+    let tree = run_cli_json(
+        &config_root,
+        &data_root,
+        &["detail", "77", "--tree", "--json"],
+    );
+
+    assert_eq!(
+        tree,
+        serde_json::json!([
+            {
+                "id": "current",
+                "level": 2,
+                "title": "Current section",
+                "children": [
+                    {
+                        "id": "child",
+                        "level": 3,
+                        "title": "Child section",
+                        "children": []
+                    }
+                ]
+            }
+        ])
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::NoteGet { id, archived }] if id == "77" && !archived
     ));
 }
 

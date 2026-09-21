@@ -7,4 +7,6 @@ Examples:
   flicknote list --json
 
 List output shows the note ID used by detail/content/edit commands.
-In JSON output, `id` is the numeric short ID when available and `uuid` is the full note UUID.
+JSON output returns lightweight discovery items: note ID, type, title, project,
+topics, summary, flagged state, and timestamps. It does not include full note
+content or internal UUIDs.

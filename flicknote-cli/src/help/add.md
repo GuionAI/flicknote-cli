@@ -10,4 +10,9 @@ cat <<'EOF' | flicknote add --project work
 Document the new endpoint contract.
 EOF
 
+For scripts, return only the newly created numeric note ID:
+cat <<'EOF' | flicknote add --json
+Quick capture
+EOF
+
 Text and URLs are auto-detected. Use `flicknote upload <path>` for files.

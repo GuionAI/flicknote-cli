@@ -1,6 +1,5 @@
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteRecord, NoteSummary, SectionDto};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
+use flicknote_core::services::dto::{NoteListItem, NoteRecord, NoteSummary, SectionDto};
 use std::io::{IsTerminal, Read};
 
 pub(crate) fn display_summary_id(note: &NoteSummary) -> String {
@@ -24,24 +23,6 @@ pub(crate) fn note_json(note: &NoteRecord, project_name: Option<&str>) -> serde_
         "updated_at": note.updated_at,
         "deleted_at": note.deleted_at,
     })
-}
-
-pub(crate) async fn note_summaries_json(
-    daemon: &DaemonClient<'_>,
-    notes: &[NoteSummary],
-    archived: bool,
-) -> Result<Vec<serde_json::Value>, CliError> {
-    let mut values = Vec::with_capacity(notes.len());
-    for summary in notes {
-        let note: NoteRecord = daemon
-            .call(AppRequest::NoteRecord {
-                id: summary.uuid.clone(),
-                archived,
-            })
-            .await?;
-        values.push(note_json(&note, None));
-    }
-    Ok(values)
 }
 
 pub(crate) fn print_section_tree(sections: &[SectionDto]) {
@@ -72,7 +53,7 @@ pub(crate) fn print_section_tree(sections: &[SectionDto]) {
     print!("{output}");
 }
 
-pub(crate) fn print_summaries_table(notes: &[NoteSummary]) {
+pub(crate) fn print_summaries_table(notes: &[NoteListItem]) {
     println!(
         "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} Created",
         "ID", "Type", "Title", "Project", "Topics", "Flagged"
@@ -104,7 +85,7 @@ pub(crate) fn print_summaries_table(notes: &[NoteSummary]) {
         };
         println!(
             "{:<8} {:<8} {:<30} {:<15} {:<20} {:<7} {}",
-            display_summary_id(note),
+            note.id.map_or_else(|| "-".to_string(), |id| id.to_string()),
             note.note_type,
             title,
             project,

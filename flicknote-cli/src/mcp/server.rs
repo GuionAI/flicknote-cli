@@ -4,9 +4,10 @@ use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
-    NoteAddInput, NoteArchiveResult, NoteCountInput, NoteDetail, NoteFindInput, NoteListInput,
-    NoteModifyInput, NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
+    NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput,
+    NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult,
+    OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult,
+    UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
@@ -21,8 +22,8 @@ use serde::Serialize;
 
 use super::dto::{
     McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteDetail,
-    McpNoteListResult, McpNoteMutationResult, McpNoteSummary, McpProjectDto, McpProjectListResult,
-    McpSourceResult, McpTopicListResult, source_output_schema,
+    McpNoteListResult, McpNoteMutationResult, McpProjectDto, McpProjectListResult, McpSourceResult,
+    McpTopicListResult, source_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -163,16 +164,14 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteListParams>,
     ) -> Result<Json<McpNoteListResult>, CallToolResult> {
         structured(
-            self.call::<Vec<NoteSummary>>(AppRequest::NoteList(NoteListInput {
+            self.call::<Vec<NoteListItem>>(AppRequest::NoteList(NoteListInput {
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
                 project: Self::effective_project(params.project),
                 archived: params.archived,
                 limit: params.limit,
             }))
             .await
-            .map(|notes| McpNoteListResult {
-                notes: notes.into_iter().map(Into::into).collect(),
-            }),
+            .map(|notes| McpNoteListResult { notes }),
         )
     }
 
@@ -186,7 +185,7 @@ impl FlickNoteMcp {
         Parameters(params): Parameters<NoteFindParams>,
     ) -> Result<Json<McpNoteListResult>, CallToolResult> {
         structured(
-            self.call::<Vec<NoteSummary>>(AppRequest::NoteFind(NoteFindInput {
+            self.call::<Vec<NoteListItem>>(AppRequest::NoteFind(NoteFindInput {
                 keywords: params.keywords,
                 extractions: params.extractions,
                 project: Self::effective_project(params.project),
@@ -194,9 +193,7 @@ impl FlickNoteMcp {
                 limit: params.limit,
             }))
             .await
-            .map(|notes| McpNoteListResult {
-                notes: notes.into_iter().map(Into::into).collect(),
-            }),
+            .map(|notes| McpNoteListResult { notes }),
         )
     }
 
@@ -367,17 +364,16 @@ impl FlickNoteMcp {
     async fn note_add(
         &self,
         Parameters(params): Parameters<NoteAddParams>,
-    ) -> Result<Json<McpNoteSummary>, CallToolResult> {
+    ) -> Result<Json<NoteCreateResult>, CallToolResult> {
         structured(
-            self.call::<NoteSummary>(AppRequest::NoteAdd(NoteAddInput {
+            self.call::<NoteCreateResult>(AppRequest::NoteAdd(NoteAddInput {
                 content: params.content,
                 project: Self::effective_project(params.project),
                 interpret_as_url: true,
                 topics: Vec::new(),
                 created_at: None,
             }))
-            .await
-            .map(Into::into),
+            .await,
         )
     }
 

@@ -1,9 +1,9 @@
 use clap::Args;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, NoteSummary};
+use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, NoteListItem};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
+use super::util::{print_summaries_table, resolve_project_arg};
 
 const FIND_HELP: &str = include_str!("../help/find.md");
 
@@ -68,7 +68,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<()
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
     let parsed = parse_search_input(&args.keywords)?;
-    let notes: Vec<NoteSummary> = daemon
+    let notes: Vec<NoteListItem> = daemon
         .call(AppRequest::NoteFind(NoteFindInput {
             keywords: parsed.keywords,
             extractions: parsed.extractions,
@@ -78,10 +78,9 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<()
         }))
         .await?;
     if args.json {
-        let values = note_summaries_json(daemon, &notes, args.archived).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
         );
     } else if notes.is_empty() {
         println!("No notes found matching: {}", args.keywords.join(", "));

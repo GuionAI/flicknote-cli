@@ -188,11 +188,11 @@ async fn app_routes_note_list_and_append_through_services() {
         }))
         .await
         .unwrap();
-    let AppResponse::NoteSummaries(notes) = listed else {
+    let AppResponse::NoteListItems(notes) = listed else {
         panic!("unexpected list response")
     };
     assert_eq!(notes.len(), 1);
-    assert_eq!(notes[0].uuid, NOTE_ID);
+    assert_eq!(notes[0].title.as_deref(), Some("Title"));
     assert_no_status_field(&serde_json::to_value(&notes).unwrap());
 
     let raw = app
@@ -303,7 +303,7 @@ async fn versioned_socket_routes_client_requests_through_application() {
         }))
         .await
         .unwrap();
-    assert!(matches!(response, AppResponse::NoteSummaries(notes) if notes.is_empty()));
+    assert!(matches!(response, AppResponse::NoteListItems(notes) if notes.is_empty()));
     server.await.unwrap().unwrap();
 }
 

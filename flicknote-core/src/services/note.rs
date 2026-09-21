@@ -3,10 +3,10 @@
 use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
-use super::dto::NoteAddInput;
 use super::dto::{
-    ExtractionDto, NoteArchiveResult, NoteDetail, NoteMutationResult, NoteSectionResult,
-    NoteSummary, OpenResult, RecallCandidate, SectionDto, ShareResult, UnshareResult,
+    ExtractionDto, NoteAddInput, NoteArchiveResult, NoteCreateResult, NoteDetail, NoteListItem,
+    NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, RecallCandidate, SectionDto,
+    ShareResult, UnshareResult,
 };
 pub use super::dto::{
     ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
@@ -32,7 +32,7 @@ impl<'a> NoteService<'a> {
         Self { db }
     }
 
-    pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteSummary>, ServiceError> {
+    pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteListItem>, ServiceError> {
         let project_id = match input.project.as_deref() {
             Some(name) => Some(
                 self.db
@@ -51,14 +51,14 @@ impl<'a> NoteService<'a> {
                 limit: input.limit,
             })
             .await?;
-        let mut summaries = Vec::with_capacity(notes.len());
+        let mut items = Vec::with_capacity(notes.len());
         for note in notes {
-            summaries.push(self.summary(note).await?);
+            items.push(self.summary(note).await?.into());
         }
-        Ok(summaries)
+        Ok(items)
     }
 
-    pub async fn find(&self, input: NoteFindInput) -> Result<Vec<NoteSummary>, ServiceError> {
+    pub async fn find(&self, input: NoteFindInput) -> Result<Vec<NoteListItem>, ServiceError> {
         if input.keywords.is_empty() && input.extractions.is_empty() {
             return Err(ServiceError::InvalidArgument(
                 "at least one keyword or extraction filter is required".to_string(),
@@ -90,11 +90,11 @@ impl<'a> NoteService<'a> {
                 },
             )
             .await?;
-        let mut summaries = Vec::with_capacity(notes.len());
+        let mut items = Vec::with_capacity(notes.len());
         for note in notes {
-            summaries.push(self.summary(note).await?);
+            items.push(self.summary(note).await?.into());
         }
-        Ok(summaries)
+        Ok(items)
     }
 
     pub async fn recall(
@@ -193,6 +193,32 @@ impl<'a> NoteService<'a> {
         }
         .await;
         summary.map_err(|error| confirmed_create_followup_error(&created, &error))
+    }
+
+    pub async fn create_result(
+        &self,
+        creator: &dyn NoteCreator,
+        input: NoteAddInput,
+    ) -> Result<NoteCreateResult, ServiceError> {
+        let summary = self.add(creator, input).await?;
+        let Some(id) = summary.short_id else {
+            return Err(ServiceError::Remote {
+                code: "note_create_partial".to_string(),
+                message: format!(
+                    "Note {} was created, but the backend did not provide a public note ID. Do not create it again.",
+                    summary.uuid
+                ),
+                retryable: false,
+                details: Some(serde_json::json!({
+                    "created": true,
+                    "note_id": summary.uuid,
+                    "short_id": null,
+                    "confirmed_extraction_ids": [],
+                    "pending_extraction_ids": [],
+                })),
+            });
+        };
+        Ok(NoteCreateResult { id })
     }
 
     pub async fn get(&self, note_id: &str, archived: bool) -> Result<NoteDetail, ServiceError> {
@@ -742,7 +768,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_returns_typed_summary_with_project_name() {
+    async fn list_returns_public_item_with_project_name() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "body", "synced").await;
         let project_id = backend.create_project("work").await.unwrap();
@@ -763,7 +789,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(notes.len(), 1);
-        assert_eq!(notes[0].uuid, id);
+        assert_eq!(notes[0].id, None);
+        assert_eq!(notes[0].title.as_deref(), Some("Test note"));
         assert_eq!(notes[0].project.as_deref(), Some("work"));
     }
 
@@ -847,7 +874,8 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(found[0].uuid, id);
+        assert_eq!(found[0].id, None);
+        assert_eq!(found[0].title.as_deref(), Some("Test note"));
 
         let count = service
             .count(NoteCountInput {
@@ -961,6 +989,39 @@ mod tests {
             details["confirmed_extraction_ids"],
             serde_json::json!(["extraction-confirmed"])
         );
+    }
+
+    #[tokio::test]
+    async fn create_result_rejects_a_created_note_without_a_public_id() {
+        let backend = make_backend().await;
+        let creator = DbCreator {
+            db: &*backend,
+            request: std::sync::Mutex::new(None),
+        };
+
+        let error = NoteService::new(&*backend)
+            .create_result(
+                &creator,
+                NoteAddInput {
+                    content: "Body".to_string(),
+                    project: None,
+                    interpret_as_url: false,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "note_create_partial");
+        assert!(!error.retryable());
+        let crate::services::error::ServiceError::Remote { details, .. } = error else {
+            panic!("expected structured post-create error")
+        };
+        let details = details.unwrap();
+        assert_eq!(details["created"], true);
+        assert_eq!(details["short_id"], serde_json::Value::Null);
+        assert!(details["note_id"].as_str().is_some());
     }
 
     #[tokio::test]

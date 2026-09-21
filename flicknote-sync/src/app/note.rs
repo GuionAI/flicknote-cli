@@ -17,10 +17,10 @@ pub(super) async fn handle_read(
     let notes = NoteService::new(app.db.as_ref());
     match request {
         AppRequest::NoteList(input) => {
-            service_result(notes.list(input).await, AppResponse::NoteSummaries)
+            service_result(notes.list(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteFind(input) => {
-            service_result(notes.find(input).await, AppResponse::NoteSummaries)
+            service_result(notes.find(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteRecall { prompt, project } => service_result(
             notes.recall(&prompt, project.as_deref()).await,
@@ -61,8 +61,8 @@ pub(super) async fn handle_write(
     let notes = NoteService::new(app.db.as_ref());
     match request {
         AppRequest::NoteAdd(input) => service_result(
-            notes.add(app.creator.as_ref(), input).await,
-            AppResponse::NoteSummary,
+            notes.create_result(app.creator.as_ref(), input).await,
+            AppResponse::NoteCreate,
         ),
         AppRequest::NoteAddEditable { document, project } => {
             add_editable(app, &document, project.as_deref()).await
