@@ -1,9 +1,9 @@
 use clap::Args;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteListInput, NoteSummary};
+use flicknote_core::services::dto::{NoteListInput, NoteListItem};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::util::{note_summaries_json, print_summaries_table, resolve_project_arg};
+use super::util::{print_summaries_table, resolve_project_arg};
 
 const LIST_HELP: &str = include_str!("../help/list.md");
 
@@ -34,7 +34,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
     {
         eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
     }
-    let notes: Vec<NoteSummary> = match daemon
+    let notes: Vec<NoteListItem> = match daemon
         .call(AppRequest::NoteList(NoteListInput {
             note_type: args.r#type.clone(),
             project: project.clone(),
@@ -54,10 +54,9 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
         Err(error) => return Err(error.into()),
     };
     if args.json {
-        let values = note_summaries_json(daemon, &notes, args.archived).await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&notes).map_err(CliError::Json)?
         );
     } else {
         print_summaries_table(&notes);

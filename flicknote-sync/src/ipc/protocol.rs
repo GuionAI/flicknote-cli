@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -229,8 +229,9 @@ pub(crate) enum AppRequestKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AppResponse {
+    NoteCreate(NoteCreateResult),
     NoteSummary(NoteSummary),
-    NoteSummaries(Vec<NoteSummary>),
+    NoteListItems(Vec<NoteListItem>),
     NoteCount { count: u64 },
     NoteDetail(NoteDetail),
     EditableDocument(EditableDocument),
@@ -272,7 +273,8 @@ macro_rules! app_result {
 }
 
 app_result!(NoteSummary, AppResponse::NoteSummary);
-app_result!(Vec<NoteSummary>, AppResponse::NoteSummaries);
+app_result!(NoteCreateResult, AppResponse::NoteCreate);
+app_result!(Vec<NoteListItem>, AppResponse::NoteListItems);
 app_result!(NoteDetail, AppResponse::NoteDetail);
 app_result!(EditableDocument, AppResponse::EditableDocument);
 app_result!(NoteRecord, AppResponse::NoteRecord);

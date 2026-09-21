@@ -20,14 +20,30 @@ use crate::mcp;
 
 struct PersistingCreator {
     db: Arc<dyn NoteDb>,
+    database: PowerSyncDatabase,
 }
 
 #[async_trait]
 impl NoteCreator for PersistingCreator {
     async fn create(&self, request: CreateNote) -> Result<CreatedNote, ServiceError> {
         let inserted = self.db.insert_note(&request.as_insert_request()).await?;
+        let short_id = 44;
+        let writer = self
+            .database
+            .writer()
+            .await
+            .map_err(|error| ServiceError::Internal(error.to_string()))?;
+        writer
+            .execute(
+                "UPDATE notes SET short_id = ? WHERE id = ?",
+                params![short_id, request.id],
+            )
+            .map_err(|error| ServiceError::Internal(error.to_string()))?;
         Ok(CreatedNote {
-            inserted,
+            inserted: flicknote_core::backend::InsertedNote {
+                uuid: inserted.uuid,
+                short_id: Some(short_id),
+            },
             confirmed_extraction_ids: Vec::new(),
         })
     }
@@ -61,9 +77,10 @@ impl McpHarness {
     async fn start() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
-        let (backend, note_uuid, alpha_id) = seeded_backend(&config).await;
+        let (backend, database, note_uuid, alpha_id) = seeded_backend(&config).await;
         let creator: Arc<dyn NoteCreator> = Arc::new(PersistingCreator {
             db: backend.clone(),
+            database,
         });
         let app = Arc::new(
             Application::new(backend, creator, Arc::new(UnusedShareGateway))
@@ -168,7 +185,14 @@ fn test_database(config: &Config) -> PowerSyncDatabase {
     PowerSyncDatabase::new(environment, app_schema())
 }
 
-async fn seeded_backend(config: &Config) -> (Arc<LocalPowerSyncBackend>, String, String) {
+async fn seeded_backend(
+    config: &Config,
+) -> (
+    Arc<LocalPowerSyncBackend>,
+    PowerSyncDatabase,
+    String,
+    String,
+) {
     let db = test_database(config);
     let backend = Arc::new(LocalPowerSyncBackend::new(
         db.clone(),
@@ -245,7 +269,7 @@ async fn seeded_backend(config: &Config) -> (Arc<LocalPowerSyncBackend>, String,
     .headings[0]
         .id
         .clone();
-    (backend, note_uuid, alpha_id)
+    (backend, db, note_uuid, alpha_id)
 }
 
 async fn initialize_mcp(
@@ -339,6 +363,32 @@ fn assert_json_does_not_contain_key(value: &serde_json::Value, excluded: &str) {
     }
 }
 
+fn assert_note_list_item_contract(note: &serde_json::Value) {
+    let keys = note
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        keys,
+        [
+            "created_at",
+            "deleted_at",
+            "flagged",
+            "id",
+            "project",
+            "summary",
+            "title",
+            "topics",
+            "type",
+            "updated_at",
+        ]
+        .into_iter()
+        .collect()
+    );
+}
+
 #[tokio::test]
 async fn mcp_server_exposes_stable_tool_contract() {
     let mut harness = McpHarness::start().await;
@@ -358,6 +408,15 @@ async fn mcp_server_exposes_stable_tool_contract() {
         list["inputSchema"]["$defs"]["NoteType"]["enum"],
         serde_json::json!(["normal", "meeting", "link"])
     );
+    let add = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_add")
+        .unwrap();
+    assert_eq!(
+        add["outputSchema"]["properties"],
+        serde_json::json!({ "id": { "type": "integer" } })
+    );
+    assert_eq!(add["outputSchema"]["required"], serde_json::json!(["id"]));
     let count = tools
         .iter()
         .find(|tool| tool["name"] == "note_count")
@@ -763,8 +822,20 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
             .len(),
         2
     );
+    let listed_note = &listed["result"]["structuredContent"]["notes"][0];
+    assert_note_list_item_contract(listed_note);
+    assert_eq!(listed_note["id"], 42);
+    assert_eq!(listed_note["project"], "MCP Project");
+    assert_eq!(listed_note["topics"], serde_json::json!(["AI"]));
     assert_json_does_not_contain_string(&listed["result"]["structuredContent"], &harness.note_uuid);
     assert_json_does_not_contain_key(&listed["result"]["structuredContent"], "status");
+
+    let found = harness
+        .call("note_find", serde_json::json!({ "keywords": ["MCP"] }))
+        .await;
+    let found_note = &found["result"]["structuredContent"]["notes"][0];
+    assert_note_list_item_contract(found_note);
+    assert_eq!(found_note, listed_note);
 
     let fetched = harness
         .call("note_get", serde_json::json!({ "id": 42 }))
@@ -852,7 +923,9 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         )
         .await;
     assert_eq!(added["result"]["isError"], false);
-    assert_json_does_not_contain_key(&added["result"]["structuredContent"], "status");
+    let receipt = &added["result"]["structuredContent"];
+    assert!(receipt["id"].is_i64());
+    assert_eq!(receipt.as_object().unwrap().len(), 1);
     let archived = harness
         .call("note_archive", serde_json::json!({ "id": 42 }))
         .await;

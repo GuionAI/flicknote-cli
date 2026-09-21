@@ -31,7 +31,12 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<
         })
         .await?;
     if args.tree {
-        if detail.sections.is_empty() {
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&detail.sections).map_err(CliError::Json)?
+            );
+        } else if detail.sections.is_empty() {
             println!("(no headings found)");
         } else {
             print_section_tree(&detail.sections);

@@ -73,6 +73,45 @@ pub struct NoteSummary {
     pub deleted_at: Option<String>,
 }
 
+/// Stable public receipt returned after a note is created.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteCreateResult {
+    pub id: i64,
+}
+
+/// Lightweight public note representation for discovery surfaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteListItem {
+    pub id: Option<i64>,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: Option<String>,
+    pub project: Option<String>,
+    pub topics: Vec<String>,
+    pub summary: Option<String>,
+    pub flagged: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+impl From<NoteSummary> for NoteListItem {
+    fn from(note: NoteSummary) -> Self {
+        Self {
+            id: note.short_id,
+            note_type: note.note_type,
+            title: note.title,
+            project: note.project,
+            topics: note.topics,
+            summary: note.summary,
+            flagged: note.flagged,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            deleted_at: note.deleted_at,
+        }
+    }
+}
+
 /// A status-free note record used at the daemon boundary for CLI detail JSON.
 ///
 /// This intentionally projects the storage note instead of serializing the
@@ -260,7 +299,7 @@ pub struct OpenResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{NoteSummary, Patch, ProjectModifyInput};
+    use super::{NoteCreateResult, NoteListItem, NoteSummary, Patch, ProjectModifyInput};
 
     #[test]
     fn project_patch_distinguishes_missing_null_and_value() {
@@ -303,5 +342,43 @@ mod tests {
 
         assert_eq!(value["id"], 42);
         assert!(value.get("short_id").is_none());
+    }
+
+    #[test]
+    fn public_note_machine_dtos_expose_only_the_discovery_and_creation_contracts() {
+        let item = NoteListItem::from(NoteSummary {
+            short_id: Some(42),
+            uuid: "note-uuid".to_string(),
+            note_type: "normal".to_string(),
+            title: Some("A note".to_string()),
+            project_id: Some("project-uuid".to_string()),
+            project: Some("orientation".to_string()),
+            topics: vec!["CLI".to_string()],
+            summary: Some("A summary".to_string()),
+            flagged: true,
+            created_at: Some("2026-09-21T00:00:00Z".to_string()),
+            updated_at: Some("2026-09-21T01:00:00Z".to_string()),
+            deleted_at: None,
+        });
+
+        assert_eq!(
+            serde_json::to_value(&item).unwrap(),
+            serde_json::json!({
+                "id": 42,
+                "type": "normal",
+                "title": "A note",
+                "project": "orientation",
+                "topics": ["CLI"],
+                "summary": "A summary",
+                "flagged": true,
+                "created_at": "2026-09-21T00:00:00Z",
+                "updated_at": "2026-09-21T01:00:00Z",
+                "deleted_at": null
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(NoteCreateResult { id: 42 }).unwrap(),
+            serde_json::json!({ "id": 42 })
+        );
     }
 }
