@@ -9,6 +9,7 @@ fn test_config(directory: &std::path::Path) -> Config {
         supabase_anon_key: String::new(),
         powersync_url: String::new(),
         api_url: String::new(),
+        gateway_url: String::new(),
         web_url: None,
         paths: ConfigPaths {
             config_dir: directory.to_path_buf(),
@@ -49,6 +50,7 @@ fn socket_path_lives_in_data_dir() {
         supabase_anon_key: String::new(),
         powersync_url: String::new(),
         api_url: String::new(),
+        gateway_url: String::new(),
         web_url: None,
         paths: ConfigPaths {
             config_dir: dir.clone(),
@@ -176,6 +178,22 @@ fn mutating_application_requests_do_not_have_an_automatic_response_timeout() {
     };
 
     assert_eq!(response_timeout_for(&request), None);
+}
+
+#[test]
+fn recall_application_requests_use_the_long_generic_transport_guard() {
+    let request = DaemonRequest::App {
+        protocol: PROTOCOL_VERSION,
+        request: Box::new(AppRequest::NoteRecall {
+            prompt: "Ada".to_string(),
+            project: None,
+        }),
+    };
+
+    assert_eq!(
+        response_timeout_for(&request),
+        Some(std::time::Duration::from_secs(300))
+    );
 }
 
 #[tokio::test]

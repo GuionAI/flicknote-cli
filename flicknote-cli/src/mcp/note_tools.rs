@@ -181,6 +181,12 @@ pub(super) struct NoteFindParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct NoteRecallParams {
+    pub prompt: String,
+    pub project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub(super) struct NoteCountParams {
     #[serde(default)]
     pub keywords: Vec<String>,

@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::CliError;
+use crate::services::dto::RecallCandidate;
 use crate::types::{Note, Project};
 
 // ─── Filter / request types ──────────────────────────────────────────────────
@@ -88,6 +89,11 @@ pub trait NoteDb: Send + Sync {
         search: &NoteSearch,
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<Note>, CliError>;
+    async fn recall_notes(
+        &self,
+        prompt: &str,
+        filter: &NoteFilter<'_>,
+    ) -> Result<Vec<RecallCandidate>, CliError>;
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;

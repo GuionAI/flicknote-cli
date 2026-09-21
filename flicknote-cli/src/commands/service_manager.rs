@@ -249,6 +249,7 @@ fn service_environment(config: &Config) -> Vec<(String, String)> {
         "FLICKNOTE_SUPABASE_KEY",
         "FLICKNOTE_POWERSYNC_URL",
         "FLICKNOTE_API_URL",
+        "FLICKNOTE_GATEWAY_URL",
         "FLICKNOTE_WEB_URL",
     ] {
         if let Ok(value) = std::env::var(name) {
@@ -442,6 +443,7 @@ mod tests {
             supabase_anon_key: "key".to_string(),
             powersync_url: "https://sync.example".to_string(),
             api_url: "https://api.example".to_string(),
+            gateway_url: "https://gateway.example".to_string(),
             web_url: None,
             paths: ConfigPaths {
                 config_dir: root.path().join("config/flicknote"),

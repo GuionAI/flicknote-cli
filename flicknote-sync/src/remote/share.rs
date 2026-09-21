@@ -10,7 +10,6 @@ use flicknote_core::{
 use serde::Deserialize;
 
 use crate::ipc::DaemonError;
-use crate::remote::attachment::validate_api_url;
 
 #[cfg(test)]
 mod tests;
@@ -110,7 +109,9 @@ async fn get_or_create_share_with_token(
     access_token: &str,
     request: &ShareRequest,
 ) -> Result<String, DaemonError> {
-    validate_api_url(config)?;
+    config.validate_api().map_err(|error| DaemonError::Other {
+        message: error.to_string(),
+    })?;
     let endpoint = share_endpoint(&config.api_url, request);
     let response = http
         .get(&endpoint)
@@ -154,7 +155,9 @@ async fn revoke_share_with_token(
     access_token: &str,
     request: &ShareRequest,
 ) -> Result<(), DaemonError> {
-    validate_api_url(config)?;
+    config.validate_api().map_err(|error| DaemonError::Other {
+        message: error.to_string(),
+    })?;
     let response = http
         .delete(share_endpoint(&config.api_url, request))
         .bearer_auth(access_token)

@@ -127,6 +127,7 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 mod tests {
     use super::*;
     use crate::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
+    use crate::services::dto::RecallCandidate;
     use crate::types::Project;
     use std::collections::HashMap;
     use std::sync::Mutex;
@@ -444,6 +445,14 @@ mod tests {
             _search: &NoteSearch,
             _filter: &NoteFilter<'_>,
         ) -> Result<Vec<Note>, CliError> {
+            unimplemented!()
+        }
+
+        async fn recall_notes(
+            &self,
+            _prompt: &str,
+            _filter: &NoteFilter<'_>,
+        ) -> Result<Vec<RecallCandidate>, CliError> {
             unimplemented!()
         }
 

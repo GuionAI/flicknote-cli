@@ -33,6 +33,35 @@ contract; server-side validation is authoritative. Arbitrary JSON schema terms
 must use object form rather than bare boolean terms. Every MCP change must pass
 the repository-wide strict-client output-schema contract test.
 
+`note_recall` is a read-only, host-triggered tool for Codex's synchronous
+`UserPromptSubmit` hook. It offers bounded historical candidates by numeric
+short ID; it does not read note bodies or write notes. Human and operator recall
+uses `flicknote recall QUERY`; Codex command hooks use
+`flicknote recall --hook`, which reads one `UserPromptSubmit` event JSON object
+from stdin and emits the same bounded hook JSON contract. The CLI uses the
+`--project` argument or `FLICKNOTE_PROJECT`; host event metadata never selects
+the project. Human recall has a five-second complete daemon-call budget;
+command-hook and MCP `note_recall` recall have three seconds. Empty recall,
+daemon-unavailable recall, and timed-out recall supply no context. Treat a
+timeout as a slow response; recommend daemon status/start only for an actually
+unavailable daemon.
+
+Install the command hook with `flicknote hook install codex [--local|--global]`.
+Installation does not require an MCP registration, daemon access, or trust
+changes. It writes a static shell-quoted absolute CLI command with a three-second
+synchronous timeout, preserves unrelated hook configuration, and replaces or
+coalesces only recognizable `command` handlers for `flicknote recall --hook` in
+the selected hooks file. Old MCP `mcp_tool` hooks are ignored and preserved
+unchanged; they never block command-hook installation. If an old MCP hook is
+still enabled, remove it manually to avoid duplicate recall. An active command
+recall entry in another scope or inline source is reported instead of
+duplicated. Review and trust the result in Codex with `/hooks` (and trust the
+project for a local hook). Reinstall an existing command hook explicitly after
+upgrading to receive the three-second generated timeout. Hook failures are
+nonblocking and must not fabricate context; use `note_get` to inspect a
+candidate and verify it before any separately authorized edit. The recall query
+optimization is daemon-side and requires the updated daemon to be running.
+
 
 ## Build & Test
 

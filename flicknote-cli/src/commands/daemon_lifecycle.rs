@@ -410,6 +410,7 @@ mod tests {
             supabase_anon_key: String::new(),
             powersync_url: String::new(),
             api_url: String::new(),
+            gateway_url: String::new(),
             web_url: None,
             paths: flicknote_core::config::ConfigPaths {
                 config_dir: directory.path().to_path_buf(),
@@ -581,7 +582,7 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let mismatch = ServiceError::Remote {
             code: PROTOCOL_MISMATCH_CODE.to_string(),
-            message: "daemon protocol mismatch: CLI v4 vs daemon v3".to_string(),
+            message: "daemon protocol mismatch: CLI v5 vs daemon v3".to_string(),
             retryable: true,
             details: None,
         };

@@ -479,6 +479,7 @@ mod tests {
             supabase_anon_key: String::new(),
             powersync_url: String::new(),
             api_url: String::new(),
+            gateway_url: String::new(),
             web_url: None,
             paths: ConfigPaths {
                 config_dir: directory.to_path_buf(),

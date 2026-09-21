@@ -4,14 +4,16 @@ use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
 use super::dto::{
-    ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult,
-    NoteSectionResult, NoteSummary, OpenResult, SectionDto, ShareResult, UnshareResult,
+    ExtractionDto, NoteAddInput, NoteArchiveResult, NoteCreateResult, NoteDetail, NoteListItem,
+    NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, RecallCandidate, SectionDto,
+    ShareResult, UnshareResult,
 };
 pub use super::dto::{
     ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
     NoteModifyInput,
 };
-use super::dto::{NoteAddInput, NoteCreateResult};
+
+pub const RECALL_MAX_CANDIDATES: u32 = 5;
 use super::edit_match;
 use super::editable_document;
 use super::error::ServiceError;
@@ -93,6 +95,29 @@ impl<'a> NoteService<'a> {
             items.push(self.summary(note).await?.into());
         }
         Ok(items)
+    }
+
+    pub async fn recall(
+        &self,
+        prompt: &str,
+        project: Option<&str>,
+    ) -> Result<Vec<RecallCandidate>, ServiceError> {
+        if prompt.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let project_id = self.resolve_project_filter(project).await?;
+        self.db
+            .recall_notes(
+                prompt,
+                &NoteFilter {
+                    project_id: project_id.as_deref(),
+                    note_type: None,
+                    archived: false,
+                    limit: RECALL_MAX_CANDIDATES,
+                },
+            )
+            .await
+            .map_err(ServiceError::from)
     }
 
     pub async fn count(&self, input: NoteCountInput) -> Result<u64, ServiceError> {

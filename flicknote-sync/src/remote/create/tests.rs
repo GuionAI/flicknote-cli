@@ -146,7 +146,7 @@ fn partial_remote_create_maps_to_non_retryable_structured_service_error() {
 async fn remote_create_returns_after_canonical_note_is_committed_locally() {
     let body = r#"[{"id":"note-create","short_id":77,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_server(vec![("201 Created", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -201,7 +201,7 @@ async fn remote_create_reports_typed_partial_success_after_note_commit() {
             r#"{"message":"topic failure"}"#,
         ),
     ]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -256,7 +256,7 @@ async fn remote_create_reports_typed_partial_success_after_note_commit() {
 async fn remote_create_recovers_empty_idempotent_response_by_stable_uuid() {
     let body = r#"[{"id":"note-retry","short_id":78,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_server(vec![("200 OK", "[]"), ("200 OK", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -298,7 +298,7 @@ async fn remote_create_recovers_empty_idempotent_response_by_stable_uuid() {
 async fn remote_create_recovers_malformed_success_response_by_stable_uuid() {
     let body = r#"[{"id":"note-malformed","short_id":81,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_server(vec![("201 Created", "{"), ("200 OK", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -341,7 +341,7 @@ async fn malformed_success_with_failed_reconciliation_reports_confirmed_create()
         ("201 Created", "{"),
         ("503 Service Unavailable", r#"{"message":"try later"}"#),
     ]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -385,7 +385,7 @@ async fn malformed_success_with_failed_reconciliation_reports_confirmed_create()
 async fn local_commit_failure_after_remote_create_reports_partial_success() {
     let note = r#"[{"id":"note-local-failure","short_id":82,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Remote title","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_server(vec![("201 Created", note)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -434,7 +434,7 @@ async fn local_commit_failure_after_remote_create_reports_partial_success() {
 async fn remote_create_recovers_lost_response_by_stable_uuid() {
     let body = r#"[{"id":"note-lost","short_id":79,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_disconnected_response_then_server("200 OK", body);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -472,7 +472,7 @@ async fn ambiguous_transport_failure_reports_stable_unknown_outcome() {
         "503 Service Unavailable",
         r#"{"message":"try later"}"#,
     );
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -516,7 +516,7 @@ async fn ambiguous_transport_failure_reports_stable_unknown_outcome() {
 async fn ambiguous_transport_failure_retries_create_with_the_same_stable_uuid() {
     let body = r#"[{"id":"note-recovered-after-retry","short_id":83,"user_id":"user-1","type":"normal","status":"ai_queued","title":"Recovered","content":"Body","summary":null,"is_flagged":false,"project_id":null,"metadata":null,"source":null,"created_at":"2026-08-09T00:00:00Z","updated_at":"2026-08-09T00:00:00Z","deleted_at":null}]"#;
     let (origin, server) = spawn_disconnected_then_retry_responses(vec![("201 Created", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -557,7 +557,7 @@ async fn retryable_status_retries_create_with_the_same_stable_uuid() {
         ("503 Service Unavailable", r#"{"message":"try later"}"#),
         ("201 Created", body),
     ]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -598,7 +598,7 @@ async fn retryable_status_retries_create_with_the_same_stable_uuid() {
 async fn remote_extraction_create_commits_confirmed_rows_locally() {
     let body = r#"[{"id":"extraction-create","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
     let (origin, server) = spawn_server(vec![("201 Created", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -640,7 +640,7 @@ async fn remote_extraction_create_commits_confirmed_rows_locally() {
 async fn remote_extraction_create_recovers_by_stable_uuid() {
     let body = r#"[{"id":"extraction-retry","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
     let (origin, server) = spawn_server(vec![("200 OK", "[]"), ("200 OK", body)]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;
@@ -676,7 +676,7 @@ async fn remote_extraction_create_recovers_by_stable_uuid() {
 async fn remote_extraction_create_commits_confirmed_subset_and_reports_exact_pending_ids() {
     let body = r#"[{"id":"extraction-confirmed","note_id":"note-create","user_id":"user-1","key":"::topic","value":"rust"}]"#;
     let (origin, server) = spawn_server(vec![("201 Created", body), ("200 OK", "[]")]);
-    let mut config = test_config(String::new());
+    let mut config = empty_test_config();
     config.supabase_url = origin;
     config.supabase_anon_key = "anon-key".to_string();
     let (_directory, db) = test_powersync_db().await;

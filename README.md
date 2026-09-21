@@ -9,6 +9,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
+- **Codex recall** — human-readable `recall QUERY` results and a read-only `UserPromptSubmit` hook with bounded historical note candidates
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
 - **User daemon service** — foreground daemon managed by launchd (macOS) or systemd (Linux)
@@ -81,6 +82,8 @@ flicknote list
 flicknote list --type link --limit 10
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
+flicknote recall "Memory Systems"        # show matching historical candidates
+flicknote recall ""                       # an explicit empty query returns no candidates
 
 # Note IDs are numeric short IDs from list/detail. Full UUIDs are also accepted
 # for compatibility.
@@ -118,13 +121,21 @@ flicknote daemon run
 
 # Reconcile/start the service after an upgrade
 flicknote daemon restart
+
+# Install the Codex recall hook (choose interactively, or pass a scope)
+flicknote hook install codex
+flicknote hook install codex --global
 ```
 
 ## Daemon lifecycle
 
 `flicknote login` authenticates and then installs, starts, and verifies the user daemon.
 `flicknote logout` stops and uninstalls it before clearing the session and local database.
-Use `--force` only for explicit recovery when cleanup cannot be confirmed:
+After upgrading an existing dev installation for the cnsupa authentication cutover,
+run `flicknote login --force` once. This stops and uninstalls the existing daemon,
+replaces the old session, and installs, starts, and verifies the daemon again. It
+does not delete the local database. `flicknote logout --force` is reserved for
+explicit recovery when service cleanup cannot be confirmed:
 
 ```bash
 flicknote login --force
@@ -158,12 +169,77 @@ start it as a subprocess:
 ```
 
 The MCP server requires the local daemon. It exposes typed note, discovery,
-note-source, and project tools. Note content and exact `before`/`after` edits
+note-source, project, and read-only recall tools. Note content and exact `before`/`after` edits
 are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data, while `note_get` reads
 editable note content. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
+
+### Codex recall hook
+
+`flicknote recall QUERY` is the human entrance for recall. It sends the text to
+the daemon and prints up to five matching active-note candidates with their
+numeric short IDs, titles, available summaries, and modification times. An
+empty or unmatched query prints an empty-result message; it never lists every
+note. Human recall gives the complete daemon call five seconds, including IPC
+connection and response work. Use `--project NAME` or `FLICKNOTE_PROJECT` with
+the same precedence as the other note queries.
+
+The Codex entrance is a synchronous command hook. Install it without an MCP
+registration or a running daemon:
+
+```bash
+flicknote hook install codex
+```
+
+The installer asks whether to enable the hook for the current project or your
+user account. Use `--local` or `--global` to choose directly. It preserves
+unrelated configuration, does not contact the daemon, and does not grant hook
+trust. Repeating the installation replaces and coalesces recognizable command
+recall entries in the selected hooks file. Old MCP `mcp_tool` recall hooks are
+left untouched and do not block installation; remove an old MCP hook manually
+if it remains enabled, otherwise recall may run twice. If an active command
+recall entry is already in the other scope or an inline configuration source,
+the installer reports its location instead of creating another entry.
+
+The installed handler runs `flicknote recall --hook`. Codex supplies one
+`UserPromptSubmit` event as JSON on stdin; the command validates the event and
+string `prompt`, then emits the existing `hookSpecificOutput` JSON contract.
+The command is static: prompt text is delivered through stdin and is never
+interpolated into shell code. It uses the same five-candidate and 6000-byte
+context bounds as the MCP `note_recall` tool. Hook and MCP recall allow three
+seconds for the complete daemon call, and the installed command hook has a
+three-second synchronous host timeout. That host timeout also bounds an input
+stream that never reaches EOF. The hook needs the FlickNote daemon when a
+prompt arrives; malformed input, an unavailable daemon, or a response timeout
+emits diagnostics on stderr and no context on stdout, with a non-blocking
+failure. A response timeout is distinct from an unavailable daemon: only the
+latter calls for `flicknote daemon status` and `flicknote daemon start`.
+
+Existing installed hooks keep their generated host timeout until explicitly
+reinstalled. After upgrading, run `flicknote hook install codex --local` or
+`flicknote hook install codex --global` for the selected scope; reinstalling
+updates only the recognizable command-hook entry. The recall query improvement
+is in the daemon, so an updated daemon must be running for it to take effect.
+Synthetic measurements compare query variants and do not establish a universal
+200–300 ms SLA.
+
+In Codex, open `/hooks` to review and trust the installed hook. Project-local
+hooks also require a trusted project.
+
+When you send a message, the hook supplies up to five historical note candidates
+for Codex to consider. Codex can read a relevant candidate with `note_get` and
+check it against the current task. Recall is read-only: it does not modify your
+notes. Messages with no matches receive no extra context; if recall is
+unavailable, the conversation continues.
+
+If the hook is not working, check `flicknote daemon status` and the hook's
+enabled and trusted state in `/hooks`. The command hook does not depend on the
+FlickNote MCP connection. The MCP `note_recall` tool remains available for MCP
+clients that use it directly. See the
+[Codex hooks documentation](https://developers.openai.com/codex/hooks) for host
+setup and trust requirements.
 
 The Gateway CLI command remains available for internal development and
 maintenance requests; it is not the formal agent interface.
@@ -173,9 +249,24 @@ maintenance requests; it is not the formal agent interface.
 Config file: `~/.config/flicknote/config.json`
 
 Environment variables:
+
 - `FLICKNOTE_SUPABASE_URL`
 - `FLICKNOTE_SUPABASE_KEY`
 - `FLICKNOTE_POWERSYNC_URL`
+- `FLICKNOTE_API_URL` — API Worker base URL for share links
+- `FLICKNOTE_GATEWAY_URL` — Gateway origin for attachment operations and `gateway request`
+
+For the default `dev` environment, the built-in `FLICKNOTE_SUPABASE_KEY` value
+in the [runtime configuration](flicknote-core/src/config.rs) is an opaque cnsupa
+publishable key, not the retired JWT-shaped anon key. The value is sent through
+Supabase's existing `apikey` header. Existing dev users must upgrade and run
+`flicknote login --force` once to replace the old session before normal sync;
+explicit config-file and environment key overrides continue to work for custom
+environments.
+
+`apiUrl` and `gatewayUrl` can also be set in `config.json`. After changing either
+value, restart the daemon with `flicknote daemon restart`. Configure the two
+endpoint values together; setting only one is rejected.
 
 Data directory: `~/.local/share/flicknote/`
 

@@ -42,6 +42,9 @@ pub(crate) fn response_timeout_for(request: &DaemonRequest) -> Option<std::time:
         // whether it committed. Keep waiting for the authoritative response until the protocol
         // has durable operation IDs and status reconciliation (tracked as FlickNote #1785).
         DaemonRequest::App { request, .. } if request.may_write() => None,
+        // Recall has its own whole-call deadline at each user-facing entrypoint. The generic
+        // application guard remains a longer transport backstop and cannot preempt those
+        // explicit three- or five-second budgets.
         DaemonRequest::App { .. } => Some(IPC_APP_RESPONSE_TIMEOUT),
     }
 }

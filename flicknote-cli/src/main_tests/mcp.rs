@@ -138,6 +138,11 @@ impl McpHarness {
             .unwrap()
             .clone()
     }
+
+    async fn stop_daemon(&mut self) {
+        self.daemon.abort();
+        drop((&mut self.daemon).await);
+    }
 }
 
 impl Drop for McpHarness {
@@ -152,7 +157,8 @@ fn test_config(directory: &std::path::Path) -> Config {
         supabase_url: "https://auth.example.test".to_string(),
         supabase_anon_key: "anon-key".to_string(),
         powersync_url: String::new(),
-        api_url: "https://gateway.example.test/api/v1".to_string(),
+        api_url: String::new(),
+        gateway_url: "https://gateway.example.test".to_string(),
         web_url: Some("https://app.example".to_string()),
         paths: ConfigPaths {
             config_dir: directory.to_path_buf(),
@@ -263,6 +269,10 @@ async fn seeded_backend(
         )
         .unwrap();
     drop(writer);
+    backend
+        .set_note_extractions(&no_source_id, "::topic", &["Memory Systems".to_string()])
+        .await
+        .unwrap();
     let alpha_id = flicknote_core::services::markdown::parse_markdown(
         "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me.",
     )
@@ -473,6 +483,45 @@ async fn mcp_server_exposes_stable_tool_contract() {
             .is_some()
     );
     assert!(project_get["inputSchema"]["properties"].get("id").is_none());
+}
+
+#[tokio::test]
+async fn mcp_recall_output_schema_advertises_codex_hook_contract() {
+    let mut harness = McpHarness::start().await;
+    let recall = harness
+        .tools()
+        .await
+        .into_iter()
+        .find(|tool| tool["name"] == "note_recall")
+        .unwrap();
+    assert_eq!(
+        recall["inputSchema"]["properties"]["prompt"]["type"],
+        "string"
+    );
+    let hook_output = &recall["outputSchema"]["properties"]["hookSpecificOutput"];
+    let hook_output = hook_output
+        .get("anyOf")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|variants| {
+            variants
+                .iter()
+                .find(|variant| variant.get("$ref").is_some())
+        })
+        .unwrap_or(hook_output);
+    let hook_output = hook_output
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        .map(|name| &recall["outputSchema"]["$defs"][name])
+        .unwrap_or(hook_output);
+    assert_eq!(
+        hook_output["properties"]["hookEventName"]["const"],
+        "UserPromptSubmit"
+    );
+    assert_eq!(
+        hook_output["properties"]["additionalContext"]["type"],
+        "string"
+    );
 }
 
 /// Fail if any schema position holds a bare boolean schema (e.g.
@@ -729,7 +778,7 @@ async fn mcp_discovery_returns_object_wrapped_typed_results() {
     assert_eq!(
         topics["result"]["structuredContent"],
         serde_json::json!({
-            "topics": ["AI"]
+            "topics": ["AI", "Memory Systems"]
         })
     );
 
@@ -754,6 +803,96 @@ async fn mcp_discovery_returns_object_wrapped_typed_results() {
         serde_json::json!([
             { "value": "Ada Lovelace", "type": "person" }
         ])
+    );
+}
+
+#[tokio::test]
+async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication() {
+    let mut harness = McpHarness::start().await;
+
+    let recalled = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Discuss Ada Lovelace and OpenAI" }),
+        )
+        .await;
+    assert_eq!(recalled["result"]["isError"], false);
+    let context =
+        recalled["result"]["structuredContent"]["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+    assert_eq!(
+        recalled["result"]["structuredContent"]["hookSpecificOutput"]["hookEventName"],
+        "UserPromptSubmit"
+    );
+    assert!(context.contains("Current time: "));
+    assert!(context.contains("\"id\":42"));
+    assert!(context.contains("MCP Note"));
+    assert!(context.contains("[Historical note candidates end]"));
+    assert!(!context.contains(&harness.note_uuid));
+
+    let topic_recalled = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Design Memory Systems" }),
+        )
+        .await;
+    assert_eq!(topic_recalled["result"]["isError"], false);
+    let topic_context =
+        topic_recalled["result"]["structuredContent"]["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+    assert!(topic_context.contains("\"id\":43"));
+    assert!(topic_context.contains("No source note"));
+
+    let candidate = harness
+        .call("note_get", serde_json::json!({ "id": 42 }))
+        .await;
+    assert_eq!(candidate["result"]["isError"], false);
+    assert_eq!(candidate["result"]["structuredContent"]["id"], 42);
+
+    let empty_prompt = harness
+        .call("note_recall", serde_json::json!({ "prompt": "   " }))
+        .await;
+    assert_eq!(empty_prompt["result"]["isError"], false);
+    assert_eq!(
+        empty_prompt["result"]["structuredContent"],
+        serde_json::json!({})
+    );
+
+    let no_match = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "A subject with no known entity" }),
+        )
+        .await;
+    assert_eq!(no_match["result"]["isError"], false);
+    assert_eq!(
+        no_match["result"]["structuredContent"],
+        serde_json::json!({})
+    );
+}
+
+#[tokio::test]
+async fn mcp_recall_reports_daemon_failure_without_fabricated_context() {
+    let mut harness = McpHarness::start().await;
+    harness.stop_daemon().await;
+
+    let unavailable = harness
+        .call(
+            "note_recall",
+            serde_json::json!({ "prompt": "Ada Lovelace" }),
+        )
+        .await;
+    assert_eq!(unavailable["result"]["isError"], true);
+    assert_eq!(
+        unavailable["result"]["structuredContent"]["code"],
+        "daemon_unavailable"
+    );
+    assert!(
+        unavailable["result"]["structuredContent"]
+            .get("hookSpecificOutput")
+            .is_none()
     );
 }
 
