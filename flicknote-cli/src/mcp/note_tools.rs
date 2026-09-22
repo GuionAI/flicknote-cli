@@ -165,6 +165,8 @@ pub(super) struct NoteListParams {
     pub archived: bool,
     #[serde(default = "default_limit")]
     pub limit: u32,
+    #[schemars(range(min = 1))]
+    pub cursor: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

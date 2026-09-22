@@ -806,6 +806,59 @@ async fn cli_json_commands_expose_lightweight_discovery_items() {
 }
 
 #[tokio::test]
+async fn cli_list_pages_by_descending_short_id() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let (_seeded_note_id, _seeded_project_id) = seed_workspace(&config_root, &data_root).await;
+    let config = test_config(&config_root, &data_root);
+    let db = test_database(&config);
+    let backend = LocalPowerSyncBackend::new(db.clone(), "test-user".to_string());
+    for short_id in [78, 79] {
+        let id = uuid::Uuid::new_v4().to_string();
+        backend
+            .insert_note(&InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "synced",
+                title: Some("Paged note"),
+                content: Some("body"),
+                metadata: None,
+                project_id: None,
+                now: "2026-01-01T00:00:00Z",
+            })
+            .await
+            .unwrap();
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET short_id = ? WHERE id = ?",
+                rusqlite::params![short_id, id],
+            )
+            .unwrap();
+        drop(writer);
+    }
+    drop(backend);
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
+
+    let first = run_cli_json(
+        &config_root,
+        &data_root,
+        &["list", "--limit", "2", "--json"],
+    );
+    assert_eq!(first[0]["id"], 79);
+    assert_eq!(first[1]["id"], 78);
+
+    let second = run_cli_json(
+        &config_root,
+        &data_root,
+        &["list", "--limit", "2", "--cursor", "78", "--json"],
+    );
+    assert_eq!(second.as_array().unwrap().len(), 1);
+    assert_eq!(second[0]["id"], 77);
+}
+
+#[tokio::test]
 async fn recall_command_lists_candidates_and_keeps_empty_queries_bounded() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");

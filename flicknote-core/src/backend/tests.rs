@@ -354,6 +354,7 @@ async fn local_backend_list_filter() {
             note_type: None,
             archived: false,
             limit: 20,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -389,6 +390,7 @@ async fn local_backend_search_notes() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -405,6 +407,7 @@ async fn local_backend_search_notes() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await;
@@ -482,6 +485,7 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -529,6 +533,7 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -639,6 +644,7 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
                 note_type: None,
                 archived: false,
                 limit,
+                cursor: None,
             },
         )
         .await
@@ -830,6 +836,7 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
         note_type: None,
         archived: false,
         limit: 20,
+        cursor: None,
     };
     let results = fixture
         .recall_notes("Discuss ADA LOVELACE and OpenAI", &filter)
@@ -931,6 +938,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 note_type: None,
                 archived: false,
                 limit: 3,
+                cursor: None,
             },
         )
         .await
@@ -963,6 +971,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -1009,6 +1018,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -1044,6 +1054,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -1091,6 +1102,7 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
                 note_type: None,
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -1181,6 +1193,7 @@ async fn local_backend_search_respects_type_filter() {
                 note_type: Some("link"),
                 archived: false,
                 limit: 20,
+                cursor: None,
             },
         )
         .await
@@ -1217,6 +1230,7 @@ async fn local_backend_archive() {
             note_type: None,
             archived: false,
             limit: 20,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -1235,6 +1249,7 @@ async fn local_backend_archive() {
             note_type: None,
             archived: false,
             limit: 20,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -1247,6 +1262,7 @@ async fn local_backend_archive() {
             note_type: None,
             archived: true,
             limit: 20,
+            cursor: None,
         })
         .await
         .unwrap();
@@ -1260,6 +1276,7 @@ async fn local_backend_archive() {
             note_type: None,
             archived: false,
             limit: 20,
+            cursor: None,
         })
         .await
         .unwrap();

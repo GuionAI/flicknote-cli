@@ -80,6 +80,7 @@ echo "long content" | flicknote add --project myproject
 # List and search
 flicknote list
 flicknote list --type link --limit 10
+flicknote list --limit 10 --cursor 123 # continue after note 123
 flicknote find rust
 flicknote find rust effect                 # OR match across multiple keywords
 flicknote recall "Memory Systems"        # show matching historical candidates

@@ -11,6 +11,7 @@ pub struct NoteFilter<'a> {
     pub note_type: Option<&'a str>,
     pub archived: bool,
     pub limit: u32,
+    pub cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

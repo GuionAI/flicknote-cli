@@ -31,3 +31,13 @@ _Avoid_: Verified fact, instruction
 **Note modification time**:
 The time a note was last changed. It does not establish when the described event happened or whether a claim is more accurate.
 _Avoid_: Event time, evidence of truth
+
+## Note discovery
+
+**Note-list page**:
+A bounded, short-ID-descending segment of the active or archived notes selected by the same note-list filters. Its final item's short ID is the continuation cursor when another page is needed.
+_Avoid_: Result array, batch
+
+**Note-list cursor**:
+The short ID from the final item of a note-list page. It selects later pages of the same list, whose notes have lower short IDs.
+_Avoid_: Offset, page number, opaque token

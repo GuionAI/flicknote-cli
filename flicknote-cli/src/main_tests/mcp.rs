@@ -418,6 +418,10 @@ async fn mcp_server_exposes_stable_tool_contract() {
         list["inputSchema"]["$defs"]["NoteType"]["enum"],
         serde_json::json!(["normal", "meeting", "link"])
     );
+    assert_eq!(
+        list["inputSchema"]["properties"]["cursor"]["minimum"],
+        serde_json::json!(1)
+    );
     let add = tools
         .iter()
         .find(|tool| tool["name"] == "note_add")
@@ -961,7 +965,11 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
             .len(),
         2
     );
-    let listed_note = &listed["result"]["structuredContent"]["notes"][0];
+    let listed_notes = listed["result"]["structuredContent"]["notes"]
+        .as_array()
+        .unwrap();
+    assert_eq!(listed_notes[0]["id"], 43);
+    let listed_note = listed_notes.iter().find(|note| note["id"] == 42).unwrap();
     assert_note_list_item_contract(listed_note);
     assert_eq!(listed_note["id"], 42);
     assert_eq!(listed_note["project"], "MCP Project");
@@ -1000,6 +1008,34 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
             .as_str()
             .unwrap()
             .contains("invalid note ID")
+    );
+}
+
+#[tokio::test]
+async fn mcp_note_list_pages_by_descending_short_id() {
+    let mut harness = McpHarness::start().await;
+
+    let first = harness
+        .call("note_list", serde_json::json!({ "limit": 1 }))
+        .await;
+    assert_eq!(first["result"]["isError"], false);
+    assert_eq!(first["result"]["structuredContent"]["notes"][0]["id"], 43);
+
+    let second = harness
+        .call("note_list", serde_json::json!({ "limit": 1, "cursor": 43 }))
+        .await;
+    assert_eq!(second["result"]["isError"], false);
+    assert_eq!(second["result"]["structuredContent"]["notes"][0]["id"], 42);
+
+    let invalid = harness
+        .call("note_list", serde_json::json!({ "cursor": 0 }))
+        .await;
+    assert_eq!(invalid["result"]["isError"], true);
+    assert!(
+        invalid["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("cursor must be a positive note ID")
     );
 }
 

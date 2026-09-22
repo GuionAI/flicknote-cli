@@ -33,6 +33,11 @@ impl<'a> NoteService<'a> {
     }
 
     pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteListItem>, ServiceError> {
+        if input.cursor.is_some_and(|cursor| cursor <= 0) {
+            return Err(ServiceError::InvalidArgument(
+                "cursor must be a positive note ID".to_string(),
+            ));
+        }
         let project_id = match input.project.as_deref() {
             Some(name) => Some(
                 self.db
@@ -49,6 +54,7 @@ impl<'a> NoteService<'a> {
                 note_type: input.note_type.as_deref(),
                 archived: input.archived,
                 limit: input.limit,
+                cursor: input.cursor,
             })
             .await?;
         let mut items = Vec::with_capacity(notes.len());
@@ -87,6 +93,7 @@ impl<'a> NoteService<'a> {
                     note_type: None,
                     archived: input.archived,
                     limit: input.limit,
+                    cursor: None,
                 },
             )
             .await?;
@@ -114,6 +121,7 @@ impl<'a> NoteService<'a> {
                     note_type: None,
                     archived: false,
                     limit: RECALL_MAX_CANDIDATES,
+                    cursor: None,
                 },
             )
             .await
@@ -129,6 +137,7 @@ impl<'a> NoteService<'a> {
             note_type: input.note_type.as_deref(),
             archived: input.archived,
             limit: u32::MAX,
+            cursor: None,
         };
         if input.keywords.is_empty() {
             return Ok(self.db.count_notes(&filter).await?);
@@ -784,6 +793,7 @@ mod tests {
                 project: Some("work".to_string()),
                 archived: false,
                 limit: 20,
+                cursor: None,
             })
             .await
             .unwrap();
