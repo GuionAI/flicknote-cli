@@ -19,6 +19,7 @@ pub(crate) fn note_json(note: &NoteRecord, project_name: Option<&str>) -> serde_
         "summary": note.summary,
         "content": note.content,
         "is_flagged": note.is_flagged,
+        "draft": note.draft,
         "created_at": note.created_at,
         "updated_at": note.updated_at,
         "deleted_at": note.deleted_at,

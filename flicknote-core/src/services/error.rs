@@ -22,6 +22,8 @@ pub enum ServiceError {
     NoSource,
     #[error("Nothing to modify")]
     NothingToModify,
+    #[error("Note is not a draft")]
+    NotDraft,
     #[error("FlickNote daemon is unavailable: {0}")]
     DaemonUnavailable(String),
     #[error("{0}")]
@@ -57,6 +59,7 @@ impl ServiceError {
             Self::NoTextContent => "no_text_content",
             Self::NoSource => "no_source",
             Self::NothingToModify => "nothing_to_modify",
+            Self::NotDraft => "not_draft",
             Self::DaemonUnavailable(_) => "daemon_unavailable",
             Self::Timeout(_) => "timeout",
             Self::Daemon(_) => "daemon_error",

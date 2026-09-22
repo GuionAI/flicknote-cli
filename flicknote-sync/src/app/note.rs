@@ -75,6 +75,9 @@ pub(super) async fn handle_write(
         AppRequest::NoteAppend { id, content } => {
             service_result(notes.append(&id, &content).await, AppResponse::NoteMutation)
         }
+        AppRequest::NoteWrite { id, content } => {
+            service_result(notes.write(&id, &content).await, AppResponse::NoteMutation)
+        }
         AppRequest::NoteSaveEditable { id, document } => save_editable(app, &id, &document).await,
         AppRequest::NoteReplaceSection {
             id,
@@ -103,6 +106,9 @@ pub(super) async fn handle_write(
         ),
         AppRequest::NoteModify(input) => {
             service_result(notes.modify(input).await, AppResponse::NoteMutation)
+        }
+        AppRequest::NoteSubmit { id } => {
+            service_result(notes.submit(&id).await, AppResponse::NoteMutation)
         }
         AppRequest::NoteArchive { id } => {
             service_result(notes.archive(&id).await, AppResponse::NoteArchive)
@@ -257,6 +263,7 @@ async fn upload_text(
                     content: content.trim_end().to_string(),
                     project,
                     interpret_as_url: false,
+                    draft: false,
                     topics: Vec::new(),
                     created_at,
                 },

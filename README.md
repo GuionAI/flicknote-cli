@@ -7,7 +7,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **Add & capture notes** — text, URLs (auto-detected as links), files
 - **List & search notes** — filter by type, project, or keyword (`find`)
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
-- **Edit notes** — human editor, append, content, and metadata workflows; structured content and section mutations are provided by MCP
+- **Edit notes** — human editor plus explicit machine append, write, metadata, and draft-submit workflows; structured section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over stdio
 - **Codex recall** — human-readable `recall QUERY` results and a read-only `UserPromptSubmit` hook with bounded historical note candidates
 - **Archive notes** — archive and unarchive
@@ -76,6 +76,7 @@ flicknote login --email user@example.com
 flicknote add "Meeting notes about API redesign"
 flicknote add https://example.com          # URL auto-detected as link note
 echo "long content" | flicknote add --project myproject
+echo "draft content" | flicknote add --draft --json
 
 # List and search
 flicknote list
@@ -101,12 +102,17 @@ flicknote project unshare <project-id>
 flicknote modify <note-id> --project myproject
 flicknote modify <note-id> --project myproject --flagged
 flicknote modify <note-id> --unflagged
+flicknote modify <note-id> --title "Updated title"
+flicknote modify <note-id> --clear-summary --clear-project
 
-# Content and section mutations use the structured MCP interface. The MCP
-# schemas carry exact before/after fields and section-scoped operations.
+# Machine content writes preserve lifecycle state. Section mutations use MCP.
 
 # Append
 echo "more content" | flicknote append <note-id>
+cat replacement.md | flicknote write <note-id> --json
+
+# Submit a draft explicitly; ordinary edits never requeue AI processing.
+flicknote submit <note-id>
 
 # Delete
 flicknote delete <note-id>
@@ -170,11 +176,15 @@ start it as a subprocess:
 ```
 
 The MCP server requires the local daemon. It exposes typed note, discovery,
-note-source, project, and read-only recall tools. Note content and exact `before`/`after` edits
+note-source, project, and read-only recall tools. `note_get` returns actual stored
+note content; the synthesized editable document is used only by the human editor.
+Machine content, metadata, and lifecycle operations are orthogonal: ordinary
+content or metadata mutations preserve status and never start AI processing.
+`note_submit` is the explicit draft transition, while `note_write` replaces stored
+content without changing metadata or lifecycle. Note content and exact `before`/`after` edits
 are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
-project names. `note_source` reads stored source data, while `note_get` reads
-editable note content. Every data tool uses the running daemon; the MCP process
+project names. `note_source` reads stored source data. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
 
 ### Codex recall hook

@@ -68,6 +68,7 @@ pub struct NoteSummary {
     pub topics: Vec<String>,
     pub summary: Option<String>,
     pub flagged: bool,
+    pub draft: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub deleted_at: Option<String>,
@@ -90,6 +91,7 @@ pub struct NoteListItem {
     pub topics: Vec<String>,
     pub summary: Option<String>,
     pub flagged: bool,
+    pub draft: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub deleted_at: Option<String>,
@@ -105,6 +107,7 @@ impl From<NoteSummary> for NoteListItem {
             topics: note.topics,
             summary: note.summary,
             flagged: note.flagged,
+            draft: note.draft,
             created_at: note.created_at,
             updated_at: note.updated_at,
             deleted_at: note.deleted_at,
@@ -127,6 +130,7 @@ pub struct NoteRecord {
     pub content: Option<String>,
     pub summary: Option<String>,
     pub is_flagged: Option<i64>,
+    pub draft: bool,
     pub project_id: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -143,6 +147,7 @@ impl From<crate::types::Note> for NoteRecord {
             content: note.content,
             summary: note.summary,
             is_flagged: note.is_flagged,
+            draft: note.status == "draft",
             project_id: note.project_id,
             created_at: note.created_at,
             updated_at: note.updated_at,
@@ -182,8 +187,14 @@ pub struct NoteModifyInput {
     pub before: Option<String>,
     pub after: Option<String>,
     pub section: Option<String>,
-    pub project: Option<String>,
-    pub flagged: Option<bool>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub title: Patch<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub summary: Patch<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub project: Patch<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub flagged: Patch<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -263,6 +274,8 @@ pub struct NoteAddInput {
     pub project: Option<String>,
     #[serde(default)]
     pub interpret_as_url: bool,
+    #[serde(default)]
+    pub draft: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub topics: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -348,6 +361,7 @@ mod tests {
             topics: Vec::new(),
             summary: None,
             flagged: false,
+            draft: false,
             created_at: None,
             updated_at: None,
             deleted_at: None,
@@ -370,6 +384,7 @@ mod tests {
             topics: vec!["CLI".to_string()],
             summary: Some("A summary".to_string()),
             flagged: true,
+            draft: false,
             created_at: Some("2026-09-21T00:00:00Z".to_string()),
             updated_at: Some("2026-09-21T01:00:00Z".to_string()),
             deleted_at: None,
@@ -385,6 +400,7 @@ mod tests {
                 "topics": ["CLI"],
                 "summary": "A summary",
                 "flagged": true,
+                "draft": false,
                 "created_at": "2026-09-21T00:00:00Z",
                 "updated_at": "2026-09-21T01:00:00Z",
                 "deleted_at": null

@@ -1,4 +1,4 @@
-use flicknote_core::services::dto::ExtractionFilterDto;
+use flicknote_core::services::dto::{ExtractionFilterDto, Patch};
 
 use super::dto::McpEntityType;
 use flicknote_core::services::source::SourceView;
@@ -224,6 +224,8 @@ pub(super) struct NoteSectionParams {
 pub(super) struct NoteAddParams {
     pub content: String,
     pub project: Option<String>,
+    #[serde(default)]
+    pub draft: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -233,8 +235,14 @@ pub(super) struct NoteModifyParams {
     pub before: Option<String>,
     pub after: Option<String>,
     pub section: Option<String>,
-    pub project: Option<String>,
-    pub flagged: Option<bool>,
+    #[serde(default)]
+    pub title: Patch<String>,
+    #[serde(default)]
+    pub summary: Patch<String>,
+    #[serde(default)]
+    pub project: Patch<String>,
+    #[serde(default)]
+    pub flagged: Patch<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -378,5 +386,40 @@ mod tests {
                 "{invalid_id:?} produced {error}"
             );
         }
+    }
+
+    #[test]
+    fn note_modify_metadata_fields_preserve_missing_null_and_value() {
+        let missing: NoteModifyParams = serde_json::from_value(json!({ "id": 42 })).unwrap();
+        assert_eq!(missing.title, Patch::Missing);
+        assert_eq!(missing.summary, Patch::Missing);
+        assert_eq!(missing.project, Patch::Missing);
+        assert_eq!(missing.flagged, Patch::Missing);
+
+        let clear: NoteModifyParams = serde_json::from_value(json!({
+            "id": 42,
+            "title": null,
+            "summary": null,
+            "project": null,
+            "flagged": null
+        }))
+        .unwrap();
+        assert_eq!(clear.title, Patch::Null);
+        assert_eq!(clear.summary, Patch::Null);
+        assert_eq!(clear.project, Patch::Null);
+        assert_eq!(clear.flagged, Patch::Null);
+
+        let set: NoteModifyParams = serde_json::from_value(json!({
+            "id": 42,
+            "title": "Title",
+            "summary": "Summary",
+            "project": "work",
+            "flagged": true
+        }))
+        .unwrap();
+        assert_eq!(set.title, Patch::Value("Title".to_string()));
+        assert_eq!(set.summary, Patch::Value("Summary".to_string()));
+        assert_eq!(set.project, Patch::Value("work".to_string()));
+        assert_eq!(set.flagged, Patch::Value(true));
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 6;
+pub const PROTOCOL_VERSION: u16 = 7;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -106,6 +106,10 @@ pub enum AppRequest {
         id: String,
         content: String,
     },
+    NoteWrite {
+        id: String,
+        content: String,
+    },
     NoteSaveEditable {
         id: String,
         document: String,
@@ -131,6 +135,9 @@ pub enum AppRequest {
         section: String,
     },
     NoteModify(NoteModifyInput),
+    NoteSubmit {
+        id: String,
+    },
     NoteArchive {
         id: String,
     },
@@ -192,12 +199,14 @@ impl AppRequest {
             | Self::NoteAddEditable { .. }
             | Self::NoteUpload { .. }
             | Self::NoteAppend { .. }
+            | Self::NoteWrite { .. }
             | Self::NoteSaveEditable { .. }
             | Self::NoteReplaceSection { .. }
             | Self::NoteRenameSection { .. }
             | Self::NoteInsert { .. }
             | Self::NoteDeleteSection { .. }
             | Self::NoteModify(_)
+            | Self::NoteSubmit { .. }
             | Self::NoteArchive { .. }
             | Self::NoteRestore { .. }
             | Self::NoteShare { .. }

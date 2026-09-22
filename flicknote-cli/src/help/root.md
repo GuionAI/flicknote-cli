@@ -15,7 +15,9 @@ Common workflows:
   flicknote source <id>
   flicknote detail <id> --tree
   flicknote content <id> --section <section-id>
+  flicknote write <id> < replacement.md
   flicknote modify <id> --project work
+  flicknote submit <id>
   flicknote share <id>
   flicknote unshare <id>
   flicknote project share <project-id>

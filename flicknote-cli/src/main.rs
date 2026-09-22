@@ -35,6 +35,8 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
+    /// Replace a note's stored content from stdin
+    Write(commands::write::WriteArgs),
     /// Delete (archive) a note
     Delete(commands::delete::DeleteArgs),
     /// Edit a note in $EDITOR, or create a new note from editor
@@ -81,6 +83,8 @@ enum Commands {
     Import(commands::import::ImportArgs),
     /// Modify note metadata
     Modify(commands::modify::ModifyArgs),
+    /// Submit a draft note for AI processing
+    Submit(commands::submit::SubmitArgs),
     /// Open a note in the browser
     Open(commands::open::OpenArgs),
 }
@@ -168,6 +172,7 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Add(args) => commands::add::run(daemon, args).await,
         Commands::Upload(args) => commands::upload::run(daemon, args).await,
         Commands::Append(args) => commands::append::run(daemon, args).await,
+        Commands::Write(args) => commands::write::run(daemon, args).await,
         Commands::Delete(args) => commands::delete::run(daemon, args).await,
         Commands::Edit(args) => commands::edit::run(daemon, args).await,
         Commands::Restore(args) => commands::restore::run(daemon, args).await,
@@ -186,6 +191,7 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
         Commands::Project(args) => commands::project::run(daemon, args).await,
         Commands::Modify(args) => commands::modify::run(daemon, args).await,
+        Commands::Submit(args) => commands::submit::run(daemon, args).await,
         Commands::Open(args) => commands::open::run(daemon, args).await,
         Commands::Import(args) => commands::import::run(daemon, args).await,
         // Login/Logout/Daemon/Skill are handled before dispatch() is called

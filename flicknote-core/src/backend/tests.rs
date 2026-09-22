@@ -268,7 +268,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_uuid = backend.resolve_note_id(&id).await.unwrap();
     backend
-        .update_note_content(&from_uuid, "hi from uuid", true)
+        .update_note_content(&from_uuid, "hi from uuid")
         .await
         .unwrap();
     assert_eq!(
@@ -278,7 +278,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_short_id = backend.resolve_note_id("1172").await.unwrap();
     backend
-        .update_note_content(&from_short_id, "hi from short id", true)
+        .update_note_content(&from_short_id, "hi from short id")
         .await
         .unwrap();
     assert_eq!(
@@ -1436,7 +1436,7 @@ async fn test_update_note_title_ok() {
         .unwrap();
 
     backend
-        .update_note_title(&note_id, "New title")
+        .update_note_title(&note_id, Some("New title"))
         .await
         .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
@@ -1463,11 +1463,17 @@ async fn test_update_note_flagged_ok() {
         .await
         .unwrap();
 
-    backend.update_note_flagged(&note_id, true).await.unwrap();
+    backend
+        .update_note_flagged(&note_id, Some(true))
+        .await
+        .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
     assert_eq!(note.is_flagged, Some(1));
 
-    backend.update_note_flagged(&note_id, false).await.unwrap();
+    backend
+        .update_note_flagged(&note_id, Some(false))
+        .await
+        .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
     assert_eq!(note.is_flagged, Some(0));
 }

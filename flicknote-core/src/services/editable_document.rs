@@ -60,7 +60,7 @@ pub async fn save_editable_note(
 
     let title_changed = note.title.as_deref() != Some(parsed.title.as_str());
     if title_changed {
-        db.update_note_title(note_id, &parsed.title).await?;
+        db.update_note_title(note_id, Some(&parsed.title)).await?;
     }
 
     db.set_note_extractions(note_id, TOPIC_EXTRACTION_KEY, &parsed.topics)
@@ -69,7 +69,7 @@ pub async fn save_editable_note(
     let old_content = note.content.as_deref().unwrap_or("");
     let content_changed = old_content != parsed.stored_content;
     if content_changed {
-        db.update_note_content(note_id, &parsed.stored_content, true)
+        db.update_note_content(note_id, &parsed.stored_content)
             .await?;
     }
 
@@ -460,18 +460,17 @@ mod tests {
             unimplemented!()
         }
 
-        async fn update_note_content(
-            &self,
-            id: &str,
-            content: &str,
-            _requeue: bool,
-        ) -> Result<(), CliError> {
+        async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
             let mut note = self.note.lock().unwrap();
             if note.id != id {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
             note.content = Some(content.to_string());
             Ok(())
+        }
+
+        async fn submit_draft(&self, _id: &str) -> Result<(), CliError> {
+            unimplemented!()
         }
 
         async fn set_note_deleted_at(
@@ -523,6 +522,14 @@ mod tests {
             unimplemented!()
         }
 
+        async fn update_note_project(
+            &self,
+            _id: &str,
+            _project_id: Option<&str>,
+        ) -> Result<(), CliError> {
+            unimplemented!()
+        }
+
         async fn update_project(
             &self,
             _id: &str,
@@ -535,16 +542,28 @@ mod tests {
             unimplemented!()
         }
 
-        async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
+        async fn update_note_title(&self, id: &str, title: Option<&str>) -> Result<(), CliError> {
             let mut note = self.note.lock().unwrap();
             if note.id != id {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
-            note.title = Some(title.to_string());
+            note.title = title.map(str::to_string);
             Ok(())
         }
 
-        async fn update_note_flagged(&self, _id: &str, _flagged: bool) -> Result<(), CliError> {
+        async fn update_note_summary(
+            &self,
+            _id: &str,
+            _summary: Option<&str>,
+        ) -> Result<(), CliError> {
+            unimplemented!()
+        }
+
+        async fn update_note_flagged(
+            &self,
+            _id: &str,
+            _flagged: Option<bool>,
+        ) -> Result<(), CliError> {
             unimplemented!()
         }
 

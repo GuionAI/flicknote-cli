@@ -51,9 +51,10 @@ const SQ_FIND_CONTENT: &str =
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-const SQ_UPDATE_CONTENT: &str = "UPDATE notes \
-     SET content = ?, status = CASE WHEN ? THEN 'ai_queued' ELSE status END, updated_at = ? \
-     WHERE user_id = ? AND id = ?";
+const SQ_UPDATE_CONTENT: &str =
+    "UPDATE notes SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+const SQ_SUBMIT_DRAFT: &str = "UPDATE notes SET status = 'ai_queued', updated_at = ? \
+     WHERE user_id = ? AND id = ? AND deleted_at IS NULL AND status = 'draft'";
 const SQ_SET_DELETED_AT: &str =
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_SET_DELETED_AT_NULL: &str =
@@ -80,6 +81,8 @@ const SQ_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ?
 
 const SQ_UPDATE_TITLE: &str =
     "UPDATE notes SET title = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+const SQ_UPDATE_SUMMARY: &str =
+    "UPDATE notes SET summary = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, key, value FROM note_extractions \
@@ -634,18 +637,17 @@ impl NoteDb for LocalPowerSyncBackend {
         })
     }
 
-    async fn update_note_content(
-        &self,
-        id: &str,
-        content: &str,
-        requeue: bool,
-    ) -> Result<(), CliError> {
+    async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let writer = self.db.writer().await?;
-        writer.execute(
-            SQ_UPDATE_CONTENT,
-            params![content, requeue, now, self.user_id, id],
-        )?;
+        writer.execute(SQ_UPDATE_CONTENT, params![content, now, self.user_id, id])?;
+        Ok(())
+    }
+
+    async fn submit_draft(&self, id: &str) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let writer = self.db.writer().await?;
+        writer.execute(SQ_SUBMIT_DRAFT, params![now, self.user_id, id])?;
         Ok(())
     }
 
@@ -765,6 +767,30 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(old_name)
     }
 
+    async fn update_note_project(
+        &self,
+        id: &str,
+        project_id: Option<&str>,
+    ) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        if !sqlite_exists(
+            &self.db,
+            "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+            &self.user_id,
+            id,
+        )
+        .await?
+        {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        let writer = self.db.writer().await?;
+        writer.execute(
+            SQ_UPDATE_PROJECT,
+            params![project_id, now, self.user_id, id],
+        )?;
+        Ok(())
+    }
+
     async fn find_project(&self, id: &str) -> Result<Project, CliError> {
         let reader = self.db.reader().await?;
         reader
@@ -819,7 +845,7 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(())
     }
 
-    async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError> {
+    async fn update_note_title(&self, id: &str, title: Option<&str>) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         if !sqlite_exists(
             &self.db,
@@ -836,9 +862,26 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(())
     }
 
-    async fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError> {
+    async fn update_note_summary(&self, id: &str, summary: Option<&str>) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        let val: i64 = if flagged { 1 } else { 0 };
+        if !sqlite_exists(
+            &self.db,
+            "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+            &self.user_id,
+            id,
+        )
+        .await?
+        {
+            return Err(CliError::NoteNotFound { id: id.to_string() });
+        }
+        let writer = self.db.writer().await?;
+        writer.execute(SQ_UPDATE_SUMMARY, params![summary, now, self.user_id, id])?;
+        Ok(())
+    }
+
+    async fn update_note_flagged(&self, id: &str, flagged: Option<bool>) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let val = flagged.map(i64::from);
         if !sqlite_exists(
             &self.db,
             "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
