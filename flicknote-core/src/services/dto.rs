@@ -202,6 +202,8 @@ pub struct NoteListInput {
     pub archived: bool,
     #[serde(default = "default_note_limit")]
     pub limit: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<i64>,
 }
 
 pub const fn default_note_limit() -> u32 {

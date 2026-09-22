@@ -402,7 +402,8 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
-            ORDER BY created_at DESC
+              AND (? IS NULL OR short_id < ?)
+            ORDER BY short_id DESC
             LIMIT ?
             "#,
             params![
@@ -412,6 +413,8 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.note_type,
                 filter.project_id,
                 filter.project_id,
+                filter.cursor,
+                filter.cursor,
                 limit,
             ],
         )

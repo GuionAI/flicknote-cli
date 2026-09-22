@@ -185,6 +185,7 @@ async fn app_routes_note_list_and_append_through_services() {
             project: None,
             archived: false,
             limit: 20,
+            cursor: None,
         }))
         .await
         .unwrap();
@@ -300,6 +301,7 @@ async fn versioned_socket_routes_client_requests_through_application() {
             project: None,
             archived: false,
             limit: 20,
+            cursor: None,
         }))
         .await
         .unwrap();

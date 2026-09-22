@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 5;
+pub const PROTOCOL_VERSION: u16 = 6;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

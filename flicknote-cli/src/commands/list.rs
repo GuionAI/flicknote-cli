@@ -22,6 +22,9 @@ pub(crate) struct ListArgs {
     /// Maximum number of results
     #[arg(long, default_value = "20")]
     limit: u32,
+    /// Continue after this note ID
+    #[arg(long)]
+    cursor: Option<i64>,
     /// Output as JSON
     #[arg(long)]
     json: bool,
@@ -40,6 +43,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
             project: project.clone(),
             archived: args.archived,
             limit: args.limit,
+            cursor: args.cursor,
         }))
         .await
     {

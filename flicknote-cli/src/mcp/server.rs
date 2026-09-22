@@ -169,6 +169,7 @@ impl FlickNoteMcp {
                 project: Self::effective_project(params.project),
                 archived: params.archived,
                 limit: params.limit,
+                cursor: params.cursor,
             }))
             .await
             .map(|notes| McpNoteListResult { notes }),

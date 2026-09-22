@@ -67,7 +67,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 5);
+    assert_eq!(PROTOCOL_VERSION, 6);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -86,6 +86,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
             project: None,
             archived: false,
             limit: 20,
+            cursor: None,
         })),
     };
     let value = serde_json::to_value(request).unwrap();
@@ -257,7 +258,7 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v5_client_rejects_protocol_v2_server_info() {
+async fn protocol_v6_client_rejects_protocol_v2_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
@@ -277,7 +278,7 @@ async fn protocol_v5_client_rejects_protocol_v2_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 5",
+        "CLI version {} protocol 6",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
