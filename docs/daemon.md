@@ -29,7 +29,8 @@ service installation. The generated Homebrew formula installs Meilisearch as
 a runtime dependency; source installs without it continue to work with SQLite
 search. A failed or rebuilding projection never invalidates canonical note
 operations. `daemon status --verbose` reports search readiness, and daemon
-logs explain projection failures and fallback.
+logs explain projection failures and fallback. Transient projection failures
+retry with bounded backoff and rebuild from the canonical snapshot.
 
 ## Authentication symmetry
 

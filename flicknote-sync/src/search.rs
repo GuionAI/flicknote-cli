@@ -14,7 +14,7 @@ use powersync::PowerSyncDatabase;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
-use tokio::sync::watch;
+use tokio::sync::{Notify, watch};
 
 const INDEX: &str = "flicknote_notes";
 const DEFAULT_PORT: u16 = 7702;
@@ -41,6 +41,7 @@ impl SearchState {
 #[derive(Clone)]
 pub(crate) struct SearchProjection {
     state: Arc<AtomicU8>,
+    retry: Arc<Notify>,
     client: Arc<MeiliClient>,
 }
 
@@ -48,6 +49,7 @@ impl SearchProjection {
     pub(crate) fn new(port: u16, key: String) -> Self {
         Self {
             state: Arc::new(AtomicU8::new(SearchState::Starting as u8)),
+            retry: Arc::new(Notify::new()),
             client: Arc::new(MeiliClient {
                 base: format!("http://127.0.0.1:{port}"),
                 key,
@@ -80,6 +82,7 @@ impl SearchProjection {
             Err(error) => {
                 log::warn!("Meilisearch query failed; using SQLite fallback: {error}");
                 self.set_state(SearchState::Degraded);
+                self.retry.notify_one();
                 None
             }
         }
@@ -203,17 +206,39 @@ fn start_with_binary(
     let projection = SearchProjection::new(port, key);
     let worker_projection = projection.clone();
     let worker = tokio::spawn(async move {
-        if let Err(error) = run_worker(
-            &worker_projection,
-            &db,
-            &user_id,
-            &data_dir,
-            &binary,
-            shutdown,
-        )
-        .await
-        {
-            log::warn!("Meilisearch projection degraded; SQLite fallback: {error}");
+        let mut shutdown = shutdown;
+        let mut backoff = Duration::from_secs(1);
+        loop {
+            if *shutdown.borrow() {
+                break;
+            }
+            worker_projection.set_state(SearchState::Starting);
+            let result = run_worker(
+                &worker_projection,
+                &db,
+                &user_id,
+                &data_dir,
+                &binary,
+                shutdown.clone(),
+            )
+            .await;
+            worker_projection.set_state(SearchState::Degraded);
+            if *shutdown.borrow() || result.is_ok() {
+                break;
+            }
+            log::warn!(
+                "Meilisearch projection degraded; SQLite fallback; retrying: {}",
+                result.unwrap_err()
+            );
+            tokio::select! {
+                () = tokio::time::sleep(backoff) => {},
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        break;
+                    }
+                }
+            }
+            backoff = (backoff * 2).min(Duration::from_secs(30));
         }
         worker_projection.set_state(SearchState::Degraded);
     });
@@ -232,11 +257,10 @@ struct SearchDocument {
     content: Option<String>,
     project_id: Option<String>,
     updated_at: Option<String>,
-    deleted: bool,
     draft: bool,
 }
 
-const SNAPSHOT_SQL: &str = "SELECT id, short_id, user_id, type, title, summary, content, project_id, updated_at, deleted_at, status FROM notes WHERE user_id = ? AND deleted_at IS NULL";
+const SNAPSHOT_SQL: &str = "SELECT id, short_id, user_id, type, title, summary, content, project_id, updated_at, status FROM notes WHERE user_id = ? AND deleted_at IS NULL";
 
 // The PowerSync watcher callback requires ownership of its cloned Params.
 #[allow(clippy::needless_pass_by_value)]
@@ -255,8 +279,7 @@ fn snapshot(
             content: row.get(6)?,
             project_id: row.get(7)?,
             updated_at: row.get(8)?,
-            deleted: false,
-            draft: row.get::<_, String>(10)? == "draft",
+            draft: row.get::<_, String>(9)? == "draft",
         })
     })?;
     let mut documents = HashMap::new();
@@ -291,6 +314,9 @@ async fn run_worker(
         .map_err(|error| format!("could not launch {}: {error}", binary.display()))?;
     log::info!("Meilisearch child started (pid {:?})", child.id());
     let result = project_until_shutdown(projection, db, user_id, &mut child, &mut shutdown).await;
+    if result.is_err() {
+        projection.set_state(SearchState::Degraded);
+    }
     stop_child(&mut child).await;
     result
 }
@@ -381,6 +407,9 @@ async fn project_until_shutdown(
             }
             result = child.wait() => {
                 return Err(format!("Meilisearch child exited unexpectedly: {:?}", result));
+            }
+            () = projection.retry.notified() => {
+                return Err("query failed; rebuilding search projection".to_string());
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -584,6 +613,19 @@ mod tests {
         .expect("projection did not become ready");
     }
 
+    async fn wait_degraded(projection: &SearchProjection) {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if projection.state() == SearchState::Degraded {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("projection did not degrade");
+    }
+
     async fn wait_hit(projection: &SearchProjection, query: &str, expected: &[&str]) {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
@@ -638,6 +680,63 @@ mod tests {
             .unwrap()
     }
 
+    async fn check_rebuild_after_update_failure(
+        projection: &SearchProjection,
+        db: &PowerSyncDatabase,
+        id: &str,
+    ) {
+        let response = projection
+            .client
+            .request(reqwest::Method::DELETE, &format!("/indexes/{INDEX}"), None)
+            .await
+            .unwrap();
+        projection.client.task(response).await.unwrap();
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET deleted_at = '2026-01-03' WHERE id = ?",
+                params![id],
+            )
+            .unwrap();
+        drop(writer);
+        wait_degraded(projection).await;
+        assert!(
+            projection
+                .search(&["aurora".to_string()], 10)
+                .await
+                .is_none()
+        );
+        wait_ready(projection).await;
+        wait_hit(projection, "aurora", &[]).await;
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET deleted_at = NULL WHERE id = ?",
+                params![id],
+            )
+            .unwrap();
+        drop(writer);
+        wait_hit(projection, "aurora", &[id]).await;
+    }
+
+    async fn check_rebuild_after_query_failure(projection: &SearchProjection, id: &str) {
+        let response = projection
+            .client
+            .request(reqwest::Method::DELETE, &format!("/indexes/{INDEX}"), None)
+            .await
+            .unwrap();
+        projection.client.task(response).await.unwrap();
+        assert!(
+            projection
+                .search(&["aurora".to_string()], 10)
+                .await
+                .is_none()
+        );
+        wait_degraded(projection).await;
+        wait_ready(projection).await;
+        wait_hit(projection, "aurora", &[id]).await;
+    }
+
     #[test]
     fn port_contract() {
         assert_eq!(port_from_env(None).unwrap(), 7702);
@@ -672,21 +771,17 @@ mod tests {
         let port = port_guard.local_addr().unwrap().port();
         drop(port_guard);
         let data_dir = directory.path().join("meilisearch");
-        let projection = SearchProjection::new(port, private_key(&data_dir).unwrap());
+        let key = private_key(&data_dir).unwrap();
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let worker_projection = projection.clone();
-        let worker_db = db.clone();
-        let worker = tokio::spawn(async move {
-            run_worker(
-                &worker_projection,
-                &worker_db,
-                "user-1",
-                &data_dir,
-                &binary,
-                shutdown_rx,
-            )
-            .await
-        });
+        let (projection, worker) = start_with_binary(
+            db.clone(),
+            "user-1".to_string(),
+            data_dir,
+            shutdown_rx,
+            port,
+            binary,
+            key,
+        );
         wait_ready(&projection).await;
 
         let id = uuid::Uuid::new_v4().to_string();
@@ -708,6 +803,7 @@ mod tests {
         assert_eq!(document["content"], "中文 English aurora");
         assert_eq!(document["project_id"], "project-1");
         assert_eq!(document["draft"], true);
+        assert!(document.get("deleted").is_none());
 
         let writer = db.writer().await.unwrap();
         writer
@@ -751,8 +847,11 @@ mod tests {
 
         check_ranking_and_limit(&projection, &db).await;
 
+        check_rebuild_after_update_failure(&projection, &db, &id).await;
+        check_rebuild_after_query_failure(&projection, &id).await;
+
         shutdown_tx.send(true).unwrap();
-        assert!(worker.await.unwrap().is_ok());
+        worker.await.unwrap();
         assert!(!projection.client.healthy().await);
     }
 
@@ -771,7 +870,7 @@ mod tests {
         drop(listener);
         let data_dir = directory.path().join("meilisearch-state");
         let key = private_key(&data_dir).unwrap();
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (projection, worker) = start_with_binary(
             db.clone(),
             "user-1".to_string(),
@@ -782,8 +881,7 @@ mod tests {
             key,
         );
 
-        worker.await.unwrap();
-
+        wait_degraded(&projection).await;
         assert_eq!(projection.state(), SearchState::Degraded);
         assert!(
             projection
@@ -792,5 +890,7 @@ mod tests {
                 .is_none()
         );
         assert!(db.reader().await.is_ok());
+        shutdown_tx.send(true).unwrap();
+        worker.await.unwrap();
     }
 }
