@@ -98,13 +98,12 @@ pub trait NoteDb: Send + Sync {
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
-    /// Update content. When `requeue` is true, also sets status = 'ai_queued'.
-    async fn update_note_content(
-        &self,
-        id: &str,
-        content: &str,
-        requeue: bool,
-    ) -> Result<(), CliError>;
+    /// Update stored content while preserving the note lifecycle status.
+    async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError>;
+
+    /// Transition an active draft to the queued lifecycle state.
+    /// Returns false when the note is no longer an active draft.
+    async fn submit_draft(&self, id: &str) -> Result<bool, CliError>;
     /// Set deleted_at to the given timestamp, or NULL when `deleted_at` is None.
     /// `now` is used for the `updated_at` column and must match the timestamp
     /// used in the hook payload so subscribers see consistent values.
@@ -138,6 +137,9 @@ pub trait NoteDb: Send + Sync {
         new_project_id: &str,
         old_project_id: Option<&str>,
     ) -> Result<Option<String>, CliError>;
+    /// Set or clear a note project while preserving its lifecycle status.
+    async fn update_note_project(&self, id: &str, project_id: Option<&str>)
+    -> Result<(), CliError>;
 
     /// Update project color. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
     async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError>;
@@ -146,10 +148,12 @@ pub trait NoteDb: Send + Sync {
     async fn delete_project(&self, id: &str) -> Result<(), CliError>;
 
     // Note metadata writes
-    /// Update a note's title. Returns `NoteNotFound` if no such note exists.
-    async fn update_note_title(&self, id: &str, title: &str) -> Result<(), CliError>;
-    /// Update a note's flagged status. Returns `NoteNotFound` if no such note exists.
-    async fn update_note_flagged(&self, id: &str, flagged: bool) -> Result<(), CliError>;
+    /// Set or clear a note title. Returns `NoteNotFound` if no such note exists.
+    async fn update_note_title(&self, id: &str, title: Option<&str>) -> Result<(), CliError>;
+    /// Set or clear a note summary. Returns `NoteNotFound` if no such note exists.
+    async fn update_note_summary(&self, id: &str, summary: Option<&str>) -> Result<(), CliError>;
+    /// Set or clear a note's flagged status. Returns `NoteNotFound` if no such note exists.
+    async fn update_note_flagged(&self, id: &str, flagged: Option<bool>) -> Result<(), CliError>;
 
     // Note reads (extended)
     async fn count_notes(&self, filter: &NoteFilter<'_>) -> Result<u64, CliError>;

@@ -16,6 +16,9 @@ pub(crate) struct AddArgs {
     /// Assign to project by name
     #[arg(long)]
     project: Option<String>,
+    /// Create a normal note in draft lifecycle state
+    #[arg(long)]
+    draft: bool,
     /// Output the created note ID as JSON
     #[arg(long)]
     json: bool,
@@ -46,6 +49,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(),
             content,
             project: project.clone(),
             interpret_as_url: args.value.is_some(),
+            draft: args.draft,
             topics: Vec::new(),
             created_at: None,
         }))

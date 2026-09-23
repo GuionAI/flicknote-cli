@@ -96,10 +96,56 @@ fn modify_requires_metadata_and_accepts_valid_combinations() {
     assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--project", "work"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--flagged"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--unflagged"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--title", "New"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--clear-title"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--summary", "Short"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--clear-summary"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--clear-project"]).is_ok());
     assert!(
         Cli::try_parse_from(["flicknote", "modify", "1", "--project", "work", "--flagged"]).is_ok()
     );
     assert!(Cli::try_parse_from(["flicknote", "modify", "1", "--flagged", "--unflagged"]).is_err());
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "modify",
+            "1",
+            "--title",
+            "New",
+            "--clear-title"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "modify",
+            "1",
+            "--summary",
+            "Short",
+            "--clear-summary"
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "modify",
+            "1",
+            "--project",
+            "work",
+            "--clear-project"
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn draft_add_write_and_submit_commands_parse_without_a_status_setter() {
+    assert!(Cli::try_parse_from(["flicknote", "add", "Body", "--draft", "--json"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "write", "1", "--json"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "submit", "1", "--json"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "add", "Body", "--status", "draft"]).is_err());
 }
 
 #[test]

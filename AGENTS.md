@@ -21,8 +21,18 @@ Rust workspace with 4 crates:
 ### MCP interface
 
 FlickNote MCP is the formal model interface for note operations. The CLI remains
-for human and operational workflows; content and section mutations are not CLI
-commands.
+for human and operational workflows; structured section mutations remain MCP
+operations.
+
+### Machine note operation contract
+
+Machine note operations are orthogonal: content mutation, metadata mutation,
+and lifecycle mutation are separate contracts. Ordinary content and metadata
+edits must preserve lifecycle status and never implicitly trigger AI processing.
+`submit` is the explicit draft lifecycle transition; do not add a generic
+public status setter or expose raw internal status fields through machine DTOs.
+Machine reads return stored note content. The synthesized editable document is
+reserved for the human `flicknote edit` workflow.
 
 Every MCP structured result must have an object root, and each advertised output
 schema must be precise and derived from its boundary DTO's serialized JSON

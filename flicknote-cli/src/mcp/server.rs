@@ -32,7 +32,7 @@ use crate::commands::open::SystemBrowserOpener;
 use crate::recall::{McpRecallResult, RECALL_HOOK_TIMEOUT, current_time, recall_call_with_timeout};
 
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 28] = [
+pub(crate) const EXPECTED_TOOLS: [&str; 30] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -52,7 +52,9 @@ pub(crate) const EXPECTED_TOOLS: [&str; 28] = [
     "note_restore",
     "note_share",
     "note_source",
+    "note_submit",
     "note_unshare",
+    "note_write",
     "project_add",
     "project_archive",
     "project_get",
@@ -300,7 +302,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_get",
-        description = "Get one note with editable content, metadata, extractions, and section tree.",
+        description = "Get one note with stored content, metadata, extractions, and section tree.",
         annotations(read_only_hint = true)
     )]
     async fn note_get(
@@ -337,7 +339,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_source",
-        description = "Read stored source data as rendered content, raw JSON/text, or compact info. Normal notes often have no source data; use note_get for editable content. Use info then a 1-based range for large text or meeting sources.",
+        description = "Read stored source data as rendered content, raw JSON/text, or compact info. Normal notes often have no source data; use note_get for stored note content. Use info then a 1-based range for large text or meeting sources.",
         output_schema = source_output_schema(),
         annotations(read_only_hint = true)
     )]
@@ -359,7 +361,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_add",
-        description = "Create a note through the FlickNote daemon. A leading H1 becomes the title; a pure HTTP(S) value becomes a link note.",
+        description = "Create a note through the FlickNote daemon. A leading H1 becomes the title; draft=true creates a normal draft instead of a link note.",
         annotations(open_world_hint = true)
     )]
     async fn note_add(
@@ -371,6 +373,7 @@ impl FlickNoteMcp {
                 content: params.content,
                 project: Self::effective_project(params.project),
                 interpret_as_url: true,
+                draft: params.draft,
                 topics: Vec::new(),
                 created_at: None,
             }))
@@ -380,7 +383,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_modify",
-        description = "Apply one exact before/after edit and/or change project or flagged state. Before and after are direct JSON fields."
+        description = "Apply one exact stored-content before/after edit and/or patch title, summary, project, or flagged metadata. Omitted metadata is unchanged; null clears it."
     )]
     async fn note_modify(
         &self,
@@ -392,6 +395,8 @@ impl FlickNoteMcp {
                 before: params.before,
                 after: params.after,
                 section: params.section,
+                title: params.title,
+                summary: params.summary,
                 project: params.project,
                 flagged: params.flagged,
             }))
@@ -402,7 +407,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_append",
-        description = "Append text to an active note without requeueing AI processing."
+        description = "Append text to an active note while preserving its lifecycle status."
     )]
     async fn note_append(
         &self,
@@ -412,6 +417,41 @@ impl FlickNoteMcp {
             self.call::<NoteMutationResult>(AppRequest::NoteAppend {
                 id: params.id.to_string(),
                 content: params.content,
+            })
+            .await
+            .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "note_write",
+        description = "Replace stored note content without changing metadata or lifecycle status. Content must not be empty."
+    )]
+    async fn note_write(
+        &self,
+        Parameters(params): Parameters<NoteContentParams>,
+    ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
+        structured(
+            self.call::<NoteMutationResult>(AppRequest::NoteWrite {
+                id: params.id.to_string(),
+                content: params.content,
+            })
+            .await
+            .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "note_submit",
+        description = "Submit a current draft by transitioning it to AI processing without changing content or metadata."
+    )]
+    async fn note_submit(
+        &self,
+        Parameters(params): Parameters<NoteIdParams>,
+    ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
+        structured(
+            self.call::<NoteMutationResult>(AppRequest::NoteSubmit {
+                id: params.id.to_string(),
             })
             .await
             .map(Into::into),

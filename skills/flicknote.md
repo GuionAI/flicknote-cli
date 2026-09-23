@@ -16,11 +16,12 @@ operations identify projects by their names.
 
 ## Exact edits
 
-`note_modify` performs one exact, whitespace-sensitive `before`/`after`
-replacement. The `before` text must occur exactly once. Include more surrounding
-context when a match is ambiguous. Content-editing fields remain separate from
-metadata fields, so a project or flagged-state change can be combined with an
-exact edit when appropriate.
+`note_modify` performs one exact, whitespace-sensitive stored-content
+`before`/`after` replacement. The `before` text must occur exactly once. Include
+more surrounding context when a match is ambiguous. It also patches title, summary, project, and
+flagged metadata: omitted fields stay unchanged, `null` clears a field, and a
+value sets it. `note_write` replaces the whole stored content. These ordinary
+content and metadata mutations preserve lifecycle status.
 
 ## Section scope
 
@@ -33,8 +34,11 @@ replacement heading and subtree; section deletion is destructive.
 
 Archiving is the normal soft-delete operation. Treat archive as destructive and
 use restore only when the user explicitly wants the identified archived note
-back. Do not assume processing or synchronization status is part of the public
-note contract.
+back. `draft: true` is the sole public lifecycle projection. Create a draft with
+`note_add { "draft": true }` and use `note_submit` for the explicit
+`draft → ai_queued` transition. Ordinary edits never requeue processing. Do not
+assume other processing or synchronization status is part of the public note
+contract.
 
 ## Daemon recovery
 

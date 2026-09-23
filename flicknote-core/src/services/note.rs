@@ -5,8 +5,8 @@ use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
 use super::dto::{
     ExtractionDto, NoteAddInput, NoteArchiveResult, NoteCreateResult, NoteDetail, NoteListItem,
-    NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, RecallCandidate, SectionDto,
-    ShareResult, UnshareResult,
+    NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, Patch, RecallCandidate,
+    SectionDto, ShareResult, UnshareResult,
 };
 pub use super::dto::{
     ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
@@ -15,7 +15,6 @@ pub use super::dto::{
 
 pub const RECALL_MAX_CANDIDATES: u32 = 5;
 use super::edit_match;
-use super::editable_document;
 use super::error::ServiceError;
 use super::markdown;
 use super::note_content::extract_title_and_strip;
@@ -164,7 +163,8 @@ impl<'a> NoteService<'a> {
             .clone()
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
         let link_url = input.content.trim();
-        let is_url = input.interpret_as_url
+        let is_url = !input.draft
+            && input.interpret_as_url
             && (link_url.starts_with("http://") || link_url.starts_with("https://"))
             && !link_url.chars().any(char::is_whitespace);
         let request = if is_url {
@@ -182,10 +182,19 @@ impl<'a> NoteService<'a> {
             }
         } else {
             let (title, content) = extract_title_and_strip(&input.content);
+            if input.draft && content.trim().is_empty() {
+                return Err(ServiceError::InvalidArgument(
+                    "content must not be empty".to_string(),
+                ));
+            }
             CreateNote {
                 id,
                 note_type: "normal".to_string(),
-                status: "ai_queued".to_string(),
+                status: if input.draft {
+                    "draft".to_string()
+                } else {
+                    "ai_queued".to_string()
+                },
                 title,
                 content: Some(content),
                 metadata: None,
@@ -241,7 +250,7 @@ impl<'a> NoteService<'a> {
         } else {
             self.db.find_note(&full_id).await?
         };
-        let content = editable_document::render_editable_note(self.db, &note).await?;
+        let content = note.content.clone().unwrap_or_default();
         let mut extraction_keys = Vec::with_capacity(ENTITY_EXTRACTION_KEYS.len() + 1);
         extraction_keys.push(TOPIC_EXTRACTION_KEY);
         extraction_keys.extend_from_slice(ENTITY_EXTRACTION_KEYS);
@@ -369,10 +378,23 @@ impl<'a> NoteService<'a> {
             Some(existing) if !existing.is_empty() => format!("{existing}\n\n{content}"),
             _ => content.to_string(),
         };
-        self.db
-            .update_note_content(&full_id, &combined, false)
-            .await?;
+        self.db.update_note_content(&full_id, &combined).await?;
         self.mutation_result(&full_id, &combined).await
+    }
+
+    pub async fn write(
+        &self,
+        note_id: &str,
+        content: &str,
+    ) -> Result<NoteMutationResult, ServiceError> {
+        if content.trim().is_empty() {
+            return Err(ServiceError::InvalidArgument(
+                "content must not be empty".to_string(),
+            ));
+        }
+        let full_id = self.db.resolve_note_id(note_id).await?;
+        self.db.update_note_content(&full_id, content).await?;
+        self.mutation_result(&full_id, content).await
     }
 
     pub async fn replace_section(
@@ -394,7 +416,7 @@ impl<'a> NoteService<'a> {
         let updated =
             markdown::replace_entire_section(&content, bounds.start, bounds.end, &shifted);
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated, true).await?;
+        self.db.update_note_content(&full_id, updated).await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -425,7 +447,7 @@ impl<'a> NoteService<'a> {
             &content[heading_line_end..]
         );
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated, true).await?;
+        self.db.update_note_content(&full_id, updated).await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -460,7 +482,7 @@ impl<'a> NoteService<'a> {
             format!("{before}\n\n{insertion}\n\n{after}")
         };
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated, true).await?;
+        self.db.update_note_content(&full_id, updated).await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -485,7 +507,7 @@ impl<'a> NoteService<'a> {
             }
         );
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated, true).await?;
+        self.db.update_note_content(&full_id, updated).await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -501,22 +523,17 @@ impl<'a> NoteService<'a> {
                 "section requires before and after".to_string(),
             ));
         }
-        if !has_edit && input.project.is_none() && input.flagged.is_none() {
+        if !has_edit
+            && input.title.is_missing()
+            && input.summary.is_missing()
+            && input.project.is_missing()
+            && input.flagged.is_missing()
+        {
             return Err(ServiceError::NothingToModify);
         }
 
         let full_id = self.db.resolve_note_id(&input.id).await?;
         let note = self.db.find_note(&full_id).await?;
-        let resolved_project = match input.project.as_deref() {
-            Some(name) => Some(
-                self.db
-                    .find_project_by_name(name)
-                    .await?
-                    .ok_or_else(|| ServiceError::ProjectNotFound(name.to_string()))?,
-            ),
-            None => None,
-        };
-
         let mut resulting_content = note.content.clone().unwrap_or_default();
         if let (Some(before), Some(after)) = (input.before.as_deref(), input.after.as_deref()) {
             if let Some(section) = input.section.as_deref() {
@@ -531,31 +548,34 @@ impl<'a> NoteService<'a> {
                 };
                 resulting_content = edit_match::splice(&content, &absolute, after);
                 self.db
-                    .update_note_content(&full_id, resulting_content.trim(), true)
+                    .update_note_content(&full_id, resulting_content.trim())
                     .await?;
             } else {
-                let editable = editable_document::render_editable_note(self.db, &note).await?;
-                let matched = edit_match::find_unique(&editable, before)?;
-                let updated = edit_match::splice(&editable, &matched, after);
-                resulting_content =
-                    editable_document::save_editable_note(self.db, &full_id, &updated)
-                        .await?
-                        .stored_content;
+                let content = self.required_content(&full_id).await?;
+                let matched = edit_match::find_unique(&content, before)?;
+                resulting_content = edit_match::splice(&content, &matched, after);
+                self.db
+                    .update_note_content(&full_id, &resulting_content)
+                    .await?;
             }
         }
 
-        if let Some(project_id) = resolved_project
-            && note.project_id.as_deref() != Some(project_id.as_str())
-        {
-            self.db
-                .move_note_to_project(&full_id, &project_id, note.project_id.as_deref())
-                .await?;
-        }
-        if let Some(flagged) = input.flagged {
-            self.db.update_note_flagged(&full_id, flagged).await?;
-        }
+        self.apply_metadata_patch(&full_id, &note, &input).await?;
 
         self.mutation_result(&full_id, &resulting_content).await
+    }
+
+    pub async fn submit(&self, note_id: &str) -> Result<NoteMutationResult, ServiceError> {
+        let full_id = self.db.resolve_note_id(note_id).await?;
+        if !self.db.submit_draft(&full_id).await? {
+            return Err(ServiceError::NotDraft);
+        }
+        let content = self
+            .db
+            .find_note_content(&full_id)
+            .await?
+            .unwrap_or_default();
+        self.mutation_result(&full_id, &content).await
     }
 
     pub async fn archive(&self, note_id: &str) -> Result<NoteArchiveResult, ServiceError> {
@@ -605,6 +625,57 @@ impl<'a> NoteService<'a> {
         }
     }
 
+    async fn apply_metadata_patch(
+        &self,
+        note_id: &str,
+        note: &crate::types::Note,
+        input: &NoteModifyInput,
+    ) -> Result<(), ServiceError> {
+        match &input.title {
+            Patch::Missing => {}
+            Patch::Null => self.db.update_note_title(note_id, None).await?,
+            Patch::Value(title) => self.db.update_note_title(note_id, Some(title)).await?,
+        }
+        match &input.summary {
+            Patch::Missing => {}
+            Patch::Null => self.db.update_note_summary(note_id, None).await?,
+            Patch::Value(summary) => self.db.update_note_summary(note_id, Some(summary)).await?,
+        }
+        self.apply_project_patch(note_id, note, &input.project)
+            .await?;
+        match &input.flagged {
+            Patch::Missing => {}
+            Patch::Null => self.db.update_note_flagged(note_id, None).await?,
+            Patch::Value(flagged) => self.db.update_note_flagged(note_id, Some(*flagged)).await?,
+        }
+        Ok(())
+    }
+
+    async fn apply_project_patch(
+        &self,
+        note_id: &str,
+        note: &crate::types::Note,
+        project: &Patch<String>,
+    ) -> Result<(), ServiceError> {
+        let Patch::Value(name) = project else {
+            if matches!(project, Patch::Null) && note.project_id.is_some() {
+                self.db.update_note_project(note_id, None).await?;
+            }
+            return Ok(());
+        };
+        let project_id = self
+            .db
+            .find_project_by_name(name)
+            .await?
+            .ok_or_else(|| ServiceError::ProjectNotFound(name.to_string()))?;
+        if note.project_id.as_deref() != Some(project_id.as_str()) {
+            self.db
+                .move_note_to_project(note_id, &project_id, note.project_id.as_deref())
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn mutation_result(
         &self,
         note_id: &str,
@@ -644,6 +715,7 @@ impl<'a> NoteService<'a> {
             topics,
             summary: note.summary,
             flagged: note.is_flagged == Some(1),
+            draft: note.status == "draft",
             created_at: note.created_at,
             updated_at: note.updated_at,
             deleted_at: note.deleted_at,
@@ -679,7 +751,7 @@ pub fn confirmed_create_followup_error(
 mod tests {
 
     use crate::backend::NoteDb;
-    use crate::services::dto::NoteAddInput;
+    use crate::services::dto::{NoteAddInput, Patch};
     use crate::services::ports::{
         BrowserOpener, CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
     };
@@ -692,7 +764,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn append_separates_content_and_does_not_requeue() {
+    async fn append_separates_content_and_preserves_lifecycle() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "existing", "synced").await;
         let service = NoteService::new(&*backend);
@@ -707,7 +779,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replace_section_replaces_subtree_and_requeues() {
+    async fn replace_section_replaces_subtree_without_changing_lifecycle() {
         let backend = make_backend().await;
         let id = insert_normal_note(
             &backend,
@@ -733,8 +805,66 @@ mod tests {
             note.content.as_deref(),
             Some("## Replacement\nnew\n\n## Keep\nstable")
         );
-        assert_eq!(note.status, "ai_queued");
+        assert_eq!(note.status, "synced");
         assert_eq!(result.sections[0].title, "Replacement");
+    }
+
+    #[tokio::test]
+    async fn write_replaces_content_without_changing_lifecycle() {
+        let backend = make_backend().await;
+        let draft_id = insert_normal_note(&backend, "old draft body", "draft").await;
+        let synced_id = insert_normal_note(&backend, "old synced body", "synced").await;
+        let service = NoteService::new(&*backend);
+
+        let result = service.write(&draft_id, "new draft body").await.unwrap();
+        service.write(&synced_id, "new synced body").await.unwrap();
+
+        let note = backend.find_note(&draft_id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("new draft body"));
+        assert_eq!(note.status, "draft");
+        assert!(result.note.draft);
+        let note = backend.find_note(&synced_id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("new synced body"));
+        assert_eq!(note.status, "synced");
+    }
+
+    #[tokio::test]
+    async fn write_changes_only_content() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "old body", "draft").await;
+        let project_id = backend.create_project("work").await.unwrap();
+        backend
+            .set_note_extractions(&id, "::topic", &["Preserved topic".to_string()])
+            .await
+            .unwrap();
+        let service = NoteService::new(&*backend);
+        service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: None,
+                after: None,
+                section: None,
+                title: Patch::Value("Kept title".to_string()),
+                summary: Patch::Value("Kept summary".to_string()),
+                project: Patch::Value("work".to_string()),
+                flagged: Patch::Value(true),
+            })
+            .await
+            .unwrap();
+
+        service.write(&id, "replacement body").await.unwrap();
+
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("replacement body"));
+        assert_eq!(note.title.as_deref(), Some("Kept title"));
+        assert_eq!(note.summary.as_deref(), Some("Kept summary"));
+        assert_eq!(note.project_id.as_deref(), Some(project_id.as_str()));
+        assert_eq!(note.is_flagged, Some(1));
+        assert_eq!(note.status, "draft");
+        assert_eq!(
+            backend.list_note_topics(&[&id]).await.unwrap()[&id],
+            vec!["Preserved topic".to_string()]
+        );
     }
 
     #[tokio::test]
@@ -749,8 +879,10 @@ mod tests {
                 before: Some("same".to_string()),
                 after: Some("changed".to_string()),
                 section: None,
-                project: None,
-                flagged: None,
+                title: Patch::Missing,
+                summary: Patch::Missing,
+                project: Patch::Missing,
+                flagged: Patch::Missing,
             })
             .await
             .unwrap_err();
@@ -759,6 +891,58 @@ mod tests {
         let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.content.as_deref(), Some("same\n\nsame"));
         assert_eq!(note.status, "synced");
+    }
+
+    #[tokio::test]
+    async fn exact_content_modify_preserves_lifecycle() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "old body", "synced").await;
+        let service = NoteService::new(&*backend);
+
+        service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: Some("old body".to_string()),
+                after: Some("new body".to_string()),
+                section: None,
+                title: Patch::Missing,
+                summary: Patch::Missing,
+                project: Patch::Missing,
+                flagged: Patch::Missing,
+            })
+            .await
+            .unwrap();
+
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("new body"));
+        assert_eq!(note.status, "synced");
+    }
+
+    #[tokio::test]
+    async fn exact_content_modify_does_not_expose_editable_document_frontmatter() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "stored body", "ready").await;
+        let service = NoteService::new(&*backend);
+
+        let error = service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: Some("title: Test note".to_string()),
+                after: Some("title: Changed title".to_string()),
+                section: None,
+                title: Patch::Missing,
+                summary: Patch::Missing,
+                project: Patch::Missing,
+                flagged: Patch::Missing,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "before_not_found");
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.title.as_deref(), Some("Test note"));
+        assert_eq!(note.content.as_deref(), Some("stored body"));
+        assert_eq!(note.status, "ready");
     }
 
     #[tokio::test]
@@ -805,15 +989,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_returns_editable_content_and_section_tree() {
+    async fn get_returns_stored_content_and_section_tree() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "## Part\nBody", "synced").await;
+        let stored = "---\ncustom: preserve\n---\n\n## Part\nBody";
+        let id = insert_normal_note(&backend, stored, "synced").await;
         let service = NoteService::new(&*backend);
 
         let detail = service.get(&id, false).await.unwrap();
 
-        assert!(detail.content.contains("title: Test note"));
-        assert_eq!(detail.sections[0].title, "Part");
+        assert_eq!(detail.content, stored);
+        assert!(!detail.content.contains("title: Test note"));
+        assert!(
+            detail
+                .sections
+                .iter()
+                .any(|section| section.title == "Part")
+        );
         assert_eq!(detail.note.uuid, id);
     }
 
@@ -832,11 +1023,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(renamed.sections[0].title, "Renamed");
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
         let renamed_id = renamed.sections[0].id.clone();
 
         let deleted = service.delete_section(&id, &renamed_id).await.unwrap();
         assert_eq!(deleted.sections.len(), 1);
         assert_eq!(deleted.sections[0].title, "Second");
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
     }
 
     #[tokio::test]
@@ -859,6 +1052,7 @@ mod tests {
             content,
             "## First\none\n\n### Child\nchild\n\n## New\nnew\n\n## Second\ntwo"
         );
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
     }
 
     #[tokio::test]
@@ -931,6 +1125,178 @@ mod tests {
         assert_eq!(section.content, "# Test note\nBody");
     }
 
+    #[tokio::test]
+    async fn draft_projection_is_consistent_for_list_find_detail_and_mutation() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "draft searchable body", "draft").await;
+        let service = NoteService::new(&*backend);
+
+        let listed = service
+            .list(NoteListInput {
+                note_type: None,
+                project: None,
+                archived: false,
+                limit: 20,
+                cursor: None,
+            })
+            .await
+            .unwrap();
+        let found = service
+            .find(NoteFindInput {
+                keywords: vec!["searchable".to_string()],
+                extractions: Vec::new(),
+                project: None,
+                archived: false,
+                limit: 20,
+            })
+            .await
+            .unwrap();
+        let detail = service.get(&id, false).await.unwrap();
+        let mutation = service.append(&id, "more").await.unwrap();
+
+        assert!(listed[0].draft);
+        assert!(found[0].draft);
+        assert!(detail.note.draft);
+        assert!(mutation.note.draft);
+    }
+
+    #[tokio::test]
+    async fn modify_patches_metadata_without_changing_lifecycle() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "body", "draft").await;
+        let project_id = backend.create_project("work").await.unwrap();
+        let service = NoteService::new(&*backend);
+
+        let result = service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: None,
+                after: None,
+                section: None,
+                title: Patch::Value("New title".to_string()),
+                summary: Patch::Value("Short summary".to_string()),
+                project: Patch::Value("work".to_string()),
+                flagged: Patch::Value(true),
+            })
+            .await
+            .unwrap();
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.title.as_deref(), Some("New title"));
+        assert_eq!(note.summary.as_deref(), Some("Short summary"));
+        assert_eq!(note.project_id.as_deref(), Some(project_id.as_str()));
+        assert_eq!(note.is_flagged, Some(1));
+        assert_eq!(note.status, "draft");
+        assert!(result.note.draft);
+
+        service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: None,
+                after: None,
+                section: None,
+                title: Patch::Null,
+                summary: Patch::Null,
+                project: Patch::Null,
+                flagged: Patch::Null,
+            })
+            .await
+            .unwrap();
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.title, None);
+        assert_eq!(note.summary, None);
+        assert_eq!(note.project_id, None);
+        assert_eq!(note.is_flagged, None);
+        assert_eq!(note.status, "draft");
+    }
+
+    #[tokio::test]
+    async fn submit_transitions_only_drafts_without_touching_content_or_metadata() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "draft body", "draft").await;
+        let service = NoteService::new(&*backend);
+        service
+            .modify(NoteModifyInput {
+                id: id.clone(),
+                before: None,
+                after: None,
+                section: None,
+                title: Patch::Value("Kept title".to_string()),
+                summary: Patch::Value("Kept summary".to_string()),
+                project: Patch::Missing,
+                flagged: Patch::Value(true),
+            })
+            .await
+            .unwrap();
+
+        let result = service.submit(&id).await.unwrap();
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.status, "ai_queued");
+        assert_eq!(note.content.as_deref(), Some("draft body"));
+        assert_eq!(note.title.as_deref(), Some("Kept title"));
+        assert_eq!(note.summary.as_deref(), Some("Kept summary"));
+        assert_eq!(note.is_flagged, Some(1));
+        assert!(!result.note.draft);
+
+        let error = service.submit(&id).await.unwrap_err();
+        assert_eq!(error.code(), "not_draft");
+        assert_eq!(error.to_string(), "Note is not a draft");
+    }
+
+    #[tokio::test]
+    async fn concurrent_submit_succeeds_once() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "draft body", "draft").await;
+        let service = NoteService::new(&*backend);
+
+        let (first, second) = tokio::join!(service.submit(&id), service.submit(&id));
+        let results = [first, second];
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .map(super::ServiceError::code)
+                .collect::<Vec<_>>(),
+            ["not_draft"]
+        );
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "ai_queued");
+    }
+
+    #[tokio::test]
+    async fn write_rejects_empty_content_without_mutating_the_note() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "kept", "draft").await;
+        let service = NoteService::new(&*backend);
+
+        let error = service.write(&id, " \n\t ").await.unwrap_err();
+
+        assert_eq!(error.code(), "invalid_argument");
+        let note = backend.find_note(&id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("kept"));
+        assert_eq!(note.status, "draft");
+    }
+
+    #[tokio::test]
+    async fn human_edit_save_preserves_lifecycle_status() {
+        let backend = make_backend().await;
+        for status in ["draft", "ready"] {
+            let id = insert_normal_note(&backend, "Original body", status).await;
+            let editable = crate::services::editable_document::load_editable_note(&*backend, &id)
+                .await
+                .unwrap();
+            let edited = editable.replace("Original body", "Edited body");
+
+            crate::services::editable_document::save_editable_note(&*backend, &id, &edited)
+                .await
+                .unwrap();
+
+            let note = backend.find_note(&id).await.unwrap();
+            assert_eq!(note.content.as_deref(), Some("Edited body\n"));
+            assert_eq!(note.status, status);
+        }
+    }
+
     struct DbCreator<'a> {
         db: &'a dyn NoteDb,
         request: std::sync::Mutex<Option<CreateNote>>,
@@ -979,6 +1345,7 @@ mod tests {
                     content: "Body".to_string(),
                     project: None,
                     interpret_as_url: false,
+                    draft: false,
                     topics: Vec::new(),
                     created_at: None,
                 },
@@ -1016,6 +1383,7 @@ mod tests {
                     content: "Body".to_string(),
                     project: None,
                     interpret_as_url: false,
+                    draft: false,
                     topics: Vec::new(),
                     created_at: None,
                 },
@@ -1050,6 +1418,7 @@ mod tests {
                     content: "# Title\n\nBody".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    draft: false,
                     topics: Vec::new(),
                     created_at: None,
                 },
@@ -1060,9 +1429,71 @@ mod tests {
         let request = creator.request.lock().unwrap();
         let request = request.as_ref().unwrap();
         assert_eq!(request.note_type, "normal");
+        assert_eq!(request.status, "ai_queued");
         assert_eq!(request.title.as_deref(), Some("Title"));
         assert_eq!(request.content.as_deref(), Some("Body"));
         assert_eq!(created.title.as_deref(), Some("Title"));
+    }
+
+    #[tokio::test]
+    async fn add_draft_creates_a_normal_note_in_draft_lifecycle() {
+        let backend = make_backend().await;
+        let creator = DbCreator {
+            db: &*backend,
+            request: std::sync::Mutex::new(None),
+        };
+
+        let created = NoteService::new(&*backend)
+            .add(
+                &creator,
+                NoteAddInput {
+                    content: "https://example.com/draft".to_string(),
+                    project: None,
+                    interpret_as_url: true,
+                    draft: true,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let request = creator.request.lock().unwrap();
+        let request = request.as_ref().unwrap();
+        assert_eq!(request.note_type, "normal");
+        assert_eq!(request.status, "draft");
+        assert_eq!(
+            request.content.as_deref(),
+            Some("https://example.com/draft")
+        );
+        assert!(created.draft);
+    }
+
+    #[tokio::test]
+    async fn add_draft_rejects_empty_body_after_extracting_title() {
+        let backend = make_backend().await;
+        let creator = DbCreator {
+            db: &*backend,
+            request: std::sync::Mutex::new(None),
+        };
+
+        let error = NoteService::new(&*backend)
+            .add(
+                &creator,
+                NoteAddInput {
+                    content: "# Just a Title\n\n".to_string(),
+                    project: None,
+                    interpret_as_url: false,
+                    draft: true,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "invalid_argument");
+        assert!(creator.request.lock().unwrap().is_none());
     }
 
     #[tokio::test]
@@ -1080,6 +1511,7 @@ mod tests {
                     content: "https://example.com with context".to_string(),
                     project: None,
                     interpret_as_url: true,
+                    draft: false,
                     topics: Vec::new(),
                     created_at: None,
                 },

@@ -266,7 +266,10 @@ async fn seed_workspace(
         .set_note_extractions(&note_id, "::topic", &["Recall topic".to_string()])
         .await
         .unwrap();
-    backend.update_note_flagged(&note_id, true).await.unwrap();
+    backend
+        .update_note_flagged(&note_id, Some(true))
+        .await
+        .unwrap();
     drop(backend);
     (note_id, project_id)
 }
@@ -327,6 +330,7 @@ fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
         topics: Vec::new(),
         summary: None,
         flagged: false,
+        draft: false,
         created_at: None,
         updated_at: None,
         deleted_at: None,
@@ -344,6 +348,7 @@ fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json
         [
             "created_at",
             "deleted_at",
+            "draft",
             "flagged",
             "id",
             "project",
@@ -360,6 +365,7 @@ fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json
     assert_eq!(note["summary"], "Recall summary");
     assert_eq!(note["topics"], serde_json::json!(["Recall topic"]));
     assert_eq!(note["flagged"], true);
+    assert_eq!(note["draft"], false);
     assert_eq!(&note["project"], project);
 }
 
@@ -378,6 +384,7 @@ fn assert_detail_shape_without_internal_status(
             "content",
             "created_at",
             "deleted_at",
+            "draft",
             "id",
             "is_flagged",
             "project",
@@ -393,6 +400,7 @@ fn assert_detail_shape_without_internal_status(
     );
     assert_eq!(note["content"], "stored body");
     assert_eq!(note["is_flagged"], 1);
+    assert_eq!(note["draft"], false);
     assert_eq!(&note["project"], project);
 }
 
@@ -1015,6 +1023,98 @@ fn cli_add_json_emits_only_the_public_note_id() {
             if input.content == "new note"
                 && input.project.is_none()
                 && !input.interpret_as_url
+                && !input.draft
+    ));
+}
+
+#[test]
+fn cli_draft_write_and_submit_use_distinct_machine_requests() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
+                    flicknote_core::services::dto::NoteCreateResult { id: 88 },
+                ))),
+                AppRequest::NoteWrite { .. } | AppRequest::NoteSubmit { .. } => {
+                    DaemonResponse::App(Box::new(AppResponse::NoteMutation(
+                        flicknote_core::services::dto::NoteMutationResult {
+                            note: fake_note_summary(),
+                            sections: Vec::new(),
+                        },
+                    )))
+                }
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+
+    let added = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["add", "--draft", "--json"],
+        "Draft body\n",
+    );
+    assert!(added.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&added.stdout).unwrap(),
+        serde_json::json!({ "id": 88 })
+    );
+    let written = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["write", "77", "--json"],
+        "Replacement body\n",
+    );
+    assert!(written.status.success());
+    let submitted = run_cli_with_input(&config_root, &data_root, &["submit", "77", "--json"], "");
+    assert!(submitted.status.success());
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [
+            AppRequest::NoteAdd(input),
+            AppRequest::NoteWrite { id, content },
+            AppRequest::NoteSubmit { id: submitted_id }
+        ] if input.draft
+            && input.content == "Draft body"
+            && id == "77"
+            && content == "Replacement body"
+            && submitted_id == "77"
+    ));
+}
+
+#[test]
+fn cli_content_prints_only_actual_stored_content() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let stored = "---\ncustom: keep\n---\n\nStored body";
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        ServerInfo::current(),
+        move |request| match request {
+            AppRequest::NoteGet { .. } => DaemonResponse::App(Box::new(AppResponse::NoteDetail(
+                flicknote_core::services::dto::NoteDetail {
+                    note: fake_note_summary(),
+                    content: stored.to_string(),
+                    metadata: None,
+                    extractions: Vec::new(),
+                    sections: Vec::new(),
+                },
+            ))),
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
+
+    let output = run_cli_with_input(&config_root, &data_root, &["content", "77"], "");
+
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), stored);
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::NoteGet { id, archived }] if id == "77" && !archived
     ));
 }
 
@@ -1031,6 +1131,7 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
         topics: vec!["CLI".to_string()],
         summary: Some("A lightweight item".to_string()),
         flagged: true,
+        draft: false,
         created_at: Some("2026-09-21T00:00:00Z".to_string()),
         updated_at: Some("2026-09-21T01:00:00Z".to_string()),
         deleted_at: None,
@@ -1056,6 +1157,7 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
             "topics": ["CLI"],
             "summary": "A lightweight item",
             "flagged": true,
+            "draft": false,
             "created_at": "2026-09-21T00:00:00Z",
             "updated_at": "2026-09-21T01:00:00Z",
             "deleted_at": null

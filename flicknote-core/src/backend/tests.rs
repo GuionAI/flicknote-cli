@@ -191,6 +191,29 @@ async fn local_backend_insert_and_find() {
 }
 
 #[tokio::test]
+async fn submit_draft_reports_whether_it_performed_the_transition() {
+    let backend = make_backend().await;
+    let id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "draft",
+            title: Some("Draft"),
+            content: Some("Body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-10T00:00:00Z",
+        })
+        .await
+        .unwrap();
+
+    assert!(backend.submit_draft(&id).await.unwrap());
+    assert!(!backend.submit_draft(&id).await.unwrap());
+    assert_eq!(backend.find_note(&id).await.unwrap().status, "ai_queued");
+}
+
+#[tokio::test]
 async fn test_numeric_short_id_ref_does_not_fallback_to_short_uuid_prefix() {
     let backend = make_backend().await;
     let id = "42000000-e29b-41d4-a716-446655440000".to_string();
@@ -268,7 +291,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_uuid = backend.resolve_note_id(&id).await.unwrap();
     backend
-        .update_note_content(&from_uuid, "hi from uuid", true)
+        .update_note_content(&from_uuid, "hi from uuid")
         .await
         .unwrap();
     assert_eq!(
@@ -278,7 +301,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_short_id = backend.resolve_note_id("1172").await.unwrap();
     backend
-        .update_note_content(&from_short_id, "hi from short id", true)
+        .update_note_content(&from_short_id, "hi from short id")
         .await
         .unwrap();
     assert_eq!(
@@ -1436,7 +1459,7 @@ async fn test_update_note_title_ok() {
         .unwrap();
 
     backend
-        .update_note_title(&note_id, "New title")
+        .update_note_title(&note_id, Some("New title"))
         .await
         .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
@@ -1463,11 +1486,17 @@ async fn test_update_note_flagged_ok() {
         .await
         .unwrap();
 
-    backend.update_note_flagged(&note_id, true).await.unwrap();
+    backend
+        .update_note_flagged(&note_id, Some(true))
+        .await
+        .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
     assert_eq!(note.is_flagged, Some(1));
 
-    backend.update_note_flagged(&note_id, false).await.unwrap();
+    backend
+        .update_note_flagged(&note_id, Some(false))
+        .await
+        .unwrap();
     let note = backend.find_note(&note_id).await.unwrap();
     assert_eq!(note.is_flagged, Some(0));
 }

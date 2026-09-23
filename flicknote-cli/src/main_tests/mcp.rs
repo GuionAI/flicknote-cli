@@ -385,6 +385,7 @@ fn assert_note_list_item_contract(note: &serde_json::Value) {
         [
             "created_at",
             "deleted_at",
+            "draft",
             "flagged",
             "id",
             "project",
@@ -431,6 +432,7 @@ async fn mcp_server_exposes_stable_tool_contract() {
         serde_json::json!({ "id": { "type": "integer" } })
     );
     assert_eq!(add["outputSchema"]["required"], serde_json::json!(["id"]));
+    assert_eq!(add["inputSchema"]["properties"]["draft"]["type"], "boolean");
     let count = tools
         .iter()
         .find(|tool| tool["name"] == "note_count")
@@ -974,6 +976,7 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     assert_eq!(listed_note["id"], 42);
     assert_eq!(listed_note["project"], "MCP Project");
     assert_eq!(listed_note["topics"], serde_json::json!(["AI"]));
+    assert_eq!(listed_note["draft"], false);
     assert_json_does_not_contain_string(&listed["result"]["structuredContent"], &harness.note_uuid);
     assert_json_does_not_contain_key(&listed["result"]["structuredContent"], "status");
 
@@ -994,6 +997,11 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
             .get("project_id")
             .is_none()
     );
+    assert_eq!(
+        fetched["result"]["structuredContent"]["content"],
+        "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me."
+    );
+    assert_eq!(fetched["result"]["structuredContent"]["draft"], false);
     let string_id = harness
         .call("note_get", serde_json::json!({ "id": "42" }))
         .await;
@@ -1109,6 +1117,128 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         .call("note_restore", serde_json::json!({ "id": 42 }))
         .await;
     assert_eq!(restored["result"]["structuredContent"]["archived"], false);
+}
+
+async fn add_draft(harness: &mut McpHarness) -> i64 {
+    let created = harness
+        .call(
+            "note_add",
+            serde_json::json!({ "content": "# Draft title\n\nDraft body", "draft": true }),
+        )
+        .await;
+    assert_eq!(created["result"]["isError"], false);
+    created["result"]["structuredContent"]["id"]
+        .as_i64()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn mcp_draft_write_metadata_and_submit_contracts_are_orthogonal() {
+    let mut harness = McpHarness::start().await;
+    let id = add_draft(&mut harness).await;
+
+    let detail = harness
+        .call("note_get", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(
+        detail["result"]["structuredContent"]["content"],
+        "Draft body"
+    );
+    assert_eq!(
+        detail["result"]["structuredContent"]["title"],
+        "Draft title"
+    );
+    assert_eq!(detail["result"]["structuredContent"]["draft"], true);
+
+    let written = harness
+        .call(
+            "note_write",
+            serde_json::json!({ "id": id, "content": "Replacement body" }),
+        )
+        .await;
+    assert_eq!(written["result"]["isError"], false);
+    assert_eq!(
+        written["result"]["structuredContent"]["note"]["draft"],
+        true
+    );
+
+    let patched = harness
+        .call(
+            "note_modify",
+            serde_json::json!({
+                "id": id,
+                "title": "Replacement title",
+                "summary": "A summary",
+                "project": "MCP Project",
+                "flagged": true
+            }),
+        )
+        .await;
+    assert_eq!(patched["result"]["isError"], false);
+    assert_eq!(
+        patched["result"]["structuredContent"]["note"]["draft"],
+        true
+    );
+    let cleared = harness
+        .call(
+            "note_modify",
+            serde_json::json!({
+                "id": id,
+                "title": null,
+                "summary": null,
+                "project": null,
+                "flagged": null
+            }),
+        )
+        .await;
+    assert_eq!(cleared["result"]["isError"], false);
+    assert_eq!(
+        cleared["result"]["structuredContent"]["note"]["draft"],
+        true
+    );
+
+    let submitted = harness
+        .call("note_submit", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(submitted["result"]["isError"], false);
+    assert_eq!(
+        submitted["result"]["structuredContent"]["note"]["draft"],
+        false
+    );
+    let after_submit = harness
+        .call("note_get", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(
+        after_submit["result"]["structuredContent"]["content"],
+        "Replacement body"
+    );
+    assert_eq!(
+        after_submit["result"]["structuredContent"]["title"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        after_submit["result"]["structuredContent"]["summary"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        after_submit["result"]["structuredContent"]["project"],
+        serde_json::Value::Null
+    );
+    assert_eq!(
+        after_submit["result"]["structuredContent"]["flagged"],
+        false
+    );
+
+    let repeated = harness
+        .call("note_submit", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(repeated["result"]["isError"], true);
+    assert!(
+        repeated["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Note is not a draft")
+    );
 }
 
 #[tokio::test]
