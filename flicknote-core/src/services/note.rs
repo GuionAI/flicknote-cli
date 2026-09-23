@@ -709,6 +709,10 @@ impl<'a> NoteService<'a> {
     }
 
     async fn summary(&self, note: crate::types::Note) -> Result<NoteSummary, ServiceError> {
+        let content_bytes = note
+            .content
+            .as_ref()
+            .map_or(0, |content| content.len() as u64);
         let project = match note.project_id.as_deref() {
             Some(project_id) => self.db.find_project_name_by_id(project_id).await?,
             None => None,
@@ -728,6 +732,7 @@ impl<'a> NoteService<'a> {
             project,
             topics,
             summary: note.summary,
+            content_bytes,
             flagged: note.is_flagged == Some(1),
             draft: note.status == "draft",
             created_at: note.created_at,
@@ -1000,6 +1005,32 @@ mod tests {
         assert_eq!(notes[0].id, None);
         assert_eq!(notes[0].title.as_deref(), Some("Test note"));
         assert_eq!(notes[0].project.as_deref(), Some("work"));
+        assert_eq!(notes[0].content_bytes, 4);
+    }
+
+    #[tokio::test]
+    async fn content_bytes_counts_stored_unicode_utf8_bytes() {
+        let backend = make_backend().await;
+        let stored = "---\ncustom: keep\n---\n\n中文😊";
+        let id = insert_normal_note(&backend, stored, "synced").await;
+        let service = NoteService::new(&*backend);
+
+        let detail = service.get(&id, false).await.unwrap();
+        let listed = service
+            .list(NoteListInput {
+                note_type: None,
+                project: None,
+                archived: false,
+                limit: 20,
+                cursor: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(detail.content, stored);
+        assert_ne!(stored.len(), stored.chars().count());
+        assert_eq!(detail.note.content_bytes, stored.len() as u64);
+        assert_eq!(listed[0].content_bytes, stored.len() as u64);
     }
 
     #[tokio::test]
@@ -1094,6 +1125,7 @@ mod tests {
             .unwrap();
         assert_eq!(found[0].id, None);
         assert_eq!(found[0].title.as_deref(), Some("Test note"));
+        assert_eq!(found[0].content_bytes, "PowerSync notes".len() as u64);
 
         let count = service
             .count(NoteCountInput {

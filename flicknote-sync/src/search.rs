@@ -672,7 +672,11 @@ mod tests {
             .handle(AppRequest::NoteFind(input.clone()))
             .await
             .unwrap();
-        assert!(matches!(response, AppResponse::NoteListItems(_)));
+        let AppResponse::NoteListItems(items) = response else {
+            panic!("expected note discovery items")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content_bytes, "中文 English aurora".len() as u64);
 
         let mut structured = input.clone();
         structured.extractions.push(ExtractionFilterDto {
@@ -688,8 +692,13 @@ mod tests {
         assert!(app.handle(AppRequest::NoteFind(project)).await.is_err());
 
         projection.set_state(SearchState::Degraded);
-        app.handle(AppRequest::NoteFind(input)).await.unwrap();
+        let fallback = app.handle(AppRequest::NoteFind(input)).await.unwrap();
         projection.set_state(SearchState::Ready);
+        let AppResponse::NoteListItems(items) = fallback else {
+            panic!("expected SQLite discovery items")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content_bytes, "中文 English aurora".len() as u64);
 
         let logs = search_logs_since(cursor);
         assert!(

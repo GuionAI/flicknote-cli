@@ -9,8 +9,8 @@ Examples:
 
 List output shows the note ID used by detail/content/edit commands.
 JSON output returns lightweight discovery items: note ID, type, title, project,
-topics, summary, flagged state, and timestamps. It does not include full note
-content or internal UUIDs.
+topics, summary, content_bytes (UTF-8 bytes of stored content), flagged state,
+and timestamps. It does not include full note content or internal UUIDs.
 
 Results are ordered by note ID from newest to oldest. To fetch the next page,
 pass the final result's ID to --cursor.

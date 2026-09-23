@@ -329,6 +329,7 @@ fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
         project: None,
         topics: Vec::new(),
         summary: None,
+        content_bytes: 0,
         flagged: false,
         draft: false,
         created_at: None,
@@ -347,6 +348,7 @@ fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json
         keys,
         [
             "created_at",
+            "content_bytes",
             "deleted_at",
             "draft",
             "flagged",
@@ -366,6 +368,7 @@ fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json
     assert_eq!(note["topics"], serde_json::json!(["Recall topic"]));
     assert_eq!(note["flagged"], true);
     assert_eq!(note["draft"], false);
+    assert_eq!(note["content_bytes"], 11);
     assert_eq!(&note["project"], project);
 }
 
@@ -1130,6 +1133,7 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
         project: Some("orientation".to_string()),
         topics: vec!["CLI".to_string()],
         summary: Some("A lightweight item".to_string()),
+        content_bytes: 19,
         flagged: true,
         draft: false,
         created_at: Some("2026-09-21T00:00:00Z".to_string()),
@@ -1156,6 +1160,7 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
             "project": "orientation",
             "topics": ["CLI"],
             "summary": "A lightweight item",
+            "content_bytes": 19,
             "flagged": true,
             "draft": false,
             "created_at": "2026-09-21T00:00:00Z",
