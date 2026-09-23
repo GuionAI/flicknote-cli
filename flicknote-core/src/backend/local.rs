@@ -644,11 +644,23 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(())
     }
 
-    async fn submit_draft(&self, id: &str) -> Result<(), CliError> {
+    async fn submit_draft(&self, id: &str) -> Result<bool, CliError> {
         let now = chrono::Utc::now().to_rfc3339();
-        let writer = self.db.writer().await?;
-        writer.execute(SQ_SUBMIT_DRAFT, params![now, self.user_id, id])?;
-        Ok(())
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        let status = tx
+            .query_row(
+                "SELECT status FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
+                params![self.user_id, id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if status.as_deref() != Some("draft") {
+            return Ok(false);
+        }
+        tx.execute(SQ_SUBMIT_DRAFT, params![now, self.user_id, id])?;
+        tx.commit()?;
+        Ok(true)
     }
 
     async fn set_note_deleted_at(

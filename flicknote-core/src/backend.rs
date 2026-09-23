@@ -102,7 +102,8 @@ pub trait NoteDb: Send + Sync {
     async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError>;
 
     /// Transition an active draft to the queued lifecycle state.
-    async fn submit_draft(&self, id: &str) -> Result<(), CliError>;
+    /// Returns false when the note is no longer an active draft.
+    async fn submit_draft(&self, id: &str) -> Result<bool, CliError>;
     /// Set deleted_at to the given timestamp, or NULL when `deleted_at` is None.
     /// `now` is used for the `updated_at` column and must match the timestamp
     /// used in the hook payload so subscribers see consistent values.

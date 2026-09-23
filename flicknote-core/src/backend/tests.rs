@@ -191,6 +191,29 @@ async fn local_backend_insert_and_find() {
 }
 
 #[tokio::test]
+async fn submit_draft_reports_whether_it_performed_the_transition() {
+    let backend = make_backend().await;
+    let id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &id,
+            note_type: "normal",
+            status: "draft",
+            title: Some("Draft"),
+            content: Some("Body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-10T00:00:00Z",
+        })
+        .await
+        .unwrap();
+
+    assert!(backend.submit_draft(&id).await.unwrap());
+    assert!(!backend.submit_draft(&id).await.unwrap());
+    assert_eq!(backend.find_note(&id).await.unwrap().status, "ai_queued");
+}
+
+#[tokio::test]
 async fn test_numeric_short_id_ref_does_not_fallback_to_short_uuid_prefix() {
     let backend = make_backend().await;
     let id = "42000000-e29b-41d4-a716-446655440000".to_string();

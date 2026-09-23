@@ -469,7 +469,7 @@ mod tests {
             Ok(())
         }
 
-        async fn submit_draft(&self, _id: &str) -> Result<(), CliError> {
+        async fn submit_draft(&self, _id: &str) -> Result<bool, CliError> {
             unimplemented!()
         }
 

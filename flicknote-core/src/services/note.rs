@@ -562,13 +562,15 @@ impl<'a> NoteService<'a> {
 
     pub async fn submit(&self, note_id: &str) -> Result<NoteMutationResult, ServiceError> {
         let full_id = self.db.resolve_note_id(note_id).await?;
-        let note = self.db.find_note(&full_id).await?;
-        if note.status != "draft" {
+        if !self.db.submit_draft(&full_id).await? {
             return Err(ServiceError::NotDraft);
         }
-        self.db.submit_draft(&full_id).await?;
-        self.mutation_result(&full_id, note.content.as_deref().unwrap_or(""))
-            .await
+        let content = self
+            .db
+            .find_note_content(&full_id)
+            .await?
+            .unwrap_or_default();
+        self.mutation_result(&full_id, &content).await
     }
 
     pub async fn archive(&self, note_id: &str) -> Result<NoteArchiveResult, ServiceError> {
@@ -1233,6 +1235,27 @@ mod tests {
         let error = service.submit(&id).await.unwrap_err();
         assert_eq!(error.code(), "not_draft");
         assert_eq!(error.to_string(), "Note is not a draft");
+    }
+
+    #[tokio::test]
+    async fn concurrent_submit_succeeds_once() {
+        let backend = make_backend().await;
+        let id = insert_normal_note(&backend, "draft body", "draft").await;
+        let service = NoteService::new(&*backend);
+
+        let (first, second) = tokio::join!(service.submit(&id), service.submit(&id));
+        let results = [first, second];
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .map(super::ServiceError::code)
+                .collect::<Vec<_>>(),
+            ["not_draft"]
+        );
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "ai_queued");
     }
 
     #[tokio::test]
