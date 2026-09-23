@@ -67,7 +67,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 7);
+    assert_eq!(PROTOCOL_VERSION, 8);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -258,18 +258,19 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v7_client_rejects_protocol_v2_server_info() {
+async fn protocol_v8_client_rejects_protocol_v7_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 2,
+            protocol: 7,
             version: "legacy".to_string(),
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
             sync_errors: PowerSyncErrors::default(),
             search: None,
+            search_documents: None,
         }),
     )
     .await;
@@ -279,13 +280,22 @@ async fn protocol_v7_client_rejects_protocol_v2_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 7",
+        "CLI version {} protocol 8",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
-    assert!(message.contains("daemon version legacy protocol 2"));
+    assert!(message.contains("daemon version legacy protocol 7"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
+}
+
+#[test]
+fn server_info_accepts_missing_search_document_count() {
+    let mut value = serde_json::to_value(ServerInfo::current()).unwrap();
+    value.as_object_mut().unwrap().remove("search_documents");
+    let info: ServerInfo = serde_json::from_value(value).unwrap();
+    assert_eq!(info.protocol, PROTOCOL_VERSION);
+    assert_eq!(info.search_documents, None);
 }
 
 #[tokio::test]

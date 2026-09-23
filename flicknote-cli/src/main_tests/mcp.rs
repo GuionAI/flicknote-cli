@@ -384,6 +384,7 @@ fn assert_note_list_item_contract(note: &serde_json::Value) {
         keys,
         [
             "created_at",
+            "content_bytes",
             "deleted_at",
             "draft",
             "flagged",
@@ -633,6 +634,19 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
         list["outputSchema"]["properties"]["notes"]["items"].is_object(),
         "note_list outputSchema must advertise the notes array item schema"
     );
+    for name in ["note_list", "note_find"] {
+        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+        let item = &tool["outputSchema"]["properties"]["notes"]["items"];
+        assert_eq!(item["$ref"], "#/$defs/NoteListItem");
+        let item = &tool["outputSchema"]["$defs"]["NoteListItem"];
+        assert_eq!(item["properties"]["content_bytes"]["type"], "integer");
+        assert!(
+            item["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("content_bytes"))
+        );
+    }
     let projects = tools
         .iter()
         .find(|tool| tool["name"] == "project_list")
@@ -977,6 +991,10 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     assert_eq!(listed_note["project"], "MCP Project");
     assert_eq!(listed_note["topics"], serde_json::json!(["AI"]));
     assert_eq!(listed_note["draft"], false);
+    assert_eq!(
+        listed_note["content_bytes"],
+        "## Alpha\n\nOld text.\n\n## Beta\n\nKeep me.".len()
+    );
     assert_json_does_not_contain_string(&listed["result"]["structuredContent"], &harness.note_uuid);
     assert_json_does_not_contain_key(&listed["result"]["structuredContent"], "status");
 

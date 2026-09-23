@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 7;
+pub const PROTOCOL_VERSION: u16 = 8;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +28,8 @@ pub struct ServerInfo {
     pub sync_errors: PowerSyncErrors,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_documents: Option<usize>,
 }
 
 impl ServerInfo {
@@ -39,6 +41,7 @@ impl ServerInfo {
             sync: None,
             sync_errors: PowerSyncErrors::default(),
             search: None,
+            search_documents: None,
         }
     }
 
@@ -52,8 +55,9 @@ impl ServerInfo {
         self
     }
 
-    pub fn with_search_state(mut self, state: &str) -> Self {
+    pub fn with_search_state(mut self, state: &str, documents: Option<usize>) -> Self {
         self.search = Some(state.to_string());
+        self.search_documents = documents;
         self
     }
 }

@@ -8,7 +8,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use flicknote_sync::ipc::{DaemonRequest, DaemonResponse, PROTOCOL_VERSION};
+use flicknote_sync::ipc::{DaemonRequest, DaemonResponse, PROTOCOL_VERSION, ServerInfo};
+use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
+use rusqlite::params;
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -33,6 +35,10 @@ impl DaemonExit {
 
 impl DaemonProcess {
     fn start() -> Self {
+        Self::start_with_seed(false)
+    }
+
+    fn start_with_seed(seed_note: bool) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let config_home = directory.path().join("config");
         let data_home = directory.path().join("data");
@@ -52,6 +58,9 @@ impl DaemonProcess {
             serde_json::to_vec(&session).unwrap(),
         )
         .unwrap();
+        if seed_note {
+            seed_canonical_note(&data_home);
+        }
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let meili_port = listener.local_addr().unwrap().port();
@@ -113,8 +122,13 @@ impl DaemonProcess {
     }
 
     fn health(&self) -> bool {
+        self.info()
+            .is_some_and(|info| info.protocol == PROTOCOL_VERSION)
+    }
+
+    fn info(&self) -> Option<ServerInfo> {
         let Ok(mut stream) = UnixStream::connect(self.socket()) else {
-            return false;
+            return None;
         };
         let request = serde_json::to_vec(&DaemonRequest::Health {
             protocol: PROTOCOL_VERSION,
@@ -123,16 +137,16 @@ impl DaemonProcess {
         if stream.write_all(&request).is_err()
             || stream.shutdown(std::net::Shutdown::Write).is_err()
         {
-            return false;
+            return None;
         }
         let mut response = Vec::new();
         if stream.read_to_end(&mut response).is_err() {
-            return false;
+            return None;
         }
-        matches!(
-            serde_json::from_slice::<DaemonResponse>(&response),
-            Ok(DaemonResponse::ServerInfo(info)) if info.protocol == PROTOCOL_VERSION
-        )
+        match serde_json::from_slice::<DaemonResponse>(&response) {
+            Ok(DaemonResponse::ServerInfo(info)) => Some(info),
+            _ => None,
+        }
     }
 
     #[allow(unsafe_code)]
@@ -155,6 +169,65 @@ impl DaemonProcess {
         }
         DaemonExit { status, logs }
     }
+}
+
+fn seed_canonical_note(data_home: &std::path::Path) {
+    struct NoHttp;
+
+    #[async_trait::async_trait]
+    impl powersync::http::HttpClient for NoHttp {
+        async fn send(
+            &self,
+            _request: powersync::http::Request,
+        ) -> Result<powersync::http::Response, powersync::error::PowerSyncError> {
+            panic!("seed fixture must not make HTTP requests")
+        }
+    }
+
+    PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    let pool = ConnectionPool::open(data_home.join("flicknote/flicknote.db")).unwrap();
+    let environment =
+        PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
+    let db = PowerSyncDatabase::new(environment, flicknote_core::schema::app_schema());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let writer = db.writer().await.unwrap();
+        writer.execute(
+            "INSERT INTO notes (id, user_id, type, status, title, content) VALUES (?, 'daemon-process-test-user', 'normal', 'synced', 'Seed', 'Stored body')",
+            params![uuid::Uuid::new_v4().to_string()],
+        ).unwrap();
+    });
+}
+
+#[test]
+fn seeded_daemon_reports_ready_projection_with_one_document() {
+    if Command::new("meilisearch")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let mut process = DaemonProcess::start_with_seed(true);
+    process.wait_ready();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let info = process.info().unwrap();
+        if info.search.as_deref() == Some("ready") && info.search_documents == Some(1) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "projection did not become ready: {:?} documents {:?}",
+            info.search,
+            info.search_documents
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(process.signal(libc::SIGTERM).success());
 }
 
 impl Drop for DaemonProcess {

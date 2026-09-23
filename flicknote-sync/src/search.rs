@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_lite::StreamExt;
@@ -41,6 +41,7 @@ impl SearchState {
 #[derive(Clone)]
 pub(crate) struct SearchProjection {
     state: Arc<AtomicU8>,
+    documents: Arc<AtomicUsize>,
     retry: Arc<Notify>,
     client: Arc<MeiliClient>,
 }
@@ -49,6 +50,7 @@ impl SearchProjection {
     pub(crate) fn new(port: u16, key: String) -> Self {
         Self {
             state: Arc::new(AtomicU8::new(SearchState::Starting as u8)),
+            documents: Arc::new(AtomicUsize::new(0)),
             retry: Arc::new(Notify::new()),
             client: Arc::new(MeiliClient {
                 base: format!("http://127.0.0.1:{port}"),
@@ -67,6 +69,14 @@ impl SearchProjection {
             2 => SearchState::Ready,
             _ => SearchState::Degraded,
         }
+    }
+
+    pub(crate) fn document_count(&self) -> usize {
+        self.documents.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn ready_document_count(&self) -> Option<usize> {
+        (self.state() == SearchState::Ready).then(|| self.document_count())
     }
 
     fn set_state(&self, state: SearchState) {
@@ -213,6 +223,7 @@ fn start_with_binary(
                 break;
             }
             worker_projection.set_state(SearchState::Starting);
+            worker_projection.documents.store(0, Ordering::Release);
             let result = run_worker(
                 &worker_projection,
                 &db,
@@ -393,14 +404,22 @@ async fn project_until_shutdown(
     let stream = db.watch_statement(SNAPSHOT_SQL.to_string(), [user_id.to_string()], snapshot);
     tokio::pin!(stream);
     let mut previous = HashMap::new();
+    let mut initial = true;
     loop {
         tokio::select! {
             result = stream.next() => {
                 let Some(result) = result else { return Err("canonical note watcher stopped".to_string()); };
                 let current = result.map_err(|error| format!("canonical note watcher failed: {error}"))?;
                 projection.set_state(SearchState::Starting);
-                if let Err(error) = projection.client.apply_diff(&previous, &current).await {
-                    return Err(format!("projection update failed: {error}"));
+                let changes = projection.client.apply_diff(&previous, &current).await
+                    .map_err(|error| format!("projection update failed: {error}"))?;
+                let documents = current.len();
+                projection.documents.store(documents, Ordering::Release);
+                if initial {
+                    log::info!("meili_projection ready documents={documents}");
+                    initial = false;
+                } else if changes.upserts != 0 || changes.removals != 0 {
+                    log::info!("meili_projection upserts={} removals={} documents={documents}", changes.upserts, changes.removals);
                 }
                 previous = current;
                 projection.set_state(SearchState::Ready);
@@ -424,6 +443,11 @@ struct MeiliClient {
     base: String,
     key: String,
     http: reqwest::Client,
+}
+
+struct ProjectionChanges {
+    upserts: usize,
+    removals: usize,
 }
 
 #[derive(Deserialize)]
@@ -544,7 +568,7 @@ impl MeiliClient {
         &self,
         previous: &HashMap<String, SearchDocument>,
         current: &HashMap<String, SearchDocument>,
-    ) -> Result<(), String> {
+    ) -> Result<ProjectionChanges, String> {
         let upserts: Vec<_> = current
             .iter()
             .filter(|(id, document)| previous.get(*id) != Some(*document))
@@ -559,7 +583,7 @@ impl MeiliClient {
                 .request(
                     reqwest::Method::POST,
                     &format!("/indexes/{INDEX}/documents"),
-                    Some(serde_json::to_value(upserts).map_err(|error| error.to_string())?),
+                    Some(serde_json::to_value(&upserts).map_err(|error| error.to_string())?),
                 )
                 .await?;
             self.task(response).await?;
@@ -569,12 +593,15 @@ impl MeiliClient {
                 .request(
                     reqwest::Method::POST,
                     &format!("/indexes/{INDEX}/documents/delete-batch"),
-                    Some(serde_json::to_value(removals).map_err(|error| error.to_string())?),
+                    Some(serde_json::to_value(&removals).map_err(|error| error.to_string())?),
                 )
                 .await?;
             self.task(response).await?;
         }
-        Ok(())
+        Ok(ProjectionChanges {
+            upserts: upserts.len(),
+            removals: removals.len(),
+        })
     }
 
     async fn search(&self, keywords: &[String], limit: u32) -> Result<Vec<String>, String> {
@@ -597,8 +624,107 @@ impl MeiliClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::test_powersync_db;
+    use crate::app::Application;
+    use crate::ipc::{AppRequest, AppResponse};
+    use crate::test_support::{search_log_cursor, search_logs_since, test_powersync_db};
+    use async_trait::async_trait;
+    use flicknote_core::backend::LocalPowerSyncBackend;
+    use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput};
+    use flicknote_core::services::error::ServiceError;
+    use flicknote_core::services::ports::{
+        CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+    };
     use std::net::TcpListener;
+
+    struct UnusedWritePorts;
+
+    #[async_trait]
+    impl NoteCreator for UnusedWritePorts {
+        async fn create(&self, _request: CreateNote) -> Result<CreatedNote, ServiceError> {
+            unreachable!("search test does not create notes through the application")
+        }
+    }
+
+    #[async_trait]
+    impl ShareGateway for UnusedWritePorts {
+        async fn share(&self, _resource: ShareResource, _id: &str) -> Result<String, ServiceError> {
+            unreachable!("search test does not share notes")
+        }
+
+        async fn unshare(&self, _resource: ShareResource, _id: &str) -> Result<(), ServiceError> {
+            unreachable!("search test does not unshare notes")
+        }
+    }
+
+    async fn check_find_backend_logs(projection: &SearchProjection, db: &PowerSyncDatabase) {
+        let backend = Arc::new(LocalPowerSyncBackend::new(db.clone(), "user-1".to_string()));
+        let app = Application::new(
+            backend,
+            Arc::new(UnusedWritePorts),
+            Arc::new(UnusedWritePorts),
+        )
+        .with_search(Some(projection.clone()));
+        let input = NoteFindInput {
+            keywords: vec!["aurora".to_string()],
+            extractions: Vec::new(),
+            project: None,
+            archived: false,
+            limit: 20,
+        };
+        let cursor = search_log_cursor();
+        let response = app
+            .handle(AppRequest::NoteFind(input.clone()))
+            .await
+            .unwrap();
+        let AppResponse::NoteListItems(items) = response else {
+            panic!("expected note discovery items")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content_bytes, "中文 English aurora".len() as u64);
+
+        let mut structured = input.clone();
+        structured.extractions.push(ExtractionFilterDto {
+            key: "::topic".to_string(),
+            value: "private-value".to_string(),
+        });
+        app.handle(AppRequest::NoteFind(structured)).await.unwrap();
+        let mut archived = input.clone();
+        archived.archived = true;
+        app.handle(AppRequest::NoteFind(archived)).await.unwrap();
+        let mut project = input.clone();
+        project.project = Some("missing-project".to_string());
+        assert!(app.handle(AppRequest::NoteFind(project)).await.is_err());
+
+        projection.set_state(SearchState::Degraded);
+        let fallback = app.handle(AppRequest::NoteFind(input)).await.unwrap();
+        projection.set_state(SearchState::Ready);
+        let AppResponse::NoteListItems(items) = fallback else {
+            panic!("expected SQLite discovery items")
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content_bytes, "中文 English aurora".len() as u64);
+
+        let logs = search_logs_since(cursor);
+        assert!(
+            logs.iter()
+                .any(|line| line.starts_with("note_find backend=meili hits=1 latency_ms="))
+        );
+        for reason in [
+            "structured_query",
+            "project_filter",
+            "archived_filter",
+            "meili_unavailable",
+        ] {
+            assert!(
+                logs.iter()
+                    .any(|line| line.contains(&format!("backend=sqlite reason={reason}")))
+            );
+        }
+        assert!(
+            logs.iter()
+                .all(|line| !line.contains("aurora") && !line.contains("private-"))
+        );
+    }
 
     async fn wait_ready(projection: &SearchProjection) {
         tokio::time::timeout(Duration::from_secs(20), async {
@@ -613,6 +739,32 @@ mod tests {
         .expect("projection did not become ready");
     }
 
+    async fn seed_search_note(db: &PowerSyncDatabase) -> String {
+        let id = uuid::Uuid::new_v4().to_string();
+        let writer = db.writer().await.unwrap();
+        writer.execute(
+            "INSERT INTO notes (id, user_id, type, status, content) VALUES (?, 'user-1', 'normal', 'synced', 'Seed document')",
+            params![id],
+        ).unwrap();
+        id
+    }
+
+    fn assert_projection_logs(cursor: usize) {
+        let logs = search_logs_since(cursor);
+        assert!(
+            logs.iter()
+                .any(|line| line == "meili_projection ready documents=1")
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line == "meili_projection upserts=1 removals=0 documents=2")
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line == "meili_projection upserts=0 removals=1 documents=1")
+        );
+    }
+
     async fn wait_degraded(projection: &SearchProjection) {
         tokio::time::timeout(Duration::from_secs(20), async {
             loop {
@@ -624,6 +776,21 @@ mod tests {
         })
         .await
         .expect("projection did not degrade");
+    }
+
+    async fn wait_count(projection: &SearchProjection, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if projection.state() == SearchState::Ready
+                    && projection.document_count() == expected
+                {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("projection document count did not converge");
     }
 
     async fn wait_hit(projection: &SearchProjection, query: &str, expected: &[&str]) {
@@ -746,6 +913,17 @@ mod tests {
     }
 
     #[test]
+    fn status_count_is_unavailable_until_ready_and_after_degradation() {
+        let projection = SearchProjection::new(1, "test-key".to_string());
+        projection.documents.store(3, Ordering::Release);
+        assert_eq!(projection.ready_document_count(), None);
+        projection.set_state(SearchState::Ready);
+        assert_eq!(projection.ready_document_count(), Some(3));
+        projection.set_state(SearchState::Degraded);
+        assert_eq!(projection.ready_document_count(), None);
+    }
+
+    #[test]
     fn binary_discovery_searches_path() {
         let directory = tempfile::tempdir().unwrap();
         let binary = directory.path().join("meilisearch");
@@ -766,7 +944,9 @@ mod tests {
         let Some(binary) = discover_binary(std::env::var_os("PATH").as_deref()) else {
             return;
         };
+        let log_cursor = search_log_cursor();
         let (directory, db) = test_powersync_db().await;
+        seed_search_note(&db).await;
         let port_guard = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = port_guard.local_addr().unwrap().port();
         drop(port_guard);
@@ -783,6 +963,7 @@ mod tests {
             key,
         );
         wait_ready(&projection).await;
+        assert_eq!(projection.document_count(), 1);
 
         let id = uuid::Uuid::new_v4().to_string();
         let writer = db.writer().await.unwrap();
@@ -792,6 +973,7 @@ mod tests {
         ).unwrap();
         drop(writer);
         wait_hit(&projection, "Needle", &[&id]).await;
+        wait_count(&projection, 2).await;
 
         let writer = db.writer().await.unwrap();
         writer.execute("UPDATE notes SET title = 'Other', summary = 'Another', content = '中文 English aurora', project_id = 'project-1' WHERE id = ?", params![id]).unwrap();
@@ -799,6 +981,8 @@ mod tests {
         wait_hit(&projection, "Needle", &[]).await;
         wait_hit(&projection, "aurora", &[&id]).await;
         wait_hit(&projection, "中文", &[&id]).await;
+        assert_eq!(projection.document_count(), 2);
+        check_find_backend_logs(&projection, &db).await;
         let document = projected_document(&projection, &id).await;
         assert_eq!(document["content"], "中文 English aurora");
         assert_eq!(document["project_id"], "project-1");
@@ -834,6 +1018,7 @@ mod tests {
             .unwrap();
         drop(writer);
         wait_hit(&projection, "aurora", &[]).await;
+        wait_count(&projection, 1).await;
 
         let writer = db.writer().await.unwrap();
         writer
@@ -844,11 +1029,15 @@ mod tests {
             .unwrap();
         drop(writer);
         wait_hit(&projection, "aurora", &[&id]).await;
+        wait_count(&projection, 2).await;
 
         check_ranking_and_limit(&projection, &db).await;
+        wait_count(&projection, 5).await;
 
         check_rebuild_after_update_failure(&projection, &db, &id).await;
         check_rebuild_after_query_failure(&projection, &id).await;
+
+        assert_projection_logs(log_cursor);
 
         shutdown_tx.send(true).unwrap();
         worker.await.unwrap();

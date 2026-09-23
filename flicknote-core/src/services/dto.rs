@@ -67,6 +67,7 @@ pub struct NoteSummary {
     pub project: Option<String>,
     pub topics: Vec<String>,
     pub summary: Option<String>,
+    pub content_bytes: u64,
     pub flagged: bool,
     pub draft: bool,
     pub created_at: Option<String>,
@@ -90,6 +91,7 @@ pub struct NoteListItem {
     pub project: Option<String>,
     pub topics: Vec<String>,
     pub summary: Option<String>,
+    pub content_bytes: u64,
     pub flagged: bool,
     pub draft: bool,
     pub created_at: Option<String>,
@@ -106,6 +108,7 @@ impl From<NoteSummary> for NoteListItem {
             project: note.project,
             topics: note.topics,
             summary: note.summary,
+            content_bytes: note.content_bytes,
             flagged: note.flagged,
             draft: note.draft,
             created_at: note.created_at,
@@ -360,6 +363,7 @@ mod tests {
             project: None,
             topics: Vec::new(),
             summary: None,
+            content_bytes: 0,
             flagged: false,
             draft: false,
             created_at: None,
@@ -369,6 +373,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(value["id"], 42);
+        assert_eq!(value["content_bytes"], 0);
         assert!(value.get("short_id").is_none());
     }
 
@@ -383,6 +388,7 @@ mod tests {
             project: Some("orientation".to_string()),
             topics: vec!["CLI".to_string()],
             summary: Some("A summary".to_string()),
+            content_bytes: 123,
             flagged: true,
             draft: false,
             created_at: Some("2026-09-21T00:00:00Z".to_string()),
@@ -399,6 +405,7 @@ mod tests {
                 "project": "orientation",
                 "topics": ["CLI"],
                 "summary": "A summary",
+                "content_bytes": 123,
                 "flagged": true,
                 "draft": false,
                 "created_at": "2026-09-21T00:00:00Z",

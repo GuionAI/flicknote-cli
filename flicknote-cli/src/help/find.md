@@ -10,5 +10,5 @@ Examples:
 
 Multiple keywords use OR matching across title, content, and summary.
 Structured filters use ::type::value pairs and are matched with AND logic.
-JSON output returns lightweight discovery items without full note content or
-internal UUIDs.
+JSON output returns lightweight discovery items, including content_bytes (UTF-8
+bytes of stored content), without full note content or internal UUIDs.
