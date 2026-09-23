@@ -5,6 +5,7 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{NoteCreator, ShareGateway};
 
 use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
+use crate::search::SearchProjection;
 
 mod note;
 mod project;
@@ -14,6 +15,7 @@ pub struct Application {
     creator: Arc<dyn NoteCreator>,
     share_gateway: Arc<dyn ShareGateway>,
     web_url: Option<String>,
+    search: Option<SearchProjection>,
 }
 
 impl Application {
@@ -27,11 +29,17 @@ impl Application {
             creator,
             share_gateway,
             web_url: None,
+            search: None,
         }
     }
 
     pub fn with_web_url(mut self, web_url: Option<String>) -> Self {
         self.web_url = web_url;
+        self
+    }
+
+    pub(crate) fn with_search(mut self, search: Option<SearchProjection>) -> Self {
+        self.search = search;
         self
     }
 

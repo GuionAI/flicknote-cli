@@ -20,6 +20,19 @@ pub(super) async fn handle_read(
             service_result(notes.list(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteFind(input) => {
+            if input.extractions.is_empty()
+                && input.project.is_none()
+                && !input.archived
+                && !input.keywords.is_empty()
+                && input.limit <= 1_000
+                && let Some(search) = &app.search
+                && let Some(ids) = search.search(&input.keywords, input.limit).await
+            {
+                return service_result(
+                    notes.find_ranked_ids(&ids).await,
+                    AppResponse::NoteListItems,
+                );
+            }
             service_result(notes.find(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteRecall { prompt, project } => service_result(

@@ -269,6 +269,7 @@ async fn protocol_v7_client_rejects_protocol_v2_server_info() {
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
             sync_errors: PowerSyncErrors::default(),
+            search: None,
         }),
     )
     .await;

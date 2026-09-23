@@ -262,6 +262,7 @@ struct StatusReport {
     application_state: ApplicationStatusState,
     sync_state: SyncStatusState,
     sync_errors: flicknote_sync::ipc::PowerSyncErrors,
+    search: Option<String>,
     daemon_executable: Option<String>,
     version: VersionStatus,
     protocol: ProtocolStatus,
@@ -279,6 +280,7 @@ impl StatusReport {
             application_state: ApplicationStatusState::Unknown,
             sync_state: SyncStatusState::Unavailable,
             sync_errors: flicknote_sync::ipc::PowerSyncErrors::default(),
+            search: None,
             daemon_executable: None,
             version: VersionStatus {
                 cli: env!("CARGO_PKG_VERSION").to_string(),
@@ -333,7 +335,7 @@ impl StatusReport {
         let download_error = self.sync_errors.download.as_deref().unwrap_or("none");
         let upload_error = self.sync_errors.upload.as_deref().unwrap_or("none");
         format!(
-            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nlast error: {}\nservice error: {}\nservice diagnostics: {}\nlogs: {}\nlog command: {}",
+            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nMeilisearch: {}\nlast error: {}\nservice error: {}\nservice diagnostics: {}\nlogs: {}\nlog command: {}",
             format_service_state(self.service_state),
             format_application_state(self.application_state),
             self.daemon_executable.as_deref().unwrap_or("unavailable"),
@@ -346,6 +348,7 @@ impl StatusReport {
             format_sync_state(self.sync_state),
             download_error,
             upload_error,
+            self.search.as_deref().unwrap_or("unavailable"),
             error,
             service_error,
             service_diagnostic,
@@ -392,6 +395,7 @@ async fn build_status_report_with_probe(
             report.version.daemon = Some(info.version);
             report.protocol.daemon = Some(info.protocol);
             report.sync_errors = info.sync_errors;
+            report.search = info.search;
             report.sync_state = match info.sync {
                 Some(flicknote_sync::ipc::SyncConnectionState::Connected) => {
                     SyncStatusState::Connected
@@ -618,13 +622,15 @@ mod tests {
     async fn status_exposes_powersync_download_and_upload_errors() {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
-        let info = ServerInfo::current().with_sync_status(
-            flicknote_sync::ipc::SyncConnectionState::Offline,
-            flicknote_sync::ipc::PowerSyncErrors {
-                download: Some("download transport failed".to_string()),
-                upload: Some("upload rejected".to_string()),
-            },
-        );
+        let info = ServerInfo::current()
+            .with_sync_status(
+                flicknote_sync::ipc::SyncConnectionState::Offline,
+                flicknote_sync::ipc::PowerSyncErrors {
+                    download: Some("download transport failed".to_string()),
+                    upload: Some("upload rejected".to_string()),
+                },
+            )
+            .with_search_state("ready");
 
         let report = build_status_report_with_probe(
             &config,
@@ -636,9 +642,11 @@ mod tests {
         let json = serde_json::to_value(&report).unwrap();
         assert_eq!(json["sync_errors"]["download"], "download transport failed");
         assert_eq!(json["sync_errors"]["upload"], "upload rejected");
+        assert_eq!(json["search"], "ready");
         let verbose = report.verbose_text();
         assert!(verbose.contains("PowerSync download error: download transport failed"));
         assert!(verbose.contains("PowerSync upload error: upload rejected"));
+        assert!(verbose.contains("Meilisearch: ready"));
     }
 
     #[test]

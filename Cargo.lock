@@ -781,6 +781,7 @@ dependencies = [
  "flicknote-core",
  "fs4",
  "futures-lite",
+ "libc",
  "log",
  "powersync",
  "reqwest 0.13.2",

@@ -22,6 +22,7 @@ use crate::app::Application;
 use crate::ipc;
 use crate::ownership::{DataDirectoryLock, OwnershipError};
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
+use crate::search;
 use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone_with_timeout};
 use crate::upload::FlickNoteConnector;
 
@@ -65,6 +66,7 @@ struct ActorHandles {
     checkpoint: JoinHandle<()>,
     socket: JoinHandle<Result<(), ipc::DaemonError>>,
     powersync: JoinSet<()>,
+    search: Option<JoinHandle<()>>,
 }
 
 struct StartupSignals {
@@ -192,7 +194,6 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
     ));
     let backend = open_local_backend(&db, &config)
         .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
-    let app = build_application(backend, &db, &auth, &config);
     let (socket_listener, _socket_guard) =
         bind_socket(&config).map_err(|error| DaemonRunError::Startup(error.to_string()))?;
 
@@ -208,11 +209,21 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
     log::info!("FlickNote daemon accepting local requests");
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let socket = spawn_socket_server(socket_listener, app, &db, shutdown_rx);
+    let user_id = backend.user_id().to_string();
+    let search = search::start(
+        db.clone(),
+        user_id,
+        config.paths.data_dir.join("meilisearch"),
+        shutdown_rx.clone(),
+    );
+    let search_projection = search.as_ref().map(|(projection, _)| projection.clone());
+    let app = build_application(backend, &db, &auth, &config, search_projection.clone());
+    let socket = spawn_socket_server(socket_listener, app, &db, search_projection, shutdown_rx);
     let mut actors = ActorHandles {
         checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
         socket,
         powersync: powersync_tasks,
+        search: search.map(|(_, task)| task),
     };
 
     let result = wait_for_shutdown(&mut actors, &startup_signals).await;
@@ -297,6 +308,7 @@ fn build_application(
     db: &PowerSyncDatabase,
     auth: &Arc<GoTrueClient>,
     config: &Arc<Config>,
+    search: Option<search::SearchProjection>,
 ) -> Arc<Application> {
     let http = reqwest::Client::new();
     let creator: Arc<dyn NoteCreator> = Arc::new(RemoteNoteCreator::new(
@@ -310,7 +322,11 @@ fn build_application(
         Arc::clone(auth),
         Arc::clone(config),
     ));
-    Arc::new(Application::new(backend, creator, gateway).with_web_url(config.web_url.clone()))
+    Arc::new(
+        Application::new(backend, creator, gateway)
+            .with_web_url(config.web_url.clone())
+            .with_search(search),
+    )
 }
 
 fn spawn_checkpoint_worker(db_path: PathBuf) -> JoinHandle<()> {
@@ -359,6 +375,7 @@ fn spawn_socket_server(
     listener: UnixListener,
     app: Arc<Application>,
     db: &PowerSyncDatabase,
+    search: Option<search::SearchProjection>,
     shutdown: watch::Receiver<bool>,
 ) -> JoinHandle<Result<(), ipc::DaemonError>> {
     let db = db.clone();
@@ -375,7 +392,15 @@ fn spawn_socket_server(
             download: status.download_error().map(ToString::to_string),
             upload: status.upload_error().map(ToString::to_string),
         };
-        ipc::ServerInfo::current().with_sync_status(sync, sync_errors)
+        ipc::ServerInfo::current()
+            .with_sync_status(sync, sync_errors)
+            .with_search_state(
+                search
+                    .as_ref()
+                    .map_or("degraded/unavailable", |projection| {
+                        projection.state().label()
+                    }),
+            )
     });
     tokio::spawn(async move {
         ipc::serve_app_until_with_provider(listener, app, info_provider, shutdown).await
@@ -552,6 +577,14 @@ async fn shutdown_daemon(
         actors.socket.abort();
     }
 
+    if let Some(mut search) = actors.search.take() {
+        let _stage = run_shutdown_stage("stop Meilisearch child", Duration::from_secs(6), async {
+            (&mut search).await.map_err(|error| error.to_string())
+        })
+        .await;
+        search.abort();
+    }
+
     let operations = RuntimeShutdownOperations { db, db_path };
     let _stage_results = run_storage_shutdown(
         &operations,
@@ -663,6 +696,7 @@ mod tests {
             checkpoint: tokio::spawn(std::future::pending()),
             socket: tokio::spawn(std::future::pending()),
             powersync,
+            search: None,
         };
 
         let error = wait_for_runtime_event(&mut actors, std::future::pending())
