@@ -654,6 +654,20 @@ mod tests {
         assert!(verbose.contains("PowerSync upload error: upload rejected"));
         assert!(verbose.contains("Meilisearch: ready"));
         assert!(verbose.contains("Meilisearch documents: 2538"));
+
+        let degraded = build_status_report_with_probe(
+            &config,
+            Ok(ServiceState::Running),
+            &FakeHealth(Some(
+                ServerInfo::current().with_search_state("degraded/unavailable", None),
+            )),
+        )
+        .await;
+        assert!(
+            degraded
+                .verbose_text()
+                .contains("Meilisearch documents: unavailable")
+        );
     }
 
     #[test]

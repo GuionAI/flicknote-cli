@@ -402,7 +402,7 @@ fn spawn_socket_server(
                     }),
                 search
                     .as_ref()
-                    .map(search::SearchProjection::document_count),
+                    .and_then(search::SearchProjection::ready_document_count),
             )
     });
     tokio::spawn(async move {

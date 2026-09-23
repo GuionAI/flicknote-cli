@@ -75,6 +75,10 @@ impl SearchProjection {
         self.documents.load(Ordering::Acquire)
     }
 
+    pub(crate) fn ready_document_count(&self) -> Option<usize> {
+        (self.state() == SearchState::Ready).then(|| self.document_count())
+    }
+
     fn set_state(&self, state: SearchState) {
         self.state.store(state as u8, Ordering::Release);
     }
@@ -906,6 +910,17 @@ mod tests {
         assert_eq!(port_from_env(Some("44123")).unwrap(), 44123);
         assert!(port_from_env(Some("0")).is_err());
         assert!(port_from_env(Some("oops")).is_err());
+    }
+
+    #[test]
+    fn status_count_is_unavailable_until_ready_and_after_degradation() {
+        let projection = SearchProjection::new(1, "test-key".to_string());
+        projection.documents.store(3, Ordering::Release);
+        assert_eq!(projection.ready_document_count(), None);
+        projection.set_state(SearchState::Ready);
+        assert_eq!(projection.ready_document_count(), Some(3));
+        projection.set_state(SearchState::Degraded);
+        assert_eq!(projection.ready_document_count(), None);
     }
 
     #[test]
