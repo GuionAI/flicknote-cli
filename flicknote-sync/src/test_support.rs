@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::sync::{Mutex, Once};
 use std::thread;
 
 use flicknote_core::{
@@ -10,6 +11,42 @@ use flicknote_core::{
 };
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 use rusqlite::params;
+
+struct SearchTestLogger;
+
+static SEARCH_LOGGER: SearchTestLogger = SearchTestLogger;
+static SEARCH_LOGGER_INIT: Once = Once::new();
+static SEARCH_LOGS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+impl log::Log for SearchTestLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if !self.enabled(record.metadata()) {
+            return;
+        }
+        let message = record.args().to_string();
+        if message.starts_with("note_find ") || message.starts_with("meili_projection ") {
+            SEARCH_LOGS.lock().unwrap().push(message);
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+pub(crate) fn search_log_cursor() -> usize {
+    SEARCH_LOGGER_INIT.call_once(|| {
+        log::set_logger(&SEARCH_LOGGER).expect("install search test logger");
+        log::set_max_level(log::LevelFilter::Info);
+    });
+    SEARCH_LOGS.lock().unwrap().len()
+}
+
+pub(crate) fn search_logs_since(cursor: usize) -> Vec<String> {
+    SEARCH_LOGS.lock().unwrap()[cursor..].to_vec()
+}
 
 pub(crate) async fn test_powersync_db() -> (tempfile::TempDir, PowerSyncDatabase) {
     PowerSyncEnvironment::powersync_auto_extension().unwrap();

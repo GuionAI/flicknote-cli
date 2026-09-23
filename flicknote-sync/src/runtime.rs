@@ -400,6 +400,9 @@ fn spawn_socket_server(
                     .map_or("degraded/unavailable", |projection| {
                         projection.state().label()
                     }),
+                search
+                    .as_ref()
+                    .map(search::SearchProjection::document_count),
             )
     });
     tokio::spawn(async move {

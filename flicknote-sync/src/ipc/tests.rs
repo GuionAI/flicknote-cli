@@ -270,6 +270,7 @@ async fn protocol_v7_client_rejects_protocol_v2_server_info() {
             sync: None,
             sync_errors: PowerSyncErrors::default(),
             search: None,
+            search_documents: None,
         }),
     )
     .await;
@@ -286,6 +287,15 @@ async fn protocol_v7_client_rejects_protocol_v2_server_info() {
     assert!(message.contains("daemon version legacy protocol 2"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
+}
+
+#[test]
+fn server_info_accepts_missing_search_document_count() {
+    let mut value = serde_json::to_value(ServerInfo::current()).unwrap();
+    value.as_object_mut().unwrap().remove("search_documents");
+    let info: ServerInfo = serde_json::from_value(value).unwrap();
+    assert_eq!(info.protocol, PROTOCOL_VERSION);
+    assert_eq!(info.search_documents, None);
 }
 
 #[tokio::test]

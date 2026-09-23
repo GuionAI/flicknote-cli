@@ -1,6 +1,7 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
-use flicknote_core::services::dto::NoteAddInput;
+use flicknote_core::services::dto::{NoteAddInput, NoteFindInput};
 use flicknote_core::services::editable_document;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
@@ -20,20 +21,24 @@ pub(super) async fn handle_read(
             service_result(notes.list(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteFind(input) => {
-            if input.extractions.is_empty()
-                && input.project.is_none()
-                && !input.archived
-                && !input.keywords.is_empty()
-                && input.limit <= 1_000
+            let started = Instant::now();
+            let reason = sqlite_find_reason(&input);
+            if reason.is_none()
                 && let Some(search) = &app.search
                 && let Some(ids) = search.search(&input.keywords, input.limit).await
             {
-                return service_result(
-                    notes.find_ranked_ids(&ids).await,
-                    AppResponse::NoteListItems,
-                );
+                let result = notes.find_ranked_ids(&ids).await;
+                log_find_backend("meili", None, &result, started);
+                return service_result(result, AppResponse::NoteListItems);
             }
-            service_result(notes.find(input).await, AppResponse::NoteListItems)
+            let result = notes.find(input).await;
+            log_find_backend(
+                "sqlite",
+                Some(reason.unwrap_or("meili_unavailable")),
+                &result,
+                started,
+            );
+            service_result(result, AppResponse::NoteListItems)
         }
         AppRequest::NoteRecall { prompt, project } => service_result(
             notes.recall(&prompt, project.as_deref()).await,
@@ -64,6 +69,47 @@ pub(super) async fn handle_read(
         ),
         AppRequest::NoteOpen { id } => open_note(app, &id).await,
         _ => unreachable!("request kind guarantees a read-only note request"),
+    }
+}
+
+fn sqlite_find_reason(input: &NoteFindInput) -> Option<&'static str> {
+    if !input.extractions.is_empty() {
+        Some("structured_query")
+    } else if input.project.is_some() {
+        Some("project_filter")
+    } else if input.archived {
+        Some("archived_filter")
+    } else if input.keywords.is_empty() {
+        Some("no_keywords")
+    } else if input.limit > 1_000 {
+        Some("limit_exceeds_meili")
+    } else {
+        None
+    }
+}
+
+fn log_find_backend(
+    backend: &str,
+    reason: Option<&str>,
+    result: &Result<Vec<flicknote_core::services::dto::NoteListItem>, ServiceError>,
+    started: Instant,
+) {
+    let latency_ms = started.elapsed().as_millis();
+    match (reason, result) {
+        (Some(reason), Ok(items)) => log::info!(
+            "note_find backend={backend} reason={reason} hits={} latency_ms={latency_ms}",
+            items.len()
+        ),
+        (None, Ok(items)) => log::info!(
+            "note_find backend={backend} hits={} latency_ms={latency_ms}",
+            items.len()
+        ),
+        (Some(reason), Err(_)) => log::warn!(
+            "note_find backend={backend} reason={reason} outcome=error latency_ms={latency_ms}"
+        ),
+        (None, Err(_)) => {
+            log::warn!("note_find backend={backend} outcome=error latency_ms={latency_ms}")
+        }
     }
 }
 
@@ -353,4 +399,61 @@ async fn save_editable(
         .await
         .map(AppResponse::EditableSave)
         .map_err(Application::db_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{search_log_cursor, search_logs_since};
+    use flicknote_core::services::dto::ExtractionFilterDto;
+
+    #[test]
+    fn find_routes_and_logs_only_safe_backend_details() {
+        let cursor = search_log_cursor();
+        let mut input = NoteFindInput {
+            keywords: vec!["private-search-phrase".to_string()],
+            extractions: Vec::new(),
+            project: None,
+            archived: false,
+            limit: 20,
+        };
+        assert_eq!(sqlite_find_reason(&input), None);
+        let result: Result<Vec<flicknote_core::services::dto::NoteListItem>, ServiceError> =
+            Ok(Vec::new());
+        log_find_backend("meili", None, &result, Instant::now());
+        log_find_backend("sqlite", Some("meili_unavailable"), &result, Instant::now());
+
+        input.extractions.push(ExtractionFilterDto {
+            key: "::topic".to_string(),
+            value: "private-extraction".to_string(),
+        });
+        assert_eq!(sqlite_find_reason(&input), Some("structured_query"));
+        input.extractions.clear();
+        input.project = Some("private-project".to_string());
+        assert_eq!(sqlite_find_reason(&input), Some("project_filter"));
+        input.project = None;
+        input.archived = true;
+        assert_eq!(sqlite_find_reason(&input), Some("archived_filter"));
+
+        for reason in ["structured_query", "project_filter", "archived_filter"] {
+            log_find_backend("sqlite", Some(reason), &result, Instant::now());
+        }
+        let logs = search_logs_since(cursor);
+        assert!(
+            logs.iter()
+                .any(|line| line.starts_with("note_find backend=meili hits=0 latency_ms="))
+        );
+        for reason in [
+            "structured_query",
+            "project_filter",
+            "archived_filter",
+            "meili_unavailable",
+        ] {
+            assert!(
+                logs.iter()
+                    .any(|line| line.contains(&format!("backend=sqlite reason={reason}")))
+            );
+        }
+        assert!(logs.iter().all(|line| !line.contains("private-")));
+    }
 }

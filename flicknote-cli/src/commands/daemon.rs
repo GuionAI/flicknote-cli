@@ -263,6 +263,7 @@ struct StatusReport {
     sync_state: SyncStatusState,
     sync_errors: flicknote_sync::ipc::PowerSyncErrors,
     search: Option<String>,
+    search_documents: Option<usize>,
     daemon_executable: Option<String>,
     version: VersionStatus,
     protocol: ProtocolStatus,
@@ -281,6 +282,7 @@ impl StatusReport {
             sync_state: SyncStatusState::Unavailable,
             sync_errors: flicknote_sync::ipc::PowerSyncErrors::default(),
             search: None,
+            search_documents: None,
             daemon_executable: None,
             version: VersionStatus {
                 cli: env!("CARGO_PKG_VERSION").to_string(),
@@ -335,7 +337,7 @@ impl StatusReport {
         let download_error = self.sync_errors.download.as_deref().unwrap_or("none");
         let upload_error = self.sync_errors.upload.as_deref().unwrap_or("none");
         format!(
-            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nMeilisearch: {}\nlast error: {}\nservice error: {}\nservice diagnostics: {}\nlogs: {}\nlog command: {}",
+            "service: {}\napplication: {}\ndaemon executable: {}\nFlickNote version: cli {}, daemon {}\nIPC protocol: cli {}, daemon {}\nPowerSync: {}\nPowerSync download error: {}\nPowerSync upload error: {}\nMeilisearch: {}\nMeilisearch documents: {}\nlast error: {}\nservice error: {}\nservice diagnostics: {}\nlogs: {}\nlog command: {}",
             format_service_state(self.service_state),
             format_application_state(self.application_state),
             self.daemon_executable.as_deref().unwrap_or("unavailable"),
@@ -349,6 +351,8 @@ impl StatusReport {
             download_error,
             upload_error,
             self.search.as_deref().unwrap_or("unavailable"),
+            self.search_documents
+                .map_or_else(|| "unavailable".to_string(), |count| count.to_string()),
             error,
             service_error,
             service_diagnostic,
@@ -396,6 +400,7 @@ async fn build_status_report_with_probe(
             report.protocol.daemon = Some(info.protocol);
             report.sync_errors = info.sync_errors;
             report.search = info.search;
+            report.search_documents = info.search_documents;
             report.sync_state = match info.sync {
                 Some(flicknote_sync::ipc::SyncConnectionState::Connected) => {
                     SyncStatusState::Connected
@@ -630,7 +635,7 @@ mod tests {
                     upload: Some("upload rejected".to_string()),
                 },
             )
-            .with_search_state("ready");
+            .with_search_state("ready", Some(2538));
 
         let report = build_status_report_with_probe(
             &config,
@@ -643,10 +648,12 @@ mod tests {
         assert_eq!(json["sync_errors"]["download"], "download transport failed");
         assert_eq!(json["sync_errors"]["upload"], "upload rejected");
         assert_eq!(json["search"], "ready");
+        assert_eq!(json["search_documents"], 2538);
         let verbose = report.verbose_text();
         assert!(verbose.contains("PowerSync download error: download transport failed"));
         assert!(verbose.contains("PowerSync upload error: upload rejected"));
         assert!(verbose.contains("Meilisearch: ready"));
+        assert!(verbose.contains("Meilisearch documents: 2538"));
     }
 
     #[test]
