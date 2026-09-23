@@ -11,6 +11,26 @@ The daemon owns the local PowerSync SQLite database and its Unix IPC socket.
 Data commands and MCP use IPC only; they never start a service implicitly or
 open the database directly.
 
+## Search projection
+
+PowerSync/SQLite remains the canonical note store. The daemon owns a disposable
+Meilisearch projection for unfiltered keyword `find` queries up to 1,000 hits,
+maintained from PowerSync's reactive note-table watcher. Its initial snapshot rebuilds the
+index; later snapshots update changed notes and remove archived notes. Other
+find shapes (project, archive, or extraction filters) retain the canonical
+SQLite path. All Meilisearch hits are hydrated from SQLite before returning
+the existing CLI/MCP `find` DTO, so clients do not depend on Meilisearch.
+
+The daemon starts Meilisearch as a foreground child bound to `127.0.0.1:7702`.
+`FLICKNOTE_MEILI_PORT` overrides that port; invalid values degrade search to
+SQLite. The child uses private state below FlickNote's data directory, is
+terminated and waited for on normal daemon shutdown, and has no separate
+service installation. The generated Homebrew formula installs Meilisearch as
+a runtime dependency; source installs without it continue to work with SQLite
+search. A failed or rebuilding projection never invalidates canonical note
+operations. `daemon status --verbose` reports search readiness, and daemon
+logs explain projection failures and fallback.
+
 ## Authentication symmetry
 
 Login establishes a usable local installation:

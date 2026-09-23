@@ -1,7 +1,9 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -14,6 +16,7 @@ struct DaemonProcess {
     _directory: TempDir,
     config_home: PathBuf,
     data_home: PathBuf,
+    meili_port: u16,
     child: Child,
 }
 
@@ -50,11 +53,17 @@ impl DaemonProcess {
         )
         .unwrap();
 
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let meili_port = listener.local_addr().unwrap().port();
+        drop(listener);
+
         let child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
             .args(["daemon", "run"])
             .env("XDG_CONFIG_HOME", &config_home)
             .env("XDG_DATA_HOME", &data_home)
             .env("FLICKNOTE_ENV", "dev")
+            .env("FLICKNOTE_MEILI_PORT", meili_port.to_string())
+            .process_group(0)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -63,6 +72,7 @@ impl DaemonProcess {
             _directory: directory,
             config_home,
             data_home,
+            meili_port,
             child,
         }
     }
@@ -131,6 +141,14 @@ impl DaemonProcess {
         assert_eq!(result, 0, "failed to signal daemon process");
         let status = wait_for_exit(&mut self.child, Duration::from_secs(12))
             .unwrap_or_else(|| panic!("daemon did not exit within the shutdown budget"));
+        if signal == libc::SIGKILL {
+            // The test deliberately kills the parent before its normal child
+            // cleanup. Its private process group keeps the orphan test-owned.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::kill(-(self.child.id() as libc::pid_t), libc::SIGTERM);
+            }
+        }
         let mut logs = String::new();
         if let Some(mut stderr) = self.child.stderr.take() {
             stderr.read_to_string(&mut logs).unwrap();
@@ -144,7 +162,7 @@ impl Drop for DaemonProcess {
         if self.child.try_wait().unwrap().is_none() {
             #[allow(unsafe_code)]
             unsafe {
-                libc::kill(self.child.id() as libc::pid_t, libc::SIGKILL);
+                libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
             }
             #[allow(clippy::let_underscore_untyped)]
             let _ = wait_for_exit(&mut self.child, Duration::from_secs(2));
@@ -175,6 +193,8 @@ fn start_with_roots(process: &DaemonProcess) -> DaemonProcess {
         .env("XDG_CONFIG_HOME", &process.config_home)
         .env("XDG_DATA_HOME", &process.data_home)
         .env("FLICKNOTE_ENV", "dev")
+        .env("FLICKNOTE_MEILI_PORT", process.meili_port.to_string())
+        .process_group(0)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -183,6 +203,7 @@ fn start_with_roots(process: &DaemonProcess) -> DaemonProcess {
         _directory: tempfile::tempdir().unwrap(),
         config_home: process.config_home.clone(),
         data_home: process.data_home.clone(),
+        meili_port: process.meili_port,
         child,
     }
 }

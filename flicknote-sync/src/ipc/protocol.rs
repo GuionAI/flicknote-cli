@@ -26,6 +26,8 @@ pub struct ServerInfo {
     pub sync: Option<SyncConnectionState>,
     #[serde(default)]
     pub sync_errors: PowerSyncErrors,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
 }
 
 impl ServerInfo {
@@ -36,6 +38,7 @@ impl ServerInfo {
             executable: current_executable(),
             sync: None,
             sync_errors: PowerSyncErrors::default(),
+            search: None,
         }
     }
 
@@ -46,6 +49,11 @@ impl ServerInfo {
     ) -> Self {
         self.sync = Some(sync);
         self.sync_errors = sync_errors;
+        self
+    }
+
+    pub fn with_search_state(mut self, state: &str) -> Self {
+        self.search = Some(state.to_string());
         self
     }
 }

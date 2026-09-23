@@ -4,6 +4,7 @@ pub mod ipc;
 mod ownership;
 mod remote;
 mod runtime;
+mod search;
 mod storage_maintenance;
 mod upload;
 

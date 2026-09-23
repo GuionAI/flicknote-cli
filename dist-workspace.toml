@@ -25,3 +25,6 @@ pr-run-mode = "plan"
 [dist.dependencies.apt]
 libclang-dev = "*"
 musl-tools = "*"
+
+[dist.dependencies.homebrew]
+meilisearch = { stage = ["run"], targets = ["aarch64-apple-darwin"] }

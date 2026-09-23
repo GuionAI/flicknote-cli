@@ -103,6 +103,20 @@ impl<'a> NoteService<'a> {
         Ok(items)
     }
 
+    /// Hydrate ranked search identifiers from canonical storage. A projection
+    /// can lag canonical deletion; missing hits are deliberately skipped.
+    pub async fn find_ranked_ids(&self, ids: &[String]) -> Result<Vec<NoteListItem>, ServiceError> {
+        let mut items = Vec::with_capacity(ids.len());
+        for id in ids {
+            match self.db.find_note(id).await {
+                Ok(note) => items.push(self.summary(note).await?.into()),
+                Err(crate::error::CliError::NoteNotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(items)
+    }
+
     pub async fn recall(
         &self,
         prompt: &str,
@@ -1091,6 +1105,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn ranked_ids_keep_order_and_drop_stale_hits() {
+        let backend = make_backend().await;
+        let first = insert_normal_note(&backend, "first", "synced").await;
+        let second = insert_normal_note(&backend, "second", "draft").await;
+        backend
+            .update_note_title(&first, Some("First"))
+            .await
+            .unwrap();
+        backend
+            .update_note_title(&second, Some("Second"))
+            .await
+            .unwrap();
+        let service = NoteService::new(&*backend);
+
+        let found = service
+            .find_ranked_ids(&[second.clone(), "stale-id".to_string(), first.clone()])
+            .await
+            .unwrap();
+
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0].title.as_deref(), Some("Second"));
+        assert!(found[0].draft);
+        assert_eq!(found[1].title.as_deref(), Some("First"));
     }
 
     #[tokio::test]
