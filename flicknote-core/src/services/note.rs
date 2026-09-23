@@ -182,6 +182,11 @@ impl<'a> NoteService<'a> {
             }
         } else {
             let (title, content) = extract_title_and_strip(&input.content);
+            if input.draft && content.trim().is_empty() {
+                return Err(ServiceError::InvalidArgument(
+                    "content must not be empty".to_string(),
+                ));
+            }
             CreateNote {
                 id,
                 note_type: "normal".to_string(),
@@ -1462,6 +1467,33 @@ mod tests {
             Some("https://example.com/draft")
         );
         assert!(created.draft);
+    }
+
+    #[tokio::test]
+    async fn add_draft_rejects_empty_body_after_extracting_title() {
+        let backend = make_backend().await;
+        let creator = DbCreator {
+            db: &*backend,
+            request: std::sync::Mutex::new(None),
+        };
+
+        let error = NoteService::new(&*backend)
+            .add(
+                &creator,
+                NoteAddInput {
+                    content: "# Just a Title\n\n".to_string(),
+                    project: None,
+                    interpret_as_url: false,
+                    draft: true,
+                    topics: Vec::new(),
+                    created_at: None,
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "invalid_argument");
+        assert!(creator.request.lock().unwrap().is_none());
     }
 
     #[tokio::test]
