@@ -210,7 +210,7 @@ async fn seeded_backend(
         .insert_note(&InsertNoteReq {
             id: &note_uuid,
             note_type: "normal",
-            status: "synced",
+            status: "ready",
             title: Some("MCP Note"),
             content: Some("## Alpha\n\nOld text.\n\n## Beta\n\nKeep me."),
             metadata: None,
@@ -252,7 +252,7 @@ async fn seeded_backend(
         .insert_note(&InsertNoteReq {
             id: &no_source_id,
             note_type: "normal",
-            status: "synced",
+            status: "draft",
             title: Some("No source note"),
             content: Some("Editable content"),
             metadata: None,
@@ -421,6 +421,10 @@ async fn mcp_server_exposes_stable_tool_contract() {
     assert_eq!(
         list["inputSchema"]["$defs"]["NoteType"]["enum"],
         serde_json::json!(["normal", "meeting", "link"])
+    );
+    assert_eq!(
+        list["inputSchema"]["$defs"]["NoteStatus"]["enum"],
+        serde_json::json!(["draft", "ai_queued", "source_queued", "ready"])
     );
     assert_eq!(
         list["inputSchema"]["properties"]["cursor"]["minimum"],
@@ -999,6 +1003,36 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     );
     assert_json_does_not_contain_string(&listed["result"]["structuredContent"], &harness.note_uuid);
     assert_json_does_not_contain_key(&listed["result"]["structuredContent"], "status");
+
+    let ready = harness
+        .call("note_list", serde_json::json!({ "status": "ready" }))
+        .await;
+    assert_eq!(ready["result"]["isError"], false);
+    assert_eq!(ready["result"]["structuredContent"]["notes"][0]["id"], 42);
+    assert_eq!(
+        ready["result"]["structuredContent"]["notes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let draft = harness
+        .call("note_list", serde_json::json!({ "status": "draft" }))
+        .await;
+    assert_eq!(draft["result"]["isError"], false);
+    assert_eq!(draft["result"]["structuredContent"]["notes"][0]["id"], 43);
+
+    let invalid = harness
+        .call("note_list", serde_json::json!({ "status": "reday" }))
+        .await;
+    assert_eq!(invalid["result"]["isError"], true);
+    assert!(
+        invalid["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("unknown note status: reday")
+    );
 
     let found = harness
         .call("note_find", serde_json::json!({ "keywords": ["MCP"] }))

@@ -196,7 +196,7 @@ fn seed_canonical_note(data_home: &std::path::Path) {
     runtime.block_on(async {
         let writer = db.writer().await.unwrap();
         writer.execute(
-            "INSERT INTO notes (id, user_id, type, status, title, content) VALUES (?, 'daemon-process-test-user', 'normal', 'synced', 'Seed', 'Stored body')",
+            "INSERT INTO notes (id, user_id, type, status, title, content) VALUES (?, 'daemon-process-test-user', 'normal', 'ready', 'Seed', 'Stored body')",
             params![uuid::Uuid::new_v4().to_string()],
         ).unwrap();
     });

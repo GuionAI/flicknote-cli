@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
 use crate::services::dto::RecallCandidate;
-use crate::types::{Note, Project};
+use crate::types::{Note, NoteStatus, Project};
 
 use super::{
     InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, RouteProjectUpdate,
@@ -408,6 +408,7 @@ impl NoteDb for LocalPowerSyncBackend {
             WHERE user_id = ?
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
+              AND (? IS NULL OR status = ?)
               AND (? IS NULL OR project_id = ?)
               AND (? = 0 OR project_id IS NULL)
               AND (? IS NULL OR
@@ -429,6 +430,8 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.archived,
                 filter.note_type,
                 filter.note_type,
+                filter.status,
+                filter.status,
                 filter.project_id,
                 filter.project_id,
                 filter.no_project,
@@ -689,14 +692,15 @@ impl NoteDb for LocalPowerSyncBackend {
 
             let row = tx
                 .query_row(
-                    "SELECT id, project_id, metadata FROM notes WHERE user_id = ? \
+                    "SELECT id, status, project_id, metadata FROM notes WHERE user_id = ? \
                      AND short_id = ? AND deleted_at IS NULL LIMIT 1",
                     params![self.user_id, update.note_id],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
-                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, String>(1)?,
                             row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
                         ))
                     },
                 )
@@ -704,7 +708,13 @@ impl NoteDb for LocalPowerSyncBackend {
                 .ok_or_else(|| CliError::NoteNotFound {
                     id: update.note_id.to_string(),
                 })?;
-            let (note_id, project_id, metadata) = row;
+            let (note_id, status, project_id, metadata) = row;
+            if status != NoteStatus::Ready.as_str() {
+                return Err(CliError::Other(format!(
+                    "Note {} is not ready",
+                    update.note_id
+                )));
+            }
             if project_id.is_some() {
                 return Err(CliError::Other(format!(
                     "Note {} already has a project",

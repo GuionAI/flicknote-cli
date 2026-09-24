@@ -1,6 +1,7 @@
 //! Note application service.
 
 use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch, RouteProjectUpdate};
+use crate::types::NoteStatus;
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
 use super::dto::{
@@ -134,6 +135,12 @@ impl<'a> NoteService<'a> {
             input.created_after.as_deref(),
             input.created_before.as_deref(),
         )?;
+        let status = input
+            .status
+            .as_deref()
+            .map(str::parse::<NoteStatus>)
+            .transpose()
+            .map_err(ServiceError::InvalidArgument)?;
         let project_id = match input.project.as_deref() {
             Some(name) => Some(
                 self.db
@@ -149,6 +156,7 @@ impl<'a> NoteService<'a> {
                 project_id: project_id.as_deref(),
                 no_project: input.no_project,
                 note_type: input.note_type.as_deref(),
+                status: status.map(NoteStatus::as_str),
                 created_after_micros,
                 created_before_micros,
                 archived: input.archived,
@@ -191,6 +199,7 @@ impl<'a> NoteService<'a> {
                     project_id: project_id.as_deref(),
                     no_project: false,
                     note_type: None,
+                    status: None,
                     created_after_micros: None,
                     created_before_micros: None,
                     archived: input.archived,
@@ -236,6 +245,7 @@ impl<'a> NoteService<'a> {
                     project_id: project_id.as_deref(),
                     no_project: false,
                     note_type: None,
+                    status: None,
                     created_after_micros: None,
                     created_before_micros: None,
                     archived: false,
@@ -255,6 +265,7 @@ impl<'a> NoteService<'a> {
             project_id: project_id.as_deref(),
             no_project: false,
             note_type: input.note_type.as_deref(),
+            status: None,
             created_after_micros: None,
             created_before_micros: None,
             archived: input.archived,
@@ -294,7 +305,7 @@ impl<'a> NoteService<'a> {
             CreateNote {
                 id,
                 note_type: "link".to_string(),
-                status: "source_queued".to_string(),
+                status: NoteStatus::SourceQueued.as_str().to_string(),
                 title: None,
                 content: None,
                 metadata: Some(serde_json::json!({ "link": { "url": link_url } }).to_string()),
@@ -314,9 +325,9 @@ impl<'a> NoteService<'a> {
                 id,
                 note_type: "normal".to_string(),
                 status: if input.draft {
-                    "draft".to_string()
+                    NoteStatus::Draft.as_str().to_string()
                 } else {
-                    "ai_queued".to_string()
+                    NoteStatus::AiQueued.as_str().to_string()
                 },
                 title,
                 content: Some(content),
@@ -947,14 +958,14 @@ mod tests {
     #[tokio::test]
     async fn append_separates_content_and_preserves_lifecycle() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "existing", "synced").await;
+        let id = insert_normal_note(&backend, "existing", "ready").await;
         let service = NoteService::new(&*backend);
 
         let result = service.append(&id, "added").await.unwrap();
 
         let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.content.as_deref(), Some("existing\n\nadded"));
-        assert_eq!(note.status, "synced");
+        assert_eq!(note.status, "ready");
         assert_eq!(result.note.uuid, id);
         assert!(result.sections.is_empty());
     }
@@ -965,7 +976,7 @@ mod tests {
         let id = insert_normal_note(
             &backend,
             "## Target\nold\n\n### Child\nchild\n\n## Keep\nstable",
-            "synced",
+            "ready",
         )
         .await;
         let section = crate::services::markdown::parse_markdown(
@@ -986,7 +997,7 @@ mod tests {
             note.content.as_deref(),
             Some("## Replacement\nnew\n\n## Keep\nstable")
         );
-        assert_eq!(note.status, "synced");
+        assert_eq!(note.status, "ready");
         assert_eq!(result.sections[0].title, "Replacement");
     }
 
@@ -994,19 +1005,19 @@ mod tests {
     async fn write_replaces_content_without_changing_lifecycle() {
         let backend = make_backend().await;
         let draft_id = insert_normal_note(&backend, "old draft body", "draft").await;
-        let synced_id = insert_normal_note(&backend, "old synced body", "synced").await;
+        let ready_id = insert_normal_note(&backend, "old ready body", "ready").await;
         let service = NoteService::new(&*backend);
 
         let result = service.write(&draft_id, "new draft body").await.unwrap();
-        service.write(&synced_id, "new synced body").await.unwrap();
+        service.write(&ready_id, "new ready body").await.unwrap();
 
         let note = backend.find_note(&draft_id).await.unwrap();
         assert_eq!(note.content.as_deref(), Some("new draft body"));
         assert_eq!(note.status, "draft");
         assert!(result.note.draft);
-        let note = backend.find_note(&synced_id).await.unwrap();
-        assert_eq!(note.content.as_deref(), Some("new synced body"));
-        assert_eq!(note.status, "synced");
+        let note = backend.find_note(&ready_id).await.unwrap();
+        assert_eq!(note.content.as_deref(), Some("new ready body"));
+        assert_eq!(note.status, "ready");
     }
 
     #[tokio::test]
@@ -1051,7 +1062,7 @@ mod tests {
     #[tokio::test]
     async fn modify_rejects_ambiguous_before_without_writing() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "same\n\nsame", "synced").await;
+        let id = insert_normal_note(&backend, "same\n\nsame", "ready").await;
         let service = NoteService::new(&*backend);
 
         let error = service
@@ -1071,13 +1082,13 @@ mod tests {
         assert_eq!(error.code(), "before_ambiguous");
         let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.content.as_deref(), Some("same\n\nsame"));
-        assert_eq!(note.status, "synced");
+        assert_eq!(note.status, "ready");
     }
 
     #[tokio::test]
     async fn exact_content_modify_preserves_lifecycle() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "old body", "synced").await;
+        let id = insert_normal_note(&backend, "old body", "ready").await;
         let service = NoteService::new(&*backend);
 
         service
@@ -1096,7 +1107,7 @@ mod tests {
 
         let note = backend.find_note(&id).await.unwrap();
         assert_eq!(note.content.as_deref(), Some("new body"));
-        assert_eq!(note.status, "synced");
+        assert_eq!(note.status, "ready");
     }
 
     #[tokio::test]
@@ -1129,7 +1140,7 @@ mod tests {
     #[tokio::test]
     async fn archive_and_restore_target_the_explicit_note() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "body", "synced").await;
+        let id = insert_normal_note(&backend, "body", "ready").await;
         let service = NoteService::new(&*backend);
 
         let archived = service.archive(&id).await.unwrap();
@@ -1144,7 +1155,7 @@ mod tests {
     #[tokio::test]
     async fn list_returns_public_item_with_project_name() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "body", "synced").await;
+        let id = insert_normal_note(&backend, "body", "ready").await;
         let project_id = backend.create_project("work").await.unwrap();
         backend
             .move_note_to_project(&id, &project_id, None)
@@ -1155,6 +1166,7 @@ mod tests {
         let notes = service
             .list(NoteListInput {
                 note_type: None,
+                status: None,
                 project: Some("work".to_string()),
                 no_project: false,
                 created_after: None,
@@ -1181,6 +1193,7 @@ mod tests {
         let error = service
             .list(NoteListInput {
                 note_type: None,
+                status: None,
                 project: Some("work".to_string()),
                 no_project: true,
                 created_after: None,
@@ -1200,16 +1213,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_accepts_canonical_statuses_and_rejects_unknown_status() {
+        let backend = make_backend().await;
+        let service = NoteService::new(&*backend);
+
+        for status in ["draft", "ai_queued", "source_queued", "ready"] {
+            insert_normal_note(&backend, status, status).await;
+            let notes = service
+                .list(NoteListInput {
+                    note_type: None,
+                    status: Some(status.to_string()),
+                    project: None,
+                    no_project: false,
+                    created_after: None,
+                    created_before: None,
+                    archived: false,
+                    limit: 20,
+                    cursor: None,
+                })
+                .await
+                .unwrap();
+            assert_eq!(notes.len(), 1, "status {status}");
+        }
+
+        let error = service
+            .list(NoteListInput {
+                note_type: None,
+                status: Some("reday".to_string()),
+                project: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
+                archived: false,
+                limit: 20,
+                cursor: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), "invalid_argument");
+        assert_eq!(error.to_string(), "unknown note status: reday");
+    }
+
+    #[tokio::test]
     async fn content_bytes_counts_stored_unicode_utf8_bytes() {
         let backend = make_backend().await;
         let stored = "---\ncustom: keep\n---\n\n中文😊";
-        let id = insert_normal_note(&backend, stored, "synced").await;
+        let id = insert_normal_note(&backend, stored, "ready").await;
         let service = NoteService::new(&*backend);
 
         let detail = service.get(&id, false).await.unwrap();
         let listed = service
             .list(NoteListInput {
                 note_type: None,
+                status: None,
                 project: None,
                 no_project: false,
                 created_after: None,
@@ -1231,7 +1287,7 @@ mod tests {
     async fn get_returns_stored_content_and_section_tree() {
         let backend = make_backend().await;
         let stored = "---\ncustom: preserve\n---\n\n## Part\nBody";
-        let id = insert_normal_note(&backend, stored, "synced").await;
+        let id = insert_normal_note(&backend, stored, "ready").await;
         let service = NoteService::new(&*backend);
 
         let detail = service.get(&id, false).await.unwrap();
@@ -1251,7 +1307,7 @@ mod tests {
     async fn rename_and_delete_section_update_the_same_tree_contract() {
         let backend = make_backend().await;
         let original = "## First\none\n\n## Second\ntwo";
-        let id = insert_normal_note(&backend, original, "synced").await;
+        let id = insert_normal_note(&backend, original, "ready").await;
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
@@ -1262,20 +1318,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(renamed.sections[0].title, "Renamed");
-        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "ready");
         let renamed_id = renamed.sections[0].id.clone();
 
         let deleted = service.delete_section(&id, &renamed_id).await.unwrap();
         assert_eq!(deleted.sections.len(), 1);
         assert_eq!(deleted.sections[0].title, "Second");
-        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "ready");
     }
 
     #[tokio::test]
     async fn insert_after_section_places_content_after_the_whole_subtree() {
         let backend = make_backend().await;
         let original = "## First\none\n\n### Child\nchild\n\n## Second\ntwo";
-        let id = insert_normal_note(&backend, original, "synced").await;
+        let id = insert_normal_note(&backend, original, "ready").await;
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
@@ -1291,13 +1347,13 @@ mod tests {
             content,
             "## First\none\n\n### Child\nchild\n\n## New\nnew\n\n## Second\ntwo"
         );
-        assert_eq!(backend.find_note(&id).await.unwrap().status, "synced");
+        assert_eq!(backend.find_note(&id).await.unwrap().status, "ready");
     }
 
     #[tokio::test]
     async fn find_and_count_use_typed_filters() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "PowerSync notes", "synced").await;
+        let id = insert_normal_note(&backend, "PowerSync notes", "ready").await;
         backend
             .set_note_extractions(&id, "::topic", &["Rust".to_string()])
             .await
@@ -1336,7 +1392,7 @@ mod tests {
     #[tokio::test]
     async fn ranked_ids_keep_order_and_drop_stale_hits() {
         let backend = make_backend().await;
-        let first = insert_normal_note(&backend, "first", "synced").await;
+        let first = insert_normal_note(&backend, "first", "ready").await;
         let second = insert_normal_note(&backend, "second", "draft").await;
         backend
             .update_note_title(&first, Some("First"))
@@ -1363,7 +1419,7 @@ mod tests {
     async fn get_section_returns_heading_and_full_subtree() {
         let backend = make_backend().await;
         let original = "## First\none\n\n### Child\nchild\n\n## Second\ntwo";
-        let id = insert_normal_note(&backend, original, "synced").await;
+        let id = insert_normal_note(&backend, original, "ready").await;
         let section = crate::services::markdown::parse_markdown(original).headings[0]
             .id
             .clone();
@@ -1379,7 +1435,7 @@ mod tests {
     #[tokio::test]
     async fn get_section_accepts_an_id_returned_by_get_when_title_matches_heading() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "# Test note\nBody", "synced").await;
+        let id = insert_normal_note(&backend, "# Test note\nBody", "ready").await;
         let service = NoteService::new(&*backend);
         let detail = service.get(&id, false).await.unwrap();
         let section_id = detail.sections[0].id.clone();
@@ -1400,6 +1456,7 @@ mod tests {
         let listed = service
             .list(NoteListInput {
                 note_type: None,
+                status: None,
                 project: None,
                 no_project: false,
                 created_after: None,
@@ -1800,7 +1857,7 @@ mod tests {
     #[tokio::test]
     async fn source_reads_archived_notes_through_the_shared_parser() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "body", "synced").await;
+        let id = insert_normal_note(&backend, "body", "ready").await;
         let writer = backend.database().writer().await.unwrap();
         writer
             .execute(
@@ -1865,7 +1922,7 @@ mod tests {
     #[tokio::test]
     async fn share_and_open_resolve_note_identity_before_side_effects() {
         let backend = make_backend().await;
-        let id = insert_normal_note(&backend, "body", "synced").await;
+        let id = insert_normal_note(&backend, "body", "ready").await;
         let writer = backend.database().writer().await.unwrap();
         writer
             .execute(

@@ -10,6 +10,7 @@ pub struct NoteFilter<'a> {
     pub project_id: Option<&'a str>,
     pub no_project: bool,
     pub note_type: Option<&'a str>,
+    pub status: Option<&'a str>,
     pub created_after_micros: Option<i64>,
     pub created_before_micros: Option<i64>,
     pub archived: bool,

@@ -1,4 +1,5 @@
 use flicknote_core::services::dto::{ExtractionFilterDto, Patch};
+use flicknote_core::types::NoteStatus;
 
 use super::dto::McpEntityType;
 use flicknote_core::services::source::SourceView;
@@ -160,6 +161,8 @@ impl CountNoteType {
 pub(super) struct NoteListParams {
     #[serde(rename = "type")]
     pub note_type: Option<ListNoteType>,
+    #[schemars(with = "Option<NoteStatus>")]
+    pub status: Option<String>,
     pub project: Option<String>,
     #[serde(default)]
     pub no_project: bool,

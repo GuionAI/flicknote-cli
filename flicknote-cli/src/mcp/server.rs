@@ -150,7 +150,7 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
 impl FlickNoteMcp {
     #[tool(
         name = "note_list",
-        description = "List active or archived notes with optional type and project filters.",
+        description = "List active or archived notes with optional type, lifecycle status, project, and creation-time filters.",
         annotations(read_only_hint = true)
     )]
     async fn note_list(
@@ -160,6 +160,7 @@ impl FlickNoteMcp {
         structured(
             self.call::<Vec<NoteListItem>>(AppRequest::NoteList(NoteListInput {
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
+                status: params.status,
                 project: params.project,
                 no_project: params.no_project,
                 created_after: params.created_after,

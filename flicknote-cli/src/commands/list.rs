@@ -1,6 +1,7 @@
 use clap::Args;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{NoteListInput, NoteListItem};
+use flicknote_core::types::NoteStatus;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::print_summaries_table;
@@ -13,6 +14,9 @@ pub(crate) struct ListArgs {
     /// Filter by type
     #[arg(long, value_parser = ["normal", "meeting", "link"])]
     r#type: Option<String>,
+    /// Filter by lifecycle status
+    #[arg(long)]
+    status: Option<NoteStatus>,
     /// Filter by project name
     #[arg(long)]
     project: Option<String>,
@@ -44,6 +48,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
     let notes: Vec<NoteListItem> = match daemon
         .call(AppRequest::NoteList(NoteListInput {
             note_type: args.r#type.clone(),
+            status: args.status.map(|status| status.as_str().to_string()),
             project: project.clone(),
             no_project: args.no_project,
             created_after: args.created_after.clone(),

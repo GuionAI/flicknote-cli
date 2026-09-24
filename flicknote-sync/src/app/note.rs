@@ -7,6 +7,7 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
 use flicknote_core::services::ports::{CreateNote, CreatedNote};
 use flicknote_core::services::upload::{self, UploadKind};
+use flicknote_core::types::NoteStatus;
 
 use super::Application;
 use crate::ipc::{AppRequest, AppResponse, EditableDocument, WireError};
@@ -264,7 +265,7 @@ async fn add_editable(
         .create(CreateNote {
             id: uuid::Uuid::new_v4().to_string(),
             note_type: "normal".to_string(),
-            status: "ai_queued".to_string(),
+            status: NoteStatus::AiQueued.as_str().to_string(),
             title: Some(parsed.title),
             content: Some(parsed.stored_content),
             metadata: None,
@@ -349,7 +350,7 @@ async fn upload_attachment(
         .create(CreateNote {
             id: uuid::Uuid::new_v4().to_string(),
             note_type: note_type.to_string(),
-            status: "source_queued".to_string(),
+            status: NoteStatus::SourceQueued.as_str().to_string(),
             title: None,
             content: None,
             metadata: Some(metadata),

@@ -182,6 +182,7 @@ async fn app_routes_note_list_and_append_through_services() {
     let listed = app
         .handle(AppRequest::NoteList(NoteListInput {
             note_type: None,
+            status: None,
             project: None,
             no_project: false,
             created_after: None,
@@ -301,6 +302,7 @@ async fn versioned_socket_routes_client_requests_through_application() {
     let response = client
         .app(AppRequest::NoteList(NoteListInput {
             note_type: None,
+            status: None,
             project: None,
             no_project: false,
             created_after: None,
