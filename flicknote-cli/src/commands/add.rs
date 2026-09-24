@@ -4,8 +4,6 @@ use flicknote_core::services::dto::{NoteAddInput, NoteCreateResult};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use std::io::{IsTerminal, Read};
 
-use super::util::resolve_project_arg;
-
 const ADD_HELP: &str = include_str!("../help/add.md");
 
 #[derive(Args)]
@@ -43,7 +41,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(),
         }
     };
 
-    let project = resolve_project_arg(&args.project);
+    let project = args.project.clone();
     let note: NoteCreateResult = daemon
         .call(AppRequest::NoteAdd(NoteAddInput {
             content,

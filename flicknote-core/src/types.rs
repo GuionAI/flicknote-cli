@@ -35,6 +35,7 @@ pub struct Project {
     pub user_id: String,
     pub name: String,
     pub color: Option<String>,
+    pub metadata: Option<String>,
     pub is_archived: Option<i64>,
     pub created_at: Option<String>,
 }

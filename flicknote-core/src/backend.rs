@@ -8,7 +8,10 @@ use crate::types::{Note, Project};
 
 pub struct NoteFilter<'a> {
     pub project_id: Option<&'a str>,
+    pub no_project: bool,
     pub note_type: Option<&'a str>,
+    pub created_after_micros: Option<i64>,
+    pub created_before_micros: Option<i64>,
     pub archived: bool,
     pub limit: u32,
     pub cursor: Option<i64>,
@@ -41,6 +44,13 @@ pub struct InsertNoteReq<'a> {
 pub struct InsertedNote {
     pub uuid: String,
     pub short_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteProjectUpdate {
+    pub note_id: i64,
+    pub project_id: Option<String>,
+    pub probability_json: String,
 }
 
 pub(crate) enum NoteLookup<'a> {
@@ -101,6 +111,10 @@ pub trait NoteDb: Send + Sync {
     /// Update stored content while preserving the note lifecycle status.
     async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError>;
 
+    /// Apply automatic project routing to every note in one transaction.
+    async fn route_notes_to_projects(&self, updates: &[RouteProjectUpdate])
+    -> Result<(), CliError>;
+
     /// Transition an active draft to the queued lifecycle state.
     /// Returns false when the note is no longer an active draft.
     async fn submit_draft(&self, id: &str) -> Result<bool, CliError>;
@@ -141,8 +155,14 @@ pub trait NoteDb: Send + Sync {
     async fn update_note_project(&self, id: &str, project_id: Option<&str>)
     -> Result<(), CliError>;
 
-    /// Update project color. `None` = don't change, `Some(None)` = clear, `Some(Some(v))` = set.
-    async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError>;
+    /// Patch project presentation and metadata. Nested options retain three-state semantics.
+    async fn update_project(
+        &self,
+        id: &str,
+        color: Option<Option<&str>>,
+        pinned: Option<Option<bool>>,
+        summary: Option<Option<&str>>,
+    ) -> Result<(), CliError>;
 
     /// Delete (archive) a project by ID. Returns `ProjectNotFound` if no such project exists.
     async fn delete_project(&self, id: &str) -> Result<(), CliError>;

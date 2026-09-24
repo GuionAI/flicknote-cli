@@ -1,4 +1,4 @@
-use super::util::{display_summary_id, resolve_project_arg};
+use super::util::display_summary_id;
 use clap::Args;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{NoteDetail, NoteSummary};
@@ -114,14 +114,14 @@ async fn create_from_editor(
         println!("Empty buffer — no note created.");
         return Ok(());
     }
-    let effective_project = resolve_project_arg(project_arg);
+    let project = project_arg.clone();
     let inserted: NoteSummary = daemon
         .call(AppRequest::NoteAddEditable {
             document: edited,
-            project: effective_project.clone(),
+            project: project.clone(),
         })
         .await?;
-    match effective_project.as_deref() {
+    match project.as_deref() {
         Some(name) => println!(
             "Created note {} in project \"{name}\".",
             display_summary_id(&inserted)

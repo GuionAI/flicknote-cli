@@ -9,7 +9,8 @@ use crate::services::dto::RecallCandidate;
 use crate::types::{Note, Project};
 
 use super::{
-    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, parse_note_lookup,
+    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, RouteProjectUpdate,
+    parse_note_lookup,
 };
 
 // ─── LocalPowerSyncBackend ───────────────────────────────────────────────────
@@ -59,15 +60,17 @@ const SQ_SET_DELETED_AT: &str =
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_SET_DELETED_AT_NULL: &str =
     "UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE user_id = ? AND id = ?";
-const SQ_UPDATE_PROJECT: &str =
-    "UPDATE notes SET project_id = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+const SQ_UPDATE_PROJECT: &str = "UPDATE notes SET project_id = ?, updated_at = ?, \
+     metadata = CASE WHEN json_type(metadata, '$.project_routing') IS NOT NULL \
+                     THEN json_remove(metadata, '$.project_routing') ELSE metadata END \
+     WHERE user_id = ? AND id = ?";
 
 const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND name = ? \
      AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1";
 const SQ_FIND_PROJECT_NAME: &str = "SELECT name FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
-const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ACTIVE: &str = "SELECT id, user_id, name, color, metadata, is_archived, created_at FROM projects \
      WHERE user_id = ? AND (is_archived = 0 OR is_archived IS NULL) ORDER BY name";
-const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects \
+const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, metadata, is_archived, created_at FROM projects \
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
 const SQ_CREATE_PROJECT: &str =
     "INSERT INTO projects (id, user_id, name, is_archived, created_at) VALUES (?, ?, ?, 0, ?)";
@@ -101,7 +104,7 @@ const SQ_CLEAR_EXTRACTIONS: &str = "DELETE FROM note_extractions \
 const SQ_INSERT_EXTRACTION: &str =
     "INSERT INTO note_extractions (id, note_id, user_id, key, value) VALUES (?, ?, ?, ?, ?)";
 
-const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
+const SQ_FIND_PROJECT_BY_ID: &str = "SELECT id, user_id, name, color, metadata, is_archived, created_at FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_RESOLVE_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND id = ? LIMIT 1";
 const SQ_ARCHIVE_PROJECT: &str = "UPDATE projects SET is_archived = 1 WHERE user_id = ? AND id = ?";
 // This query is a coarse literal prefilter. Extraction rows are the outer loop
@@ -300,6 +303,7 @@ fn decode_project(row: &Row<'_>) -> rusqlite::Result<Project> {
         user_id: row.get("user_id")?,
         name: row.get("name")?,
         color: row.get("color")?,
+        metadata: row.get("metadata")?,
         is_archived: row.get("is_archived")?,
         created_at: row.get("created_at")?,
     })
@@ -405,6 +409,17 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
+              AND (? = 0 OR project_id IS NULL)
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END >= ?)
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END < ?)
               AND (? IS NULL OR short_id < ?)
             ORDER BY short_id DESC
             LIMIT ?
@@ -416,6 +431,11 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.note_type,
                 filter.project_id,
                 filter.project_id,
+                filter.no_project,
+                filter.created_after_micros,
+                filter.created_after_micros,
+                filter.created_before_micros,
+                filter.created_before_micros,
                 filter.cursor,
                 filter.cursor,
                 limit,
@@ -644,6 +664,96 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(())
     }
 
+    async fn route_notes_to_projects(
+        &self,
+        updates: &[RouteProjectUpdate],
+    ) -> Result<(), CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        for update in updates {
+            if let Some(project_id) = update.project_id.as_deref() {
+                let project_exists = tx
+                    .query_row(
+                        "SELECT 1 FROM projects WHERE user_id = ? AND id = ? \
+                         AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
+                        params![self.user_id, project_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !project_exists {
+                    return Err(CliError::Other(format!("Project not found: {project_id}")));
+                }
+            }
+
+            let row = tx
+                .query_row(
+                    "SELECT id, project_id, metadata FROM notes WHERE user_id = ? \
+                     AND short_id = ? AND deleted_at IS NULL LIMIT 1",
+                    params![self.user_id, update.note_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| CliError::NoteNotFound {
+                    id: update.note_id.to_string(),
+                })?;
+            let (note_id, project_id, metadata) = row;
+            if project_id.is_some() {
+                return Err(CliError::Other(format!(
+                    "Note {} already has a project",
+                    update.note_id
+                )));
+            }
+            let mut metadata = metadata
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()?
+                .unwrap_or_else(|| serde_json::json!({}));
+            let object = metadata.as_object_mut().ok_or_else(|| {
+                CliError::Other(format!(
+                    "Note {} metadata must be a JSON object",
+                    update.note_id
+                ))
+            })?;
+            if object
+                .get("project_routing")
+                .and_then(|value| value.get("routed"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(CliError::Other(format!(
+                    "Note {} is already routed",
+                    update.note_id
+                )));
+            }
+            let probability: serde_json::Value = serde_json::from_str(&update.probability_json)?;
+            object.insert(
+                "project_routing".to_string(),
+                serde_json::json!({"routed": true, "probability": probability}),
+            );
+            tx.execute(
+                "UPDATE notes SET project_id = ?, metadata = ?, updated_at = ? \
+                 WHERE user_id = ? AND id = ?",
+                params![
+                    update.project_id,
+                    serde_json::to_string(&metadata)?,
+                    now,
+                    self.user_id,
+                    note_id
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     async fn submit_draft(&self, id: &str) -> Result<bool, CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let mut writer = self.db.writer().await?;
@@ -822,21 +932,66 @@ impl NoteDb for LocalPowerSyncBackend {
         .await
     }
 
-    async fn update_project(&self, id: &str, color: Option<Option<&str>>) -> Result<(), CliError> {
+    async fn update_project(
+        &self,
+        id: &str,
+        color: Option<Option<&str>>,
+        pinned: Option<Option<bool>>,
+        summary: Option<Option<&str>>,
+    ) -> Result<(), CliError> {
         let update_color = color.is_some();
-        if !update_color {
+        if !update_color && pinned.is_none() && summary.is_none() {
             return Ok(());
         }
 
         let color_value = color.flatten();
+        let existing = self.find_project(id).await?.metadata;
+        let mut metadata = existing
+            .as_deref()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .transpose()?
+            .unwrap_or_else(|| serde_json::json!({}));
+        let object = metadata.as_object_mut().ok_or_else(|| {
+            CliError::Other(format!("Project {id} metadata must be a JSON object"))
+        })?;
+        if let Some(value) = pinned {
+            match value {
+                Some(value) => {
+                    object.insert("pinned".to_string(), value.into());
+                }
+                None => {
+                    object.remove("pinned");
+                }
+            }
+        }
+        if let Some(value) = summary {
+            match value {
+                Some(value) => {
+                    object.insert("summary".to_string(), value.into());
+                }
+                None => {
+                    object.remove("summary");
+                }
+            }
+        }
+        let update_metadata = pinned.is_some() || summary.is_some();
+        let metadata = serde_json::to_string(&metadata)?;
         let writer = self.db.writer().await?;
         writer.execute(
             r#"
             UPDATE projects SET
-                color = CASE WHEN ? THEN ? ELSE color END
+                color = CASE WHEN ? THEN ? ELSE color END,
+                metadata = CASE WHEN ? THEN ? ELSE metadata END
             WHERE user_id = ? AND id = ?
             "#,
-            params![update_color, color_value, self.user_id, id],
+            params![
+                update_color,
+                color_value,
+                update_metadata,
+                metadata,
+                self.user_id,
+                id
+            ],
         )?;
         Ok(())
     }

@@ -191,6 +191,63 @@ async fn local_backend_insert_and_find() {
 }
 
 #[tokio::test]
+async fn project_metadata_hydrates_and_patch_preserves_unknown_keys() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("work").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET metadata = ? WHERE id = ?",
+                params![r#"{"unknown":{"keep":true},"pinned":false}"#, project_id],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    assert_eq!(
+        backend
+            .find_project(&project_id)
+            .await
+            .unwrap()
+            .metadata
+            .as_deref(),
+        Some(r#"{"unknown":{"keep":true},"pinned":false}"#)
+    );
+
+    backend
+        .update_project(&project_id, None, Some(Some(true)), Some(Some("Summary")))
+        .await
+        .unwrap();
+    let project = backend.find_project(&project_id).await.unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(project.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["unknown"]["keep"], true);
+    assert_eq!(metadata["pinned"], true);
+    assert_eq!(metadata["summary"], "Summary");
+    let patch = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(patch.crud.len(), 1);
+    assert_eq!(patch.crud[0].table, "projects");
+    assert!(matches!(
+        patch.crud[0].update_type,
+        powersync::UpdateType::Patch
+    ));
+    let uploaded: serde_json::Value = serde_json::from_str(
+        patch.crud[0].data.as_ref().unwrap()["metadata"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(uploaded["unknown"]["keep"], true);
+}
+
+#[tokio::test]
 async fn submit_draft_reports_whether_it_performed_the_transition() {
     let backend = make_backend().await;
     let id = uuid::Uuid::new_v4().to_string();
@@ -374,6 +431,9 @@ async fn local_backend_list_filter() {
     let notes = backend
         .list_notes(&NoteFilter {
             project_id: Some(&proj_a),
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -410,6 +470,9 @@ async fn local_backend_search_notes() {
             &["Unique".to_string()],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -427,6 +490,9 @@ async fn local_backend_search_notes() {
             &[],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -505,6 +571,9 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
             },
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -553,6 +622,9 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
             },
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -664,6 +736,9 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
             prompt,
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit,
@@ -856,6 +931,9 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
     );
     let filter = NoteFilter {
         project_id: None,
+        no_project: false,
+        created_after_micros: None,
+        created_before_micros: None,
         note_type: None,
         archived: false,
         limit: 20,
@@ -958,6 +1036,9 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             "Ada Lovelace and OpenAI\n\t\u{3000}",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 3,
@@ -991,6 +1072,9 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             "Ada Lovelace and OpenAI",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1038,6 +1122,9 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             "Project Ada",
             &NoteFilter {
                 project_id: Some(&project_id),
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1074,6 +1161,9 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             "No summary entity",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1122,6 +1212,9 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
             "Project topic",
             &NoteFilter {
                 project_id: Some(&project_id),
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1213,6 +1306,9 @@ async fn local_backend_search_respects_type_filter() {
             &["Shared".to_string()],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: Some("link"),
                 archived: false,
                 limit: 20,
@@ -1250,6 +1346,9 @@ async fn local_backend_archive() {
     let active = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1269,6 +1368,9 @@ async fn local_backend_archive() {
     let active_after = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1282,6 +1384,9 @@ async fn local_backend_archive() {
     let archived = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: true,
             limit: 20,
@@ -1296,6 +1401,9 @@ async fn local_backend_archive() {
     let active_restored = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1553,4 +1661,452 @@ async fn test_project_resolver_rejects_uuid_prefixes() {
     let project_prefix = &project_id[..8];
 
     assert!(backend.resolve_project_id(project_prefix).await.is_err());
+}
+
+async fn seed_routing_note(
+    db: &powersync::PowerSyncDatabase,
+    short_id: i64,
+    created_at: &str,
+    project_id: Option<&str>,
+    metadata: Option<&str>,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "INSERT INTO notes (id, short_id, user_id, type, status, title, content, project_id, metadata, created_at, updated_at) \
+             VALUES (?, ?, 'test-user-id', 'normal', 'ready', ?, 'body', ?, ?, ?, ?)",
+            params![id, short_id, format!("Note {short_id}"), project_id, metadata, created_at, created_at],
+        )
+        .unwrap();
+    writer.execute("DELETE FROM ps_crud", []).unwrap();
+    id
+}
+
+#[tokio::test]
+async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = uuid::Uuid::new_v4().to_string();
+    for (short_id, created_at, project) in [
+        (101, "2026-09-24T00:00:00Z", None),
+        (102, "2026-09-24T01:00:00Z", Some(project_id.as_str())),
+        (103, "2026-09-24T02:00:00Z", None),
+        (104, "2026-09-24T03:00:00Z", None),
+    ] {
+        seed_routing_note(&db, short_id, created_at, project, None).await;
+    }
+
+    fn list<'a>(
+        after: Option<&'a str>,
+        before: Option<&'a str>,
+        no_project: bool,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> NoteFilter<'a> {
+        let micros = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .timestamp_micros()
+        };
+        NoteFilter {
+            project_id: None,
+            no_project,
+            note_type: None,
+            created_after_micros: after.map(micros),
+            created_before_micros: before.map(micros),
+            archived: false,
+            limit,
+            cursor,
+        }
+    }
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some("2026-09-24T01:00:00Z"), None, false, 20, None))
+            .await
+            .unwrap()),
+        vec![104, 103, 102]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some("2026-09-24T02:00:00Z"), false, 20, None))
+            .await
+            .unwrap()),
+        vec![102, 101]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(
+                Some("2026-09-24T01:00:00Z"),
+                Some("2026-09-24T03:00:00Z"),
+                false,
+                20,
+                None
+            ))
+            .await
+            .unwrap()),
+        vec![103, 102]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 20, None))
+            .await
+            .unwrap()),
+        vec![104, 103, 101]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 2, None))
+            .await
+            .unwrap()),
+        vec![104, 103]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 2, Some(103)))
+            .await
+            .unwrap()),
+        vec![101]
+    );
+}
+
+#[tokio::test]
+async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    for (short_id, created_at) in [
+        (200, "2026-09-24T00:00:00Z"),
+        (201, "2026-09-24T00:00:00.000123Z"),
+        (202, "2026-09-24T00:00:00.000456+00:00"),
+        (203, "2026-09-24T08:00:00.000789+08:00"),
+    ] {
+        seed_routing_note(&db, short_id, created_at, None, None).await;
+    }
+
+    let base_micros = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+        .unwrap()
+        .timestamp_micros();
+    let list = |after, before| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        created_after_micros: after,
+        created_before_micros: before,
+        archived: false,
+        limit: 20,
+        cursor: None,
+    };
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 124), None))
+            .await
+            .unwrap()),
+        vec![203, 202]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some(base_micros + 456)))
+            .await
+            .unwrap()),
+        vec![201, 200]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 456), Some(base_micros + 789)))
+            .await
+            .unwrap()),
+        vec![202]
+    );
+}
+
+#[tokio::test]
+async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
+    assert!(
+        rusqlite::version_number() >= 3_051_000,
+        "the timestamp filter requires bundled SQLite 3.51 or newer, found {}",
+        rusqlite::version()
+    );
+
+    let (_directory, db, backend) = make_powersync_backend().await;
+    for (short_id, created_at) in [
+        (210, "2026-09-24T00:00:00.999499Z"),
+        (211, "2026-09-24T00:00:00.999500Z"),
+        (212, "2026-09-24T00:00:00.999999Z"),
+        (213, "2026-09-24T00:00:01Z"),
+        (214, "2026-09-24T08:00:00.999500+08:00"),
+    ] {
+        seed_routing_note(&db, short_id, created_at, None, None).await;
+    }
+
+    let base_micros = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+        .unwrap()
+        .timestamp_micros();
+    let list = |after, before| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        created_after_micros: after,
+        created_before_micros: before,
+        archived: false,
+        limit: 20,
+        cursor: None,
+    };
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 999_500), None))
+            .await
+            .unwrap()),
+        vec![214, 213, 212, 211]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some(base_micros + 1_000_000)))
+            .await
+            .unwrap()),
+        vec![214, 212, 211, 210]
+    );
+}
+
+#[tokio::test]
+async fn route_project_batch_writes_metadata_and_one_powersync_transaction() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Destination").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let first = seed_routing_note(
+        &db,
+        201,
+        "2026-09-24T01:00:00Z",
+        None,
+        Some(r#"{"unknown":{"keep":true}}"#),
+    )
+    .await;
+    let second = seed_routing_note(&db, 202, "2026-09-24T02:00:00Z", None, None).await;
+
+    backend
+        .route_notes_to_projects(&[
+            RouteProjectUpdate {
+                note_id: 201,
+                project_id: Some(project_id.clone()),
+                probability_json: "0.91".to_string(),
+            },
+            RouteProjectUpdate {
+                note_id: 202,
+                project_id: None,
+                probability_json: "0.78".to_string(),
+            },
+        ])
+        .await
+        .unwrap();
+
+    let first = backend.find_note(&first).await.unwrap();
+    let first_metadata: serde_json::Value =
+        serde_json::from_str(first.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(first.project_id.as_deref(), Some(project_id.as_str()));
+    assert_eq!(first_metadata["unknown"]["keep"], true);
+    assert_eq!(first_metadata["project_routing"]["routed"], true);
+    assert_eq!(first_metadata["project_routing"]["probability"], 0.91);
+    let second = backend.find_note(&second).await.unwrap();
+    let second_metadata: serde_json::Value =
+        serde_json::from_str(second.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(second.project_id, None);
+    assert_eq!(second_metadata["project_routing"]["probability"], 0.78);
+
+    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(transaction.crud.len(), 2);
+    assert!(transaction.crud.iter().all(|entry| {
+        entry.table == "notes" && matches!(entry.update_type, powersync::UpdateType::Patch)
+    }));
+    transaction.complete().await.unwrap();
+}
+
+async fn routing_rollback_fixture() -> (
+    tempfile::TempDir,
+    powersync::PowerSyncDatabase,
+    LocalPowerSyncBackend,
+    String,
+    String,
+    String,
+) {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Destination").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let first = seed_routing_note(&db, 301, "2026-09-24T01:00:00Z", None, None).await;
+    let second = seed_routing_note(&db, 302, "2026-09-24T02:00:00Z", None, None).await;
+    (_directory, db, backend, project_id, first, second)
+}
+
+fn valid_route(project_id: &str) -> RouteProjectUpdate {
+    RouteProjectUpdate {
+        note_id: 301,
+        project_id: Some(project_id.to_string()),
+        probability_json: "0.9".to_string(),
+    }
+}
+
+async fn assert_route_rolled_back(
+    backend: &LocalPowerSyncBackend,
+    db: &powersync::PowerSyncDatabase,
+    first: &str,
+) {
+    let note = backend.find_note(first).await.unwrap();
+    assert_eq!(note.project_id, None);
+    assert_eq!(note.metadata, None);
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn route_project_invalid_short_id_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, _second) = routing_rollback_fixture().await;
+
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 999_999,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_existing_project_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, second) = routing_rollback_fixture().await;
+
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET project_id = ? WHERE id = ?",
+                params![project_id, second],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 302,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_already_routed_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, second) = routing_rollback_fixture().await;
+
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET project_id = NULL, metadata = ? WHERE id = ?",
+                params![
+                    r#"{"project_routing":{"routed":true,"probability":0.4}}"#,
+                    second
+                ],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 302,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_invalid_project_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, _second) = routing_rollback_fixture().await;
+
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 999_998,
+                project_id: Some(uuid::Uuid::new_v4().to_string()),
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn manual_project_change_clears_routing_metadata_and_preserves_other_keys() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Manual").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let note_id = seed_routing_note(
+        &db,
+        401,
+        "2026-09-24T01:00:00Z",
+        None,
+        Some(r#"{"unknown":"keep","project_routing":{"routed":true,"probability":0.7}}"#),
+    )
+    .await;
+
+    backend
+        .update_note_project(&note_id, Some(&project_id))
+        .await
+        .unwrap();
+    let note = backend.find_note(&note_id).await.unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(note.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["unknown"], "keep");
+    assert!(metadata.get("project_routing").is_none());
 }

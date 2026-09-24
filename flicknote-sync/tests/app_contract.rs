@@ -183,6 +183,9 @@ async fn app_routes_note_list_and_append_through_services() {
         .handle(AppRequest::NoteList(NoteListInput {
             note_type: None,
             project: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -299,6 +302,9 @@ async fn versioned_socket_routes_client_requests_through_application() {
         .app(AppRequest::NoteList(NoteListInput {
             note_type: None,
             project: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             archived: false,
             limit: 20,
             cursor: None,

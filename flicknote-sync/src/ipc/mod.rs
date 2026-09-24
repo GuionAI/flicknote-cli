@@ -5,8 +5,8 @@ use flicknote_core::config::Config;
 use flicknote_core::services::dto::{
     InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail,
     NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteRecord,
-    NoteSectionResult, NoteSummary, OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput,
-    RecallCandidate, ShareResult, UnshareResult,
+    NoteRouteProjectInput, NoteRouteProjectResult, NoteSectionResult, NoteSummary, OpenResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
 };
 use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;

@@ -3,7 +3,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, NoteListItem};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::util::{print_summaries_table, resolve_project_arg};
+use super::util::print_summaries_table;
 
 const FIND_HELP: &str = include_str!("../help/find.md");
 
@@ -61,12 +61,7 @@ fn parse_search_input(args: &[String]) -> Result<ParsedSearch, CliError> {
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<(), CliError> {
-    let project = resolve_project_arg(&args.project);
-    if args.project.is_none()
-        && let Some(name) = project.as_deref()
-    {
-        eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
-    }
+    let project = args.project.clone();
     let parsed = parse_search_input(&args.keywords)?;
     let notes: Vec<NoteListItem> = daemon
         .call(AppRequest::NoteFind(NoteFindInput {

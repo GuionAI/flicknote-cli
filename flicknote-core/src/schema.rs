@@ -58,10 +58,13 @@ fn projects_table() -> Table {
             Column::text("user_id"),
             Column::text("name"),
             Column::text("color"),
+            Column::text("metadata"),
             Column::integer("is_archived"),
             Column::text("created_at"),
         ],
-        |_| {},
+        |table| {
+            table.options.track_metadata = true;
+        },
     )
 }
 
@@ -173,7 +176,7 @@ mod tests {
     fn remote_committed_tables_track_crud_metadata() {
         let schema = app_schema();
 
-        for name in ["notes", "note_extractions"] {
+        for name in ["notes", "projects", "note_extractions"] {
             let table = schema
                 .tables
                 .iter()

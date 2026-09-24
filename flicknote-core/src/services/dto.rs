@@ -1,6 +1,7 @@
 //! Shared application DTOs used by CLI and MCP adapters.
 
 use schemars::JsonSchema;
+use schemars::{Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, JsonSchema)]
@@ -38,6 +39,10 @@ pub struct ProjectModifyInput {
     pub id: String,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub color: Patch<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub pinned: Patch<bool>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub summary: Patch<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -51,6 +56,7 @@ pub struct ProjectDto {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -88,10 +94,13 @@ pub struct NoteListItem {
     #[serde(rename = "type")]
     pub note_type: String,
     pub title: Option<String>,
+    pub project_id: Option<String>,
     pub project: Option<String>,
     pub topics: Vec<String>,
     pub summary: Option<String>,
     pub content_bytes: u64,
+    #[schemars(schema_with = "arbitrary_json_schema")]
+    pub metadata: Option<serde_json::Value>,
     pub flagged: bool,
     pub draft: bool,
     pub created_at: Option<String>,
@@ -105,10 +114,12 @@ impl From<NoteSummary> for NoteListItem {
             id: note.short_id,
             note_type: note.note_type,
             title: note.title,
+            project_id: note.project_id,
             project: note.project,
             topics: note.topics,
             summary: note.summary,
             content_bytes: note.content_bytes,
+            metadata: None,
             flagged: note.flagged,
             draft: note.draft,
             created_at: note.created_at,
@@ -213,11 +224,36 @@ pub struct NoteListInput {
     pub note_type: Option<String>,
     pub project: Option<String>,
     #[serde(default)]
+    pub no_project: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<String>,
+    #[serde(default)]
     pub archived: bool,
     #[serde(default = "default_note_limit")]
     pub limit: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteRouteProjectInput {
+    pub note_id: i64,
+    pub project_id: Option<String>,
+    pub probability: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteRouteProjectResult {
+    pub routed: usize,
+}
+
+fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
+    serde_json::from_value(serde_json::json!({
+        "type": ["array", "boolean", "integer", "null", "number", "object", "string"]
+    }))
+    .expect("arbitrary JSON schema is valid")
 }
 
 pub const fn default_note_limit() -> u32 {
@@ -402,10 +438,12 @@ mod tests {
                 "id": 42,
                 "type": "normal",
                 "title": "A note",
+                "project_id": "project-uuid",
                 "project": "orientation",
                 "topics": ["CLI"],
                 "summary": "A summary",
                 "content_bytes": 123,
+                "metadata": null,
                 "flagged": true,
                 "draft": false,
                 "created_at": "2026-09-21T00:00:00Z",

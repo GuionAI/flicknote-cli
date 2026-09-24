@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use flicknote_core::services::dto::{
-    ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, ProjectDto,
-    SectionDto,
+    ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, NoteSummary,
+    ProjectDto, SectionDto,
 };
 use flicknote_core::services::source::SourceResult;
 use rmcp::handler::server::tool::schema_for_output;
@@ -58,9 +58,45 @@ pub(super) struct McpNoteListResult {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpNoteSummary {
+    pub id: Option<i64>,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: Option<String>,
+    pub project: Option<String>,
+    pub topics: Vec<String>,
+    pub summary: Option<String>,
+    pub content_bytes: u64,
+    pub flagged: bool,
+    pub draft: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+impl From<NoteSummary> for McpNoteSummary {
+    fn from(note: NoteSummary) -> Self {
+        Self {
+            id: note.short_id,
+            note_type: note.note_type,
+            title: note.title,
+            project: note.project,
+            topics: note.topics,
+            summary: note.summary,
+            content_bytes: note.content_bytes,
+            flagged: note.flagged,
+            draft: note.draft,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            deleted_at: note.deleted_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteDetail {
     #[serde(flatten)]
-    pub note: NoteListItem,
+    pub note: McpNoteSummary,
     pub content: String,
     #[schemars(schema_with = "arbitrary_json_schema")]
     pub metadata: Option<serde_json::Value>,
@@ -175,7 +211,7 @@ pub(super) fn source_output_schema() -> Arc<JsonObject> {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteMutationResult {
-    pub note: NoteListItem,
+    pub note: McpNoteSummary,
     pub sections: Vec<SectionDto>,
 }
 
@@ -207,6 +243,8 @@ impl From<NoteArchiveResult> for McpNoteArchiveResult {
 pub(super) struct McpProjectDto {
     pub name: String,
     pub color: Option<String>,
+    #[schemars(schema_with = "arbitrary_json_schema")]
+    pub metadata: Option<serde_json::Value>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -222,6 +260,7 @@ impl From<ProjectDto> for McpProjectDto {
         Self {
             name: project.name,
             color: project.color,
+            metadata: project.metadata,
             archived: project.archived,
             created_at: project.created_at,
         }

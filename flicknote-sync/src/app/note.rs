@@ -166,6 +166,10 @@ pub(super) async fn handle_write(
         AppRequest::NoteModify(input) => {
             service_result(notes.modify(input).await, AppResponse::NoteMutation)
         }
+        AppRequest::NoteRouteProject(input) => service_result(
+            notes.route_project(input).await,
+            AppResponse::NoteRouteProject,
+        ),
         AppRequest::NoteSubmit { id } => {
             service_result(notes.submit(&id).await, AppResponse::NoteMutation)
         }

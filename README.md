@@ -194,8 +194,7 @@ the daemon and prints up to five matching active-note candidates with their
 numeric short IDs, titles, available summaries, and modification times. An
 empty or unmatched query prints an empty-result message; it never lists every
 note. Human recall gives the complete daemon call five seconds, including IPC
-connection and response work. Use `--project NAME` or `FLICKNOTE_PROJECT` with
-the same precedence as the other note queries.
+connection and response work. Use `--project NAME` to filter by project.
 
 The Codex entrance is a synchronous command hook. Install it without an MCP
 registration or a running daemon:

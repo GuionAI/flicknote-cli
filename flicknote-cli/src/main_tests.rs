@@ -61,6 +61,33 @@ fn upload_command_parses() {
 }
 
 #[test]
+fn list_project_and_no_project_are_mutually_exclusive() {
+    let Err(error) =
+        Cli::try_parse_from(["flicknote", "list", "--project", "work", "--no-project"])
+    else {
+        panic!("project and no-project should conflict")
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn list_time_filters_and_route_project_parse() {
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "list",
+            "--created-after",
+            "2026-09-24T00:00:00Z",
+            "--created-before",
+            "2026-09-25T00:00:00Z",
+            "--no-project"
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["flicknote", "note", "route-project"]).is_ok());
+}
+
+#[test]
 fn metadata_discovery_and_source_commands_parse() {
     assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());

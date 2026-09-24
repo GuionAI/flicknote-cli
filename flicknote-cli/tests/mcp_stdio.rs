@@ -283,7 +283,6 @@ fn run_cli_json(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("FLICKNOTE_PROJECT")
         .output()
         .unwrap();
     assert!(
@@ -304,7 +303,6 @@ fn run_cli_with_input(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("FLICKNOTE_PROJECT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -353,7 +351,9 @@ fn assert_discovery_item_contract(note: &serde_json::Value, project: &serde_json
             "draft",
             "flagged",
             "id",
+            "metadata",
             "project",
+            "project_id",
             "summary",
             "title",
             "topics",
@@ -1130,10 +1130,12 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
         id: Some(77),
         note_type: "normal".to_string(),
         title: Some("Adapter note".to_string()),
+        project_id: Some("project-uuid".to_string()),
         project: Some("orientation".to_string()),
         topics: vec!["CLI".to_string()],
         summary: Some("A lightweight item".to_string()),
         content_bytes: 19,
+        metadata: Some(serde_json::json!({"project_routing":{"routed":true}})),
         flagged: true,
         draft: false,
         created_at: Some("2026-09-21T00:00:00Z".to_string()),
@@ -1157,10 +1159,12 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
             "id": 77,
             "type": "normal",
             "title": "Adapter note",
+            "project_id": "project-uuid",
             "project": "orientation",
             "topics": ["CLI"],
             "summary": "A lightweight item",
             "content_bytes": 19,
+            "metadata": {"project_routing":{"routed":true}},
             "flagged": true,
             "draft": false,
             "created_at": "2026-09-21T00:00:00Z",
@@ -1179,6 +1183,50 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
     assert!(matches!(
         daemon.requests().as_slice(),
         [AppRequest::NoteList(_), AppRequest::NoteFind(_)]
+    ));
+}
+
+#[test]
+fn cli_route_project_reads_one_json_batch_from_stdin() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let project_id = uuid::Uuid::new_v4().to_string();
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::NoteRouteProject(routes) => {
+                    DaemonResponse::App(Box::new(AppResponse::NoteRouteProject(
+                        flicknote_core::services::dto::NoteRouteProjectResult {
+                            routed: routes.len(),
+                        },
+                    )))
+                }
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+    let input = serde_json::json!([
+        {"note_id":3127,"project_id":project_id,"probability":0.91},
+        {"note_id":3128,"project_id":null,"probability":0.78}
+    ])
+    .to_string();
+
+    let output = run_cli_with_input(&config_root, &data_root, &["note", "route-project"], &input);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!({"routed":2})
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::NoteRouteProject(routes)]
+            if routes.len() == 2
+                && routes[0].note_id == 3127
+                && routes[1].project_id.is_none()
     ));
 }
 

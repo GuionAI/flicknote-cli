@@ -48,14 +48,14 @@ impl<'a> ProjectService<'a> {
         let id = self.db.create_project(&input.name).await?;
         if input.color.is_some() {
             self.db
-                .update_project(&id, input.color.as_deref().map(Some))
+                .update_project(&id, input.color.as_deref().map(Some), None, None)
                 .await?;
         }
         Ok(self.db.find_project(&id).await?.into())
     }
 
     pub async fn modify(&self, input: ProjectModifyInput) -> Result<ProjectDto, ServiceError> {
-        if input.color.is_missing() {
+        if input.color.is_missing() && input.pinned.is_missing() && input.summary.is_missing() {
             return Err(ServiceError::NothingToModify);
         }
         let id = self.resolve_project_id(&input.id).await?;
@@ -64,8 +64,23 @@ impl<'a> ProjectService<'a> {
             Patch::Null => Some(None),
             Patch::Value(color) => Some(Some(color)),
         };
+        let pinned = match input.pinned {
+            Patch::Missing => None,
+            Patch::Null => Some(None),
+            Patch::Value(pinned) => Some(Some(pinned)),
+        };
+        let summary = match input.summary {
+            Patch::Missing => None,
+            Patch::Null => Some(None),
+            Patch::Value(summary) => Some(Some(summary)),
+        };
         self.db
-            .update_project(&id, color.as_ref().map(|value| value.as_deref()))
+            .update_project(
+                &id,
+                color.as_ref().map(|value| value.as_deref()),
+                pinned,
+                summary.as_ref().map(|value| value.as_deref()),
+            )
             .await?;
         Ok(self.db.find_project(&id).await?.into())
     }
@@ -113,6 +128,13 @@ impl From<Project> for ProjectDto {
             id: project.id,
             name: project.name,
             color: project.color,
+            metadata: project
+                .metadata
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()
+                .ok()
+                .flatten(),
             archived: project.is_archived.unwrap_or(0) != 0,
             created_at: project.created_at,
         }
@@ -156,10 +178,39 @@ mod tests {
             .modify(ProjectModifyInput {
                 id: created.id.clone(),
                 color: Patch::Value("#abcdef".to_string()),
+                pinned: Patch::Missing,
+                summary: Patch::Missing,
             })
             .await
             .unwrap();
         assert_eq!(modified.color.as_deref(), Some("#abcdef"));
+
+        let metadata = service
+            .modify(ProjectModifyInput {
+                id: created.id.clone(),
+                color: Patch::Missing,
+                pinned: Patch::Value(true),
+                summary: Patch::Value("Current work".to_string()),
+            })
+            .await
+            .unwrap()
+            .metadata
+            .unwrap();
+        assert_eq!(metadata["pinned"], true);
+        assert_eq!(metadata["summary"], "Current work");
+        let cleared = service
+            .modify(ProjectModifyInput {
+                id: created.id.clone(),
+                color: Patch::Missing,
+                pinned: Patch::Value(false),
+                summary: Patch::Null,
+            })
+            .await
+            .unwrap()
+            .metadata
+            .unwrap();
+        assert_eq!(cleared["pinned"], false);
+        assert!(cleared.get("summary").is_none());
 
         let archived = service.archive(&created.id).await.unwrap();
         assert!(archived.archived);

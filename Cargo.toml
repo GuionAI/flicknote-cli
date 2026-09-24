@@ -23,6 +23,8 @@ serde_json = "1"
 tokio = { version = "1", features = ["rt", "macros", "time"] }
 powersync = { git = "https://github.com/GuionAI/powersync-native", tag = "v0.0.7-guion.1", features = ["tokio", "reqwest"] }
 base64 = "0.22"
+# The bundled SQLite runtime is part of the timestamp-filtering contract. Keep
+# its second-boundary behavior covered by the local backend integration tests.
 rusqlite = { version = "0.39", features = ["load_extension", "bundled"] }
 async-trait = "0.1"
 thiserror = "2"

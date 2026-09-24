@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,6 +147,7 @@ pub enum AppRequest {
         section: String,
     },
     NoteModify(NoteModifyInput),
+    NoteRouteProject(Vec<NoteRouteProjectInput>),
     NoteSubmit {
         id: String,
     },
@@ -218,6 +219,7 @@ impl AppRequest {
             | Self::NoteInsert { .. }
             | Self::NoteDeleteSection { .. }
             | Self::NoteModify(_)
+            | Self::NoteRouteProject(_)
             | Self::NoteSubmit { .. }
             | Self::NoteArchive { .. }
             | Self::NoteRestore { .. }
@@ -266,6 +268,7 @@ pub enum AppResponse {
     NoteRecord(NoteRecord),
     NoteSection(NoteSectionResult),
     NoteMutation(NoteMutationResult),
+    NoteRouteProject(NoteRouteProjectResult),
     EditableSave(EditableSaveResult),
     NoteArchive(NoteArchiveResult),
     Source(SourceResult),
@@ -309,6 +312,7 @@ app_result!(EditableDocument, AppResponse::EditableDocument);
 app_result!(NoteRecord, AppResponse::NoteRecord);
 app_result!(NoteSectionResult, AppResponse::NoteSection);
 app_result!(NoteMutationResult, AppResponse::NoteMutation);
+app_result!(NoteRouteProjectResult, AppResponse::NoteRouteProject);
 app_result!(EditableSaveResult, AppResponse::EditableSave);
 app_result!(NoteArchiveResult, AppResponse::NoteArchive);
 app_result!(SourceResult, AppResponse::Source);

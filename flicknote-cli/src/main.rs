@@ -83,6 +83,8 @@ enum Commands {
     Import(commands::import::ImportArgs),
     /// Modify note metadata
     Modify(commands::modify::ModifyArgs),
+    /// Perform note domain operations
+    Note(commands::note::NoteArgs),
     /// Submit a draft note for AI processing
     Submit(commands::submit::SubmitArgs),
     /// Open a note in the browser
@@ -191,6 +193,7 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
         Commands::Project(args) => commands::project::run(daemon, args).await,
         Commands::Modify(args) => commands::modify::run(daemon, args).await,
+        Commands::Note(args) => commands::note::run(daemon, args).await,
         Commands::Submit(args) => commands::submit::run(daemon, args).await,
         Commands::Open(args) => commands::open::run(daemon, args).await,
         Commands::Import(args) => commands::import::run(daemon, args).await,
