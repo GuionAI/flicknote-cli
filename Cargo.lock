@@ -767,6 +767,7 @@ dependencies = [
  "chrono-tz",
  "dirs 6.0.0",
  "flicknote-auth",
+ "iana-time-zone",
  "log",
  "powersync",
  "pulldown-cmark",

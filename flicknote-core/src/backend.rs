@@ -54,6 +54,13 @@ pub struct InsertCommentReq<'a> {
     pub now: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateCommentReq {
+    pub id: String,
+    pub content: Option<String>,
+    pub is_read: Option<bool>,
+}
+
 pub(crate) enum NoteLookup<'a> {
     ShortId(i64),
     Uuid(&'a str),
@@ -136,10 +143,7 @@ pub trait NoteDb: Send + Sync {
     ) -> Result<(), CliError> {
         unimplemented!()
     }
-    async fn list_pending_routing_comments(
-        &self,
-        _limit: u32,
-    ) -> Result<Vec<NoteComment>, CliError> {
+    async fn update_comments(&self, _updates: &[UpdateCommentReq]) -> Result<(), CliError> {
         unimplemented!()
     }
     async fn capture_into_daily(

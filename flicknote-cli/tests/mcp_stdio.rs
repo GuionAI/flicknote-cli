@@ -1031,6 +1031,138 @@ fn cli_add_json_emits_only_the_public_note_id() {
 }
 
 #[test]
+fn cli_comment_list_json_exposes_the_generic_typed_contract() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let comment = flicknote_core::services::dto::CommentDto {
+        id: "comment-1".to_string(),
+        note_id: "note-1".to_string(),
+        block_text: "captured text".to_string(),
+        content: serde_json::json!({"kind":"project_route","destination":null}),
+        author: "flick_jev".to_string(),
+        is_read: true,
+        parent_id: None,
+        created_at: Some("2026-09-24T00:00:00Z".to_string()),
+    };
+    let expected = comment.clone();
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        ServerInfo::current(),
+        move |request| match request {
+            AppRequest::CommentList { .. } => {
+                DaemonResponse::App(Box::new(AppResponse::Comments(vec![comment.clone()])))
+            }
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
+
+    let json = run_cli_json(
+        &config_root,
+        &data_root,
+        &["comment", "list", "note-1", "--json"],
+    );
+
+    assert_eq!(json, serde_json::to_value([expected]).unwrap());
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::CommentList { note_id }] if note_id == "note-1"
+    ));
+}
+
+#[test]
+fn cli_comment_modify_batch_sends_one_generic_atomic_request() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::CommentBatchModify(_) => {
+                    DaemonResponse::App(Box::new(AppResponse::Comments(Vec::new())))
+                }
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+    let input = serde_json::json!([
+        {"id":"comment-1","content":{"destination":"project-1"}},
+        {"id":"comment-2","is_read":true}
+    ])
+    .to_string();
+
+    let output = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["comment", "modify-batch"],
+        &input,
+    );
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!([])
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::CommentBatchModify(input)]
+            if input.comments.len() == 2
+                && input.comments[0].content.as_ref().unwrap()["destination"] == "project-1"
+                && input.comments[1].is_read == Some(true)
+    ));
+}
+
+#[test]
+fn cli_capture_keeps_multiline_stdin_as_one_request_and_rejects_mixed_input() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    let daemon =
+        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
+            match request {
+                AppRequest::Capture { .. } => DaemonResponse::App(Box::new(AppResponse::Capture(
+                    flicknote_core::services::dto::CaptureReceipt {
+                        daily_uuid: "daily-1".to_string(),
+                        daily_short_id: Some(24),
+                        routing_comment_uuid: "comment-1".to_string(),
+                    },
+                ))),
+                _ => panic!("unexpected request: {request:?}"),
+            }
+        });
+
+    let multiline = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["capture", "--json"],
+        "one\n\ntwo\n",
+    );
+    assert!(
+        multiline.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&multiline.stderr)
+    );
+    assert!(matches!(
+        daemon.requests().as_slice(),
+        [AppRequest::Capture { text }] if text == "one\n\ntwo\n"
+    ));
+
+    let conflict = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["capture", "positional"],
+        "piped",
+    );
+    assert_eq!(conflict.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("not both"));
+    assert_eq!(daemon.requests().len(), 1);
+}
+
+#[test]
 fn cli_draft_write_and_submit_use_distinct_machine_requests() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");

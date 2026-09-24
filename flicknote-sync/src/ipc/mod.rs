@@ -3,10 +3,10 @@ use std::path::PathBuf;
 
 use flicknote_core::config::Config;
 use flicknote_core::services::dto::{
-    CaptureReceipt, CommentCreateInput, CommentDto, CommentModifyInput, DailyReceipt,
-    InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail,
-    NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteRecord,
-    NoteSectionResult, NoteSummary, OpenResult, PendingRoutingCommentsInput, ProjectAddInput,
+    CaptureReceipt, CommentBatchModifyInput, CommentCreateInput, CommentDto, CommentModifyInput,
+    DailyReceipt, InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput,
+    NoteCreateResult, NoteDetail, NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput,
+    NoteMutationResult, NoteRecord, NoteSectionResult, NoteSummary, OpenResult, ProjectAddInput,
     ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
 };
 use flicknote_core::services::editable_document::EditableSaveResult;

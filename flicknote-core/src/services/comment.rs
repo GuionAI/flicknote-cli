@@ -1,7 +1,7 @@
-use crate::backend::{InsertCommentReq, NoteDb};
+use crate::backend::{InsertCommentReq, NoteDb, UpdateCommentReq};
 use crate::types::NoteComment;
 
-use super::dto::{CommentCreateInput, CommentDto, CommentModifyInput};
+use super::dto::{CommentBatchModifyInput, CommentCreateInput, CommentDto, CommentModifyInput};
 use super::error::ServiceError;
 
 pub struct CommentService<'a> {
@@ -86,18 +86,44 @@ impl<'a> CommentService<'a> {
         comment_dto(self.db.find_comment(&input.id).await?)
     }
 
-    pub async fn pending_routing(&self, limit: u32) -> Result<Vec<CommentDto>, ServiceError> {
-        if limit == 0 || limit > 1_000 {
+    pub async fn modify_batch(
+        &self,
+        input: CommentBatchModifyInput,
+    ) -> Result<Vec<CommentDto>, ServiceError> {
+        if input.comments.is_empty() {
             return Err(ServiceError::InvalidArgument(
-                "limit must be between 1 and 1000".to_string(),
+                "comment batch must not be empty".to_string(),
             ));
         }
-        self.db
-            .list_pending_routing_comments(limit)
-            .await?
-            .into_iter()
-            .map(comment_dto)
-            .collect()
+        if input
+            .comments
+            .iter()
+            .any(|comment| comment.content.is_none() && comment.is_read.is_none())
+        {
+            return Err(ServiceError::NothingToModify);
+        }
+        let updates = input
+            .comments
+            .iter()
+            .map(|comment| {
+                Ok(UpdateCommentReq {
+                    id: comment.id.clone(),
+                    content: comment
+                        .content
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()
+                        .map_err(|error| ServiceError::Internal(error.to_string()))?,
+                    is_read: comment.is_read,
+                })
+            })
+            .collect::<Result<Vec<_>, ServiceError>>()?;
+        self.db.update_comments(&updates).await?;
+        let mut comments = Vec::with_capacity(updates.len());
+        for update in updates {
+            comments.push(comment_dto(self.db.find_comment(&update.id).await?)?);
+        }
+        Ok(comments)
     }
 }
 
@@ -117,13 +143,13 @@ fn comment_dto(comment: NoteComment) -> Result<CommentDto, ServiceError> {
 
 #[cfg(all(test, feature = "powersync"))]
 mod tests {
-    use crate::services::dto::{CommentCreateInput, CommentModifyInput};
+    use crate::services::dto::{CommentBatchModifyInput, CommentCreateInput, CommentModifyInput};
     use crate::services::test_support::{insert_normal_note, make_backend};
 
     use super::CommentService;
 
     #[tokio::test]
-    async fn create_list_reply_modify_and_pending_use_one_generic_contract() {
+    async fn create_list_reply_and_modify_use_one_generic_contract() {
         let backend = make_backend().await;
         let note_id = insert_normal_note(&backend, "body", "ready").await;
         let service = CommentService::new(&*backend);
@@ -148,8 +174,6 @@ mod tests {
             .unwrap();
         assert_eq!(reply.parent_id.as_deref(), Some(root.id.as_str()));
         assert_eq!(service.list(&note_id).await.unwrap().len(), 2);
-        assert_eq!(service.pending_routing(10).await.unwrap()[0].id, root.id);
-
         let modified = service.modify(CommentModifyInput {
             id: root.id,
             content: Some(serde_json::json!({"kind":"project_route","destination":"none","probability":0.9})),
@@ -157,6 +181,55 @@ mod tests {
         }).await.unwrap();
         assert_eq!(modified.content["destination"], "none");
         assert!(!modified.is_read);
-        assert!(service.pending_routing(10).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn batch_modify_updates_all_comments() {
+        let backend = make_backend().await;
+        let note_id = insert_normal_note(&backend, "body", "ready").await;
+        let service = CommentService::new(&*backend);
+        let first = service
+            .create(CommentCreateInput {
+                note_id: note_id.clone(),
+                block_text: "one".to_string(),
+                content: serde_json::json!({"state":"old"}),
+                author: "author".to_string(),
+                parent_id: None,
+                is_read: false,
+            })
+            .await
+            .unwrap();
+        let second = service
+            .create(CommentCreateInput {
+                note_id,
+                block_text: "two".to_string(),
+                content: serde_json::json!({"state":"old"}),
+                author: "author".to_string(),
+                parent_id: None,
+                is_read: false,
+            })
+            .await
+            .unwrap();
+
+        let updated = service
+            .modify_batch(CommentBatchModifyInput {
+                comments: vec![
+                    CommentModifyInput {
+                        id: first.id,
+                        content: Some(serde_json::json!({"state":"new"})),
+                        is_read: None,
+                    },
+                    CommentModifyInput {
+                        id: second.id,
+                        content: None,
+                        is_read: Some(true),
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(updated[0].content["state"], "new");
+        assert!(updated[1].is_read);
     }
 }

@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 9;
+pub const PROTOCOL_VERSION: u16 = 10;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,7 +84,7 @@ pub enum AppRequest {
     },
     CommentCreate(CommentCreateInput),
     CommentModify(CommentModifyInput),
-    CommentPending(PendingRoutingCommentsInput),
+    CommentBatchModify(CommentBatchModifyInput),
     NoteAdd(NoteAddInput),
     NoteAddEditable {
         document: String,
@@ -207,8 +207,10 @@ pub enum AppRequest {
 impl AppRequest {
     pub(crate) fn kind(&self) -> AppRequestKind {
         match self {
-            Self::CommentList { .. } | Self::CommentPending(_) => AppRequestKind::CommentRead,
-            Self::CommentCreate(_) | Self::CommentModify(_) => AppRequestKind::CommentWrite,
+            Self::CommentList { .. } => AppRequestKind::CommentRead,
+            Self::CommentCreate(_) | Self::CommentModify(_) | Self::CommentBatchModify(_) => {
+                AppRequestKind::CommentWrite
+            }
             Self::DailyGetOrCreate | Self::Capture { .. } => AppRequestKind::DailyWrite,
             Self::NoteList(_)
             | Self::NoteFind(_)

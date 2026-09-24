@@ -93,13 +93,8 @@ pub struct CommentModifyInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct PendingRoutingCommentsInput {
-    #[serde(default = "default_pending_comment_limit")]
-    pub limit: u32,
-}
-
-pub const fn default_pending_comment_limit() -> u32 {
-    100
+pub struct CommentBatchModifyInput {
+    pub comments: Vec<CommentModifyInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

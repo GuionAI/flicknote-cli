@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use chrono_tz::Tz;
 
 use crate::backend::NoteDb;
@@ -31,25 +31,20 @@ impl<'a> DailyService<'a> {
         creator: &dyn NoteCreator,
         now: DateTime<Utc>,
     ) -> Result<DailyReceipt, ServiceError> {
-        let tz_name = self
-            .db
-            .configured_iana_tz()
-            .await?
-            .unwrap_or_else(|| "UTC".to_string());
-        let timezone: Tz = tz_name.parse().map_err(|_| {
-            ServiceError::InvalidArgument(format!("invalid configured IANA timezone: {tz_name}"))
-        })?;
-        let local = now.with_timezone(&timezone);
-        let date = local.format("%Y-%m-%d").to_string();
+        let configured = self.db.configured_iana_tz().await?;
+        let host_timezone = iana_time_zone::get_timezone().ok();
+        let timezone = resolve_timezone(configured.as_deref(), host_timezone.as_deref());
+        let semantic_local = now.with_timezone(&timezone).naive_local() - Duration::hours(4);
+        let date = semantic_local.format("%Y-%m-%d").to_string();
         if let Some(note) = self.db.find_daily(&date).await? {
             return Ok(receipt(note, date));
         }
 
         let title = format!(
             "{}, {} {}",
-            local.format("%A"),
-            local.format("%b"),
-            local.day()
+            semantic_local.format("%A"),
+            semantic_local.format("%b"),
+            semantic_local.day()
         );
         let id = uuid::Uuid::new_v4().to_string();
         let created = creator
@@ -98,6 +93,13 @@ impl<'a> DailyService<'a> {
     }
 }
 
+fn resolve_timezone(configured: Option<&str>, host: Option<&str>) -> Tz {
+    configured
+        .and_then(|timezone| timezone.parse().ok())
+        .or_else(|| host.and_then(|timezone| timezone.parse().ok()))
+        .unwrap_or(chrono_tz::UTC)
+}
+
 fn receipt(note: crate::types::Note, date: String) -> DailyReceipt {
     DailyReceipt {
         uuid: note.id,
@@ -133,7 +135,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daily_uses_configured_local_date_and_is_idempotent() {
+    async fn daily_uses_configured_local_date_cutoff_and_is_idempotent() {
         let backend = make_backend().await;
         {
             let writer = backend.database().writer().await.unwrap();
@@ -146,21 +148,54 @@ mod tests {
         }
         let service = DailyService::new(&*backend);
         let creator = DbCreator(&*backend);
-        let instant = Utc.with_ymd_and_hms(2026, 9, 24, 16, 30, 0).unwrap();
+        // 02:30 on Sep 25 in Taipei still belongs to the Sep 24 Daily.
+        let instant = Utc.with_ymd_and_hms(2026, 9, 24, 18, 30, 0).unwrap();
 
         let first = service.get_or_create_at(&creator, instant).await.unwrap();
         let second = service.get_or_create_at(&creator, instant).await.unwrap();
 
         assert_eq!(first.uuid, second.uuid);
-        assert_eq!(first.date, "2026-09-25");
-        assert_eq!(first.title, "Friday, Sep 25");
+        assert_eq!(first.date, "2026-09-24");
+        assert_eq!(first.title, "Thursday, Sep 24");
         let note = backend.find_note(&first.uuid).await.unwrap();
         assert_eq!(note.r#type, "normal");
+        assert_eq!(note.status, "ready");
         assert_eq!(note.project_id, None);
         assert_eq!(
             note.metadata.as_deref(),
-            Some(r#"{"daily":{"date":"2026-09-25"}}"#)
+            Some(r#"{"daily":{"date":"2026-09-24"}}"#)
         );
+    }
+
+    #[tokio::test]
+    async fn daily_rolls_over_after_four_in_the_configured_timezone() {
+        let backend = make_backend().await;
+        {
+            let writer = backend.database().writer().await.unwrap();
+            writer
+                .execute(
+                    "INSERT INTO settings (id, iana_tz) VALUES (?, ?)",
+                    params!["settings-1", "Asia/Taipei"],
+                )
+                .unwrap();
+        }
+        let service = DailyService::new(&*backend);
+        let creator = DbCreator(&*backend);
+        let instant = Utc.with_ymd_and_hms(2026, 9, 24, 20, 1, 0).unwrap();
+
+        let daily = service.get_or_create_at(&creator, instant).await.unwrap();
+
+        assert_eq!(daily.date, "2026-09-25");
+        assert_eq!(daily.title, "Friday, Sep 25");
+    }
+
+    #[test]
+    fn missing_configured_timezone_uses_host_timezone_before_utc() {
+        assert_eq!(
+            resolve_timezone(None, Some("Asia/Taipei")),
+            chrono_tz::Asia::Taipei
+        );
+        assert_eq!(resolve_timezone(None, None), chrono_tz::UTC);
     }
 
     #[tokio::test]

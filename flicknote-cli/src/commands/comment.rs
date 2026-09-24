@@ -1,6 +1,8 @@
 use clap::{Args, Subcommand};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{CommentCreateInput, CommentDto, CommentModifyInput};
+use flicknote_core::services::dto::{
+    CommentBatchModifyInput, CommentCreateInput, CommentDto, CommentModifyInput,
+};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
@@ -12,7 +14,12 @@ pub(crate) struct CommentArgs {
 #[derive(Subcommand)]
 enum CommentCommands {
     /// List comments for a note in chronological order
-    List { note_id: String },
+    List {
+        note_id: String,
+        /// Output typed comment records as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a root or reply comment
     Add {
         note_id: String,
@@ -33,20 +40,28 @@ enum CommentCommands {
         #[arg(long)]
         is_read: Option<bool>,
     },
+    /// Atomically patch a JSON array of comments read from stdin
+    ModifyBatch,
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CommentArgs) -> Result<(), CliError> {
     match &args.command {
-        CommentCommands::List { note_id } => {
+        CommentCommands::List { note_id, json } => {
             let comments: Vec<CommentDto> = daemon
                 .call(AppRequest::CommentList {
                     note_id: note_id.clone(),
                 })
                 .await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&comments).map_err(CliError::Json)?
-            );
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&comments).map_err(CliError::Json)?
+                );
+            } else {
+                for comment in comments {
+                    println!("{}\t{}\t{}", comment.id, comment.author, comment.block_text);
+                }
+            }
         }
         CommentCommands::Add {
             note_id,
@@ -91,6 +106,19 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CommentArgs) -> Result
             println!(
                 "{}",
                 serde_json::to_string(&comment).map_err(CliError::Json)?
+            );
+        }
+        CommentCommands::ModifyBatch => {
+            let input = super::util::read_stdin_required()?;
+            let comments = serde_json::from_str(&input).map_err(CliError::Json)?;
+            let comments: Vec<CommentDto> = daemon
+                .call(AppRequest::CommentBatchModify(CommentBatchModifyInput {
+                    comments,
+                }))
+                .await?;
+            println!(
+                "{}",
+                serde_json::to_string(&comments).map_err(CliError::Json)?
             );
         }
     }

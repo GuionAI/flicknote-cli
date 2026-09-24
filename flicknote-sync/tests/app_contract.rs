@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::schema::app_schema;
-use flicknote_core::services::dto::{CommentModifyInput, NoteListInput, ProjectAddInput};
+use flicknote_core::services::dto::{
+    CommentBatchModifyInput, CommentModifyInput, NoteListInput, ProjectAddInput,
+};
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
@@ -138,7 +140,7 @@ async fn app_exposes_daily_capture_and_comment_contracts() {
         db: backend.clone(),
         request: std::sync::Mutex::new(None),
     });
-    let app = app_with_creator(backend, creator);
+    let app = app_with_creator(backend, creator.clone());
 
     let first = app.handle(AppRequest::DailyGetOrCreate).await.unwrap();
     let AppResponse::Daily(first) = first else {
@@ -149,6 +151,13 @@ async fn app_exposes_daily_capture_and_comment_contracts() {
         panic!("expected Daily response")
     };
     assert_eq!(first.uuid, second.uuid);
+    {
+        let recorded = creator.request.lock().unwrap();
+        let request = recorded.as_ref().unwrap();
+        assert_eq!(request.note_type, "normal");
+        assert_eq!(request.status, "ready");
+        assert_eq!(request.project_id, None);
+    }
 
     let captured = app
         .handle(AppRequest::Capture {
@@ -182,6 +191,24 @@ async fn app_exposes_daily_capture_and_comment_contracts() {
         .await
         .unwrap();
     assert!(matches!(modified, AppResponse::Comment(comment) if !comment.is_read));
+
+    let modified = app
+        .handle(AppRequest::CommentBatchModify(CommentBatchModifyInput {
+            comments: vec![CommentModifyInput {
+                id: captured.routing_comment_uuid,
+                content: Some(serde_json::json!({"kind":"project_route","destination":"none","probability":1.0})),
+                is_read: Some(true),
+            }],
+        }))
+        .await
+        .unwrap();
+    assert!(matches!(
+        modified,
+        AppResponse::Comments(comments)
+            if comments.len() == 1
+                && comments[0].content["destination"] == "none"
+                && comments[0].is_read
+    ));
 }
 
 #[tokio::test]

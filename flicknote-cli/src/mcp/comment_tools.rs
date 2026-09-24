@@ -29,11 +29,6 @@ pub(super) struct CommentModifyParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub(super) struct PendingCommentsParams {
-    #[serde(default = "default_limit")]
-    pub limit: u32,
-}
-
-const fn default_limit() -> u32 {
-    100
+pub(super) struct CommentBatchModifyParams {
+    pub comments: Vec<CommentModifyParams>,
 }

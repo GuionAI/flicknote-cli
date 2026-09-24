@@ -14,11 +14,6 @@ pub(super) async fn handle_read(
             .await
             .map(AppResponse::Comments)
             .map_err(WireError::from_service),
-        AppRequest::CommentPending(input) => comments
-            .pending_routing(input.limit)
-            .await
-            .map(AppResponse::Comments)
-            .map_err(WireError::from_service),
         _ => unreachable!("request kind guarantees a comment read"),
     }
 }
@@ -38,6 +33,11 @@ pub(super) async fn handle_write(
             .modify(input)
             .await
             .map(AppResponse::Comment)
+            .map_err(WireError::from_service),
+        AppRequest::CommentBatchModify(input) => comments
+            .modify_batch(input)
+            .await
+            .map(AppResponse::Comments)
             .map_err(WireError::from_service),
         _ => unreachable!("request kind guarantees a comment write"),
     }

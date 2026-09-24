@@ -19,6 +19,7 @@ flicknote-auth = { path = "../flicknote-auth" }
 dirs = { workspace = true }
 chrono = "0.4"
 chrono-tz = "0.10"
+iana-time-zone = "0.1"
 uuid = { workspace = true }
 pulldown-cmark = { version = "0.13.1", default-features = false }
 sha2 = "0.10"

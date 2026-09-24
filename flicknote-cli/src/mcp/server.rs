@@ -4,10 +4,11 @@ use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
-    CaptureReceipt, CommentCreateInput, CommentDto, CommentModifyInput, DailyReceipt, NoteAddInput,
-    NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput, NoteListInput,
-    NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
+    CaptureReceipt, CommentBatchModifyInput, CommentCreateInput, CommentDto, CommentModifyInput,
+    DailyReceipt, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail,
+    NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult,
+    NoteSectionResult, OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput,
+    RecallCandidate, ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
@@ -39,7 +40,7 @@ pub(crate) const EXPECTED_TOOLS: [&str; 36] = [
     "comment_create",
     "comment_list",
     "comment_modify",
-    "comment_pending",
+    "comment_modify_batch",
     "daily_get_or_create",
     "entity_list",
     "note_add",
@@ -801,20 +802,25 @@ impl FlickNoteMcp {
     }
 
     #[tool(
-        name = "comment_pending",
-        description = "List a bounded chronological batch of pending flick_jev routing comments.",
-        annotations(read_only_hint = true)
+        name = "comment_modify_batch",
+        description = "Atomically patch content and/or read state for a batch of comments."
     )]
-    async fn comment_pending(
+    async fn comment_modify_batch(
         &self,
-        Parameters(params): Parameters<PendingCommentsParams>,
+        Parameters(params): Parameters<CommentBatchModifyParams>,
     ) -> Result<Json<McpCommentListResult>, CallToolResult> {
         structured(
-            self.call::<Vec<CommentDto>>(AppRequest::CommentPending(
-                flicknote_core::services::dto::PendingRoutingCommentsInput {
-                    limit: params.limit,
-                },
-            ))
+            self.call::<Vec<CommentDto>>(AppRequest::CommentBatchModify(CommentBatchModifyInput {
+                comments: params
+                    .comments
+                    .into_iter()
+                    .map(|comment| CommentModifyInput {
+                        id: comment.id,
+                        content: comment.content,
+                        is_read: comment.is_read,
+                    })
+                    .collect(),
+            }))
             .await
             .map(|comments| McpCommentListResult {
                 comments: comments.into_iter().map(Into::into).collect(),

@@ -397,6 +397,80 @@ async fn capture_is_one_crud_transaction_with_note_patch_and_comment_put() {
 }
 
 #[tokio::test]
+async fn comment_batch_is_one_crud_transaction_and_rolls_back_on_failure() {
+    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
+    let first = uuid::Uuid::new_v4().to_string();
+    let second = uuid::Uuid::new_v4().to_string();
+    for id in [&first, &second] {
+        backend
+            .insert_comment(&InsertCommentReq {
+                id,
+                note_id: &note_id,
+                block_text: id,
+                content: r#"{"state":"old"}"#,
+                author: "author",
+                is_read: false,
+                parent_id: None,
+                now: "2026-09-24T00:00:00Z",
+            })
+            .await
+            .unwrap();
+        db.next_crud_transaction()
+            .await
+            .unwrap()
+            .unwrap()
+            .complete()
+            .await
+            .unwrap();
+    }
+
+    backend
+        .update_comments(&[
+            UpdateCommentReq {
+                id: first.clone(),
+                content: Some(r#"{"state":"new"}"#.to_string()),
+                is_read: None,
+            },
+            UpdateCommentReq {
+                id: second.clone(),
+                content: None,
+                is_read: Some(true),
+            },
+        ])
+        .await
+        .unwrap();
+    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(transaction.crud.len(), 2);
+    assert!(transaction.crud.iter().all(|entry| {
+        entry.table == "note_comments" && matches!(entry.update_type, powersync::UpdateType::Patch)
+    }));
+    transaction.complete().await.unwrap();
+
+    let missing = uuid::Uuid::new_v4().to_string();
+    let error = backend
+        .update_comments(&[
+            UpdateCommentReq {
+                id: first.clone(),
+                content: Some(r#"{"state":"rolled-back"}"#.to_string()),
+                is_read: None,
+            },
+            UpdateCommentReq {
+                id: missing,
+                content: None,
+                is_read: Some(true),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Comment not found"));
+    assert_eq!(
+        backend.find_comment(&first).await.unwrap().content,
+        r#"{"state":"new"}"#
+    );
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn capture_comment_failure_rolls_back_note_append() {
     let (_directory, db, backend, note_id) = existing_daily_fixture().await;
     {

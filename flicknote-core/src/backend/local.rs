@@ -10,7 +10,7 @@ use crate::types::{Note, NoteComment, Project};
 
 use super::{
     InsertCommentReq, InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch,
-    parse_note_lookup,
+    UpdateCommentReq, parse_note_lookup,
 };
 
 // ─── LocalPowerSyncBackend ───────────────────────────────────────────────────
@@ -738,40 +738,46 @@ impl NoteDb for LocalPowerSyncBackend {
         content: Option<&str>,
         is_read: Option<bool>,
     ) -> Result<(), CliError> {
-        let writer = self.db.writer().await?;
-        writer.execute(
-            "UPDATE note_comments SET \
-             content = CASE WHEN ? THEN ? ELSE content END, \
-             is_read = CASE WHEN ? THEN ? ELSE is_read END \
-             WHERE user_id = ? AND id = ?",
-            params![
-                content.is_some(),
-                content,
-                is_read.is_some(),
-                is_read.map(i64::from),
-                self.user_id,
-                id,
-            ],
-        )?;
-        Ok(())
+        self.update_comments(&[UpdateCommentReq {
+            id: id.to_string(),
+            content: content.map(str::to_string),
+            is_read,
+        }])
+        .await
     }
 
-    async fn list_pending_routing_comments(
-        &self,
-        limit: u32,
-    ) -> Result<Vec<NoteComment>, CliError> {
-        let reader = self.db.reader().await?;
-        let mut statement = reader.prepare(
-            r#"SELECT id, note_id, user_id, block_text, content, author, is_read, created_at, parent_id
-               FROM note_comments
-               WHERE user_id = ? AND author = 'flick_jev'
-                 AND json_extract(content, '$.kind') = 'project_route'
-                 AND json_type(content, '$.destination') = 'null'
-               ORDER BY created_at, id LIMIT ?"#,
-        )?;
-        Ok(statement
-            .query_map(params![self.user_id, limit], decode_comment)?
-            .collect::<Result<Vec<_>, _>>()?)
+    async fn update_comments(&self, updates: &[UpdateCommentReq]) -> Result<(), CliError> {
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        for update in updates {
+            let exists = tx
+                .query_row(
+                    "SELECT 1 FROM note_comments WHERE user_id = ? AND id = ? LIMIT 1",
+                    params![self.user_id, update.id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if !exists {
+                return Err(CliError::Other(format!("Comment not found: {}", update.id)));
+            }
+            tx.execute(
+                "UPDATE note_comments SET \
+                 content = CASE WHEN ? THEN ? ELSE content END, \
+                 is_read = CASE WHEN ? THEN ? ELSE is_read END \
+                 WHERE user_id = ? AND id = ?",
+                params![
+                    update.content.is_some(),
+                    update.content,
+                    update.is_read.is_some(),
+                    update.is_read.map(i64::from),
+                    self.user_id,
+                    update.id,
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     async fn capture_into_daily(
