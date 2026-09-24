@@ -1,5 +1,3 @@
-pub mod comment;
-pub mod daily;
 pub mod dto;
 pub mod edit_match;
 pub mod editable_document;

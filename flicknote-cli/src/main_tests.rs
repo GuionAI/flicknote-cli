@@ -61,34 +61,30 @@ fn upload_command_parses() {
 }
 
 #[test]
-fn daily_capture_and_comment_commands_parse_without_splitting_payloads() {
-    assert!(Cli::try_parse_from(["flicknote", "capture", "one\n\ntwo"]).is_ok());
-    assert!(Cli::try_parse_from(["flicknote", "daily", "--json"]).is_ok());
-    assert!(Cli::try_parse_from(["flicknote", "comment", "list", "42"]).is_ok());
+fn list_project_and_no_project_are_mutually_exclusive() {
+    let Err(error) =
+        Cli::try_parse_from(["flicknote", "list", "--project", "work", "--no-project"])
+    else {
+        panic!("project and no-project should conflict")
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn list_time_filters_and_route_project_parse() {
     assert!(
         Cli::try_parse_from([
             "flicknote",
-            "comment",
-            "add",
-            "42",
-            "anchor",
-            r#"{"text":"hello"}"#,
-            "--author",
-            "Neil"
+            "list",
+            "--created-after",
+            "2026-09-24T00:00:00Z",
+            "--created-before",
+            "2026-09-25T00:00:00Z",
+            "--no-project"
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from([
-            "flicknote",
-            "comment",
-            "modify",
-            "comment-id",
-            "--is-read",
-            "true"
-        ])
-        .is_ok()
-    );
+    assert!(Cli::try_parse_from(["flicknote", "note", "route-project"]).is_ok());
 }
 
 #[test]

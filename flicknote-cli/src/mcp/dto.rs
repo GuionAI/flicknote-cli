@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use flicknote_core::services::dto::{
-    CommentDto, ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult,
+    ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, NoteSummary,
     ProjectDto, SectionDto,
 };
 use flicknote_core::services::source::SourceResult;
@@ -58,9 +58,45 @@ pub(super) struct McpNoteListResult {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpNoteSummary {
+    pub id: Option<i64>,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: Option<String>,
+    pub project: Option<String>,
+    pub topics: Vec<String>,
+    pub summary: Option<String>,
+    pub content_bytes: u64,
+    pub flagged: bool,
+    pub draft: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+}
+
+impl From<NoteSummary> for McpNoteSummary {
+    fn from(note: NoteSummary) -> Self {
+        Self {
+            id: note.short_id,
+            note_type: note.note_type,
+            title: note.title,
+            project: note.project,
+            topics: note.topics,
+            summary: note.summary,
+            content_bytes: note.content_bytes,
+            flagged: note.flagged,
+            draft: note.draft,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            deleted_at: note.deleted_at,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteDetail {
     #[serde(flatten)]
-    pub note: NoteListItem,
+    pub note: McpNoteSummary,
     pub content: String,
     #[schemars(schema_with = "arbitrary_json_schema")]
     pub metadata: Option<serde_json::Value>,
@@ -91,7 +127,7 @@ const ARBITRARY_JSON_TYPES: [&str; 7] = [
 /// `serde_json::Value` derives a bare boolean schema term (`true`) that strict
 /// MCP clients reject. This term keeps arbitrary values unconstrained while
 /// remaining a parseable JSON Schema object.
-pub(super) fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
+fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
     serde_json::from_value(serde_json::json!({ "type": ARBITRARY_JSON_TYPES }))
         .expect("arbitrary-json schema is valid JSON Schema")
 }
@@ -175,7 +211,7 @@ pub(super) fn source_output_schema() -> Arc<JsonObject> {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteMutationResult {
-    pub note: NoteListItem,
+    pub note: McpNoteSummary,
     pub sections: Vec<SectionDto>,
 }
 
@@ -229,37 +265,4 @@ impl From<ProjectDto> for McpProjectDto {
             created_at: project.created_at,
         }
     }
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct McpCommentDto {
-    pub id: String,
-    pub note_id: String,
-    pub block_text: String,
-    #[schemars(schema_with = "arbitrary_json_schema")]
-    pub content: serde_json::Value,
-    pub author: String,
-    pub is_read: bool,
-    pub created_at: Option<String>,
-    pub parent_id: Option<String>,
-}
-
-impl From<CommentDto> for McpCommentDto {
-    fn from(comment: CommentDto) -> Self {
-        Self {
-            id: comment.id,
-            note_id: comment.note_id,
-            block_text: comment.block_text,
-            content: comment.content,
-            author: comment.author,
-            is_read: comment.is_read,
-            created_at: comment.created_at,
-            parent_id: comment.parent_id,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct McpCommentListResult {
-    pub comments: Vec<McpCommentDto>,
 }

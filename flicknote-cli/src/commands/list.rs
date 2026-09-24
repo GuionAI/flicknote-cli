@@ -16,6 +16,15 @@ pub(crate) struct ListArgs {
     /// Filter by project name
     #[arg(long)]
     project: Option<String>,
+    /// Show only notes without a project
+    #[arg(long, conflicts_with = "project")]
+    no_project: bool,
+    /// Include notes created at or after this RFC3339 instant
+    #[arg(long)]
+    created_after: Option<String>,
+    /// Include notes created before this RFC3339 instant
+    #[arg(long)]
+    created_before: Option<String>,
     /// Show only archived notes
     #[arg(long)]
     archived: bool,
@@ -31,7 +40,11 @@ pub(crate) struct ListArgs {
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
-    let project = resolve_project_arg(&args.project);
+    let project = if args.no_project {
+        None
+    } else {
+        resolve_project_arg(&args.project)
+    };
     if args.project.is_none()
         && let Some(name) = project.as_deref()
     {
@@ -41,6 +54,9 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
         .call(AppRequest::NoteList(NoteListInput {
             note_type: args.r#type.clone(),
             project: project.clone(),
+            no_project: args.no_project,
+            created_after: args.created_after.clone(),
+            created_before: args.created_before.clone(),
             archived: args.archived,
             limit: args.limit,
             cursor: args.cursor,

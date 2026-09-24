@@ -5,7 +5,6 @@ pub fn app_schema() -> Schema {
         tables: vec![
             notes_table(),
             projects_table(),
-            note_comments_table(),
             note_extractions_table(),
             taskchampion_tasks_table(),
             taskchampion_operations_table(),
@@ -65,32 +64,6 @@ fn projects_table() -> Table {
         ],
         |table| {
             table.options.track_metadata = true;
-        },
-    )
-}
-
-fn note_comments_table() -> Table {
-    Table::create(
-        "note_comments",
-        vec![
-            Column::text("note_id"),
-            Column::text("user_id"),
-            Column::text("block_text"),
-            Column::text("content"),
-            Column::text("author"),
-            Column::integer("is_read"),
-            Column::text("created_at"),
-            Column::text("parent_id"),
-        ],
-        |table| {
-            table.options.track_metadata = true;
-            table.indexes = vec![
-                index("note_comments_note_id_idx", "note_id", "TEXT"),
-                compound_index(
-                    "note_comments_author_created_idx",
-                    &[("author", "TEXT"), ("created_at", "TEXT")],
-                ),
-            ];
         },
     )
 }
@@ -203,7 +176,7 @@ mod tests {
     fn remote_committed_tables_track_crud_metadata() {
         let schema = app_schema();
 
-        for name in ["notes", "projects", "note_comments", "note_extractions"] {
+        for name in ["notes", "projects", "note_extractions"] {
             let table = schema
                 .tables
                 .iter()

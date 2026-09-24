@@ -39,16 +39,3 @@ pub struct Project {
     pub is_archived: Option<i64>,
     pub created_at: Option<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NoteComment {
-    pub id: String,
-    pub note_id: String,
-    pub user_id: String,
-    pub block_text: String,
-    pub content: String,
-    pub author: String,
-    pub is_read: Option<i64>,
-    pub created_at: Option<String>,
-    pub parent_id: Option<String>,
-}

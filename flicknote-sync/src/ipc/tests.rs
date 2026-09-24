@@ -67,7 +67,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(PROTOCOL_VERSION, 9);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -84,6 +84,9 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
         request: Box::new(AppRequest::NoteList(NoteListInput {
             note_type: None,
             project: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -258,13 +261,13 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v10_client_rejects_protocol_v9_server_info() {
+async fn protocol_v9_client_rejects_protocol_v8_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 9,
+            protocol: 8,
             version: "legacy".to_string(),
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
@@ -280,11 +283,11 @@ async fn protocol_v10_client_rejects_protocol_v9_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 10",
+        "CLI version {} protocol 9",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
-    assert!(message.contains("daemon version legacy protocol 9"));
+    assert!(message.contains("daemon version legacy protocol 8"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
 }

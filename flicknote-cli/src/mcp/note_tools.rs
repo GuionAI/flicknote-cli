@@ -162,6 +162,10 @@ pub(super) struct NoteListParams {
     pub note_type: Option<ListNoteType>,
     pub project: Option<String>,
     #[serde(default)]
+    pub no_project: bool,
+    pub created_after: Option<String>,
+    pub created_before: Option<String>,
+    #[serde(default)]
     pub archived: bool,
     #[serde(default = "default_limit")]
     pub limit: u32,

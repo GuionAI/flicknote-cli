@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 9;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,16 +75,6 @@ fn current_executable() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AppRequest {
-    DailyGetOrCreate,
-    Capture {
-        text: String,
-    },
-    CommentList {
-        note_id: String,
-    },
-    CommentCreate(CommentCreateInput),
-    CommentModify(CommentModifyInput),
-    CommentBatchModify(CommentBatchModifyInput),
     NoteAdd(NoteAddInput),
     NoteAddEditable {
         document: String,
@@ -157,6 +147,7 @@ pub enum AppRequest {
         section: String,
     },
     NoteModify(NoteModifyInput),
+    NoteRouteProject(Vec<NoteRouteProjectInput>),
     NoteSubmit {
         id: String,
     },
@@ -207,11 +198,6 @@ pub enum AppRequest {
 impl AppRequest {
     pub(crate) fn kind(&self) -> AppRequestKind {
         match self {
-            Self::CommentList { .. } => AppRequestKind::CommentRead,
-            Self::CommentCreate(_) | Self::CommentModify(_) | Self::CommentBatchModify(_) => {
-                AppRequestKind::CommentWrite
-            }
-            Self::DailyGetOrCreate | Self::Capture { .. } => AppRequestKind::DailyWrite,
             Self::NoteList(_)
             | Self::NoteFind(_)
             | Self::NoteRecall { .. }
@@ -233,6 +219,7 @@ impl AppRequest {
             | Self::NoteInsert { .. }
             | Self::NoteDeleteSection { .. }
             | Self::NoteModify(_)
+            | Self::NoteRouteProject(_)
             | Self::NoteSubmit { .. }
             | Self::NoteArchive { .. }
             | Self::NoteRestore { .. }
@@ -254,10 +241,7 @@ impl AppRequest {
     pub fn may_write(&self) -> bool {
         matches!(
             self.kind(),
-            AppRequestKind::NoteWrite
-                | AppRequestKind::ProjectWrite
-                | AppRequestKind::CommentWrite
-                | AppRequestKind::DailyWrite
+            AppRequestKind::NoteWrite | AppRequestKind::ProjectWrite
         )
     }
 }
@@ -268,19 +252,12 @@ pub(crate) enum AppRequestKind {
     NoteWrite,
     ProjectRead,
     ProjectWrite,
-    CommentRead,
-    CommentWrite,
-    DailyWrite,
     ExtractionRead,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum AppResponse {
-    Daily(DailyReceipt),
-    Capture(CaptureReceipt),
-    Comments(Vec<CommentDto>),
-    Comment(CommentDto),
     NoteCreate(NoteCreateResult),
     NoteSummary(NoteSummary),
     NoteListItems(Vec<NoteListItem>),
@@ -291,6 +268,7 @@ pub enum AppResponse {
     NoteRecord(NoteRecord),
     NoteSection(NoteSectionResult),
     NoteMutation(NoteMutationResult),
+    NoteRouteProject(NoteRouteProjectResult),
     EditableSave(EditableSaveResult),
     NoteArchive(NoteArchiveResult),
     Source(SourceResult),
@@ -326,10 +304,6 @@ macro_rules! app_result {
 }
 
 app_result!(NoteSummary, AppResponse::NoteSummary);
-app_result!(DailyReceipt, AppResponse::Daily);
-app_result!(CaptureReceipt, AppResponse::Capture);
-app_result!(Vec<CommentDto>, AppResponse::Comments);
-app_result!(CommentDto, AppResponse::Comment);
 app_result!(NoteCreateResult, AppResponse::NoteCreate);
 app_result!(Vec<NoteListItem>, AppResponse::NoteListItems);
 app_result!(Vec<RecallCandidate>, AppResponse::NoteRecall);
@@ -338,6 +312,7 @@ app_result!(EditableDocument, AppResponse::EditableDocument);
 app_result!(NoteRecord, AppResponse::NoteRecord);
 app_result!(NoteSectionResult, AppResponse::NoteSection);
 app_result!(NoteMutationResult, AppResponse::NoteMutation);
+app_result!(NoteRouteProjectResult, AppResponse::NoteRouteProject);
 app_result!(EditableSaveResult, AppResponse::EditableSave);
 app_result!(NoteArchiveResult, AppResponse::NoteArchive);
 app_result!(SourceResult, AppResponse::Source);

@@ -6,11 +6,11 @@ use std::collections::HashSet;
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
 use crate::services::dto::RecallCandidate;
-use crate::types::{Note, NoteComment, Project};
+use crate::types::{Note, Project};
 
 use super::{
-    InsertCommentReq, InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch,
-    UpdateCommentReq, parse_note_lookup,
+    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, RouteProjectUpdate,
+    parse_note_lookup,
 };
 
 // ─── LocalPowerSyncBackend ───────────────────────────────────────────────────
@@ -60,8 +60,10 @@ const SQ_SET_DELETED_AT: &str =
     "UPDATE notes SET deleted_at = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_SET_DELETED_AT_NULL: &str =
     "UPDATE notes SET deleted_at = NULL, updated_at = ? WHERE user_id = ? AND id = ?";
-const SQ_UPDATE_PROJECT: &str =
-    "UPDATE notes SET project_id = ?, updated_at = ? WHERE user_id = ? AND id = ?";
+const SQ_UPDATE_PROJECT: &str = "UPDATE notes SET project_id = ?, updated_at = ?, \
+     metadata = CASE WHEN json_type(metadata, '$.project_routing') IS NOT NULL \
+                     THEN json_remove(metadata, '$.project_routing') ELSE metadata END \
+     WHERE user_id = ? AND id = ?";
 
 const SQ_FIND_PROJECT: &str = "SELECT id FROM projects WHERE user_id = ? AND name = ? \
      AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1";
@@ -307,20 +309,6 @@ fn decode_project(row: &Row<'_>) -> rusqlite::Result<Project> {
     })
 }
 
-fn decode_comment(row: &Row<'_>) -> rusqlite::Result<NoteComment> {
-    Ok(NoteComment {
-        id: row.get("id")?,
-        note_id: row.get("note_id")?,
-        user_id: row.get("user_id")?,
-        block_text: row.get("block_text")?,
-        content: row.get("content")?,
-        author: row.get("author")?,
-        is_read: row.get("is_read")?,
-        created_at: row.get("created_at")?,
-        parent_id: row.get("parent_id")?,
-    })
-}
-
 fn query_notes(
     connection: &Connection,
     sql: &str,
@@ -421,6 +409,9 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
+              AND (? = 0 OR project_id IS NULL)
+              AND (? IS NULL OR julianday(created_at) >= julianday(?))
+              AND (? IS NULL OR julianday(created_at) < julianday(?))
               AND (? IS NULL OR short_id < ?)
             ORDER BY short_id DESC
             LIMIT ?
@@ -432,6 +423,11 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.note_type,
                 filter.project_id,
                 filter.project_id,
+                filter.no_project,
+                filter.created_after,
+                filter.created_after,
+                filter.created_before,
+                filter.created_before,
                 filter.cursor,
                 filter.cursor,
                 limit,
@@ -630,33 +626,6 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(candidates)
     }
 
-    async fn find_daily(&self, date: &str) -> Result<Option<Note>, CliError> {
-        let reader = self.db.reader().await?;
-        Ok(reader
-            .query_row(
-                r#"SELECT id, short_id, user_id, type, status, title, content, summary, is_flagged,
-                          project_id, metadata, source, created_at, updated_at, deleted_at
-                   FROM notes
-                   WHERE user_id = ? AND deleted_at IS NULL AND project_id IS NULL
-                     AND type = 'normal' AND json_extract(metadata, '$.daily.date') = ?
-                   ORDER BY created_at, id LIMIT 1"#,
-                params![self.user_id, date],
-                decode_note,
-            )
-            .optional()?)
-    }
-
-    async fn configured_iana_tz(&self) -> Result<Option<String>, CliError> {
-        let reader = self.db.reader().await?;
-        Ok(reader
-            .query_row(
-                "SELECT iana_tz FROM settings WHERE iana_tz IS NOT NULL AND iana_tz <> '' LIMIT 1",
-                [],
-                |row| row.get(0),
-            )
-            .optional()?)
-    }
-
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError> {
         let writer = self.db.writer().await?;
         writer.execute(
@@ -687,138 +656,92 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(())
     }
 
-    async fn list_comments(&self, note_id: &str) -> Result<Vec<NoteComment>, CliError> {
-        let reader = self.db.reader().await?;
-        let mut statement = reader.prepare(
-            "SELECT id, note_id, user_id, block_text, content, author, is_read, created_at, parent_id \
-             FROM note_comments WHERE user_id = ? AND note_id = ? ORDER BY created_at, id",
-        )?;
-        Ok(statement
-            .query_map(params![self.user_id, note_id], decode_comment)?
-            .collect::<Result<Vec<_>, _>>()?)
-    }
-
-    async fn find_comment(&self, id: &str) -> Result<NoteComment, CliError> {
-        let reader = self.db.reader().await?;
-        reader
-            .query_row(
-                "SELECT id, note_id, user_id, block_text, content, author, is_read, created_at, parent_id \
-                 FROM note_comments WHERE user_id = ? AND id = ? LIMIT 1",
-                params![self.user_id, id],
-                decode_comment,
-            )
-            .optional()?
-            .ok_or_else(|| CliError::Other(format!("Comment not found: {id}")))
-    }
-
-    async fn insert_comment(&self, req: &InsertCommentReq<'_>) -> Result<(), CliError> {
-        let writer = self.db.writer().await?;
-        writer.execute(
-            "INSERT INTO note_comments \
-             (id, note_id, user_id, block_text, content, author, is_read, created_at, parent_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![
-                req.id,
-                req.note_id,
-                self.user_id,
-                req.block_text,
-                req.content,
-                req.author,
-                i64::from(req.is_read),
-                req.now,
-                req.parent_id,
-            ],
-        )?;
-        Ok(())
-    }
-
-    async fn update_comment(
+    async fn route_notes_to_projects(
         &self,
-        id: &str,
-        content: Option<&str>,
-        is_read: Option<bool>,
-    ) -> Result<(), CliError> {
-        self.update_comments(&[UpdateCommentReq {
-            id: id.to_string(),
-            content: content.map(str::to_string),
-            is_read,
-        }])
-        .await
-    }
-
-    async fn update_comments(&self, updates: &[UpdateCommentReq]) -> Result<(), CliError> {
-        let mut writer = self.db.writer().await?;
-        let tx = writer.transaction()?;
-        for update in updates {
-            let exists = tx
-                .query_row(
-                    "SELECT 1 FROM note_comments WHERE user_id = ? AND id = ? LIMIT 1",
-                    params![self.user_id, update.id],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            if !exists {
-                return Err(CliError::Other(format!("Comment not found: {}", update.id)));
-            }
-            tx.execute(
-                "UPDATE note_comments SET \
-                 content = CASE WHEN ? THEN ? ELSE content END, \
-                 is_read = CASE WHEN ? THEN ? ELSE is_read END \
-                 WHERE user_id = ? AND id = ?",
-                params![
-                    update.content.is_some(),
-                    update.content,
-                    update.is_read.is_some(),
-                    update.is_read.map(i64::from),
-                    self.user_id,
-                    update.id,
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    async fn capture_into_daily(
-        &self,
-        note_id: &str,
-        submitted_text: &str,
-        comment_id: &str,
-        comment_content: &str,
+        updates: &[RouteProjectUpdate],
     ) -> Result<(), CliError> {
         let now = chrono::Utc::now().to_rfc3339();
         let mut writer = self.db.writer().await?;
         let tx = writer.transaction()?;
-        let existing = tx
-            .query_row(
-                "SELECT content FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
-                params![self.user_id, note_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .ok_or_else(|| CliError::NoteNotFound { id: note_id.to_string() })?;
-        let combined = match existing.as_deref() {
-            Some(existing) if !existing.is_empty() => format!("{existing}\n\n{submitted_text}"),
-            _ => submitted_text.to_string(),
-        };
-        tx.execute(
-            SQ_UPDATE_CONTENT,
-            params![combined, now, self.user_id, note_id],
-        )?;
-        tx.execute(
-            "INSERT INTO note_comments \
-             (id, note_id, user_id, block_text, content, author, is_read, created_at, parent_id) \
-             VALUES (?, ?, ?, ?, ?, 'flick_jev', 1, ?, NULL)",
-            params![
-                comment_id,
-                note_id,
-                self.user_id,
-                submitted_text,
-                comment_content,
-                now,
-            ],
-        )?;
+        for update in updates {
+            if let Some(project_id) = update.project_id.as_deref() {
+                let project_exists = tx
+                    .query_row(
+                        "SELECT 1 FROM projects WHERE user_id = ? AND id = ? \
+                         AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
+                        params![self.user_id, project_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !project_exists {
+                    return Err(CliError::Other(format!("Project not found: {project_id}")));
+                }
+            }
+
+            let row = tx
+                .query_row(
+                    "SELECT id, project_id, metadata FROM notes WHERE user_id = ? \
+                     AND short_id = ? AND deleted_at IS NULL LIMIT 1",
+                    params![self.user_id, update.note_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| CliError::NoteNotFound {
+                    id: update.note_id.to_string(),
+                })?;
+            let (note_id, project_id, metadata) = row;
+            if project_id.is_some() {
+                return Err(CliError::Other(format!(
+                    "Note {} already has a project",
+                    update.note_id
+                )));
+            }
+            let mut metadata = metadata
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()?
+                .unwrap_or_else(|| serde_json::json!({}));
+            let object = metadata.as_object_mut().ok_or_else(|| {
+                CliError::Other(format!(
+                    "Note {} metadata must be a JSON object",
+                    update.note_id
+                ))
+            })?;
+            if object
+                .get("project_routing")
+                .and_then(|value| value.get("routed"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(CliError::Other(format!(
+                    "Note {} is already routed",
+                    update.note_id
+                )));
+            }
+            let probability: serde_json::Value = serde_json::from_str(&update.probability_json)?;
+            object.insert(
+                "project_routing".to_string(),
+                serde_json::json!({"routed": true, "probability": probability}),
+            );
+            tx.execute(
+                "UPDATE notes SET project_id = ?, metadata = ?, updated_at = ? \
+                 WHERE user_id = ? AND id = ?",
+                params![
+                    update.project_id,
+                    serde_json::to_string(&metadata)?,
+                    now,
+                    self.user_id,
+                    note_id
+                ],
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }

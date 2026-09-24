@@ -35,12 +35,6 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
-    /// Capture one submission into today's Daily
-    Capture(commands::capture::CaptureArgs),
-    /// Get or create today's Daily
-    Daily(commands::daily::DailyArgs),
-    /// Inspect and mutate note comments
-    Comment(commands::comment::CommentArgs),
     /// Replace a note's stored content from stdin
     Write(commands::write::WriteArgs),
     /// Delete (archive) a note
@@ -89,6 +83,8 @@ enum Commands {
     Import(commands::import::ImportArgs),
     /// Modify note metadata
     Modify(commands::modify::ModifyArgs),
+    /// Perform note domain operations
+    Note(commands::note::NoteArgs),
     /// Submit a draft note for AI processing
     Submit(commands::submit::SubmitArgs),
     /// Open a note in the browser
@@ -173,14 +169,8 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
             .map_err(|e| CliError::Other(e.to_string()))?;
         return Ok(());
     };
-    if let Some(result) = dispatch_capture_commands(command, daemon).await {
-        return result;
-    }
     match command {
         Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
-        Commands::Capture(_) | Commands::Daily(_) | Commands::Comment(_) => {
-            unreachable!("capture commands are dispatched before the main command match")
-        }
         Commands::Add(args) => commands::add::run(daemon, args).await,
         Commands::Upload(args) => commands::upload::run(daemon, args).await,
         Commands::Append(args) => commands::append::run(daemon, args).await,
@@ -203,6 +193,7 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Unshare(args) => commands::share::run_unshare_note(daemon, args).await,
         Commands::Project(args) => commands::project::run(daemon, args).await,
         Commands::Modify(args) => commands::modify::run(daemon, args).await,
+        Commands::Note(args) => commands::note::run(daemon, args).await,
         Commands::Submit(args) => commands::submit::run(daemon, args).await,
         Commands::Open(args) => commands::open::run(daemon, args).await,
         Commands::Import(args) => commands::import::run(daemon, args).await,
@@ -210,18 +201,6 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Login(_) | Commands::Logout(_) | Commands::Daemon(_) | Commands::Skill(_) => {
             unreachable!()
         }
-    }
-}
-
-async fn dispatch_capture_commands(
-    command: &Commands,
-    daemon: &DaemonClient<'_>,
-) -> Option<Result<(), CliError>> {
-    match command {
-        Commands::Capture(args) => Some(commands::capture::run(daemon, args).await),
-        Commands::Daily(args) => Some(commands::daily::run(daemon, args).await),
-        Commands::Comment(args) => Some(commands::comment::run(daemon, args).await),
-        _ => None,
     }
 }
 

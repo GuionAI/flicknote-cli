@@ -4,9 +4,7 @@ use async_trait::async_trait;
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::schema::app_schema;
-use flicknote_core::services::dto::{
-    CommentBatchModifyInput, CommentModifyInput, NoteListInput, ProjectAddInput,
-};
+use flicknote_core::services::dto::{NoteListInput, ProjectAddInput};
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
@@ -132,86 +130,6 @@ fn assert_no_status_field(value: &serde_json::Value) {
 }
 
 #[tokio::test]
-async fn app_exposes_daily_capture_and_comment_contracts() {
-    let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let backend = test_backend(&config);
-    let creator = Arc::new(RecordingCreator {
-        db: backend.clone(),
-        request: std::sync::Mutex::new(None),
-    });
-    let app = app_with_creator(backend, creator.clone());
-
-    let first = app.handle(AppRequest::DailyGetOrCreate).await.unwrap();
-    let AppResponse::Daily(first) = first else {
-        panic!("expected Daily response")
-    };
-    let second = app.handle(AppRequest::DailyGetOrCreate).await.unwrap();
-    let AppResponse::Daily(second) = second else {
-        panic!("expected Daily response")
-    };
-    assert_eq!(first.uuid, second.uuid);
-    {
-        let recorded = creator.request.lock().unwrap();
-        let request = recorded.as_ref().unwrap();
-        assert_eq!(request.note_type, "normal");
-        assert_eq!(request.status, "ready");
-        assert_eq!(request.project_id, None);
-    }
-
-    let captured = app
-        .handle(AppRequest::Capture {
-            text: "one\n\ntwo".to_string(),
-        })
-        .await
-        .unwrap();
-    let AppResponse::Capture(captured) = captured else {
-        panic!("expected capture response")
-    };
-    assert_eq!(captured.daily_uuid, first.uuid);
-    let listed = app
-        .handle(AppRequest::CommentList {
-            note_id: first.uuid,
-        })
-        .await
-        .unwrap();
-    let AppResponse::Comments(comments) = listed else {
-        panic!("expected comments response")
-    };
-    assert_eq!(comments.len(), 1);
-    assert_eq!(comments[0].block_text, "one\n\ntwo");
-    assert_eq!(comments[0].id, captured.routing_comment_uuid);
-
-    let modified = app
-        .handle(AppRequest::CommentModify(CommentModifyInput {
-            id: comments[0].id.clone(),
-            content: None,
-            is_read: Some(false),
-        }))
-        .await
-        .unwrap();
-    assert!(matches!(modified, AppResponse::Comment(comment) if !comment.is_read));
-
-    let modified = app
-        .handle(AppRequest::CommentBatchModify(CommentBatchModifyInput {
-            comments: vec![CommentModifyInput {
-                id: captured.routing_comment_uuid,
-                content: Some(serde_json::json!({"kind":"project_route","destination":"none","probability":1.0})),
-                is_read: Some(true),
-            }],
-        }))
-        .await
-        .unwrap();
-    assert!(matches!(
-        modified,
-        AppResponse::Comments(comments)
-            if comments.len() == 1
-                && comments[0].content["destination"] == "none"
-                && comments[0].is_read
-    ));
-}
-
-#[tokio::test]
 async fn app_preserves_created_identity_when_editor_or_attachment_summary_fails() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
@@ -265,6 +183,9 @@ async fn app_routes_note_list_and_append_through_services() {
         .handle(AppRequest::NoteList(NoteListInput {
             note_type: None,
             project: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -381,6 +302,9 @@ async fn versioned_socket_routes_client_requests_through_application() {
         .app(AppRequest::NoteList(NoteListInput {
             note_type: None,
             project: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             archived: false,
             limit: 20,
             cursor: None,

@@ -1,12 +1,12 @@
 //! Note application service.
 
-use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
+use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch, RouteProjectUpdate};
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
 use super::dto::{
     ExtractionDto, NoteAddInput, NoteArchiveResult, NoteCreateResult, NoteDetail, NoteListItem,
-    NoteMutationResult, NoteSectionResult, NoteSummary, OpenResult, Patch, RecallCandidate,
-    SectionDto, ShareResult, UnshareResult,
+    NoteMutationResult, NoteRouteProjectInput, NoteRouteProjectResult, NoteSectionResult,
+    NoteSummary, OpenResult, Patch, RecallCandidate, SectionDto, ShareResult, UnshareResult,
 };
 pub use super::dto::{
     ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
@@ -22,6 +22,32 @@ use super::ports::{BrowserOpener, CreateNote, NoteCreator, ShareGateway, ShareRe
 use super::sections::{content_starts_with_heading, find_section};
 use super::source::{SourceResult, SourceView, parse_source};
 
+fn validate_created_range(
+    created_after: Option<&str>,
+    created_before: Option<&str>,
+) -> Result<(), ServiceError> {
+    let parse = |name: &str, value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
+            ServiceError::InvalidArgument(format!("{name} must be an RFC3339 timestamp"))
+        })
+    };
+    let after = created_after
+        .map(|value| parse("created_after", value))
+        .transpose()?;
+    let before = created_before
+        .map(|value| parse("created_before", value))
+        .transpose()?;
+    if after
+        .zip(before)
+        .is_some_and(|(after, before)| after >= before)
+    {
+        return Err(ServiceError::InvalidArgument(
+            "created_after must be earlier than created_before".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub struct NoteService<'a> {
     db: &'a dyn NoteDb,
 }
@@ -31,12 +57,71 @@ impl<'a> NoteService<'a> {
         Self { db }
     }
 
+    pub async fn route_project(
+        &self,
+        input: Vec<NoteRouteProjectInput>,
+    ) -> Result<NoteRouteProjectResult, ServiceError> {
+        if input.is_empty() {
+            return Err(ServiceError::InvalidArgument(
+                "routing batch must not be empty".to_string(),
+            ));
+        }
+        let mut note_ids = std::collections::HashSet::with_capacity(input.len());
+        let mut updates = Vec::with_capacity(input.len());
+        for item in input {
+            if item.note_id <= 0 {
+                return Err(ServiceError::InvalidArgument(
+                    "note_id must be a positive short ID".to_string(),
+                ));
+            }
+            if !note_ids.insert(item.note_id) {
+                return Err(ServiceError::InvalidArgument(format!(
+                    "duplicate note_id in routing batch: {}",
+                    item.note_id
+                )));
+            }
+            if !item.probability.is_finite() || !(0.0..=1.0).contains(&item.probability) {
+                return Err(ServiceError::InvalidArgument(format!(
+                    "probability for note {} must be between 0 and 1",
+                    item.note_id
+                )));
+            }
+            if let Some(project_id) = item.project_id.as_deref()
+                && uuid::Uuid::parse_str(project_id).is_err()
+            {
+                return Err(ServiceError::InvalidArgument(format!(
+                    "project_id for note {} must be a UUID or null",
+                    item.note_id
+                )));
+            }
+            updates.push(RouteProjectUpdate {
+                note_id: item.note_id,
+                project_id: item.project_id,
+                probability_json: serde_json::to_string(&item.probability)
+                    .map_err(crate::error::CliError::Json)?,
+            });
+        }
+        self.db.route_notes_to_projects(&updates).await?;
+        Ok(NoteRouteProjectResult {
+            routed: updates.len(),
+        })
+    }
+
     pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteListItem>, ServiceError> {
         if input.cursor.is_some_and(|cursor| cursor <= 0) {
             return Err(ServiceError::InvalidArgument(
                 "cursor must be a positive note ID".to_string(),
             ));
         }
+        if input.project.is_some() && input.no_project {
+            return Err(ServiceError::InvalidArgument(
+                "project and no_project are mutually exclusive".to_string(),
+            ));
+        }
+        validate_created_range(
+            input.created_after.as_deref(),
+            input.created_before.as_deref(),
+        )?;
         let project_id = match input.project.as_deref() {
             Some(name) => Some(
                 self.db
@@ -50,7 +135,10 @@ impl<'a> NoteService<'a> {
             .db
             .list_notes(&NoteFilter {
                 project_id: project_id.as_deref(),
+                no_project: input.no_project,
                 note_type: input.note_type.as_deref(),
+                created_after: input.created_after.as_deref(),
+                created_before: input.created_before.as_deref(),
                 archived: input.archived,
                 limit: input.limit,
                 cursor: input.cursor,
@@ -58,7 +146,7 @@ impl<'a> NoteService<'a> {
             .await?;
         let mut items = Vec::with_capacity(notes.len());
         for note in notes {
-            items.push(self.summary(note).await?.into());
+            items.push(self.list_item(note).await?);
         }
         Ok(items)
     }
@@ -89,7 +177,10 @@ impl<'a> NoteService<'a> {
                 &search,
                 &NoteFilter {
                     project_id: project_id.as_deref(),
+                    no_project: false,
                     note_type: None,
+                    created_after: None,
+                    created_before: None,
                     archived: input.archived,
                     limit: input.limit,
                     cursor: None,
@@ -98,7 +189,7 @@ impl<'a> NoteService<'a> {
             .await?;
         let mut items = Vec::with_capacity(notes.len());
         for note in notes {
-            items.push(self.summary(note).await?.into());
+            items.push(self.list_item(note).await?);
         }
         Ok(items)
     }
@@ -109,7 +200,7 @@ impl<'a> NoteService<'a> {
         let mut items = Vec::with_capacity(ids.len());
         for id in ids {
             match self.db.find_note(id).await {
-                Ok(note) => items.push(self.summary(note).await?.into()),
+                Ok(note) => items.push(self.list_item(note).await?),
                 Err(crate::error::CliError::NoteNotFound { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
@@ -131,7 +222,10 @@ impl<'a> NoteService<'a> {
                 prompt,
                 &NoteFilter {
                     project_id: project_id.as_deref(),
+                    no_project: false,
                     note_type: None,
+                    created_after: None,
+                    created_before: None,
                     archived: false,
                     limit: RECALL_MAX_CANDIDATES,
                     cursor: None,
@@ -147,7 +241,10 @@ impl<'a> NoteService<'a> {
             .await?;
         let filter = NoteFilter {
             project_id: project_id.as_deref(),
+            no_project: false,
             note_type: input.note_type.as_deref(),
+            created_after: None,
+            created_before: None,
             archived: input.archived,
             limit: u32::MAX,
             cursor: None,
@@ -740,6 +837,18 @@ impl<'a> NoteService<'a> {
             deleted_at: note.deleted_at,
         })
     }
+
+    async fn list_item(&self, note: crate::types::Note) -> Result<NoteListItem, ServiceError> {
+        let metadata = note
+            .metadata
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(crate::error::CliError::Json)?;
+        let mut item: NoteListItem = self.summary(note).await?.into();
+        item.metadata = metadata;
+        Ok(item)
+    }
 }
 
 pub fn confirmed_create_followup_error(
@@ -770,7 +879,7 @@ pub fn confirmed_create_followup_error(
 mod tests {
 
     use crate::backend::NoteDb;
-    use crate::services::dto::{NoteAddInput, Patch};
+    use crate::services::dto::{NoteAddInput, NoteRouteProjectInput, Patch};
     use crate::services::ports::{
         BrowserOpener, CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
     };
@@ -781,6 +890,32 @@ mod tests {
         ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
         NoteModifyInput, NoteService,
     };
+
+    #[tokio::test]
+    async fn route_project_rejects_malformed_project_uuid_and_probability() {
+        let backend = make_backend().await;
+        let service = NoteService::new(&*backend);
+
+        let malformed = service
+            .route_project(vec![NoteRouteProjectInput {
+                note_id: 1,
+                project_id: Some("not-a-uuid".to_string()),
+                probability: 0.5,
+            }])
+            .await
+            .unwrap_err();
+        assert_eq!(malformed.code(), "invalid_argument");
+
+        let probability = service
+            .route_project(vec![NoteRouteProjectInput {
+                note_id: 1,
+                project_id: None,
+                probability: 1.1,
+            }])
+            .await
+            .unwrap_err();
+        assert_eq!(probability.code(), "invalid_argument");
+    }
 
     #[tokio::test]
     async fn append_separates_content_and_preserves_lifecycle() {
@@ -994,6 +1129,9 @@ mod tests {
             .list(NoteListInput {
                 note_type: None,
                 project: Some("work".to_string()),
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1020,6 +1158,9 @@ mod tests {
             .list(NoteListInput {
                 note_type: None,
                 project: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1207,6 +1348,9 @@ mod tests {
             .list(NoteListInput {
                 note_type: None,
                 project: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 archived: false,
                 limit: 20,
                 cursor: None,

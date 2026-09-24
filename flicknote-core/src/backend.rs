@@ -2,13 +2,16 @@ use async_trait::async_trait;
 
 use crate::error::CliError;
 use crate::services::dto::RecallCandidate;
-use crate::types::{Note, NoteComment, Project};
+use crate::types::{Note, Project};
 
 // ─── Filter / request types ──────────────────────────────────────────────────
 
 pub struct NoteFilter<'a> {
     pub project_id: Option<&'a str>,
+    pub no_project: bool,
     pub note_type: Option<&'a str>,
+    pub created_after: Option<&'a str>,
+    pub created_before: Option<&'a str>,
     pub archived: bool,
     pub limit: u32,
     pub cursor: Option<i64>,
@@ -43,22 +46,11 @@ pub struct InsertedNote {
     pub short_id: Option<i64>,
 }
 
-pub struct InsertCommentReq<'a> {
-    pub id: &'a str,
-    pub note_id: &'a str,
-    pub block_text: &'a str,
-    pub content: &'a str,
-    pub author: &'a str,
-    pub is_read: bool,
-    pub parent_id: Option<&'a str>,
-    pub now: &'a str,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UpdateCommentReq {
-    pub id: String,
-    pub content: Option<String>,
-    pub is_read: Option<bool>,
+pub struct RouteProjectUpdate {
+    pub note_id: i64,
+    pub project_id: Option<String>,
+    pub probability_json: String,
 }
 
 pub(crate) enum NoteLookup<'a> {
@@ -113,48 +105,15 @@ pub trait NoteDb: Send + Sync {
         prompt: &str,
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<RecallCandidate>, CliError>;
-    async fn find_daily(&self, _date: &str) -> Result<Option<Note>, CliError> {
-        unimplemented!()
-    }
-    async fn configured_iana_tz(&self) -> Result<Option<String>, CliError> {
-        unimplemented!()
-    }
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
     /// Update stored content while preserving the note lifecycle status.
     async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError>;
 
-    // Comment reads and writes
-    async fn list_comments(&self, _note_id: &str) -> Result<Vec<NoteComment>, CliError> {
-        unimplemented!()
-    }
-    async fn find_comment(&self, _id: &str) -> Result<NoteComment, CliError> {
-        unimplemented!()
-    }
-    async fn insert_comment(&self, _req: &InsertCommentReq<'_>) -> Result<(), CliError> {
-        unimplemented!()
-    }
-    async fn update_comment(
-        &self,
-        _id: &str,
-        _content: Option<&str>,
-        _is_read: Option<bool>,
-    ) -> Result<(), CliError> {
-        unimplemented!()
-    }
-    async fn update_comments(&self, _updates: &[UpdateCommentReq]) -> Result<(), CliError> {
-        unimplemented!()
-    }
-    async fn capture_into_daily(
-        &self,
-        _note_id: &str,
-        _submitted_text: &str,
-        _comment_id: &str,
-        _comment_content: &str,
-    ) -> Result<(), CliError> {
-        unimplemented!()
-    }
+    /// Apply automatic project routing to every note in one transaction.
+    async fn route_notes_to_projects(&self, updates: &[RouteProjectUpdate])
+    -> Result<(), CliError>;
 
     /// Transition an active draft to the queued lifecycle state.
     /// Returns false when the note is no longer an active draft.

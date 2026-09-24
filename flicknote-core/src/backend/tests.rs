@@ -191,83 +191,6 @@ async fn local_backend_insert_and_find() {
 }
 
 #[tokio::test]
-async fn comments_hydrate_and_local_writes_generate_put_and_patch_crud() {
-    let (_directory, db, backend) = make_powersync_backend().await;
-    let note_id = uuid::Uuid::new_v4().to_string();
-    backend
-        .insert_note(&InsertNoteReq {
-            id: &note_id,
-            note_type: "normal",
-            status: "ready",
-            title: Some("Daily"),
-            content: Some("body"),
-            metadata: None,
-            project_id: None,
-            now: "2026-09-24T00:00:00Z",
-        })
-        .await
-        .unwrap();
-    db.next_crud_transaction()
-        .await
-        .unwrap()
-        .unwrap()
-        .complete()
-        .await
-        .unwrap();
-
-    let downloaded_id = uuid::Uuid::new_v4().to_string();
-    {
-        let writer = db.writer().await.unwrap();
-        writer.execute(
-            "INSERT INTO note_comments (id, note_id, user_id, block_text, content, author, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![downloaded_id, note_id, "test-user-id", "downloaded", r#"{"kind":"human"}"#, "Neil", 0, "2026-09-24T01:00:00Z"],
-        ).unwrap();
-        writer.execute("DELETE FROM ps_crud", []).unwrap();
-    }
-    let hydrated = backend.list_comments(&note_id).await.unwrap();
-    assert_eq!(hydrated.len(), 1);
-    assert_eq!(hydrated[0].block_text, "downloaded");
-
-    let local_id = uuid::Uuid::new_v4().to_string();
-    backend
-        .insert_comment(&InsertCommentReq {
-            id: &local_id,
-            note_id: &note_id,
-            block_text: "local",
-            content: r#"{"kind":"human"}"#,
-            author: "Neil",
-            is_read: false,
-            parent_id: None,
-            now: "2026-09-24T02:00:00Z",
-        })
-        .await
-        .unwrap();
-    let put = db.next_crud_transaction().await.unwrap().unwrap();
-    assert_eq!(put.crud.len(), 1);
-    assert_eq!(put.crud[0].table, "note_comments");
-    assert!(matches!(
-        put.crud[0].update_type,
-        powersync::UpdateType::Put
-    ));
-    put.complete().await.unwrap();
-
-    backend
-        .update_comment(&local_id, Some(r#"{"kind":"edited"}"#), Some(true))
-        .await
-        .unwrap();
-    let patch = db.next_crud_transaction().await.unwrap().unwrap();
-    assert_eq!(patch.crud.len(), 1);
-    assert_eq!(patch.crud[0].table, "note_comments");
-    assert!(matches!(
-        patch.crud[0].update_type,
-        powersync::UpdateType::Patch
-    ));
-    let data = patch.crud[0].data.as_ref().unwrap();
-    assert_eq!(data["is_read"], 1);
-    assert_eq!(data["content"], r#"{"kind":"edited"}"#);
-}
-
-#[tokio::test]
 async fn project_metadata_hydrates_and_patch_preserves_unknown_keys() {
     let (_directory, db, backend) = make_powersync_backend().await;
     let project_id = backend.create_project("work").await.unwrap();
@@ -322,225 +245,6 @@ async fn project_metadata_hydrates_and_patch_preserves_unknown_keys() {
     )
     .unwrap();
     assert_eq!(uploaded["unknown"]["keep"], true);
-}
-
-async fn existing_daily_fixture() -> (
-    tempfile::TempDir,
-    powersync::PowerSyncDatabase,
-    LocalPowerSyncBackend,
-    String,
-) {
-    let (_directory, db, backend) = make_powersync_backend().await;
-    let note_id = uuid::Uuid::new_v4().to_string();
-    backend
-        .insert_note(&InsertNoteReq {
-            id: &note_id,
-            note_type: "normal",
-            status: "ready",
-            title: Some("Thursday, Sep 24"),
-            content: Some("first"),
-            metadata: Some(r#"{"daily":{"date":"2026-09-24"}}"#),
-            project_id: None,
-            now: "2026-09-24T00:00:00Z",
-        })
-        .await
-        .unwrap();
-    db.next_crud_transaction()
-        .await
-        .unwrap()
-        .unwrap()
-        .complete()
-        .await
-        .unwrap();
-    (_directory, db, backend, note_id)
-}
-
-#[tokio::test]
-async fn capture_is_one_crud_transaction_with_note_patch_and_comment_put() {
-    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
-    let comment_id = uuid::Uuid::new_v4().to_string();
-    backend
-        .capture_into_daily(
-            &note_id,
-            "second\n\nline",
-            &comment_id,
-            r#"{"kind":"project_route","destination":null,"probability":null}"#,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        backend
-            .find_note_content(&note_id)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("first\n\nsecond\n\nline")
-    );
-    assert_eq!(
-        backend.list_comments(&note_id).await.unwrap()[0].block_text,
-        "second\n\nline"
-    );
-    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
-    assert_eq!(transaction.crud.len(), 2);
-    assert!(
-        transaction.crud.iter().any(|entry| entry.table == "notes"
-            && matches!(entry.update_type, powersync::UpdateType::Patch))
-    );
-    assert!(
-        transaction
-            .crud
-            .iter()
-            .any(|entry| entry.table == "note_comments"
-                && matches!(entry.update_type, powersync::UpdateType::Put))
-    );
-    transaction.complete().await.unwrap();
-}
-
-#[tokio::test]
-async fn comment_batch_is_one_crud_transaction_and_rolls_back_on_failure() {
-    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
-    let first = uuid::Uuid::new_v4().to_string();
-    let second = uuid::Uuid::new_v4().to_string();
-    for id in [&first, &second] {
-        backend
-            .insert_comment(&InsertCommentReq {
-                id,
-                note_id: &note_id,
-                block_text: id,
-                content: r#"{"state":"old"}"#,
-                author: "author",
-                is_read: false,
-                parent_id: None,
-                now: "2026-09-24T00:00:00Z",
-            })
-            .await
-            .unwrap();
-        db.next_crud_transaction()
-            .await
-            .unwrap()
-            .unwrap()
-            .complete()
-            .await
-            .unwrap();
-    }
-
-    backend
-        .update_comments(&[
-            UpdateCommentReq {
-                id: first.clone(),
-                content: Some(r#"{"state":"new"}"#.to_string()),
-                is_read: None,
-            },
-            UpdateCommentReq {
-                id: second.clone(),
-                content: None,
-                is_read: Some(true),
-            },
-        ])
-        .await
-        .unwrap();
-    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
-    assert_eq!(transaction.crud.len(), 2);
-    assert!(transaction.crud.iter().all(|entry| {
-        entry.table == "note_comments" && matches!(entry.update_type, powersync::UpdateType::Patch)
-    }));
-    transaction.complete().await.unwrap();
-
-    let missing = uuid::Uuid::new_v4().to_string();
-    let error = backend
-        .update_comments(&[
-            UpdateCommentReq {
-                id: first.clone(),
-                content: Some(r#"{"state":"rolled-back"}"#.to_string()),
-                is_read: None,
-            },
-            UpdateCommentReq {
-                id: missing,
-                content: None,
-                is_read: Some(true),
-            },
-        ])
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("Comment not found"));
-    assert_eq!(
-        backend.find_comment(&first).await.unwrap().content,
-        r#"{"state":"new"}"#
-    );
-    assert!(db.next_crud_transaction().await.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn capture_comment_failure_rolls_back_note_append() {
-    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
-    {
-        let writer = db.writer().await.unwrap();
-        writer
-            .execute_batch(
-                r#"
-            CREATE TRIGGER fail_capture_comment
-            INSTEAD OF INSERT ON note_comments
-            BEGIN
-                SELECT RAISE(ABORT, 'forced comment failure');
-            END;
-        "#,
-            )
-            .unwrap();
-    }
-    assert!(
-        backend
-            .capture_into_daily(
-                &note_id,
-                "must roll back",
-                &uuid::Uuid::new_v4().to_string(),
-                r#"{"kind":"project_route","destination":null,"probability":null}"#,
-            )
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        backend
-            .find_note_content(&note_id)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some("first")
-    );
-    assert!(backend.list_comments(&note_id).await.unwrap().is_empty());
-    assert!(db.next_crud_transaction().await.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn capture_note_failure_leaves_no_comment() {
-    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
-    {
-        let writer = db.writer().await.unwrap();
-        writer
-            .execute_batch(
-                r#"
-            CREATE TRIGGER fail_capture_note
-            INSTEAD OF UPDATE ON notes
-            WHEN NEW.id = OLD.id
-            BEGIN
-                SELECT RAISE(ABORT, 'forced note failure');
-            END;
-        "#,
-            )
-            .unwrap();
-    }
-    assert!(
-        backend
-            .capture_into_daily(
-                &note_id,
-                "note write fails",
-                &uuid::Uuid::new_v4().to_string(),
-                r#"{"kind":"project_route","destination":null,"probability":null}"#,
-            )
-            .await
-            .is_err()
-    );
-    assert!(backend.list_comments(&note_id).await.unwrap().is_empty());
-    assert!(db.next_crud_transaction().await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -727,6 +431,9 @@ async fn local_backend_list_filter() {
     let notes = backend
         .list_notes(&NoteFilter {
             project_id: Some(&proj_a),
+            no_project: false,
+            created_after: None,
+            created_before: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -763,6 +470,9 @@ async fn local_backend_search_notes() {
             &["Unique".to_string()],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -780,6 +490,9 @@ async fn local_backend_search_notes() {
             &[],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -858,6 +571,9 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
             },
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -906,6 +622,9 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
             },
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1017,6 +736,9 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
             prompt,
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit,
@@ -1209,6 +931,9 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
     );
     let filter = NoteFilter {
         project_id: None,
+        no_project: false,
+        created_after: None,
+        created_before: None,
         note_type: None,
         archived: false,
         limit: 20,
@@ -1311,6 +1036,9 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             "Ada Lovelace and OpenAI\n\t\u{3000}",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 3,
@@ -1344,6 +1072,9 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             "Ada Lovelace and OpenAI",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1391,6 +1122,9 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             "Project Ada",
             &NoteFilter {
                 project_id: Some(&project_id),
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1427,6 +1161,9 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             "No summary entity",
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1475,6 +1212,9 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
             "Project topic",
             &NoteFilter {
                 project_id: Some(&project_id),
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1566,6 +1306,9 @@ async fn local_backend_search_respects_type_filter() {
             &["Shared".to_string()],
             &NoteFilter {
                 project_id: None,
+                no_project: false,
+                created_after: None,
+                created_before: None,
                 note_type: Some("link"),
                 archived: false,
                 limit: 20,
@@ -1603,6 +1346,9 @@ async fn local_backend_archive() {
     let active = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1622,6 +1368,9 @@ async fn local_backend_archive() {
     let active_after = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1635,6 +1384,9 @@ async fn local_backend_archive() {
     let archived = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             note_type: None,
             archived: true,
             limit: 20,
@@ -1649,6 +1401,9 @@ async fn local_backend_archive() {
     let active_restored = backend
         .list_notes(&NoteFilter {
             project_id: None,
+            no_project: false,
+            created_after: None,
+            created_before: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1906,4 +1661,337 @@ async fn test_project_resolver_rejects_uuid_prefixes() {
     let project_prefix = &project_id[..8];
 
     assert!(backend.resolve_project_id(project_prefix).await.is_err());
+}
+
+async fn seed_routing_note(
+    db: &powersync::PowerSyncDatabase,
+    short_id: i64,
+    created_at: &str,
+    project_id: Option<&str>,
+    metadata: Option<&str>,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "INSERT INTO notes (id, short_id, user_id, type, status, title, content, project_id, metadata, created_at, updated_at) \
+             VALUES (?, ?, 'test-user-id', 'normal', 'ready', ?, 'body', ?, ?, ?, ?)",
+            params![id, short_id, format!("Note {short_id}"), project_id, metadata, created_at, created_at],
+        )
+        .unwrap();
+    writer.execute("DELETE FROM ps_crud", []).unwrap();
+    id
+}
+
+#[tokio::test]
+async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = uuid::Uuid::new_v4().to_string();
+    for (short_id, created_at, project) in [
+        (101, "2026-09-24T00:00:00Z", None),
+        (102, "2026-09-24T01:00:00Z", Some(project_id.as_str())),
+        (103, "2026-09-24T02:00:00Z", None),
+        (104, "2026-09-24T03:00:00Z", None),
+    ] {
+        seed_routing_note(&db, short_id, created_at, project, None).await;
+    }
+
+    fn list<'a>(
+        after: Option<&'a str>,
+        before: Option<&'a str>,
+        no_project: bool,
+        limit: u32,
+        cursor: Option<i64>,
+    ) -> NoteFilter<'a> {
+        NoteFilter {
+            project_id: None,
+            no_project,
+            note_type: None,
+            created_after: after,
+            created_before: before,
+            archived: false,
+            limit,
+            cursor,
+        }
+    }
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some("2026-09-24T01:00:00Z"), None, false, 20, None))
+            .await
+            .unwrap()),
+        vec![104, 103, 102]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some("2026-09-24T02:00:00Z"), false, 20, None))
+            .await
+            .unwrap()),
+        vec![102, 101]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(
+                Some("2026-09-24T01:00:00Z"),
+                Some("2026-09-24T03:00:00Z"),
+                false,
+                20,
+                None
+            ))
+            .await
+            .unwrap()),
+        vec![103, 102]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 20, None))
+            .await
+            .unwrap()),
+        vec![104, 103, 101]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 2, None))
+            .await
+            .unwrap()),
+        vec![104, 103]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, None, true, 2, Some(103)))
+            .await
+            .unwrap()),
+        vec![101]
+    );
+}
+
+#[tokio::test]
+async fn route_project_batch_writes_metadata_and_one_powersync_transaction() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Destination").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let first = seed_routing_note(
+        &db,
+        201,
+        "2026-09-24T01:00:00Z",
+        None,
+        Some(r#"{"unknown":{"keep":true}}"#),
+    )
+    .await;
+    let second = seed_routing_note(&db, 202, "2026-09-24T02:00:00Z", None, None).await;
+
+    backend
+        .route_notes_to_projects(&[
+            RouteProjectUpdate {
+                note_id: 201,
+                project_id: Some(project_id.clone()),
+                probability_json: "0.91".to_string(),
+            },
+            RouteProjectUpdate {
+                note_id: 202,
+                project_id: None,
+                probability_json: "0.78".to_string(),
+            },
+        ])
+        .await
+        .unwrap();
+
+    let first = backend.find_note(&first).await.unwrap();
+    let first_metadata: serde_json::Value =
+        serde_json::from_str(first.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(first.project_id.as_deref(), Some(project_id.as_str()));
+    assert_eq!(first_metadata["unknown"]["keep"], true);
+    assert_eq!(first_metadata["project_routing"]["routed"], true);
+    assert_eq!(first_metadata["project_routing"]["probability"], 0.91);
+    let second = backend.find_note(&second).await.unwrap();
+    let second_metadata: serde_json::Value =
+        serde_json::from_str(second.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(second.project_id, None);
+    assert_eq!(second_metadata["project_routing"]["probability"], 0.78);
+
+    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(transaction.crud.len(), 2);
+    assert!(transaction.crud.iter().all(|entry| {
+        entry.table == "notes" && matches!(entry.update_type, powersync::UpdateType::Patch)
+    }));
+    transaction.complete().await.unwrap();
+}
+
+async fn routing_rollback_fixture() -> (
+    tempfile::TempDir,
+    powersync::PowerSyncDatabase,
+    LocalPowerSyncBackend,
+    String,
+    String,
+    String,
+) {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Destination").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let first = seed_routing_note(&db, 301, "2026-09-24T01:00:00Z", None, None).await;
+    let second = seed_routing_note(&db, 302, "2026-09-24T02:00:00Z", None, None).await;
+    (_directory, db, backend, project_id, first, second)
+}
+
+fn valid_route(project_id: &str) -> RouteProjectUpdate {
+    RouteProjectUpdate {
+        note_id: 301,
+        project_id: Some(project_id.to_string()),
+        probability_json: "0.9".to_string(),
+    }
+}
+
+async fn assert_route_rolled_back(
+    backend: &LocalPowerSyncBackend,
+    db: &powersync::PowerSyncDatabase,
+    first: &str,
+) {
+    let note = backend.find_note(first).await.unwrap();
+    assert_eq!(note.project_id, None);
+    assert_eq!(note.metadata, None);
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn route_project_invalid_short_id_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, _second) = routing_rollback_fixture().await;
+
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 999_999,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_existing_project_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, second) = routing_rollback_fixture().await;
+
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET project_id = ? WHERE id = ?",
+                params![project_id, second],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 302,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_already_routed_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, second) = routing_rollback_fixture().await;
+
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET project_id = NULL, metadata = ? WHERE id = ?",
+                params![
+                    r#"{"project_routing":{"routed":true,"probability":0.4}}"#,
+                    second
+                ],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 302,
+                project_id: None,
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_invalid_project_rolls_back_prior_updates() {
+    let (_directory, db, backend, project_id, first, _second) = routing_rollback_fixture().await;
+
+    backend
+        .route_notes_to_projects(&[
+            valid_route(&project_id),
+            RouteProjectUpdate {
+                note_id: 999_998,
+                project_id: Some(uuid::Uuid::new_v4().to_string()),
+                probability_json: "0.5".to_string(),
+            },
+        ])
+        .await
+        .unwrap_err();
+    assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn manual_project_change_clears_routing_metadata_and_preserves_other_keys() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("Manual").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    let note_id = seed_routing_note(
+        &db,
+        401,
+        "2026-09-24T01:00:00Z",
+        None,
+        Some(r#"{"unknown":"keep","project_routing":{"routed":true,"probability":0.7}}"#),
+    )
+    .await;
+
+    backend
+        .update_note_project(&note_id, Some(&project_id))
+        .await
+        .unwrap();
+    let note = backend.find_note(&note_id).await.unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(note.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["unknown"], "keep");
+    assert!(metadata.get("project_routing").is_none());
 }
