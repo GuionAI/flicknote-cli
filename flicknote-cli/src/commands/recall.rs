@@ -7,7 +7,6 @@ use serde::Deserialize;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use super::util::resolve_project_arg;
 use crate::recall::{
     McpRecallResult, RECALL_HOOK_EVENT, RECALL_HOOK_TIMEOUT, RECALL_HUMAN_TIMEOUT, current_time,
     normalize_timestamp, recall_call_with_timeout,
@@ -38,7 +37,7 @@ struct CodexPromptEvent {
 }
 
 pub(crate) async fn run(config: &Config, args: &RecallArgs) -> Result<(), CliError> {
-    let project = resolve_project_arg(&args.project);
+    let project = args.project.clone();
     if args.hook {
         return run_hook(config, project).await;
     }
@@ -47,11 +46,6 @@ pub(crate) async fn run(config: &Config, args: &RecallArgs) -> Result<(), CliErr
         .query
         .as_deref()
         .expect("clap requires a query outside hook mode");
-    if args.project.is_none()
-        && let Some(name) = project.as_deref()
-    {
-        eprintln!("Filtering by project \"{name}\" from $FLICKNOTE_PROJECT.");
-    }
     let candidates = recall_candidates(config, query, project, RECALL_HUMAN_TIMEOUT).await?;
     println!("{}", render_human_candidates(query, &candidates));
     Ok(())

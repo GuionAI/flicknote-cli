@@ -432,8 +432,8 @@ async fn local_backend_list_filter() {
         .list_notes(&NoteFilter {
             project_id: Some(&proj_a),
             no_project: false,
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -471,8 +471,8 @@ async fn local_backend_search_notes() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -491,8 +491,8 @@ async fn local_backend_search_notes() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -572,8 +572,8 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -623,8 +623,8 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -737,8 +737,8 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit,
@@ -932,8 +932,8 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
     let filter = NoteFilter {
         project_id: None,
         no_project: false,
-        created_after: None,
-        created_before: None,
+        created_after_micros: None,
+        created_before_micros: None,
         note_type: None,
         archived: false,
         limit: 20,
@@ -1037,8 +1037,8 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 3,
@@ -1073,8 +1073,8 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1123,8 +1123,8 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             &NoteFilter {
                 project_id: Some(&project_id),
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1162,8 +1162,8 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1213,8 +1213,8 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
             &NoteFilter {
                 project_id: Some(&project_id),
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: None,
                 archived: false,
                 limit: 20,
@@ -1307,8 +1307,8 @@ async fn local_backend_search_respects_type_filter() {
             &NoteFilter {
                 project_id: None,
                 no_project: false,
-                created_after: None,
-                created_before: None,
+                created_after_micros: None,
+                created_before_micros: None,
                 note_type: Some("link"),
                 archived: false,
                 limit: 20,
@@ -1347,8 +1347,8 @@ async fn local_backend_archive() {
         .list_notes(&NoteFilter {
             project_id: None,
             no_project: false,
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1369,8 +1369,8 @@ async fn local_backend_archive() {
         .list_notes(&NoteFilter {
             project_id: None,
             no_project: false,
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1385,8 +1385,8 @@ async fn local_backend_archive() {
         .list_notes(&NoteFilter {
             project_id: None,
             no_project: false,
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: true,
             limit: 20,
@@ -1402,8 +1402,8 @@ async fn local_backend_archive() {
         .list_notes(&NoteFilter {
             project_id: None,
             no_project: false,
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             note_type: None,
             archived: false,
             limit: 20,
@@ -1703,12 +1703,17 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
         limit: u32,
         cursor: Option<i64>,
     ) -> NoteFilter<'a> {
+        let micros = |value: &str| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .unwrap()
+                .timestamp_micros()
+        };
         NoteFilter {
             project_id: None,
             no_project,
             note_type: None,
-            created_after: after,
-            created_before: before,
+            created_after_micros: after.map(micros),
+            created_before_micros: before.map(micros),
             archived: false,
             limit,
             cursor,
@@ -1768,6 +1773,61 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
             .await
             .unwrap()),
         vec![101]
+    );
+}
+
+#[tokio::test]
+async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    for (short_id, created_at) in [
+        (200, "2026-09-24T00:00:00Z"),
+        (201, "2026-09-24T00:00:00.000123Z"),
+        (202, "2026-09-24T00:00:00.000456+00:00"),
+        (203, "2026-09-24T08:00:00.000789+08:00"),
+    ] {
+        seed_routing_note(&db, short_id, created_at, None, None).await;
+    }
+
+    let base_micros = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+        .unwrap()
+        .timestamp_micros();
+    let list = |after, before| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        created_after_micros: after,
+        created_before_micros: before,
+        archived: false,
+        limit: 20,
+        cursor: None,
+    };
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 124), None))
+            .await
+            .unwrap()),
+        vec![203, 202]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some(base_micros + 456)))
+            .await
+            .unwrap()),
+        vec![201, 200]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 456), Some(base_micros + 789)))
+            .await
+            .unwrap()),
+        vec![202]
     );
 }
 

@@ -5,7 +5,7 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::dto::NoteSummary;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::util::{display_summary_id, resolve_project_arg};
+use super::util::display_summary_id;
 
 #[derive(Args)]
 pub(crate) struct ImportArgs {
@@ -24,7 +24,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ImportArgs) -> Result<
         return Ok(());
     }
 
-    let effective_project = resolve_project_arg(&args.project);
+    let project = args.project.clone();
     let mut imported = Vec::new();
 
     for file in &files {
@@ -35,7 +35,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ImportArgs) -> Result<
         let inserted: NoteSummary = match daemon
             .call(AppRequest::NoteUpload {
                 path: path.to_string_lossy().into_owned(),
-                project: effective_project.clone(),
+                project: project.clone(),
                 created_at: Some(created_at),
             })
             .await
@@ -62,7 +62,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ImportArgs) -> Result<
             display_title
         );
     }
-    match effective_project.as_deref() {
+    match project.as_deref() {
         Some(name) => {
             println!(
                 "Imported {} note(s) into project \"{name}\".",

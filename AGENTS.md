@@ -49,8 +49,8 @@ short ID; it does not read note bodies or write notes. Human and operator recall
 uses `flicknote recall QUERY`; Codex command hooks use
 `flicknote recall --hook`, which reads one `UserPromptSubmit` event JSON object
 from stdin and emits the same bounded hook JSON contract. The CLI uses the
-`--project` argument or `FLICKNOTE_PROJECT`; host event metadata never selects
-the project. Human recall has a five-second complete daemon-call budget;
+explicit `--project` argument; host event metadata never selects the project.
+Human recall has a five-second complete daemon-call budget;
 command-hook and MCP `note_recall` recall have three seconds. Empty recall,
 daemon-unavailable recall, and timed-out recall supply no context. Treat a
 timeout as a slow response; recommend daemon status/start only for an actually

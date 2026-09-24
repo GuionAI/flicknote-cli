@@ -283,7 +283,6 @@ fn run_cli_json(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("FLICKNOTE_PROJECT")
         .output()
         .unwrap();
     assert!(
@@ -304,7 +303,6 @@ fn run_cli_with_input(
         .args(args)
         .env("XDG_CONFIG_HOME", config_root)
         .env("XDG_DATA_HOME", data_root)
-        .env_remove("FLICKNOTE_PROJECT")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

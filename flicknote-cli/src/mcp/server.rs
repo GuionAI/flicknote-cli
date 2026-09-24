@@ -106,14 +106,6 @@ impl FlickNoteMcp {
         DaemonClient::new(&self.config).call(request).await
     }
 
-    fn effective_project(project: Option<String>) -> Option<String> {
-        Self::select_project(project, std::env::var("FLICKNOTE_PROJECT").ok())
-    }
-
-    fn select_project(explicit: Option<String>, inherited: Option<String>) -> Option<String> {
-        explicit.or_else(|| inherited.filter(|value| !value.is_empty()))
-    }
-
     async fn resolve_project_name(&self, name: &str) -> Result<String, ServiceError> {
         self.call::<ProjectDto>(AppRequest::ProjectGetByName {
             name: name.to_string(),
@@ -168,11 +160,7 @@ impl FlickNoteMcp {
         structured(
             self.call::<Vec<NoteListItem>>(AppRequest::NoteList(NoteListInput {
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
-                project: if params.no_project {
-                    None
-                } else {
-                    Self::effective_project(params.project)
-                },
+                project: params.project,
                 no_project: params.no_project,
                 created_after: params.created_after,
                 created_before: params.created_before,
@@ -198,7 +186,7 @@ impl FlickNoteMcp {
             self.call::<Vec<NoteListItem>>(AppRequest::NoteFind(NoteFindInput {
                 keywords: params.keywords,
                 extractions: params.extractions,
-                project: Self::effective_project(params.project),
+                project: params.project,
                 archived: params.archived,
                 limit: params.limit,
             }))
@@ -219,7 +207,7 @@ impl FlickNoteMcp {
         structured(
             self.call::<Vec<RecallCandidate>>(AppRequest::NoteRecall {
                 prompt: params.prompt,
-                project: Self::effective_project(params.project),
+                project: params.project,
             })
             .await
             .map(|candidates| McpRecallResult::from_candidates(&candidates, current_time())),
@@ -238,7 +226,7 @@ impl FlickNoteMcp {
         structured(
             self.call::<u64>(AppRequest::NoteCount(NoteCountInput {
                 keywords: params.keywords,
-                project: Self::effective_project(params.project),
+                project: params.project,
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
                 archived: params.archived,
             }))
@@ -378,7 +366,7 @@ impl FlickNoteMcp {
         structured(
             self.call::<NoteCreateResult>(AppRequest::NoteAdd(NoteAddInput {
                 content: params.content,
-                project: Self::effective_project(params.project),
+                project: params.project,
                 interpret_as_url: true,
                 draft: params.draft,
                 topics: Vec::new(),
@@ -820,22 +808,6 @@ mod tests {
     #[test]
     fn mcp_service_is_send_and_sync() {
         assert_send_sync::<FlickNoteMcp>();
-    }
-
-    #[test]
-    fn explicit_project_wins_then_falls_back_to_non_empty_environment_value() {
-        assert_eq!(
-            FlickNoteMcp::select_project(Some("explicit".into()), Some("environment".into())),
-            Some("explicit".into())
-        );
-        assert_eq!(
-            FlickNoteMcp::select_project(None, Some("environment".into())),
-            Some("environment".into())
-        );
-        assert_eq!(
-            FlickNoteMcp::select_project(None, Some(String::new())),
-            None
-        );
     }
 
     fn test_config(directory: &Path) -> Config {

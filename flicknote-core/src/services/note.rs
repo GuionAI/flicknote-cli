@@ -25,7 +25,7 @@ use super::source::{SourceResult, SourceView, parse_source};
 fn validate_created_range(
     created_after: Option<&str>,
     created_before: Option<&str>,
-) -> Result<(), ServiceError> {
+) -> Result<(Option<i64>, Option<i64>), ServiceError> {
     let parse = |name: &str, value: &str| {
         chrono::DateTime::parse_from_rfc3339(value).map_err(|_| {
             ServiceError::InvalidArgument(format!("{name} must be an RFC3339 timestamp"))
@@ -45,7 +45,19 @@ fn validate_created_range(
             "created_after must be earlier than created_before".to_string(),
         ));
     }
-    Ok(())
+    let cutoff_micros = |value: chrono::DateTime<chrono::FixedOffset>| {
+        let micros = value.timestamp_micros();
+        if value.timestamp_subsec_nanos().is_multiple_of(1_000) {
+            return Ok(micros);
+        }
+        micros.checked_add(1).ok_or_else(|| {
+            ServiceError::InvalidArgument("created timestamp is out of range".to_string())
+        })
+    };
+    Ok((
+        after.map(cutoff_micros).transpose()?,
+        before.map(cutoff_micros).transpose()?,
+    ))
 }
 
 pub struct NoteService<'a> {
@@ -118,7 +130,7 @@ impl<'a> NoteService<'a> {
                 "project and no_project are mutually exclusive".to_string(),
             ));
         }
-        validate_created_range(
+        let (created_after_micros, created_before_micros) = validate_created_range(
             input.created_after.as_deref(),
             input.created_before.as_deref(),
         )?;
@@ -137,8 +149,8 @@ impl<'a> NoteService<'a> {
                 project_id: project_id.as_deref(),
                 no_project: input.no_project,
                 note_type: input.note_type.as_deref(),
-                created_after: input.created_after.as_deref(),
-                created_before: input.created_before.as_deref(),
+                created_after_micros,
+                created_before_micros,
                 archived: input.archived,
                 limit: input.limit,
                 cursor: input.cursor,
@@ -179,8 +191,8 @@ impl<'a> NoteService<'a> {
                     project_id: project_id.as_deref(),
                     no_project: false,
                     note_type: None,
-                    created_after: None,
-                    created_before: None,
+                    created_after_micros: None,
+                    created_before_micros: None,
                     archived: input.archived,
                     limit: input.limit,
                     cursor: None,
@@ -224,8 +236,8 @@ impl<'a> NoteService<'a> {
                     project_id: project_id.as_deref(),
                     no_project: false,
                     note_type: None,
-                    created_after: None,
-                    created_before: None,
+                    created_after_micros: None,
+                    created_before_micros: None,
                     archived: false,
                     limit: RECALL_MAX_CANDIDATES,
                     cursor: None,
@@ -243,8 +255,8 @@ impl<'a> NoteService<'a> {
             project_id: project_id.as_deref(),
             no_project: false,
             note_type: input.note_type.as_deref(),
-            created_after: None,
-            created_before: None,
+            created_after_micros: None,
+            created_before_micros: None,
             archived: input.archived,
             limit: u32::MAX,
             cursor: None,
@@ -888,8 +900,23 @@ mod tests {
 
     use super::{
         ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
-        NoteModifyInput, NoteService,
+        NoteModifyInput, NoteService, validate_created_range,
     };
+
+    #[test]
+    fn created_range_normalizes_offsets_and_rounds_sub_microsecond_bounds_up() {
+        let base = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+            .unwrap()
+            .timestamp_micros();
+        assert_eq!(
+            validate_created_range(
+                Some("2026-09-24T08:00:00.0001234+08:00"),
+                Some("2026-09-24T00:00:00.000456Z")
+            )
+            .unwrap(),
+            (Some(base + 124), Some(base + 456))
+        );
+    }
 
     #[tokio::test]
     async fn route_project_rejects_malformed_project_uuid_and_probability() {
@@ -1144,6 +1171,32 @@ mod tests {
         assert_eq!(notes[0].title.as_deref(), Some("Test note"));
         assert_eq!(notes[0].project.as_deref(), Some("work"));
         assert_eq!(notes[0].content_bytes, 4);
+    }
+
+    #[tokio::test]
+    async fn list_rejects_project_with_no_project() {
+        let backend = make_backend().await;
+        let service = NoteService::new(&*backend);
+
+        let error = service
+            .list(NoteListInput {
+                note_type: None,
+                project: Some("work".to_string()),
+                no_project: true,
+                created_after: None,
+                created_before: None,
+                archived: false,
+                limit: 20,
+                cursor: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "invalid_argument");
+        assert_eq!(
+            error.to_string(),
+            "project and no_project are mutually exclusive"
+        );
     }
 
     #[tokio::test]

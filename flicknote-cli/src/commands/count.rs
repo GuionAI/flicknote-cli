@@ -3,8 +3,6 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::dto::NoteCountInput;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
-use super::util::resolve_project_arg;
-
 #[derive(Args)]
 pub(crate) struct CountArgs {
     /// Filter by project name
@@ -21,7 +19,7 @@ pub(crate) struct CountArgs {
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CountArgs) -> Result<(), CliError> {
-    let project = resolve_project_arg(&args.project);
+    let project = args.project.clone();
     let count: u64 = match daemon
         .call(AppRequest::NoteCount(NoteCountInput {
             keywords: args.keywords.clone(),

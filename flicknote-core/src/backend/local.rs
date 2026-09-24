@@ -410,8 +410,16 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
               AND (? = 0 OR project_id IS NULL)
-              AND (? IS NULL OR julianday(created_at) >= julianday(?))
-              AND (? IS NULL OR julianday(created_at) < julianday(?))
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END >= ?)
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END < ?)
               AND (? IS NULL OR short_id < ?)
             ORDER BY short_id DESC
             LIMIT ?
@@ -424,10 +432,10 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.project_id,
                 filter.project_id,
                 filter.no_project,
-                filter.created_after,
-                filter.created_after,
-                filter.created_before,
-                filter.created_before,
+                filter.created_after_micros,
+                filter.created_after_micros,
+                filter.created_before_micros,
+                filter.created_before_micros,
                 filter.cursor,
                 filter.cursor,
                 limit,
