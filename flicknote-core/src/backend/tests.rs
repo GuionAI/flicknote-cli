@@ -1832,6 +1832,61 @@ async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
 }
 
 #[tokio::test]
+async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
+    assert!(
+        rusqlite::version_number() >= 3_051_000,
+        "the timestamp filter requires bundled SQLite 3.51 or newer, found {}",
+        rusqlite::version()
+    );
+
+    let (_directory, db, backend) = make_powersync_backend().await;
+    for (short_id, created_at) in [
+        (210, "2026-09-24T00:00:00.999499Z"),
+        (211, "2026-09-24T00:00:00.999500Z"),
+        (212, "2026-09-24T00:00:00.999999Z"),
+        (213, "2026-09-24T00:00:01Z"),
+        (214, "2026-09-24T08:00:00.999500+08:00"),
+    ] {
+        seed_routing_note(&db, short_id, created_at, None, None).await;
+    }
+
+    let base_micros = chrono::DateTime::parse_from_rfc3339("2026-09-24T00:00:00Z")
+        .unwrap()
+        .timestamp_micros();
+    let list = |after, before| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        created_after_micros: after,
+        created_before_micros: before,
+        archived: false,
+        limit: 20,
+        cursor: None,
+    };
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(Some(base_micros + 999_500), None))
+            .await
+            .unwrap()),
+        vec![214, 213, 212, 211]
+    );
+    assert_eq!(
+        ids(backend
+            .list_notes(&list(None, Some(base_micros + 1_000_000)))
+            .await
+            .unwrap()),
+        vec![214, 212, 211, 210]
+    );
+}
+
+#[tokio::test]
 async fn route_project_batch_writes_metadata_and_one_powersync_transaction() {
     let (_directory, db, backend) = make_powersync_backend().await;
     let project_id = backend.create_project("Destination").await.unwrap();
