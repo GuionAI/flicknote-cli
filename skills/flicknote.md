@@ -37,8 +37,10 @@ use restore only when the user explicitly wants the identified archived note
 back. `draft: true` is the sole public lifecycle projection. Create a draft with
 `note_add { "draft": true }` and use `note_submit` for the explicit
 `draft → ai_queued` transition. Ordinary edits never requeue processing. Do not
-assume other processing or synchronization status is part of the public note
-contract.
+assume arbitrary processing or synchronization values are valid lifecycle
+states. `note_list` may filter the canonical `draft`, `ai_queued`,
+`source_queued`, and `ready` states; list results still expose only `draft` as a
+boolean and there is no generic status setter.
 
 ## Daemon recovery
 

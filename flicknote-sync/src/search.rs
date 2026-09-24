@@ -743,7 +743,7 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let writer = db.writer().await.unwrap();
         writer.execute(
-            "INSERT INTO notes (id, user_id, type, status, content) VALUES (?, 'user-1', 'normal', 'synced', 'Seed document')",
+            "INSERT INTO notes (id, user_id, type, status, content) VALUES (?, 'user-1', 'normal', 'ready', 'Seed document')",
             params![id],
         ).unwrap();
         id
@@ -819,7 +819,7 @@ mod tests {
             (&summary_id, "ordinary", "nebula", "ordinary"),
         ] {
             writer.execute(
-                "INSERT INTO notes (id, user_id, type, status, title, summary, content) VALUES (?, 'user-1', 'normal', 'synced', ?, ?, ?)",
+                "INSERT INTO notes (id, user_id, type, status, title, summary, content) VALUES (?, 'user-1', 'normal', 'ready', ?, ?, ?)",
                 params![note_id, title, summary, content],
             ).unwrap();
         }

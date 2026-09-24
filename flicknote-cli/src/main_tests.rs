@@ -88,6 +88,15 @@ fn list_time_filters_and_route_project_parse() {
 }
 
 #[test]
+fn list_accepts_only_canonical_note_statuses() {
+    for status in ["draft", "ai_queued", "source_queued", "ready"] {
+        assert!(Cli::try_parse_from(["flicknote", "list", "--status", status]).is_ok());
+    }
+    assert!(Cli::try_parse_from(["flicknote", "list", "--status", "reday"]).is_err());
+    assert!(Cli::try_parse_from(["flicknote", "list", "--status", "synced"]).is_err());
+}
+
+#[test]
 fn metadata_discovery_and_source_commands_parse() {
     assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());

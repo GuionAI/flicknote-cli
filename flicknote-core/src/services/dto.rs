@@ -222,6 +222,7 @@ pub struct NoteArchiveResult {
 pub struct NoteListInput {
     #[serde(rename = "type")]
     pub note_type: Option<String>,
+    pub status: Option<String>,
     pub project: Option<String>,
     #[serde(default)]
     pub no_project: bool,

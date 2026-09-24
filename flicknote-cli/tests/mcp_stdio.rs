@@ -245,7 +245,7 @@ async fn seed_workspace(
         .insert_note(&InsertNoteReq {
             id: &note_id,
             note_type: "normal",
-            status: "synced",
+            status: "ready",
             title: Some("Legacy JSON"),
             content: Some("stored body"),
             metadata: None,
@@ -831,7 +831,7 @@ async fn cli_list_pages_by_descending_short_id() {
             .insert_note(&InsertNoteReq {
                 id: &id,
                 note_type: "normal",
-                status: "synced",
+                status: "ready",
                 title: Some("Paged note"),
                 content: Some("body"),
                 metadata: None,
@@ -867,6 +867,57 @@ async fn cli_list_pages_by_descending_short_id() {
     );
     assert_eq!(second.as_array().unwrap().len(), 1);
     assert_eq!(second[0]["id"], 77);
+}
+
+#[tokio::test]
+async fn cli_list_filters_by_status() {
+    let directory = tempfile::tempdir().unwrap();
+    let config_root = directory.path().join("config");
+    let data_root = directory.path().join("data");
+    seed_workspace(&config_root, &data_root).await;
+    let config = test_config(&config_root, &data_root);
+    let db = test_database(&config);
+    let backend = LocalPowerSyncBackend::new(db.clone(), "test-user".to_string());
+    let draft_id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &draft_id,
+            note_type: "normal",
+            status: "draft",
+            title: Some("Draft note"),
+            content: Some("body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-01-01T00:00:00Z",
+        })
+        .await
+        .unwrap();
+    let writer = db.writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET short_id = 78 WHERE id = ?",
+            rusqlite::params![draft_id],
+        )
+        .unwrap();
+    drop(writer);
+    drop(backend);
+    let _daemon = spawn_test_daemon(&config_root, &data_root);
+
+    let ready = run_cli_json(
+        &config_root,
+        &data_root,
+        &["list", "--status", "ready", "--json"],
+    );
+    assert_eq!(ready.as_array().unwrap().len(), 1);
+    assert_eq!(ready[0]["id"], 77);
+
+    let draft = run_cli_json(
+        &config_root,
+        &data_root,
+        &["list", "--status", "draft", "--json"],
+    );
+    assert_eq!(draft.as_array().unwrap().len(), 1);
+    assert_eq!(draft[0]["id"], 78);
 }
 
 #[tokio::test]

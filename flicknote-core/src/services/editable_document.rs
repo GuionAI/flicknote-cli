@@ -172,7 +172,7 @@ mod tests {
             short_id: Some(1),
             user_id: "user".to_string(),
             r#type: "normal".to_string(),
-            status: "synced".to_string(),
+            status: "ready".to_string(),
             title: title.map(str::to_string),
             content: content.map(str::to_string),
             summary: None,

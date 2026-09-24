@@ -435,6 +435,7 @@ async fn local_backend_list_filter() {
             created_after_micros: None,
             created_before_micros: None,
             note_type: None,
+            status: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -474,6 +475,7 @@ async fn local_backend_search_notes() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -494,6 +496,7 @@ async fn local_backend_search_notes() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -575,6 +578,7 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -626,6 +630,7 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -661,7 +666,7 @@ async fn insert_recall_note_in_project(
         .insert_note(&InsertNoteReq {
             id: &id,
             note_type: "normal",
-            status: "synced",
+            status: "ready",
             title: Some(title),
             content: Some("body"),
             metadata: None,
@@ -700,7 +705,7 @@ async fn insert_recall_note_with_extractions(
         .insert_note(&InsertNoteReq {
             id: &id,
             note_type: "normal",
-            status: "synced",
+            status: "ready",
             title: Some(title),
             content: Some("body"),
             metadata: None,
@@ -740,6 +745,7 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit,
                 cursor: None,
@@ -935,6 +941,7 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
         created_after_micros: None,
         created_before_micros: None,
         note_type: None,
+        status: None,
         archived: false,
         limit: 20,
         cursor: None,
@@ -1040,6 +1047,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 3,
                 cursor: None,
@@ -1076,6 +1084,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1126,6 +1135,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1165,6 +1175,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1216,6 +1227,7 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: None,
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1310,6 +1322,7 @@ async fn local_backend_search_respects_type_filter() {
                 created_after_micros: None,
                 created_before_micros: None,
                 note_type: Some("link"),
+                status: None,
                 archived: false,
                 limit: 20,
                 cursor: None,
@@ -1350,6 +1363,7 @@ async fn local_backend_archive() {
             created_after_micros: None,
             created_before_micros: None,
             note_type: None,
+            status: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -1372,6 +1386,7 @@ async fn local_backend_archive() {
             created_after_micros: None,
             created_before_micros: None,
             note_type: None,
+            status: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -1388,6 +1403,7 @@ async fn local_backend_archive() {
             created_after_micros: None,
             created_before_micros: None,
             note_type: None,
+            status: None,
             archived: true,
             limit: 20,
             cursor: None,
@@ -1405,6 +1421,7 @@ async fn local_backend_archive() {
             created_after_micros: None,
             created_before_micros: None,
             note_type: None,
+            status: None,
             archived: false,
             limit: 20,
             cursor: None,
@@ -1670,13 +1687,24 @@ async fn seed_routing_note(
     project_id: Option<&str>,
     metadata: Option<&str>,
 ) -> String {
+    seed_note_with_status(db, short_id, "ready", created_at, project_id, metadata).await
+}
+
+async fn seed_note_with_status(
+    db: &powersync::PowerSyncDatabase,
+    short_id: i64,
+    status: &str,
+    created_at: &str,
+    project_id: Option<&str>,
+    metadata: Option<&str>,
+) -> String {
     let id = uuid::Uuid::new_v4().to_string();
     let writer = db.writer().await.unwrap();
     writer
         .execute(
             "INSERT INTO notes (id, short_id, user_id, type, status, title, content, project_id, metadata, created_at, updated_at) \
-             VALUES (?, ?, 'test-user-id', 'normal', 'ready', ?, 'body', ?, ?, ?, ?)",
-            params![id, short_id, format!("Note {short_id}"), project_id, metadata, created_at, created_at],
+             VALUES (?, ?, 'test-user-id', 'normal', ?, ?, 'body', ?, ?, ?, ?)",
+            params![id, short_id, status, format!("Note {short_id}"), project_id, metadata, created_at, created_at],
         )
         .unwrap();
     writer.execute("DELETE FROM ps_crud", []).unwrap();
@@ -1712,6 +1740,7 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
             project_id: None,
             no_project,
             note_type: None,
+            status: None,
             created_after_micros: after.map(micros),
             created_before_micros: before.map(micros),
             archived: false,
@@ -1777,6 +1806,63 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
 }
 
 #[tokio::test]
+async fn list_notes_status_composes_with_range_no_project_and_cursor() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = uuid::Uuid::new_v4().to_string();
+    for (short_id, status, created_at, project) in [
+        (401, "draft", "2026-09-24T00:00:00Z", None),
+        (
+            402,
+            "ready",
+            "2026-09-24T01:00:00Z",
+            Some(project_id.as_str()),
+        ),
+        (403, "ready", "2026-09-24T02:00:00Z", None),
+        (404, "ai_queued", "2026-09-24T03:00:00Z", None),
+        (405, "source_queued", "2026-09-24T04:00:00Z", None),
+        (406, "ready", "2026-09-24T05:00:00Z", None),
+    ] {
+        seed_note_with_status(&db, short_id, status, created_at, project, None).await;
+    }
+
+    let micros = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .timestamp_micros()
+    };
+    let filter = |limit, cursor| NoteFilter {
+        project_id: None,
+        no_project: true,
+        note_type: None,
+        status: Some("ready"),
+        created_after_micros: Some(micros("2026-09-24T01:00:00Z")),
+        created_before_micros: Some(micros("2026-09-24T06:00:00Z")),
+        archived: false,
+        limit,
+        cursor,
+    };
+    let ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        ids(backend.list_notes(&filter(20, None)).await.unwrap()),
+        vec![406, 403]
+    );
+    assert_eq!(
+        ids(backend.list_notes(&filter(1, None)).await.unwrap()),
+        vec![406]
+    );
+    assert_eq!(
+        ids(backend.list_notes(&filter(20, Some(406))).await.unwrap()),
+        vec![403]
+    );
+}
+
+#[tokio::test]
 async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
     let (_directory, db, backend) = make_powersync_backend().await;
     for (short_id, created_at) in [
@@ -1795,6 +1881,7 @@ async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
         project_id: None,
         no_project: false,
         note_type: None,
+        status: None,
         created_after_micros: after,
         created_before_micros: before,
         archived: false,
@@ -1857,6 +1944,7 @@ async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
         project_id: None,
         no_project: false,
         note_type: None,
+        status: None,
         created_after_micros: after,
         created_before_micros: before,
         archived: false,
@@ -2078,6 +2166,42 @@ async fn route_project_invalid_project_rolls_back_prior_updates() {
         .await
         .unwrap_err();
     assert_route_rolled_back(&backend, &db, &first).await;
+}
+
+#[tokio::test]
+async fn route_project_non_ready_member_rolls_back_the_batch() {
+    for status in ["draft", "ai_queued", "source_queued"] {
+        let (_directory, db, backend, project_id, first, second) = routing_rollback_fixture().await;
+        {
+            let writer = db.writer().await.unwrap();
+            writer
+                .execute(
+                    "UPDATE notes SET status = ? WHERE id = ?",
+                    params![status, second],
+                )
+                .unwrap();
+            writer.execute("DELETE FROM ps_crud", []).unwrap();
+        }
+
+        let error = backend
+            .route_notes_to_projects(&[
+                valid_route(&project_id),
+                RouteProjectUpdate {
+                    note_id: 302,
+                    project_id: None,
+                    probability_json: "0.5".to_string(),
+                },
+            ])
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("Note 302 is not ready"));
+        assert_route_rolled_back(&backend, &db, &first).await;
+        let second = backend.find_note(&second).await.unwrap();
+        assert_eq!(second.status, status);
+        assert_eq!(second.project_id, None);
+        assert_eq!(second.metadata, None);
+    }
 }
 
 #[tokio::test]
