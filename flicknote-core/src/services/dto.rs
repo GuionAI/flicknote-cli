@@ -38,6 +38,10 @@ pub struct ProjectModifyInput {
     pub id: String,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub color: Patch<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub pinned: Patch<bool>,
+    #[serde(default, skip_serializing_if = "Patch::is_missing")]
+    pub summary: Patch<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -51,8 +55,66 @@ pub struct ProjectDto {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub archived: bool,
     pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommentDto {
+    pub id: String,
+    pub note_id: String,
+    pub block_text: String,
+    pub content: serde_json::Value,
+    pub author: String,
+    pub is_read: bool,
+    pub created_at: Option<String>,
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommentCreateInput {
+    pub note_id: String,
+    pub block_text: String,
+    pub content: serde_json::Value,
+    pub author: String,
+    pub parent_id: Option<String>,
+    #[serde(default)]
+    pub is_read: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CommentModifyInput {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_read: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PendingRoutingCommentsInput {
+    #[serde(default = "default_pending_comment_limit")]
+    pub limit: u32,
+}
+
+pub const fn default_pending_comment_limit() -> u32 {
+    100
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DailyReceipt {
+    pub uuid: String,
+    pub short_id: Option<i64>,
+    pub date: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CaptureReceipt {
+    pub daily_uuid: String,
+    pub daily_short_id: Option<i64>,
+    pub routing_comment_uuid: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

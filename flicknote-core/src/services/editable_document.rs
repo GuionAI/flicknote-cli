@@ -534,6 +534,8 @@ mod tests {
             &self,
             _id: &str,
             _color: Option<Option<&str>>,
+            _pinned: Option<Option<bool>>,
+            _summary: Option<Option<&str>>,
         ) -> Result<(), CliError> {
             unimplemented!()
         }

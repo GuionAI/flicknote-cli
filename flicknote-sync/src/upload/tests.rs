@@ -469,6 +469,46 @@ async fn remote_committed_marker_on_patch_is_rejected_and_retained() {
     assert!(db.next_crud_transaction().await.unwrap().is_some());
 }
 
+#[tokio::test]
+async fn generic_uploader_uploads_note_comments_without_bespoke_logic() {
+    let (_directory, db) = test_powersync_db().await;
+    {
+        let writer = db.writer().await.unwrap();
+        writer.execute(
+            "INSERT INTO note_comments (id, note_id, user_id, block_text, content, author, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                "comment-1",
+                "note-1",
+                "user-1",
+                "captured text",
+                r#"{"kind":"project_route","destination":null,"probability":null}"#,
+                "flick_jev",
+                1,
+                "2026-09-24T00:00:00Z",
+            ],
+        ).unwrap();
+    }
+    let (server_url, server) = spawn_capture_server(1);
+
+    run_upload(
+        &db,
+        &reqwest::Client::new(),
+        "token",
+        &server_url,
+        "anon-key",
+    )
+    .await
+    .unwrap();
+
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].starts_with("POST /rest/v1/note_comments "));
+    let (_, body) = requests[0].split_once("\r\n\r\n").unwrap();
+    let payload: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(payload["id"], "comment-1");
+    assert_eq!(payload["content"]["kind"], "project_route");
+}
+
 #[test]
 fn test_extract_fatal_code_fk_violation() {
     let body = r#"{"code":"23503","details":"Key is not present in table \"projects\".","hint":null,"message":"insert or update on table \"notes\" violates foreign key constraint"}"#;

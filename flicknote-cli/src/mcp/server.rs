@@ -4,10 +4,10 @@ use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
-    NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput,
-    NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult,
-    OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult,
-    UnshareResult,
+    CaptureReceipt, CommentCreateInput, CommentDto, CommentModifyInput, DailyReceipt, NoteAddInput,
+    NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput, NoteListInput,
+    NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult, OpenResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
@@ -20,10 +20,12 @@ use rmcp::schemars::JsonSchema;
 use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
+use super::capture_tools::*;
+use super::comment_tools::*;
 use super::dto::{
-    McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteDetail,
-    McpNoteListResult, McpNoteMutationResult, McpProjectDto, McpProjectListResult, McpSourceResult,
-    McpTopicListResult, source_output_schema,
+    McpCommentDto, McpCommentListResult, McpEntity, McpEntityListResult, McpEntityType,
+    McpNoteArchiveResult, McpNoteDetail, McpNoteListResult, McpNoteMutationResult, McpProjectDto,
+    McpProjectListResult, McpSourceResult, McpTopicListResult, source_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -32,7 +34,13 @@ use crate::commands::open::SystemBrowserOpener;
 use crate::recall::{McpRecallResult, RECALL_HOOK_TIMEOUT, current_time, recall_call_with_timeout};
 
 #[cfg(test)]
-pub(crate) const EXPECTED_TOOLS: [&str; 30] = [
+pub(crate) const EXPECTED_TOOLS: [&str; 36] = [
+    "capture",
+    "comment_create",
+    "comment_list",
+    "comment_modify",
+    "comment_pending",
+    "daily_get_or_create",
     "entity_list",
     "note_add",
     "note_append",
@@ -698,9 +706,119 @@ impl FlickNoteMcp {
             self.call::<ProjectDto>(AppRequest::ProjectModify(ProjectModifyInput {
                 id: project_id,
                 color: params.color,
+                pinned: params.pinned,
+                summary: params.summary,
             }))
             .await
             .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "daily_get_or_create",
+        description = "Get or create today's Daily using the configured IANA timezone."
+    )]
+    async fn daily_get_or_create(&self) -> Result<Json<DailyReceipt>, CallToolResult> {
+        structured(
+            self.call::<DailyReceipt>(AppRequest::DailyGetOrCreate)
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "capture",
+        description = "Append one exact submission to today's Daily and create one pending routing comment."
+    )]
+    async fn capture(
+        &self,
+        Parameters(params): Parameters<CaptureParams>,
+    ) -> Result<Json<CaptureReceipt>, CallToolResult> {
+        structured(
+            self.call::<CaptureReceipt>(AppRequest::Capture { text: params.text })
+                .await,
+        )
+    }
+
+    #[tool(
+        name = "comment_list",
+        description = "List comments for a note in stable chronological order.",
+        annotations(read_only_hint = true)
+    )]
+    async fn comment_list(
+        &self,
+        Parameters(params): Parameters<CommentListParams>,
+    ) -> Result<Json<McpCommentListResult>, CallToolResult> {
+        structured(
+            self.call::<Vec<CommentDto>>(AppRequest::CommentList {
+                note_id: params.note_id,
+            })
+            .await
+            .map(|comments| McpCommentListResult {
+                comments: comments.into_iter().map(Into::into).collect(),
+            }),
+        )
+    }
+
+    #[tool(
+        name = "comment_create",
+        description = "Create a root or reply comment on a note."
+    )]
+    async fn comment_create(
+        &self,
+        Parameters(params): Parameters<CommentCreateParams>,
+    ) -> Result<Json<McpCommentDto>, CallToolResult> {
+        structured(
+            self.call::<CommentDto>(AppRequest::CommentCreate(CommentCreateInput {
+                note_id: params.note_id,
+                block_text: params.block_text,
+                content: params.content,
+                author: params.author,
+                parent_id: params.parent_id,
+                is_read: params.is_read,
+            }))
+            .await
+            .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "comment_modify",
+        description = "Patch comment content and/or read state."
+    )]
+    async fn comment_modify(
+        &self,
+        Parameters(params): Parameters<CommentModifyParams>,
+    ) -> Result<Json<McpCommentDto>, CallToolResult> {
+        structured(
+            self.call::<CommentDto>(AppRequest::CommentModify(CommentModifyInput {
+                id: params.id,
+                content: params.content,
+                is_read: params.is_read,
+            }))
+            .await
+            .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "comment_pending",
+        description = "List a bounded chronological batch of pending flick_jev routing comments.",
+        annotations(read_only_hint = true)
+    )]
+    async fn comment_pending(
+        &self,
+        Parameters(params): Parameters<PendingCommentsParams>,
+    ) -> Result<Json<McpCommentListResult>, CallToolResult> {
+        structured(
+            self.call::<Vec<CommentDto>>(AppRequest::CommentPending(
+                flicknote_core::services::dto::PendingRoutingCommentsInput {
+                    limit: params.limit,
+                },
+            ))
+            .await
+            .map(|comments| McpCommentListResult {
+                comments: comments.into_iter().map(Into::into).collect(),
+            }),
         )
     }
 

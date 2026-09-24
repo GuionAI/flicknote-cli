@@ -1,3 +1,5 @@
+mod capture_tools;
+mod comment_tools;
 mod dto;
 mod error;
 mod note_tools;

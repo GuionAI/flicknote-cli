@@ -1,9 +1,12 @@
 pub(crate) mod add;
 pub(crate) mod append;
+pub(crate) mod capture;
+pub(crate) mod comment;
 pub(crate) mod content;
 pub(crate) mod count;
 pub(crate) mod daemon;
 pub(crate) mod daemon_lifecycle;
+pub(crate) mod daily;
 pub(crate) mod delete;
 pub(crate) mod detail;
 pub(crate) mod edit;

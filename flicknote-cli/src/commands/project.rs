@@ -69,6 +69,12 @@ struct ModifyProjectArgs {
     /// Color hex code (use "none" to clear)
     #[arg(long)]
     color: Option<String>,
+    /// Pinned state: true, false, or none to clear
+    #[arg(long)]
+    pinned: Option<String>,
+    /// Project summary (use "none" to clear)
+    #[arg(long)]
+    summary: Option<String>,
 }
 
 #[derive(Args)]
@@ -157,6 +163,12 @@ async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliE
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
+    if let Some(ref metadata) = project.metadata {
+        println!(
+            "Metadata: {}",
+            serde_json::to_string(metadata).map_err(CliError::Json)?
+        );
+    }
     let status = if project.archived {
         "archived"
     } else {
@@ -185,6 +197,18 @@ async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(
         .call(AppRequest::ProjectModify(ProjectModifyInput {
             id: args.id.clone(),
             color: patch(&args.color),
+            pinned: match args.pinned.as_deref() {
+                None => Patch::Missing,
+                Some("none") => Patch::Null,
+                Some("true") => Patch::Value(true),
+                Some("false") => Patch::Value(false),
+                Some(_) => {
+                    return Err(CliError::Other(
+                        "--pinned must be true, false, or none".into(),
+                    ));
+                }
+            },
+            summary: patch(&args.summary),
         }))
         .await?;
     println!("Updated project {}.", project.id);

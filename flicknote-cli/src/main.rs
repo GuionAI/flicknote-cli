@@ -35,6 +35,12 @@ enum Commands {
     Upload(commands::upload::UploadArgs),
     /// Append content to an existing note
     Append(commands::append::AppendArgs),
+    /// Capture one submission into today's Daily
+    Capture(commands::capture::CaptureArgs),
+    /// Get or create today's Daily
+    Daily(commands::daily::DailyArgs),
+    /// Inspect and mutate note comments
+    Comment(commands::comment::CommentArgs),
     /// Replace a note's stored content from stdin
     Write(commands::write::WriteArgs),
     /// Delete (archive) a note
@@ -167,8 +173,14 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
             .map_err(|e| CliError::Other(e.to_string()))?;
         return Ok(());
     };
+    if let Some(result) = dispatch_capture_commands(command, daemon).await {
+        return result;
+    }
     match command {
         Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
+        Commands::Capture(_) | Commands::Daily(_) | Commands::Comment(_) => {
+            unreachable!("capture commands are dispatched before the main command match")
+        }
         Commands::Add(args) => commands::add::run(daemon, args).await,
         Commands::Upload(args) => commands::upload::run(daemon, args).await,
         Commands::Append(args) => commands::append::run(daemon, args).await,
@@ -198,6 +210,18 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         Commands::Login(_) | Commands::Logout(_) | Commands::Daemon(_) | Commands::Skill(_) => {
             unreachable!()
         }
+    }
+}
+
+async fn dispatch_capture_commands(
+    command: &Commands,
+    daemon: &DaemonClient<'_>,
+) -> Option<Result<(), CliError>> {
+    match command {
+        Commands::Capture(args) => Some(commands::capture::run(daemon, args).await),
+        Commands::Daily(args) => Some(commands::daily::run(daemon, args).await),
+        Commands::Comment(args) => Some(commands::comment::run(daemon, args).await),
+        _ => None,
     }
 }
 

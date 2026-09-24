@@ -10,6 +10,8 @@ pub enum ServiceError {
     NoteNotFound(String),
     #[error("Project not found: {0}")]
     ProjectNotFound(String),
+    #[error("Comment not found: {0}")]
+    CommentNotFound(String),
     #[error("Section not found: {0}")]
     SectionNotFound(String),
     #[error("{message}")]
@@ -53,6 +55,7 @@ impl ServiceError {
             Self::InvalidArgument(_) => "invalid_argument",
             Self::NoteNotFound(_) => "note_not_found",
             Self::ProjectNotFound(_) => "project_not_found",
+            Self::CommentNotFound(_) => "comment_not_found",
             Self::SectionNotFound(_) => "section_not_found",
             Self::BeforeNotFound { .. } => "before_not_found",
             Self::BeforeAmbiguous { .. } => "before_ambiguous",

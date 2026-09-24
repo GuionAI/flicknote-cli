@@ -191,6 +191,285 @@ async fn local_backend_insert_and_find() {
 }
 
 #[tokio::test]
+async fn comments_hydrate_and_local_writes_generate_put_and_patch_crud() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let note_id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &note_id,
+            note_type: "normal",
+            status: "ready",
+            title: Some("Daily"),
+            content: Some("body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-09-24T00:00:00Z",
+        })
+        .await
+        .unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+
+    let downloaded_id = uuid::Uuid::new_v4().to_string();
+    {
+        let writer = db.writer().await.unwrap();
+        writer.execute(
+            "INSERT INTO note_comments (id, note_id, user_id, block_text, content, author, is_read, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![downloaded_id, note_id, "test-user-id", "downloaded", r#"{"kind":"human"}"#, "Neil", 0, "2026-09-24T01:00:00Z"],
+        ).unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    let hydrated = backend.list_comments(&note_id).await.unwrap();
+    assert_eq!(hydrated.len(), 1);
+    assert_eq!(hydrated[0].block_text, "downloaded");
+
+    let local_id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_comment(&InsertCommentReq {
+            id: &local_id,
+            note_id: &note_id,
+            block_text: "local",
+            content: r#"{"kind":"human"}"#,
+            author: "Neil",
+            is_read: false,
+            parent_id: None,
+            now: "2026-09-24T02:00:00Z",
+        })
+        .await
+        .unwrap();
+    let put = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(put.crud.len(), 1);
+    assert_eq!(put.crud[0].table, "note_comments");
+    assert!(matches!(
+        put.crud[0].update_type,
+        powersync::UpdateType::Put
+    ));
+    put.complete().await.unwrap();
+
+    backend
+        .update_comment(&local_id, Some(r#"{"kind":"edited"}"#), Some(true))
+        .await
+        .unwrap();
+    let patch = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(patch.crud.len(), 1);
+    assert_eq!(patch.crud[0].table, "note_comments");
+    assert!(matches!(
+        patch.crud[0].update_type,
+        powersync::UpdateType::Patch
+    ));
+    let data = patch.crud[0].data.as_ref().unwrap();
+    assert_eq!(data["is_read"], 1);
+    assert_eq!(data["content"], r#"{"kind":"edited"}"#);
+}
+
+#[tokio::test]
+async fn project_metadata_hydrates_and_patch_preserves_unknown_keys() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let project_id = backend.create_project("work").await.unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET metadata = ? WHERE id = ?",
+                params![r#"{"unknown":{"keep":true},"pinned":false}"#, project_id],
+            )
+            .unwrap();
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    assert_eq!(
+        backend
+            .find_project(&project_id)
+            .await
+            .unwrap()
+            .metadata
+            .as_deref(),
+        Some(r#"{"unknown":{"keep":true},"pinned":false}"#)
+    );
+
+    backend
+        .update_project(&project_id, None, Some(Some(true)), Some(Some("Summary")))
+        .await
+        .unwrap();
+    let project = backend.find_project(&project_id).await.unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(project.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["unknown"]["keep"], true);
+    assert_eq!(metadata["pinned"], true);
+    assert_eq!(metadata["summary"], "Summary");
+    let patch = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(patch.crud.len(), 1);
+    assert_eq!(patch.crud[0].table, "projects");
+    assert!(matches!(
+        patch.crud[0].update_type,
+        powersync::UpdateType::Patch
+    ));
+    let uploaded: serde_json::Value = serde_json::from_str(
+        patch.crud[0].data.as_ref().unwrap()["metadata"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(uploaded["unknown"]["keep"], true);
+}
+
+async fn existing_daily_fixture() -> (
+    tempfile::TempDir,
+    powersync::PowerSyncDatabase,
+    LocalPowerSyncBackend,
+    String,
+) {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let note_id = uuid::Uuid::new_v4().to_string();
+    backend
+        .insert_note(&InsertNoteReq {
+            id: &note_id,
+            note_type: "normal",
+            status: "ready",
+            title: Some("Thursday, Sep 24"),
+            content: Some("first"),
+            metadata: Some(r#"{"daily":{"date":"2026-09-24"}}"#),
+            project_id: None,
+            now: "2026-09-24T00:00:00Z",
+        })
+        .await
+        .unwrap();
+    db.next_crud_transaction()
+        .await
+        .unwrap()
+        .unwrap()
+        .complete()
+        .await
+        .unwrap();
+    (_directory, db, backend, note_id)
+}
+
+#[tokio::test]
+async fn capture_is_one_crud_transaction_with_note_patch_and_comment_put() {
+    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
+    let comment_id = uuid::Uuid::new_v4().to_string();
+    backend
+        .capture_into_daily(
+            &note_id,
+            "second\n\nline",
+            &comment_id,
+            r#"{"kind":"project_route","destination":null,"probability":null}"#,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        backend
+            .find_note_content(&note_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("first\n\nsecond\n\nline")
+    );
+    assert_eq!(
+        backend.list_comments(&note_id).await.unwrap()[0].block_text,
+        "second\n\nline"
+    );
+    let transaction = db.next_crud_transaction().await.unwrap().unwrap();
+    assert_eq!(transaction.crud.len(), 2);
+    assert!(
+        transaction.crud.iter().any(|entry| entry.table == "notes"
+            && matches!(entry.update_type, powersync::UpdateType::Patch))
+    );
+    assert!(
+        transaction
+            .crud
+            .iter()
+            .any(|entry| entry.table == "note_comments"
+                && matches!(entry.update_type, powersync::UpdateType::Put))
+    );
+    transaction.complete().await.unwrap();
+}
+
+#[tokio::test]
+async fn capture_comment_failure_rolls_back_note_append() {
+    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute_batch(
+                r#"
+            CREATE TRIGGER fail_capture_comment
+            INSTEAD OF INSERT ON note_comments
+            BEGIN
+                SELECT RAISE(ABORT, 'forced comment failure');
+            END;
+        "#,
+            )
+            .unwrap();
+    }
+    assert!(
+        backend
+            .capture_into_daily(
+                &note_id,
+                "must roll back",
+                &uuid::Uuid::new_v4().to_string(),
+                r#"{"kind":"project_route","destination":null,"probability":null}"#,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        backend
+            .find_note_content(&note_id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("first")
+    );
+    assert!(backend.list_comments(&note_id).await.unwrap().is_empty());
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn capture_note_failure_leaves_no_comment() {
+    let (_directory, db, backend, note_id) = existing_daily_fixture().await;
+    {
+        let writer = db.writer().await.unwrap();
+        writer
+            .execute_batch(
+                r#"
+            CREATE TRIGGER fail_capture_note
+            INSTEAD OF UPDATE ON notes
+            WHEN NEW.id = OLD.id
+            BEGIN
+                SELECT RAISE(ABORT, 'forced note failure');
+            END;
+        "#,
+            )
+            .unwrap();
+    }
+    assert!(
+        backend
+            .capture_into_daily(
+                &note_id,
+                "note write fails",
+                &uuid::Uuid::new_v4().to_string(),
+                r#"{"kind":"project_route","destination":null,"probability":null}"#,
+            )
+            .await
+            .is_err()
+    );
+    assert!(backend.list_comments(&note_id).await.unwrap().is_empty());
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn submit_draft_reports_whether_it_performed_the_transition() {
     let backend = make_backend().await;
     let id = uuid::Uuid::new_v4().to_string();

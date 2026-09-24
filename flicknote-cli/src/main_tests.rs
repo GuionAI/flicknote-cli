@@ -61,6 +61,37 @@ fn upload_command_parses() {
 }
 
 #[test]
+fn daily_capture_and_comment_commands_parse_without_splitting_payloads() {
+    assert!(Cli::try_parse_from(["flicknote", "capture", "one\n\ntwo"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "daily", "--json"]).is_ok());
+    assert!(Cli::try_parse_from(["flicknote", "comment", "list", "42"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "comment",
+            "add",
+            "42",
+            "anchor",
+            r#"{"text":"hello"}"#,
+            "--author",
+            "Neil"
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "comment",
+            "modify",
+            "comment-id",
+            "--is-read",
+            "true"
+        ])
+        .is_ok()
+    );
+}
+
+#[test]
 fn metadata_discovery_and_source_commands_parse() {
     assert!(Cli::try_parse_from(["flicknote", "topic", "list"]).is_ok());
     assert!(Cli::try_parse_from(["flicknote", "entity", "list", "--type", "person"]).is_ok());

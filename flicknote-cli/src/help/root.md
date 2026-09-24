@@ -3,6 +3,8 @@ The daemon owns the local PowerSync database and remote synchronization.
 Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:
+  flicknote capture "Quick thought"
+  flicknote daily --json
   flicknote add "Meeting notes" --project work
   flicknote upload file.pdf --project work
   flicknote import notes/ --project work
@@ -22,6 +24,7 @@ Common workflows:
   flicknote unshare <id>
   flicknote project share <project-id>
   flicknote project unshare <project-id>
+  flicknote comment list <note-id>
   flicknote mcp
 
 The Gateway command is for internal development and maintenance requests.

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use flicknote_core::services::dto::{
-    ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, ProjectDto,
-    SectionDto,
+    CommentDto, ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult,
+    ProjectDto, SectionDto,
 };
 use flicknote_core::services::source::SourceResult;
 use rmcp::handler::server::tool::schema_for_output;
@@ -91,7 +91,7 @@ const ARBITRARY_JSON_TYPES: [&str; 7] = [
 /// `serde_json::Value` derives a bare boolean schema term (`true`) that strict
 /// MCP clients reject. This term keeps arbitrary values unconstrained while
 /// remaining a parseable JSON Schema object.
-fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
+pub(super) fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {
     serde_json::from_value(serde_json::json!({ "type": ARBITRARY_JSON_TYPES }))
         .expect("arbitrary-json schema is valid JSON Schema")
 }
@@ -207,6 +207,8 @@ impl From<NoteArchiveResult> for McpNoteArchiveResult {
 pub(super) struct McpProjectDto {
     pub name: String,
     pub color: Option<String>,
+    #[schemars(schema_with = "arbitrary_json_schema")]
+    pub metadata: Option<serde_json::Value>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -222,8 +224,42 @@ impl From<ProjectDto> for McpProjectDto {
         Self {
             name: project.name,
             color: project.color,
+            metadata: project.metadata,
             archived: project.archived,
             created_at: project.created_at,
         }
     }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpCommentDto {
+    pub id: String,
+    pub note_id: String,
+    pub block_text: String,
+    #[schemars(schema_with = "arbitrary_json_schema")]
+    pub content: serde_json::Value,
+    pub author: String,
+    pub is_read: bool,
+    pub created_at: Option<String>,
+    pub parent_id: Option<String>,
+}
+
+impl From<CommentDto> for McpCommentDto {
+    fn from(comment: CommentDto) -> Self {
+        Self {
+            id: comment.id,
+            note_id: comment.note_id,
+            block_text: comment.block_text,
+            content: comment.content,
+            author: comment.author,
+            is_read: comment.is_read,
+            created_at: comment.created_at,
+            parent_id: comment.parent_id,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpCommentListResult {
+    pub comments: Vec<McpCommentDto>,
 }

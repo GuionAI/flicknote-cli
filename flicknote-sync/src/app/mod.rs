@@ -7,6 +7,8 @@ use flicknote_core::services::ports::{NoteCreator, ShareGateway};
 use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
 use crate::search::SearchProjection;
 
+mod comment;
+mod daily;
 mod note;
 mod project;
 
@@ -53,6 +55,9 @@ impl Application {
             AppRequestKind::NoteWrite => note::handle_write(self, request).await,
             AppRequestKind::ProjectRead => project::handle_read(self, request).await,
             AppRequestKind::ProjectWrite => project::handle_write(self, request).await,
+            AppRequestKind::CommentRead => comment::handle_read(self, request).await,
+            AppRequestKind::CommentWrite => comment::handle_write(self, request).await,
+            AppRequestKind::DailyWrite => daily::handle_write(self, request).await,
             AppRequestKind::ExtractionRead => self.handle_extraction(request).await,
         }
     }
