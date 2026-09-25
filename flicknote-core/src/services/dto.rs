@@ -40,8 +40,6 @@ pub struct ProjectModifyInput {
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub color: Patch<String>,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
-    pub pinned: Patch<bool>,
-    #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub summary: Patch<String>,
 }
 
@@ -56,7 +54,7 @@ pub struct ProjectDto {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
-    pub metadata: Option<serde_json::Value>,
+    pub summary: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
 }

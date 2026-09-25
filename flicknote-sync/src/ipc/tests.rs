@@ -1,5 +1,6 @@
 use super::*;
 use flicknote_core::config::{Config, ConfigPaths};
+use flicknote_core::services::dto::Patch;
 use serde_json::json;
 use tokio::net::UnixListener;
 
@@ -67,7 +68,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 10);
+    assert_eq!(PROTOCOL_VERSION, 11);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -99,6 +100,39 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
     assert!(value["payload"].get("surface").is_none());
     assert_eq!(value["payload"]["request"]["type"], "note_list");
     assert_eq!(value["payload"]["request"]["payload"]["status"], "ready");
+}
+
+#[test]
+fn protocol_v11_uses_typed_project_contracts() {
+    let project = ProjectDto {
+        id: "project-id".to_string(),
+        name: "Work".to_string(),
+        color: Some("#123456".to_string()),
+        summary: Some("Project boundary".to_string()),
+        archived: false,
+        created_at: Some("2026-09-25T00:00:00Z".to_string()),
+    };
+    let value = serde_json::to_value(AppResponse::Projects(vec![project])).unwrap();
+    assert_eq!(value["payload"][0]["summary"], "Project boundary");
+    assert!(value["payload"][0].get("metadata").is_none());
+    assert!(value["payload"][0].get("user_id").is_none());
+
+    let modify = serde_json::to_value(AppRequest::ProjectModify(ProjectModifyInput {
+        id: "project-id".to_string(),
+        color: Patch::Missing,
+        summary: Patch::Value("Updated boundary".to_string()),
+    }))
+    .unwrap();
+    assert_eq!(modify["payload"]["summary"], "Updated boundary");
+    assert!(modify["payload"].get("pinned").is_none());
+
+    assert!(
+        serde_json::from_value::<AppRequest>(json!({
+            "type": "project_records",
+            "payload": { "include_archived": false }
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -263,13 +297,13 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v10_client_rejects_protocol_v9_server_info() {
+async fn protocol_v11_client_rejects_protocol_v10_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 9,
+            protocol: 10,
             version: "legacy".to_string(),
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
@@ -285,11 +319,11 @@ async fn protocol_v10_client_rejects_protocol_v9_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 10",
+        "CLI version {} protocol 11",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
-    assert!(message.contains("daemon version legacy protocol 9"));
+    assert!(message.contains("daemon version legacy protocol 10"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
 }

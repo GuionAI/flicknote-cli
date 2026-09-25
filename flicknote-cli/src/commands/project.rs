@@ -1,7 +1,6 @@
 use clap::{Args, Subcommand};
 use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectDto, ProjectModifyInput};
-use flicknote_core::types::Project;
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const PROJECT_HELP: &str = include_str!("../help/project.md");
@@ -69,9 +68,6 @@ struct ModifyProjectArgs {
     /// Color hex code (use "none" to clear)
     #[arg(long)]
     color: Option<String>,
-    /// Pinned state: true, false, or none to clear
-    #[arg(long)]
-    pinned: Option<String>,
     /// Project summary (use "none" to clear)
     #[arg(long)]
     summary: Option<String>,
@@ -114,14 +110,9 @@ async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError
         .await?;
 
     if args.json {
-        let values: Vec<Project> = daemon
-            .call(AppRequest::ProjectRecords {
-                include_archived: args.include_archived,
-            })
-            .await?;
         println!(
             "{}",
-            serde_json::to_string_pretty(&values).map_err(CliError::Json)?
+            serde_json::to_string_pretty(&projects).map_err(CliError::Json)?
         );
     } else if args.include_archived {
         println!("{:<36} {:<30} {:<10} Created", "ID", "Name", "Status");
@@ -163,11 +154,8 @@ async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliE
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
-    if let Some(ref metadata) = project.metadata {
-        println!(
-            "Metadata: {}",
-            serde_json::to_string(metadata).map_err(CliError::Json)?
-        );
+    if let Some(ref summary) = project.summary {
+        println!("Summary: {summary}");
     }
     let status = if project.archived {
         "archived"
@@ -197,17 +185,6 @@ async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(
         .call(AppRequest::ProjectModify(ProjectModifyInput {
             id: args.id.clone(),
             color: patch(&args.color),
-            pinned: match args.pinned.as_deref() {
-                None => Patch::Missing,
-                Some("none") => Patch::Null,
-                Some("true") => Patch::Value(true),
-                Some("false") => Patch::Value(false),
-                Some(_) => {
-                    return Err(CliError::Other(
-                        "--pinned must be true, false, or none".into(),
-                    ));
-                }
-            },
             summary: patch(&args.summary),
         }))
         .await?;

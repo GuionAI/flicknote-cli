@@ -15,9 +15,6 @@ pub(super) async fn handle_read(
             .await
             .map(AppResponse::Projects)
             .map_err(WireError::from_service),
-        AppRequest::ProjectRecords { include_archived } => {
-            project_records(app, include_archived).await
-        }
         AppRequest::ProjectGet { id } => projects
             .get(&id)
             .await
@@ -61,27 +58,6 @@ pub(super) async fn handle_write(
             .map_err(WireError::from_service),
         _ => unreachable!("request kind guarantees a mutating project request"),
     }
-}
-
-async fn project_records(
-    app: &Application,
-    include_archived: bool,
-) -> Result<AppResponse, WireError> {
-    let mut records = app
-        .db
-        .list_projects(false)
-        .await
-        .map_err(Application::db_error)?;
-    if include_archived {
-        records.extend(
-            app.db
-                .list_projects(true)
-                .await
-                .map_err(Application::db_error)?,
-        );
-        records.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    }
-    Ok(AppResponse::ProjectRecords(records))
 }
 
 async fn project_by_name(app: &Application, name: &str) -> Result<AppResponse, WireError> {

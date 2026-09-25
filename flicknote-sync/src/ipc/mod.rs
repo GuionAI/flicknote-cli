@@ -11,7 +11,6 @@ use flicknote_core::services::dto::{
 use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::source::{SourceResult, SourceView};
-use flicknote_core::types::Project;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;

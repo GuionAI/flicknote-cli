@@ -205,6 +205,10 @@ async fn seeded_backend(
         "test-user".to_string(),
     ));
     let project_id = backend.create_project("MCP Project").await.unwrap();
+    backend
+        .update_project(&project_id, None, Some(Some("Project boundary")))
+        .await
+        .unwrap();
     let note_uuid = uuid::Uuid::new_v4().to_string();
     backend
         .insert_note(&InsertNoteReq {
@@ -661,6 +665,22 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
         projects["outputSchema"]["properties"]["projects"]["items"].is_object(),
         "project_list outputSchema must advertise the projects array item schema"
     );
+    let item = &projects["outputSchema"]["properties"]["projects"]["items"];
+    let properties = item
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        .map(|name| &projects["outputSchema"]["$defs"][name]["properties"])
+        .unwrap_or(&item["properties"]);
+    assert!(properties.get("summary").is_some());
+    assert!(properties.get("metadata").is_none());
+
+    let modify = tools
+        .iter()
+        .find(|tool| tool["name"] == "project_modify")
+        .unwrap();
+    assert!(modify["inputSchema"]["properties"].get("summary").is_some());
+    assert!(modify["inputSchema"]["properties"].get("pinned").is_none());
 }
 
 #[tokio::test]
@@ -1311,13 +1331,30 @@ async fn mcp_project_and_source_contracts_are_preserved() {
             .get("id")
             .is_none()
     );
+    assert_eq!(
+        projects["result"]["structuredContent"]["projects"][0]["summary"],
+        "Project boundary"
+    );
+    assert!(
+        projects["result"]["structuredContent"]["projects"][0]
+            .get("metadata")
+            .is_none()
+    );
     let project = harness
         .call(
             "project_modify",
-            serde_json::json!({ "project": "MCP Project", "color": "#abcdef" }),
+            serde_json::json!({
+                "project": "MCP Project",
+                "color": "#abcdef",
+                "summary": "Updated boundary"
+            }),
         )
         .await;
     assert_eq!(project["result"]["structuredContent"]["color"], "#abcdef");
+    assert_eq!(
+        project["result"]["structuredContent"]["summary"],
+        "Updated boundary"
+    );
 
     let info = harness
         .call(

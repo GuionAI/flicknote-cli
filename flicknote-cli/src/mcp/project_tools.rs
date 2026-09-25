@@ -26,9 +26,6 @@ pub(super) struct ProjectModifyParams {
     #[schemars(with = "Option<String>")]
     pub color: Patch<String>,
     #[serde(default)]
-    #[schemars(with = "Option<bool>")]
-    pub pinned: Patch<bool>,
-    #[serde(default)]
     #[schemars(with = "Option<String>")]
     pub summary: Patch<String>,
 }

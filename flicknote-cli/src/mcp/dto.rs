@@ -243,8 +243,7 @@ impl From<NoteArchiveResult> for McpNoteArchiveResult {
 pub(super) struct McpProjectDto {
     pub name: String,
     pub color: Option<String>,
-    #[schemars(schema_with = "arbitrary_json_schema")]
-    pub metadata: Option<serde_json::Value>,
+    pub summary: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -260,7 +259,7 @@ impl From<ProjectDto> for McpProjectDto {
         Self {
             name: project.name,
             color: project.color,
-            metadata: project.metadata,
+            summary: project.summary,
             archived: project.archived,
             created_at: project.created_at,
         }

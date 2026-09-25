@@ -4,7 +4,7 @@ use std::time::Instant;
 use flicknote_core::services::dto::{NoteAddInput, NoteFindInput};
 use flicknote_core::services::editable_document;
 use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::note::{NoteService, confirmed_create_followup_error};
+use flicknote_core::services::note::confirmed_create_followup_error;
 use flicknote_core::services::ports::{CreateNote, CreatedNote};
 use flicknote_core::services::upload::{self, UploadKind};
 use flicknote_core::types::NoteStatus;
@@ -16,7 +16,7 @@ pub(super) async fn handle_read(
     app: &Application,
     request: AppRequest,
 ) -> Result<AppResponse, WireError> {
-    let notes = NoteService::new(app.db.as_ref());
+    let notes = app.notes();
     match request {
         AppRequest::NoteList(input) => {
             service_result(notes.list(input).await, AppResponse::NoteListItems)
@@ -118,7 +118,7 @@ pub(super) async fn handle_write(
     app: &Application,
     request: AppRequest,
 ) -> Result<AppResponse, WireError> {
-    let notes = NoteService::new(app.db.as_ref());
+    let notes = app.notes();
     match request {
         AppRequest::NoteAdd(input) => service_result(
             notes.create_result(app.creator.as_ref(), input).await,
@@ -318,7 +318,7 @@ async fn upload_text(
             "content must not be empty".to_string(),
         )));
     }
-    let notes = NoteService::new(app.db.as_ref());
+    let notes = app.notes();
     service_result(
         notes
             .add(
@@ -383,7 +383,7 @@ async fn confirmed_summary(
     app: &Application,
     created: CreatedNote,
 ) -> Result<AppResponse, WireError> {
-    NoteService::new(app.db.as_ref())
+    app.notes()
         .get(&created.inserted.uuid, false)
         .await
         .map(|detail| AppResponse::NoteSummary(detail.note))

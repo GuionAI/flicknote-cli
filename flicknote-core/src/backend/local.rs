@@ -74,10 +74,6 @@ const SQ_LIST_PROJECTS_ARCHIVED: &str = "SELECT id, user_id, name, color, metada
      WHERE user_id = ? AND is_archived = 1 ORDER BY name";
 const SQ_CREATE_PROJECT: &str =
     "INSERT INTO projects (id, user_id, name, is_archived, created_at) VALUES (?, ?, ?, 0, ?)";
-const SQ_COUNT_PROJECT_NOTES: &str =
-    "SELECT COUNT(*) FROM notes WHERE user_id = ? AND project_id = ? AND deleted_at IS NULL";
-const SQ_DELETE_PROJECT: &str = "DELETE FROM projects WHERE user_id = ? AND id = ?";
-
 const SQ_UNDO_DELETE: &str = "UPDATE notes SET deleted_at = NULL, updated_at = ? \
      WHERE id = (SELECT id FROM notes WHERE deleted_at IS NOT NULL AND user_id = ? \
      ORDER BY deleted_at DESC LIMIT 1)";
@@ -843,62 +839,6 @@ impl NoteDb for LocalPowerSyncBackend {
         Ok(id)
     }
 
-    async fn move_note_to_project(
-        &self,
-        note_id: &str,
-        new_project_id: &str,
-        old_project_id: Option<&str>,
-    ) -> Result<Option<String>, CliError> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut writer = self.db.writer().await?;
-        let tx = writer.transaction()?;
-        let exists = tx
-            .query_row(
-                "SELECT 1 FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL LIMIT 1",
-                params![self.user_id, note_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?
-            .is_some();
-        if !exists {
-            return Err(CliError::NoteNotFound {
-                id: note_id.to_string(),
-            });
-        }
-
-        tx.execute(
-            SQ_UPDATE_PROJECT,
-            params![new_project_id, now, self.user_id, note_id],
-        )?;
-
-        let Some(old_pid) = old_project_id else {
-            tx.commit()?;
-            return Ok(None);
-        };
-
-        let count = tx.query_row(
-            SQ_COUNT_PROJECT_NOTES,
-            params![self.user_id, old_pid],
-            |row| row.get::<_, i64>(0),
-        )?;
-
-        if count != 0 {
-            tx.commit()?;
-            return Ok(None);
-        }
-
-        let old_name = tx
-            .query_row(
-                SQ_FIND_PROJECT_NAME,
-                params![self.user_id, old_pid],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        tx.execute(SQ_DELETE_PROJECT, params![self.user_id, old_pid])?;
-        tx.commit()?;
-        Ok(old_name)
-    }
-
     async fn update_note_project(
         &self,
         id: &str,
@@ -946,11 +886,10 @@ impl NoteDb for LocalPowerSyncBackend {
         &self,
         id: &str,
         color: Option<Option<&str>>,
-        pinned: Option<Option<bool>>,
         summary: Option<Option<&str>>,
     ) -> Result<(), CliError> {
         let update_color = color.is_some();
-        if !update_color && pinned.is_none() && summary.is_none() {
+        if !update_color && summary.is_none() {
             return Ok(());
         }
 
@@ -964,16 +903,7 @@ impl NoteDb for LocalPowerSyncBackend {
         let object = metadata.as_object_mut().ok_or_else(|| {
             CliError::Other(format!("Project {id} metadata must be a JSON object"))
         })?;
-        if let Some(value) = pinned {
-            match value {
-                Some(value) => {
-                    object.insert("pinned".to_string(), value.into());
-                }
-                None => {
-                    object.remove("pinned");
-                }
-            }
-        }
+        let removed_pinned = object.remove("pinned").is_some();
         if let Some(value) = summary {
             match value {
                 Some(value) => {
@@ -984,7 +914,7 @@ impl NoteDb for LocalPowerSyncBackend {
                 }
             }
         }
-        let update_metadata = pinned.is_some() || summary.is_some();
+        let update_metadata = removed_pinned || summary.is_some();
         let metadata = serde_json::to_string(&metadata)?;
         let writer = self.db.writer().await?;
         writer.execute(

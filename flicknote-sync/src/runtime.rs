@@ -21,6 +21,7 @@ use tokio::signal::unix::SignalKind;
 use crate::app::Application;
 use crate::ipc;
 use crate::ownership::{DataDirectoryLock, OwnershipError};
+use crate::project_assignment_events::JsonlProjectAssignmentEventSink;
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
 use crate::search;
 use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone_with_timeout};
@@ -324,6 +325,12 @@ fn build_application(
     ));
     Arc::new(
         Application::new(backend, creator, gateway)
+            .with_assignment_events(Arc::new(JsonlProjectAssignmentEventSink::new(
+                config
+                    .paths
+                    .data_dir
+                    .join("events/project_assignment.jsonl"),
+            )))
             .with_web_url(config.web_url.clone())
             .with_search(search),
     )
