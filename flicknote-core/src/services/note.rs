@@ -142,7 +142,7 @@ impl<'a> NoteService<'a> {
             });
         }
         self.db.route_notes_to_projects(&updates).await?;
-        self.append_assignment_events(&events).await?;
+        self.try_append_assignment_events(&events).await;
         Ok(NoteRouteProjectResult {
             routed: updates.len(),
         })
@@ -822,7 +822,7 @@ impl<'a> NoteService<'a> {
         let Patch::Value(name) = project else {
             if matches!(project, Patch::Null) && note.project_id.is_some() {
                 self.db.update_note_project(note_id, None).await?;
-                self.append_assignment_events(&[ProjectAssignmentEvent {
+                self.try_append_assignment_events(&[ProjectAssignmentEvent {
                     v: ProjectAssignmentEvent::VERSION,
                     event: ProjectAssignmentEvent::KIND,
                     note_id: note_id.to_string(),
@@ -832,7 +832,7 @@ impl<'a> NoteService<'a> {
                     probability: None,
                     created_at: chrono::Utc::now().to_rfc3339(),
                 }])
-                .await?;
+                .await;
             }
             return Ok(());
         };
@@ -845,7 +845,7 @@ impl<'a> NoteService<'a> {
             self.db
                 .update_note_project(note_id, Some(&project_id))
                 .await?;
-            self.append_assignment_events(&[ProjectAssignmentEvent {
+            self.try_append_assignment_events(&[ProjectAssignmentEvent {
                 v: ProjectAssignmentEvent::VERSION,
                 event: ProjectAssignmentEvent::KIND,
                 note_id: note_id.to_string(),
@@ -855,19 +855,36 @@ impl<'a> NoteService<'a> {
                 probability: None,
                 created_at: chrono::Utc::now().to_rfc3339(),
             }])
-            .await?;
+            .await;
         }
         Ok(())
     }
 
-    async fn append_assignment_events(
-        &self,
-        events: &[ProjectAssignmentEvent],
-    ) -> Result<(), ServiceError> {
+    async fn try_append_assignment_events(&self, events: &[ProjectAssignmentEvent]) {
         let Some(sink) = self.assignment_events else {
-            return Ok(());
+            return;
         };
-        sink.append(events).await
+        let Err(error) = sink.append(events).await else {
+            return;
+        };
+        let note_ids = events
+            .iter()
+            .take(16)
+            .map(|event| event.note_id.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        let truncated = if events.len() > 16 { ",..." } else { "" };
+        let first = events.first();
+        log::warn!(
+            "project_assignment_audit append_failed error={error} event_count={} \
+             note_ids={note_ids}{truncated} source={:?} from_project_id={:?} \
+             to_project_id={:?} probability={:?}",
+            events.len(),
+            first.map(|event| event.source),
+            first.and_then(|event| event.from_project_id.as_deref()),
+            first.and_then(|event| event.to_project_id.as_deref()),
+            first.and_then(|event| event.probability),
+        );
     }
 
     async fn mutation_result(
@@ -1126,13 +1143,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assignment_event_failure_reports_error_after_committed_manual_state() {
+    async fn assignment_event_failure_keeps_committed_manual_mutation_successful() {
         let backend = make_backend().await;
         let note_id = insert_normal_note(&backend, "body", "ready").await;
         let project_id = backend.create_project("Destination").await.unwrap();
         let service = NoteService::new(&*backend).with_assignment_events(&FailingAssignmentEvents);
 
-        let error = service
+        let result = service
             .modify(NoteModifyInput {
                 id: note_id.clone(),
                 before: None,
@@ -1144,9 +1161,9 @@ mod tests {
                 flagged: Patch::Missing,
             })
             .await
-            .unwrap_err();
+            .unwrap();
 
-        assert_eq!(error.code(), "io_error");
+        assert_eq!(result.note.project_id.as_deref(), Some(project_id.as_str()));
         assert_eq!(
             backend
                 .find_note(&note_id)
@@ -1156,6 +1173,52 @@ mod tests {
                 .as_deref(),
             Some(project_id.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn assignment_event_failure_keeps_committed_jev_batch_successful() {
+        let backend = make_backend().await;
+        let first = insert_normal_note(&backend, "first", "ready").await;
+        let second = insert_normal_note(&backend, "second", "ready").await;
+        let project_id = backend.create_project("Destination").await.unwrap();
+        {
+            let writer = backend.database().writer().await.unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 711 WHERE id = ?", [&first])
+                .unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 712 WHERE id = ?", [&second])
+                .unwrap();
+        }
+        let service = NoteService::new(&*backend).with_assignment_events(&FailingAssignmentEvents);
+
+        let result = service
+            .route_project(vec![
+                NoteRouteProjectInput {
+                    note_id: 711,
+                    project_id: Some(project_id.clone()),
+                    probability: 0.91,
+                },
+                NoteRouteProjectInput {
+                    note_id: 712,
+                    project_id: None,
+                    probability: 0.78,
+                },
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(result.routed, 2);
+        let first = backend.find_note(&first).await.unwrap();
+        assert_eq!(first.project_id.as_deref(), Some(project_id.as_str()));
+        let first_metadata: serde_json::Value =
+            serde_json::from_str(first.metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(first_metadata["project_routing"]["probability"], 0.91);
+        let second = backend.find_note(&second).await.unwrap();
+        assert_eq!(second.project_id, None);
+        let second_metadata: serde_json::Value =
+            serde_json::from_str(second.metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(second_metadata["project_routing"]["probability"], 0.78);
     }
 
     #[tokio::test]
