@@ -1,6 +1,7 @@
 //! Narrow ports for network and operating-system side effects.
 
 use async_trait::async_trait;
+use serde::Serialize;
 
 use crate::backend::{InsertNoteReq, InsertedNote};
 
@@ -60,6 +61,35 @@ pub trait ShareGateway: Send + Sync {
 
 pub trait BrowserOpener: Send + Sync {
     fn open(&self, url: &str) -> Result<(), ServiceError>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectAssignmentSource {
+    Jev,
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ProjectAssignmentEvent {
+    pub v: u8,
+    pub event: &'static str,
+    pub note_id: String,
+    pub from_project_id: Option<String>,
+    pub to_project_id: Option<String>,
+    pub source: ProjectAssignmentSource,
+    pub probability: Option<f64>,
+    pub created_at: String,
+}
+
+impl ProjectAssignmentEvent {
+    pub const VERSION: u8 = 1;
+    pub const KIND: &'static str = "project_assignment";
+}
+
+#[async_trait]
+pub trait ProjectAssignmentEventSink: Send + Sync {
+    async fn append(&self, events: &[ProjectAssignmentEvent]) -> Result<(), ServiceError>;
 }
 
 #[cfg(test)]

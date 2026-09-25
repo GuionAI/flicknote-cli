@@ -14,6 +14,11 @@ recreate them with shell commands or Gateway requests.
 Use the numeric short note ID returned by MCP. Do not substitute a UUID. Project
 operations identify projects by their names.
 
+Project reads expose a typed summary rather than raw project metadata.
+`project_modify` patches only color and summary; omitted fields stay unchanged,
+`null` clears a field, and a string sets it. Project assignment never archives
+or deletes the previous project.
+
 ## Exact edits
 
 `note_modify` performs one exact, whitespace-sensitive stored-content

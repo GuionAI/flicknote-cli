@@ -19,7 +19,10 @@ use super::edit_match;
 use super::error::ServiceError;
 use super::markdown;
 use super::note_content::extract_title_and_strip;
-use super::ports::{BrowserOpener, CreateNote, NoteCreator, ShareGateway, ShareResource};
+use super::ports::{
+    BrowserOpener, CreateNote, NoteCreator, ProjectAssignmentEvent, ProjectAssignmentEventSink,
+    ProjectAssignmentSource, ShareGateway, ShareResource,
+};
 use super::sections::{content_starts_with_heading, find_section};
 use super::source::{SourceResult, SourceView, parse_source};
 
@@ -63,11 +66,23 @@ fn validate_created_range(
 
 pub struct NoteService<'a> {
     db: &'a dyn NoteDb,
+    assignment_events: Option<&'a dyn ProjectAssignmentEventSink>,
 }
 
 impl<'a> NoteService<'a> {
     pub fn new(db: &'a dyn NoteDb) -> Self {
-        Self { db }
+        Self {
+            db,
+            assignment_events: None,
+        }
+    }
+
+    pub fn with_assignment_events(
+        mut self,
+        assignment_events: &'a dyn ProjectAssignmentEventSink,
+    ) -> Self {
+        self.assignment_events = Some(assignment_events);
+        self
     }
 
     pub async fn route_project(
@@ -81,6 +96,7 @@ impl<'a> NoteService<'a> {
         }
         let mut note_ids = std::collections::HashSet::with_capacity(input.len());
         let mut updates = Vec::with_capacity(input.len());
+        let mut events = Vec::with_capacity(input.len());
         for item in input {
             if item.note_id <= 0 {
                 return Err(ServiceError::InvalidArgument(
@@ -107,14 +123,26 @@ impl<'a> NoteService<'a> {
                     item.note_id
                 )));
             }
+            let note_id = self.db.resolve_note_id(&item.note_id.to_string()).await?;
             updates.push(RouteProjectUpdate {
                 note_id: item.note_id,
-                project_id: item.project_id,
+                project_id: item.project_id.clone(),
                 probability_json: serde_json::to_string(&item.probability)
                     .map_err(crate::error::CliError::Json)?,
             });
+            events.push(ProjectAssignmentEvent {
+                v: ProjectAssignmentEvent::VERSION,
+                event: ProjectAssignmentEvent::KIND,
+                note_id,
+                from_project_id: None,
+                to_project_id: item.project_id,
+                source: ProjectAssignmentSource::Jev,
+                probability: Some(item.probability),
+                created_at: chrono::Utc::now().to_rfc3339(),
+            });
         }
         self.db.route_notes_to_projects(&updates).await?;
+        self.append_assignment_events(&events).await?;
         Ok(NoteRouteProjectResult {
             routed: updates.len(),
         })
@@ -794,6 +822,17 @@ impl<'a> NoteService<'a> {
         let Patch::Value(name) = project else {
             if matches!(project, Patch::Null) && note.project_id.is_some() {
                 self.db.update_note_project(note_id, None).await?;
+                self.append_assignment_events(&[ProjectAssignmentEvent {
+                    v: ProjectAssignmentEvent::VERSION,
+                    event: ProjectAssignmentEvent::KIND,
+                    note_id: note_id.to_string(),
+                    from_project_id: note.project_id.clone(),
+                    to_project_id: None,
+                    source: ProjectAssignmentSource::Manual,
+                    probability: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                }])
+                .await?;
             }
             return Ok(());
         };
@@ -804,10 +843,31 @@ impl<'a> NoteService<'a> {
             .ok_or_else(|| ServiceError::ProjectNotFound(name.to_string()))?;
         if note.project_id.as_deref() != Some(project_id.as_str()) {
             self.db
-                .move_note_to_project(note_id, &project_id, note.project_id.as_deref())
+                .update_note_project(note_id, Some(&project_id))
                 .await?;
+            self.append_assignment_events(&[ProjectAssignmentEvent {
+                v: ProjectAssignmentEvent::VERSION,
+                event: ProjectAssignmentEvent::KIND,
+                note_id: note_id.to_string(),
+                from_project_id: note.project_id.clone(),
+                to_project_id: Some(project_id),
+                source: ProjectAssignmentSource::Manual,
+                probability: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            }])
+            .await?;
         }
         Ok(())
+    }
+
+    async fn append_assignment_events(
+        &self,
+        events: &[ProjectAssignmentEvent],
+    ) -> Result<(), ServiceError> {
+        let Some(sink) = self.assignment_events else {
+            return Ok(());
+        };
+        sink.append(events).await
     }
 
     async fn mutation_result(
@@ -904,7 +964,8 @@ mod tests {
     use crate::backend::NoteDb;
     use crate::services::dto::{NoteAddInput, NoteRouteProjectInput, Patch};
     use crate::services::ports::{
-        BrowserOpener, CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
+        BrowserOpener, CreateNote, CreatedNote, NoteCreator, ProjectAssignmentEvent,
+        ProjectAssignmentEventSink, ProjectAssignmentSource, ShareGateway, ShareResource,
     };
     use crate::services::test_support::{insert_normal_note, make_backend};
     use async_trait::async_trait;
@@ -913,6 +974,34 @@ mod tests {
         ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
         NoteModifyInput, NoteService, validate_created_range,
     };
+
+    #[derive(Default)]
+    struct RecordingAssignmentEvents(std::sync::Mutex<Vec<ProjectAssignmentEvent>>);
+
+    #[async_trait]
+    impl ProjectAssignmentEventSink for RecordingAssignmentEvents {
+        async fn append(
+            &self,
+            events: &[ProjectAssignmentEvent],
+        ) -> Result<(), crate::services::error::ServiceError> {
+            self.0.lock().unwrap().extend_from_slice(events);
+            Ok(())
+        }
+    }
+
+    struct FailingAssignmentEvents;
+
+    #[async_trait]
+    impl ProjectAssignmentEventSink for FailingAssignmentEvents {
+        async fn append(
+            &self,
+            _events: &[ProjectAssignmentEvent],
+        ) -> Result<(), crate::services::error::ServiceError> {
+            Err(crate::services::error::ServiceError::Io(
+                std::io::Error::other("event append failed"),
+            ))
+        }
+    }
 
     #[test]
     fn created_range_normalizes_offsets_and_rounds_sub_microsecond_bounds_up() {
@@ -953,6 +1042,214 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(probability.code(), "invalid_argument");
+    }
+
+    #[tokio::test]
+    async fn manual_project_transitions_emit_only_factual_changes() {
+        let backend = make_backend().await;
+        let note_id = insert_normal_note(&backend, "body", "ready").await;
+        let project_a = backend.create_project("A").await.unwrap();
+        let project_b = backend.create_project("B").await.unwrap();
+        let events = RecordingAssignmentEvents::default();
+        let service = NoteService::new(&*backend).with_assignment_events(&events);
+        let input = |project| NoteModifyInput {
+            id: note_id.clone(),
+            before: None,
+            after: None,
+            section: None,
+            title: Patch::Missing,
+            summary: Patch::Missing,
+            project,
+            flagged: Patch::Missing,
+        };
+
+        service
+            .modify(input(Patch::Value("A".to_string())))
+            .await
+            .unwrap();
+        service
+            .modify(input(Patch::Value("A".to_string())))
+            .await
+            .unwrap();
+        service
+            .modify(input(Patch::Value("B".to_string())))
+            .await
+            .unwrap();
+        service.modify(input(Patch::Null)).await.unwrap();
+
+        let recorded = events.0.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 3);
+        assert_eq!(recorded[0].note_id, note_id);
+        assert_eq!(recorded[0].from_project_id, None);
+        assert_eq!(
+            recorded[0].to_project_id.as_deref(),
+            Some(project_a.as_str())
+        );
+        assert_eq!(
+            recorded[1].from_project_id.as_deref(),
+            Some(project_a.as_str())
+        );
+        assert_eq!(
+            recorded[1].to_project_id.as_deref(),
+            Some(project_b.as_str())
+        );
+        assert_eq!(
+            recorded[2].from_project_id.as_deref(),
+            Some(project_b.as_str())
+        );
+        assert_eq!(recorded[2].to_project_id, None);
+        assert!(recorded.iter().all(|event| {
+            event.v == 1
+                && event.event == "project_assignment"
+                && event.source == ProjectAssignmentSource::Manual
+                && event.probability.is_none()
+                && chrono::DateTime::parse_from_rfc3339(&event.created_at).is_ok()
+        }));
+
+        events.0.lock().unwrap().clear();
+        let invalid = service
+            .modify(input(Patch::Value("missing".to_string())))
+            .await
+            .unwrap_err();
+        assert_eq!(invalid.code(), "project_not_found");
+        assert!(events.0.lock().unwrap().is_empty());
+
+        let missing = service
+            .modify(NoteModifyInput {
+                id: uuid::Uuid::new_v4().to_string(),
+                ..input(Patch::Null)
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code(), "note_not_found");
+        assert!(events.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn assignment_event_failure_reports_error_after_committed_manual_state() {
+        let backend = make_backend().await;
+        let note_id = insert_normal_note(&backend, "body", "ready").await;
+        let project_id = backend.create_project("Destination").await.unwrap();
+        let service = NoteService::new(&*backend).with_assignment_events(&FailingAssignmentEvents);
+
+        let error = service
+            .modify(NoteModifyInput {
+                id: note_id.clone(),
+                before: None,
+                after: None,
+                section: None,
+                title: Patch::Missing,
+                summary: Patch::Missing,
+                project: Patch::Value("Destination".to_string()),
+                flagged: Patch::Missing,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code(), "io_error");
+        assert_eq!(
+            backend
+                .find_note(&note_id)
+                .await
+                .unwrap()
+                .project_id
+                .as_deref(),
+            Some(project_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_jev_batch_emits_one_event_per_note_and_failures_emit_none() {
+        let backend = make_backend().await;
+        let first = insert_normal_note(&backend, "first", "ready").await;
+        let second = insert_normal_note(&backend, "second", "ready").await;
+        let project_id = backend.create_project("Destination").await.unwrap();
+        {
+            let writer = backend.database().writer().await.unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 701 WHERE id = ?", [&first])
+                .unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 702 WHERE id = ?", [&second])
+                .unwrap();
+        }
+        let events = RecordingAssignmentEvents::default();
+        let service = NoteService::new(&*backend).with_assignment_events(&events);
+
+        service
+            .route_project(vec![
+                NoteRouteProjectInput {
+                    note_id: 701,
+                    project_id: Some(project_id.clone()),
+                    probability: 0.91,
+                },
+                NoteRouteProjectInput {
+                    note_id: 702,
+                    project_id: None,
+                    probability: 0.78,
+                },
+            ])
+            .await
+            .unwrap();
+
+        let recorded = events.0.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 2);
+        assert_eq!(recorded[0].note_id, first);
+        assert_eq!(
+            recorded[0].to_project_id.as_deref(),
+            Some(project_id.as_str())
+        );
+        assert_eq!(recorded[0].probability, Some(0.91));
+        assert_eq!(recorded[1].note_id, second);
+        assert_eq!(recorded[1].to_project_id, None);
+        assert_eq!(recorded[1].probability, Some(0.78));
+        assert!(
+            recorded
+                .iter()
+                .all(|event| event.source == ProjectAssignmentSource::Jev)
+        );
+
+        events.0.lock().unwrap().clear();
+        service
+            .route_project(vec![NoteRouteProjectInput {
+                note_id: 701,
+                project_id: Some(project_id),
+                probability: 0.5,
+            }])
+            .await
+            .unwrap_err();
+        assert!(events.0.lock().unwrap().is_empty());
+
+        let third = insert_normal_note(&backend, "third", "ready").await;
+        let fourth = insert_normal_note(&backend, "fourth", "draft").await;
+        {
+            let writer = backend.database().writer().await.unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 703 WHERE id = ?", [&third])
+                .unwrap();
+            writer
+                .execute("UPDATE notes SET short_id = 704 WHERE id = ?", [&fourth])
+                .unwrap();
+        }
+        service
+            .route_project(vec![
+                NoteRouteProjectInput {
+                    note_id: 703,
+                    project_id: None,
+                    probability: 0.6,
+                },
+                NoteRouteProjectInput {
+                    note_id: 704,
+                    project_id: None,
+                    probability: 0.4,
+                },
+            ])
+            .await
+            .unwrap_err();
+        assert!(events.0.lock().unwrap().is_empty());
+        let third = backend.find_note(&third).await.unwrap();
+        assert_eq!(third.project_id, None);
+        assert_eq!(third.metadata, None);
     }
 
     #[tokio::test]
@@ -1158,7 +1455,7 @@ mod tests {
         let id = insert_normal_note(&backend, "body", "ready").await;
         let project_id = backend.create_project("work").await.unwrap();
         backend
-            .move_note_to_project(&id, &project_id, None)
+            .update_note_project(&id, Some(&project_id))
             .await
             .unwrap();
         let service = NoteService::new(&*backend);

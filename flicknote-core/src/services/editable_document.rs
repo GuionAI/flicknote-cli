@@ -520,15 +520,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn move_note_to_project(
-            &self,
-            _note_id: &str,
-            _new_project_id: &str,
-            _old_project_id: Option<&str>,
-        ) -> Result<Option<String>, CliError> {
-            unimplemented!()
-        }
-
         async fn update_note_project(
             &self,
             _id: &str,
@@ -541,7 +532,6 @@ mod tests {
             &self,
             _id: &str,
             _color: Option<Option<&str>>,
-            _pinned: Option<Option<bool>>,
             _summary: Option<Option<&str>>,
         ) -> Result<(), CliError> {
             unimplemented!()

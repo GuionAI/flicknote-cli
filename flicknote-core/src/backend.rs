@@ -144,14 +144,6 @@ pub trait NoteDb: Send + Sync {
     // Project writes
     async fn create_project(&self, name: &str) -> Result<String, CliError>;
 
-    /// Move a note to a different project. Returns the deleted project name if the old
-    /// project is now empty. Returns `NoteNotFound` if no such note exists.
-    async fn move_note_to_project(
-        &self,
-        note_id: &str,
-        new_project_id: &str,
-        old_project_id: Option<&str>,
-    ) -> Result<Option<String>, CliError>;
     /// Set or clear a note project while preserving its lifecycle status.
     async fn update_note_project(&self, id: &str, project_id: Option<&str>)
     -> Result<(), CliError>;
@@ -161,7 +153,6 @@ pub trait NoteDb: Send + Sync {
         &self,
         id: &str,
         color: Option<Option<&str>>,
-        pinned: Option<Option<bool>>,
         summary: Option<Option<&str>>,
     ) -> Result<(), CliError>;
 

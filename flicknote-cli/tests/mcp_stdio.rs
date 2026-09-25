@@ -811,9 +811,19 @@ async fn cli_json_commands_expose_lightweight_discovery_items() {
 
     let projects = run_cli_json(&config_root, &data_root, &["project", "list", "--json"]);
     let project = projects[0].as_object().unwrap();
-    assert!(project.contains_key("user_id"));
-    assert!(project.contains_key("is_archived"));
-    assert!(!project.contains_key("archived"));
+    assert_eq!(
+        project
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>(),
+        ["archived", "color", "created_at", "id", "name", "summary"]
+            .into_iter()
+            .collect()
+    );
+    assert!(project.contains_key("summary"));
+    assert!(!project.contains_key("metadata"));
+    assert!(!project.contains_key("user_id"));
+    assert!(!project.contains_key("is_archived"));
 }
 
 #[tokio::test]

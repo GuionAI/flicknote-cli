@@ -222,14 +222,14 @@ async fn project_metadata_hydrates_and_patch_preserves_unknown_keys() {
     );
 
     backend
-        .update_project(&project_id, None, Some(Some(true)), Some(Some("Summary")))
+        .update_project(&project_id, None, Some(Some("Summary")))
         .await
         .unwrap();
     let project = backend.find_project(&project_id).await.unwrap();
     let metadata: serde_json::Value =
         serde_json::from_str(project.metadata.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["unknown"]["keep"], true);
-    assert_eq!(metadata["pinned"], true);
+    assert!(metadata.get("pinned").is_none());
     assert_eq!(metadata["summary"], "Summary");
     let patch = db.next_crud_transaction().await.unwrap().unwrap();
     assert_eq!(patch.crud.len(), 1);
@@ -1473,7 +1473,7 @@ async fn test_find_archived_note() {
 // ─── Fix: PowerSync view-UPDATE zero affected rows ────────────────────
 
 #[tokio::test]
-async fn test_move_note_to_project_ok() {
+async fn test_update_note_project_keeps_empty_source_projects_active() {
     let backend = make_backend().await;
     let now = chrono::Utc::now().to_rfc3339();
     let note_id = uuid::Uuid::new_v4().to_string();
@@ -1494,72 +1494,27 @@ async fn test_move_note_to_project_ok() {
         .await
         .unwrap();
 
-    // Move to proj_b — should succeed (not return NoteNotFound)
-    let result = backend
-        .move_note_to_project(&note_id, &proj_b, Some(&proj_a))
+    backend
+        .update_note_project(&note_id, Some(&proj_b))
         .await
         .unwrap();
-    // This note was the only one in proj_a, so proj_a gets deleted
-    assert_eq!(result.as_deref(), Some("Proj-A"));
 
     // Verify the note is now in proj_b
     let note = backend.find_note(&note_id).await.unwrap();
     assert_eq!(note.project_id.as_deref(), Some(proj_b.as_str()));
-}
-
-#[tokio::test]
-async fn test_move_note_to_project_missing_returns_err() {
-    let backend = make_backend().await;
-    let fake_id = uuid::Uuid::new_v4().to_string();
-    let proj_a = backend.create_project("Proj-A").await.unwrap();
-    let proj_b = backend.create_project("Proj-B").await.unwrap();
-
-    let err = backend
-        .move_note_to_project(&fake_id, &proj_b, Some(&proj_a))
-        .await
-        .unwrap_err();
-    match err {
-        CliError::NoteNotFound { id } => assert_eq!(id, fake_id),
-        _ => panic!("expected NoteNotFound, got {:?}", err),
-    }
-}
-
-#[tokio::test]
-async fn test_move_note_to_project_same_project_noop() {
-    let backend = make_backend().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    let note_id = uuid::Uuid::new_v4().to_string();
-    let proj_x = backend.create_project("Proj-X").await.unwrap();
-
-    backend
-        .insert_note(&InsertNoteReq {
-            id: &note_id,
-            note_type: "normal",
-            status: "ai_queued",
-            title: Some("Same-project note"),
-            content: Some("body"),
-            metadata: None,
-            project_id: Some(&proj_x),
-            now: &now,
-        })
-        .await
-        .unwrap();
-
-    // Same source and target — should be idempotent, return Ok(None),
-    // not delete the project (it still holds the note).
-    let result = backend
-        .move_note_to_project(&note_id, &proj_x, Some(&proj_x))
-        .await
-        .unwrap();
-    assert_eq!(result, None, "same-project move should not delete project");
-
-    // Verify project still exists and note is still in it
-    let note = backend.find_note(&note_id).await.unwrap();
-    assert_eq!(note.project_id.as_deref(), Some(proj_x.as_str()));
     let active = backend.list_projects(false).await.unwrap();
     assert!(
-        active.iter().any(|p| p.id == proj_x),
-        "project should still exist"
+        active.iter().any(|project| project.id == proj_a),
+        "the empty source project should remain active"
+    );
+
+    backend.update_note_project(&note_id, None).await.unwrap();
+    let note = backend.find_note(&note_id).await.unwrap();
+    assert_eq!(note.project_id, None);
+    let active = backend.list_projects(false).await.unwrap();
+    assert!(
+        active.iter().any(|project| project.id == proj_b),
+        "clearing the only assignment should keep its project active"
     );
 }
 

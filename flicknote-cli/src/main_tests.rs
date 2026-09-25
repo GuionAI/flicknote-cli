@@ -56,6 +56,25 @@ fn project_unshare_command_parses() {
 }
 
 #[test]
+fn project_modify_supports_summary_but_not_pinned() {
+    let id = "550e8400-e29b-41d4-a716-446655440000";
+    assert!(
+        Cli::try_parse_from([
+            "flicknote",
+            "project",
+            "modify",
+            id,
+            "--summary",
+            "Boundary"
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from(["flicknote", "project", "modify", id, "--pinned", "true"]).is_err()
+    );
+}
+
+#[test]
 fn upload_command_parses() {
     assert!(Cli::try_parse_from(["flicknote", "upload", "file.pdf"]).is_ok());
 }

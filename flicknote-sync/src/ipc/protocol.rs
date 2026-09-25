@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 11;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -169,9 +169,6 @@ pub enum AppRequest {
     ProjectList {
         include_archived: bool,
     },
-    ProjectRecords {
-        include_archived: bool,
-    },
     ProjectGet {
         id: String,
     },
@@ -225,10 +222,9 @@ impl AppRequest {
             | Self::NoteRestore { .. }
             | Self::NoteShare { .. }
             | Self::NoteUnshare { .. } => AppRequestKind::NoteWrite,
-            Self::ProjectList { .. }
-            | Self::ProjectRecords { .. }
-            | Self::ProjectGet { .. }
-            | Self::ProjectGetByName { .. } => AppRequestKind::ProjectRead,
+            Self::ProjectList { .. } | Self::ProjectGet { .. } | Self::ProjectGetByName { .. } => {
+                AppRequestKind::ProjectRead
+            }
             Self::ProjectAdd(_)
             | Self::ProjectModify(_)
             | Self::ProjectArchive { .. }
@@ -276,7 +272,6 @@ pub enum AppResponse {
     Unshare(UnshareResult),
     Open(OpenResult),
     Projects(Vec<ProjectDto>),
-    ProjectRecords(Vec<Project>),
     Project(ProjectDto),
     Values(Vec<String>),
 }
@@ -320,7 +315,6 @@ app_result!(ShareResult, AppResponse::Share);
 app_result!(UnshareResult, AppResponse::Unshare);
 app_result!(OpenResult, AppResponse::Open);
 app_result!(Vec<ProjectDto>, AppResponse::Projects);
-app_result!(Vec<Project>, AppResponse::ProjectRecords);
 app_result!(ProjectDto, AppResponse::Project);
 app_result!(Vec<String>, AppResponse::Values);
 
