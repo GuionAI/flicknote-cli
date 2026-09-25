@@ -877,8 +877,8 @@ impl<'a> NoteService<'a> {
         let first = events.first();
         log::warn!(
             "project_assignment_audit append_failed error={error} event_count={} \
-             note_ids={note_ids}{truncated} source={:?} from_project_id={:?} \
-             to_project_id={:?} probability={:?}",
+             note_ids={note_ids}{truncated} first_source={:?} first_from_project_id={:?} \
+             first_to_project_id={:?} first_probability={:?}",
             events.len(),
             first.map(|event| event.source),
             first.and_then(|event| event.from_project_id.as_deref()),
