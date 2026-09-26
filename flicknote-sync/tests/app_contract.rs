@@ -359,10 +359,7 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
             .is_some_and(|path| !path.is_empty())
     );
     assert_eq!(details["daemon_version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(
-        details["daemon_protocol"],
-        flicknote_sync::ipc::PROTOCOL_VERSION
-    );
+    assert_eq!(details["daemon_protocol"], 12);
     server.await.unwrap().unwrap();
 }
 
