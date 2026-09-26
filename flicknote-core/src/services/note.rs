@@ -149,6 +149,11 @@ impl<'a> NoteService<'a> {
     }
 
     pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteListItem>, ServiceError> {
+        if input.shared && input.archived {
+            return Err(ServiceError::InvalidArgument(
+                "shared and archived are mutually exclusive".to_string(),
+            ));
+        }
         if input.cursor.is_some_and(|cursor| cursor <= 0) {
             return Err(ServiceError::InvalidArgument(
                 "cursor must be a positive note ID".to_string(),
@@ -188,6 +193,7 @@ impl<'a> NoteService<'a> {
                 created_after_micros,
                 created_before_micros,
                 archived: input.archived,
+                shared: input.shared,
                 limit: input.limit,
                 cursor: input.cursor,
             })
@@ -231,6 +237,7 @@ impl<'a> NoteService<'a> {
                     created_after_micros: None,
                     created_before_micros: None,
                     archived: input.archived,
+                    shared: false,
                     limit: input.limit,
                     cursor: None,
                 },
@@ -277,6 +284,7 @@ impl<'a> NoteService<'a> {
                     created_after_micros: None,
                     created_before_micros: None,
                     archived: false,
+                    shared: false,
                     limit: RECALL_MAX_CANDIDATES,
                     cursor: None,
                 },
@@ -297,6 +305,7 @@ impl<'a> NoteService<'a> {
             created_after_micros: None,
             created_before_micros: None,
             archived: input.archived,
+            shared: false,
             limit: u32::MAX,
             cursor: None,
         };
@@ -1532,6 +1541,7 @@ mod tests {
                 created_after: None,
                 created_before: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             })
@@ -1559,6 +1569,7 @@ mod tests {
                 created_after: None,
                 created_before: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             })
@@ -1588,6 +1599,7 @@ mod tests {
                     created_after: None,
                     created_before: None,
                     archived: false,
+                    shared: false,
                     limit: 20,
                     cursor: None,
                 })
@@ -1605,6 +1617,7 @@ mod tests {
                 created_after: None,
                 created_before: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             })
@@ -1631,6 +1644,7 @@ mod tests {
                 created_after: None,
                 created_before: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             })
@@ -1822,6 +1836,7 @@ mod tests {
                 created_after: None,
                 created_before: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             })

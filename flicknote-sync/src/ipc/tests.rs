@@ -90,6 +90,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
             created_after: None,
             created_before: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         })),

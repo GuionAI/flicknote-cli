@@ -6,12 +6,28 @@ pub fn app_schema() -> Schema {
             notes_table(),
             projects_table(),
             note_extractions_table(),
+            note_shares_table(),
             taskchampion_tasks_table(),
             taskchampion_operations_table(),
             settings_table(),
         ],
         ..Schema::default()
     }
+}
+
+fn note_shares_table() -> Table {
+    Table::create(
+        "note_shares",
+        vec![
+            Column::text("user_id"),
+            Column::text("token"),
+            Column::text("expires_at"),
+            Column::text("created_at"),
+        ],
+        |table| {
+            table.indexes = vec![index("note_shares_user_id_idx", "user_id", "TEXT")];
+        },
+    )
 }
 
 fn notes_table() -> Table {

@@ -188,6 +188,7 @@ async fn app_routes_note_list_and_append_through_services() {
             created_after: None,
             created_before: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         }))
@@ -308,6 +309,7 @@ async fn versioned_socket_routes_client_requests_through_application() {
             created_after: None,
             created_before: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         }))

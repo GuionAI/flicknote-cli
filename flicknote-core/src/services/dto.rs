@@ -230,6 +230,8 @@ pub struct NoteListInput {
     pub created_before: Option<String>,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub shared: bool,
     #[serde(default = "default_note_limit")]
     pub limit: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

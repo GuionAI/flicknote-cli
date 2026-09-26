@@ -166,6 +166,7 @@ impl FlickNoteMcp {
                 created_after: params.created_after,
                 created_before: params.created_before,
                 archived: params.archived,
+                shared: false,
                 limit: params.limit,
                 cursor: params.cursor,
             }))

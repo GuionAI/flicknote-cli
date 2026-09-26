@@ -8,6 +8,7 @@ Examples:
   flicknote list --limit 50
   flicknote list --limit 50 --cursor 123
   flicknote list --archived
+  flicknote list --shared --json
   flicknote list --json
 
 List output shows the note ID used by detail/content/edit commands.
@@ -19,6 +20,8 @@ note content or internal note UUIDs.
 --created-after is inclusive and --created-before is exclusive. Both accept
 RFC3339 timestamps. --project and --no-project cannot be combined.
 --status accepts draft, ai_queued, source_queued, or ready.
+--shared lists active notes with an unexpired synchronized share. It cannot be
+combined with --archived. Share creation and revocation may appear after sync.
 
 Results are ordered by note ID from newest to oldest. To fetch the next page,
 pass the final result's ID to --cursor.

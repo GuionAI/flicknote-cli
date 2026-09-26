@@ -9,8 +9,8 @@ use crate::services::dto::RecallCandidate;
 use crate::types::{Note, NoteStatus, Project};
 
 use super::{
-    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, RouteProjectUpdate,
-    parse_note_lookup,
+    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, NoteShare,
+    RouteProjectUpdate, parse_note_lookup,
 };
 
 // ─── LocalPowerSyncBackend ───────────────────────────────────────────────────
@@ -27,6 +27,29 @@ impl LocalPowerSyncBackend {
     #[cfg(test)]
     pub(crate) fn database(&self) -> &PowerSyncDatabase {
         &self.db
+    }
+
+    /// Read the synchronized canonical share row without changing local state.
+    pub async fn current_note_share(&self, id: &str) -> Result<Option<NoteShare>, CliError> {
+        let reader = self.db.reader().await?;
+        reader
+            .query_row(
+                "SELECT id, user_id, token, expires_at, created_at FROM note_shares \
+                 WHERE id = ? AND user_id = ? \
+                   AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))",
+                params![id, self.user_id],
+                |row| {
+                    Ok(NoteShare {
+                        id: row.get(0)?,
+                        user_id: row.get(1)?,
+                        token: row.get(2)?,
+                        expires_at: row.get(3)?,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 }
 
@@ -403,6 +426,11 @@ impl NoteDb for LocalPowerSyncBackend {
             FROM notes
             WHERE user_id = ?
               AND (deleted_at IS NOT NULL) = ?
+              AND (? = 0 OR EXISTS (
+                  SELECT 1 FROM note_shares AS share
+                  WHERE share.id = notes.id AND share.user_id = notes.user_id
+                    AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))
+              ))
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR status = ?)
               AND (? IS NULL OR project_id = ?)
@@ -424,6 +452,7 @@ impl NoteDb for LocalPowerSyncBackend {
             params![
                 self.user_id,
                 filter.archived,
+                filter.shared,
                 filter.note_type,
                 filter.note_type,
                 filter.status,

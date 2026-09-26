@@ -43,6 +43,15 @@ fn note_unshare_command_parses() {
 }
 
 #[test]
+fn shared_list_accepts_json_and_rejects_archive() {
+    assert!(Cli::try_parse_from(["flicknote", "list", "--shared", "--json"]).is_ok());
+    let error = Cli::try_parse_from(["flicknote", "list", "--shared", "--archived"])
+        .err()
+        .unwrap();
+    assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn project_unshare_command_parses() {
     assert!(
         Cli::try_parse_from([

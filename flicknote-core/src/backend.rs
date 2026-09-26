@@ -14,8 +14,18 @@ pub struct NoteFilter<'a> {
     pub created_after_micros: Option<i64>,
     pub created_before_micros: Option<i64>,
     pub archived: bool,
+    pub shared: bool,
     pub limit: u32,
     pub cursor: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteShare {
+    pub id: String,
+    pub user_id: String,
+    pub token: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

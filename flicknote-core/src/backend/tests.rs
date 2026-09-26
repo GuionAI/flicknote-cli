@@ -437,6 +437,7 @@ async fn local_backend_list_filter() {
             note_type: None,
             status: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         })
@@ -477,6 +478,7 @@ async fn local_backend_search_notes() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -498,6 +500,7 @@ async fn local_backend_search_notes() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -580,6 +583,7 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -632,6 +636,7 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -747,6 +752,7 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit,
                 cursor: None,
             },
@@ -943,6 +949,7 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
         note_type: None,
         status: None,
         archived: false,
+        shared: false,
         limit: 20,
         cursor: None,
     };
@@ -1049,6 +1056,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 3,
                 cursor: None,
             },
@@ -1086,6 +1094,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -1137,6 +1146,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -1177,6 +1187,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -1229,6 +1240,7 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
                 note_type: None,
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -1324,6 +1336,7 @@ async fn local_backend_search_respects_type_filter() {
                 note_type: Some("link"),
                 status: None,
                 archived: false,
+                shared: false,
                 limit: 20,
                 cursor: None,
             },
@@ -1365,6 +1378,7 @@ async fn local_backend_archive() {
             note_type: None,
             status: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         })
@@ -1388,6 +1402,7 @@ async fn local_backend_archive() {
             note_type: None,
             status: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         })
@@ -1405,6 +1420,7 @@ async fn local_backend_archive() {
             note_type: None,
             status: None,
             archived: true,
+            shared: false,
             limit: 20,
             cursor: None,
         })
@@ -1423,6 +1439,7 @@ async fn local_backend_archive() {
             note_type: None,
             status: None,
             archived: false,
+            shared: false,
             limit: 20,
             cursor: None,
         })
@@ -1699,6 +1716,7 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
             created_after_micros: after.map(micros),
             created_before_micros: before.map(micros),
             archived: false,
+            shared: false,
             limit,
             cursor,
         }
@@ -1761,6 +1779,81 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
 }
 
 #[tokio::test]
+async fn shared_list_filters_expiry_and_archive_before_pagination() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let now = chrono::Utc::now();
+    let expired = (now - chrono::Duration::days(1)).to_rfc3339();
+    let future = (now + chrono::Duration::days(1)).to_rfc3339();
+    let mut ids = Vec::new();
+    for short_id in 501..=506 {
+        let id = seed_routing_note(&db, short_id, "2026-09-24T00:00:00Z", None, None).await;
+        ids.push(id);
+    }
+    let writer = db.writer().await.unwrap();
+    for (index, expires_at) in [
+        (0, Some(future.as_str())),
+        (1, Some(expired.as_str())),
+        (2, None),
+        (3, Some(future.as_str())),
+        (5, None),
+    ] {
+        writer.execute(
+            "INSERT INTO note_shares (id, user_id, token, expires_at, created_at) VALUES (?, 'test-user-id', ?, ?, '2026-09-24T00:00:00Z')",
+            params![ids[index], format!("token-{index}"), expires_at],
+        ).unwrap();
+    }
+    writer.execute(
+        "INSERT INTO note_shares (id, user_id, token, created_at) VALUES (?, 'another-user', 'other-token', '2026-09-24T00:00:00Z')",
+        params![ids[4]],
+    ).unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET deleted_at = '2026-09-25T00:00:00Z' WHERE id = ?",
+            params![ids[3]],
+        )
+        .unwrap();
+    writer.execute("DELETE FROM ps_crud", []).unwrap();
+    drop(writer);
+
+    let share = backend.current_note_share(&ids[0]).await.unwrap().unwrap();
+    assert_eq!(share.id, ids[0]);
+    assert_eq!(share.user_id, "test-user-id");
+    assert_eq!(share.token, "token-0");
+    assert_eq!(share.expires_at.as_deref(), Some(future.as_str()));
+    assert_eq!(share.created_at, "2026-09-24T00:00:00Z");
+    assert!(backend.current_note_share(&ids[1]).await.unwrap().is_none());
+    assert!(backend.current_note_share(&ids[4]).await.unwrap().is_none());
+
+    let filter = |limit, cursor| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        status: None,
+        created_after_micros: None,
+        created_before_micros: None,
+        archived: false,
+        shared: true,
+        limit,
+        cursor,
+    };
+    let short_ids = |notes: Vec<Note>| {
+        notes
+            .into_iter()
+            .map(|note| note.short_id.unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        short_ids(backend.list_notes(&filter(2, None)).await.unwrap()),
+        vec![506, 503]
+    );
+    assert_eq!(
+        short_ids(backend.list_notes(&filter(2, Some(503))).await.unwrap()),
+        vec![501]
+    );
+    assert!(db.next_crud_transaction().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn list_notes_status_composes_with_range_no_project_and_cursor() {
     let (_directory, db, backend) = make_powersync_backend().await;
     let project_id = uuid::Uuid::new_v4().to_string();
@@ -1793,6 +1886,7 @@ async fn list_notes_status_composes_with_range_no_project_and_cursor() {
         created_after_micros: Some(micros("2026-09-24T01:00:00Z")),
         created_before_micros: Some(micros("2026-09-24T06:00:00Z")),
         archived: false,
+        shared: false,
         limit,
         cursor,
     };
@@ -1840,6 +1934,7 @@ async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
         created_after_micros: after,
         created_before_micros: before,
         archived: false,
+        shared: false,
         limit: 20,
         cursor: None,
     };
@@ -1903,6 +1998,7 @@ async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
         created_after_micros: after,
         created_before_micros: before,
         archived: false,
+        shared: false,
         limit: 20,
         cursor: None,
     };
