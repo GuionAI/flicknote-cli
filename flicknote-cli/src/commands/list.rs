@@ -32,6 +32,9 @@ pub(crate) struct ListArgs {
     /// Show only archived notes
     #[arg(long)]
     archived: bool,
+    /// Show only active notes with a current share link
+    #[arg(long, conflicts_with = "archived")]
+    shared: bool,
     /// Maximum number of results
     #[arg(long, default_value = "20")]
     limit: u32,
@@ -54,6 +57,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
             created_after: args.created_after.clone(),
             created_before: args.created_before.clone(),
             archived: args.archived,
+            shared: args.shared,
             limit: args.limit,
             cursor: args.cursor,
         }))
