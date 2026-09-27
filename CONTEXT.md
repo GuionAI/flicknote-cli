@@ -32,6 +32,24 @@ _Avoid_: Verified fact, instruction
 The time a note was last changed. It does not establish when the described event happened or whether a claim is more accurate.
 _Avoid_: Event time, evidence of truth
 
+## Note search
+
+**Note search**:
+An explicit request by a person or an agent to find existing notes from remembered words or text fragments. It returns candidates for inspection rather than asserting that a note answers the request.
+_Avoid_: Recall, answer retrieval
+
+**Human search**:
+Note search initiated by a person. Its query may be approximate or contain spelling mistakes.
+_Avoid_: Recall query
+
+**Agent search**:
+Note search initiated by an agent while carrying out a task. Its query is deliberate but the returned notes still require inspection before their contents become evidence.
+_Avoid_: Automatic recall, verified evidence
+
+**Match excerpt**:
+A bounded passage from a note showing why a search result matched the query. It supports judging a result before opening the full note and is distinct from the note's summary.
+_Avoid_: Summary, generated answer
+
 ## Note discovery
 
 **Note-list page**:
