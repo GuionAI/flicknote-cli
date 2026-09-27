@@ -142,6 +142,17 @@ reranked snippets or production end-to-end latency. Baseline reports stay intact
 The [search options decision memo](search-options-decision.html) summarizes the
 current evidence and explains when another engine experiment would be useful.
 
+## Tantivy dependency and measurement versions
+
+The runner is pinned to upstream commit
+`5ca39332002c2c87fb5d2abc707cf527b3319d42` (development version 0.27.0),
+which includes [Tantivy #3034](https://github.com/quickwit-oss/tantivy/pull/3034).
+This removes vulnerable `lru` 0.16.x (RUSTSEC-2026-0253); the lockfile resolves
+`lru` 0.18.5. Replace the git pin when a published Tantivy release includes it.
+Existing relevance/performance figures in this report were measured with
+Tantivy 0.26.2, before this dependency fix. They are historical measurements,
+not fresh measurements of the pinned development version.
+
 ## Tantivy 2/3-gram experiment
 
 The standalone Rust runner builds a temporary Tantivy index from the same
