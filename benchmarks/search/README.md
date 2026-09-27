@@ -353,9 +353,12 @@ slower than a full rebuild; it is evidence to revisit batch strategy if this
 write pattern becomes common. The settled disk and RSS values were measured
 after Tantivy's background merge; the Ready log samples them earlier.
 
-The private `.local/` query fixture was unavailable in this checkout, so target
-ranks could not be compared on the current KB. The tracked coverage and prefix
-integration cases passed with the extracted shared query modules. Pure query
-and query-plus-snippet times from the earlier benchmark are separate from the
+The private fixtures and matching 2,445-note benchmark snapshot were recovered
+from the Mac checkout into ignored local scratch space. On that snapshot, the
+production schema and query module matched the saved benchmark target ranks
+**and complete top-10 hit lists** for all 48 coverage queries and 54 input-stage
+queries. No private notes, queries, or results are committed. The tracked
+coverage and prefix integration cases also passed. Pure query and
+query-plus-snippet times from the earlier benchmark are separate from the
 above daemon projection and update measurements. End-to-end `find` latency is
 reserved for Slice B.
