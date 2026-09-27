@@ -471,77 +471,17 @@ impl NoteDb for LocalPowerSyncBackend {
         )
     }
 
-    async fn search_notes(
-        &self,
-        keywords: &[String],
-        filter: &NoteFilter<'_>,
-    ) -> Result<Vec<Note>, CliError> {
-        if keywords.is_empty() {
-            return Err(CliError::Other(
-                "search_notes requires at least one keyword".into(),
-            ));
-        }
-        let limit = i64::from(filter.limit);
-        let keywords_json = serde_json::to_string(keywords)?;
-        let reader = self.db.reader().await?;
-        query_notes(
-            &reader,
-            r#"
-            SELECT
-                id,
-                short_id,
-                user_id,
-                type,
-                status,
-                title,
-                content,
-                summary,
-                is_flagged,
-                project_id,
-                metadata,
-                source,
-                created_at,
-                updated_at,
-                deleted_at
-            FROM notes
-            WHERE user_id = ?
-              AND (deleted_at IS NOT NULL) = ?
-              AND (? IS NULL OR type = ?)
-              AND (? IS NULL OR project_id = ?)
-              AND EXISTS (
-                SELECT 1 FROM json_each(?) AS kw
-                WHERE title LIKE '%' || kw.value || '%'
-                   OR content LIKE '%' || kw.value || '%'
-                   OR summary LIKE '%' || kw.value || '%'
-              )
-            ORDER BY updated_at DESC
-            LIMIT ?
-            "#,
-            params![
-                self.user_id,
-                filter.archived,
-                filter.note_type,
-                filter.note_type,
-                filter.project_id,
-                filter.project_id,
-                keywords_json,
-                limit,
-            ],
-        )
-    }
-
     async fn search_notes_structured(
         &self,
         search: &NoteSearch,
         filter: &NoteFilter<'_>,
     ) -> Result<Vec<Note>, CliError> {
-        if search.keywords.is_empty() && search.extractions.is_empty() {
+        if search.extractions.is_empty() {
             return Err(CliError::Other(
-                "search_notes_structured requires at least one keyword or structured filter".into(),
+                "search_notes_structured requires an extraction filter".into(),
             ));
         }
         let limit = i64::from(filter.limit);
-        let keywords_json = serde_json::to_string(&search.keywords)?;
         let extractions_json = serde_json::to_string(
             &search
                 .extractions
@@ -579,14 +519,6 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
-              AND (
-                json_array_length(?) = 0 OR EXISTS (
-                  SELECT 1 FROM json_each(?) AS kw
-                  WHERE title LIKE '%' || kw.value || '%'
-                     OR content LIKE '%' || kw.value || '%'
-                     OR summary LIKE '%' || kw.value || '%'
-                )
-              )
               AND NOT EXISTS (
                 SELECT 1 FROM json_each(?) AS filter
                 WHERE NOT EXISTS (
@@ -607,8 +539,6 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.note_type,
                 filter.project_id,
                 filter.project_id,
-                keywords_json,
-                keywords_json,
                 extractions_json,
                 limit,
             ],

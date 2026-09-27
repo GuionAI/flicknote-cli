@@ -36,7 +36,6 @@ pub struct MetadataFilter {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteSearch {
-    pub keywords: Vec<String>,
     pub extractions: Vec<MetadataFilter>,
 }
 
@@ -101,11 +100,6 @@ pub trait NoteDb: Send + Sync {
     async fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
     async fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError>;
-    async fn search_notes(
-        &self,
-        keywords: &[String],
-        filter: &NoteFilter<'_>,
-    ) -> Result<Vec<Note>, CliError>;
     async fn search_notes_structured(
         &self,
         search: &NoteSearch,

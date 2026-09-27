@@ -432,14 +432,6 @@ mod tests {
             unimplemented!()
         }
 
-        async fn search_notes(
-            &self,
-            _keywords: &[String],
-            _filter: &NoteFilter<'_>,
-        ) -> Result<Vec<Note>, CliError> {
-            unimplemented!()
-        }
-
         async fn search_notes_structured(
             &self,
             _search: &NoteSearch,

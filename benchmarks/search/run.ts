@@ -282,6 +282,7 @@ await mkdir(localDir, { recursive: true });
 const meiliDir = await mkdtemp(join(localDir, "meili-"));
 const key = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
 const base = `http://127.0.0.1:${port}`;
+const meiliStarted = performance.now();
 const child = spawn(
   "meilisearch",
   ["--http-addr", `127.0.0.1:${port}`, "--db-path", meiliDir, "--no-analytics"],
@@ -345,6 +346,8 @@ async function meiliSearch(query: Query): Promise<SearchResult> {
 
 const results: { query: Query; engines: Record<Engine, SearchResult> }[] = [];
 let meiliBytes = 0;
+let meiliBuildMs = 0;
+let meiliReadyMs = 0;
 try {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
@@ -356,13 +359,13 @@ try {
       await Bun.sleep(100);
     }
   }
+  const buildStarted = performance.now();
   await waitTask((await request("/indexes", "POST", { uid: "flicknote_notes", primaryKey: "uuid" })).taskUid);
   await waitTask(
     (await request("/indexes/flicknote_notes/settings", "PATCH", {
       searchableAttributes: ["title", "summary", "content"],
-      rankingRules: ["words", "typo", "proximity", "attributeRank", "sort", "exactness"],
+      rankingRules: ["words", "typo", "proximity", "attribute", "sort", "exactness"],
       filterableAttributes: ["project"],
-      typoTolerance: { disableOnNumbers: true },
     })).taskUid,
   );
   await waitTask(
@@ -378,6 +381,8 @@ try {
       })),
     )).taskUid,
   );
+  meiliBuildMs = performance.now() - buildStarted;
+  meiliReadyMs = performance.now() - meiliStarted;
   meiliBytes = await directoryBytes(meiliDir);
 
   for (const query of fixture.queries) {
@@ -426,11 +431,11 @@ const aggregate = Object.fromEntries(
   ]),
 );
 
-await writeFile(join(localDir, "results.json"), JSON.stringify({ noteCount: notes.length, meiliBytes, aggregate, results }, null, 2));
+await writeFile(join(localDir, "results.json"), JSON.stringify({ noteCount: notes.length, meiliBytes, meiliBuildMs, meiliReadyMs, aggregate, results }, null, 2));
 const lines = [
   "# Search benchmark results",
   "",
-  `Active notes: ${notes.length}; temporary Meili index: ${(meiliBytes / 1048576).toFixed(1)} MiB`,
+  `Active notes: ${notes.length}; temporary Meili index: ${(meiliBytes / 1048576).toFixed(1)} MiB; child launch to Ready: ${meiliReadyMs.toFixed(1)} ms`,
   "",
   "| Group | Audience | Engine | Judged | Misses | Miss rate |",
   "| --- | --- | --- | ---: | ---: | ---: |",

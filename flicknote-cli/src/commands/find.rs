@@ -1,9 +1,7 @@
 use clap::Args;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, NoteListItem};
+use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, SearchHit};
 use flicknote_sync::ipc::{AppRequest, DaemonClient};
-
-use super::util::print_summaries_table;
 
 const FIND_HELP: &str = include_str!("../help/find.md");
 
@@ -63,7 +61,7 @@ fn parse_search_input(args: &[String]) -> Result<ParsedSearch, CliError> {
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let parsed = parse_search_input(&args.keywords)?;
-    let notes: Vec<NoteListItem> = daemon
+    let notes: Vec<SearchHit> = daemon
         .call(AppRequest::NoteFind(NoteFindInput {
             keywords: parsed.keywords,
             extractions: parsed.extractions,
@@ -80,14 +78,68 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<()
     } else if notes.is_empty() {
         println!("No notes found matching: {}", args.keywords.join(", "));
     } else {
-        print_summaries_table(&notes);
+        print!("{}", format_search_hits(&notes));
     }
     Ok(())
+}
+
+fn format_search_hits(hits: &[SearchHit]) -> String {
+    let mut output = String::from("ID       Title                          Snippet\n");
+    for hit in hits {
+        let id = hit
+            .short_id
+            .map_or_else(|| "-".to_owned(), |id| id.to_string());
+        let title = hit.title.as_deref().unwrap_or("(untitled)");
+        let excerpt = hit
+            .snippet
+            .segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        output.push_str(&format!("{id:<8} {title:<30} {excerpt}\n"));
+    }
+    output
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicknote_core::services::dto::{SearchSnippet, SnippetSegment};
+
+    #[test]
+    fn search_table_renders_segmented_snippet_as_readable_text() {
+        let output = format_search_hits(&[SearchHit {
+            short_id: Some(42),
+            title: Some("Office plan".into()),
+            summary: None,
+            created_at: None,
+            updated_at: None,
+            project_id: None,
+            snippet: SearchSnippet {
+                segments: vec![
+                    SnippetSegment {
+                        text: "The ".into(),
+                        highlighted: false,
+                    },
+                    SnippetSegment {
+                        text: "office".into(),
+                        highlighted: true,
+                    },
+                    SnippetSegment {
+                        text: " plan".into(),
+                        highlighted: false,
+                    },
+                ],
+            },
+        }]);
+        assert!(output.contains("42"));
+        assert!(output.contains("Office plan"));
+        assert!(output.contains("The office plan"));
+        assert!(!output.contains('\u{1f}'));
+    }
 
     #[test]
     fn parse_search_input_splits_plain_keywords_and_structured_filters() {

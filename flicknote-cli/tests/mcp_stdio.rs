@@ -13,6 +13,7 @@ use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
 };
 use flicknote_sync::app::Application;
+use flicknote_sync::fts_search::FtsSearchService;
 use flicknote_sync::ipc::{
     AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo, read_request, serve_app,
     socket_path, write_response,
@@ -183,15 +184,20 @@ fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path)
             .build()
             .unwrap()
             .block_on(async move {
-                let backend = std::sync::Arc::new(LocalPowerSyncBackend::new(
-                    test_database(&config),
-                    "test-user".to_string(),
-                ));
-                let app = std::sync::Arc::new(Application::new(
-                    backend,
-                    std::sync::Arc::new(UnusedCreator),
-                    std::sync::Arc::new(UnusedShareGateway),
-                ));
+                flicknote_core::sqlite_extension::register_better_trigram().unwrap();
+                let db = test_database(&config);
+                let search = FtsSearchService::new(db.clone());
+                search.prepare().await.unwrap();
+                let backend =
+                    std::sync::Arc::new(LocalPowerSyncBackend::new(db, "test-user".to_string()));
+                let app = std::sync::Arc::new(
+                    Application::new(
+                        backend,
+                        std::sync::Arc::new(UnusedCreator),
+                        std::sync::Arc::new(UnusedShareGateway),
+                    )
+                    .with_search(search),
+                );
                 let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
                 ready_tx.send(()).unwrap();
                 tokio::select! {
@@ -315,6 +321,19 @@ fn run_cli_with_input(
         .write_all(input.as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+#[test]
+fn cli_count_rejects_keyword_arguments() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
+        .args(["count", "stored"])
+        .env("XDG_CONFIG_HOME", directory.path().join("config"))
+        .env("XDG_DATA_HOME", directory.path().join("data"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
 }
 
 fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
@@ -788,7 +807,7 @@ async fn cli_json_commands_expose_lightweight_discovery_items() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let (note_id, _) = seed_workspace(&config_root, &data_root).await;
+    let (note_id, project_id) = seed_workspace(&config_root, &data_root).await;
     let _daemon = spawn_test_daemon(&config_root, &data_root);
 
     let listed = run_cli_json(&config_root, &data_root, &["list", "--json"]);
@@ -798,9 +817,19 @@ async fn cli_json_commands_expose_lightweight_discovery_items() {
     );
 
     let found = run_cli_json(&config_root, &data_root, &["find", "stored", "--json"]);
-    assert_discovery_item_contract(
-        &found[0],
-        &serde_json::Value::String("Legacy project".to_string()),
+    assert_eq!(found[0]["short_id"], 77);
+    assert_eq!(found[0]["title"], "Legacy JSON");
+    assert_eq!(found[0]["summary"], "Recall summary");
+    assert_eq!(
+        found[0]["project_id"],
+        serde_json::Value::String(project_id.clone())
+    );
+    assert!(
+        found[0]["snippet"]["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|segment| segment["highlighted"] == true && segment["text"] == "stored")
     );
 
     let detailed = run_cli_json(&config_root, &data_root, &["detail", &note_id, "--json"]);
@@ -1208,8 +1237,26 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
         &data_root,
         ServerInfo::current(),
         move |request| match request {
-            AppRequest::NoteList(_) | AppRequest::NoteFind(_) => {
+            AppRequest::NoteList(_) => {
                 DaemonResponse::App(Box::new(AppResponse::NoteListItems(vec![item.clone()])))
+            }
+            AppRequest::NoteFind(_) => {
+                DaemonResponse::App(Box::new(AppResponse::SearchHits(vec![
+                    flicknote_core::services::dto::SearchHit {
+                        short_id: item.id,
+                        title: item.title.clone(),
+                        summary: item.summary.clone(),
+                        created_at: item.created_at.clone(),
+                        updated_at: item.updated_at.clone(),
+                        project_id: item.project_id.clone(),
+                        snippet: flicknote_core::services::dto::SearchSnippet {
+                            segments: vec![flicknote_core::services::dto::SnippetSegment {
+                                text: "Adapter".to_string(),
+                                highlighted: true,
+                            }],
+                        },
+                    },
+                ])))
             }
             _ => panic!("unexpected request: {request:?}"),
         },
@@ -1239,7 +1286,15 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
     );
     assert_eq!(
         run_cli_json(&config_root, &data_root, &["find", "adapter", "--json"]),
-        expected
+        serde_json::json!([{
+            "short_id": 77,
+            "title": "Adapter note",
+            "summary": "A lightweight item",
+            "created_at": "2026-09-21T00:00:00Z",
+            "updated_at": "2026-09-21T01:00:00Z",
+            "project_id": "project-uuid",
+            "snippet": {"segments": [{"text": "Adapter", "highlighted": true}]}
+        }])
     );
     assert!(matches!(
         daemon.requests().as_slice(),

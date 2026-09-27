@@ -14,15 +14,12 @@ pub(crate) struct CountArgs {
     /// Count archived (deleted) notes instead of active
     #[arg(long)]
     archived: bool,
-    /// Filter by keywords (OR match across title, content, summary)
-    keywords: Vec<String>,
 }
 
 pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CountArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let count: u64 = match daemon
         .call(AppRequest::NoteCount(NoteCountInput {
-            keywords: args.keywords.clone(),
             project: project.clone(),
             note_type: args.r#type.clone(),
             archived: args.archived,

@@ -1,6 +1,6 @@
 use super::*;
 
-pub const PROTOCOL_VERSION: u16 = 12;
+pub const PROTOCOL_VERSION: u16 = 13;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,8 +28,6 @@ pub struct ServerInfo {
     pub sync_errors: PowerSyncErrors,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub search_documents: Option<usize>,
 }
 
 impl ServerInfo {
@@ -41,7 +39,6 @@ impl ServerInfo {
             sync: None,
             sync_errors: PowerSyncErrors::default(),
             search: None,
-            search_documents: None,
         }
     }
 
@@ -55,9 +52,8 @@ impl ServerInfo {
         self
     }
 
-    pub fn with_search_state(mut self, state: &str, documents: Option<usize>) -> Self {
+    pub fn with_search_state(mut self, state: &str) -> Self {
         self.search = Some(state.to_string());
-        self.search_documents = documents;
         self
     }
 }
@@ -257,6 +253,7 @@ pub enum AppResponse {
     NoteCreate(NoteCreateResult),
     NoteSummary(NoteSummary),
     NoteListItems(Vec<NoteListItem>),
+    SearchHits(Vec<SearchHit>),
     NoteRecall(Vec<RecallCandidate>),
     NoteCount { count: u64 },
     NoteDetail(NoteDetail),
@@ -301,6 +298,7 @@ macro_rules! app_result {
 app_result!(NoteSummary, AppResponse::NoteSummary);
 app_result!(NoteCreateResult, AppResponse::NoteCreate);
 app_result!(Vec<NoteListItem>, AppResponse::NoteListItems);
+app_result!(Vec<SearchHit>, AppResponse::SearchHits);
 app_result!(Vec<RecallCandidate>, AppResponse::NoteRecall);
 app_result!(NoteDetail, AppResponse::NoteDetail);
 app_result!(EditableDocument, AppResponse::EditableDocument);

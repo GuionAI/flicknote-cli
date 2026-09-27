@@ -28,7 +28,7 @@ impl log::Log for SearchTestLogger {
             return;
         }
         let message = record.args().to_string();
-        if message.starts_with("note_find ") || message.starts_with("meili_projection ") {
+        if message.starts_with("note_find ") {
             SEARCH_LOGS.lock().unwrap().push(message);
         }
     }
@@ -61,6 +61,7 @@ pub(crate) fn test_powersync_db_at(
     schema: powersync::schema::Schema,
 ) -> PowerSyncDatabase {
     PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    flicknote_core::sqlite_extension::register_better_trigram().unwrap();
     let pool = ConnectionPool::open(path).unwrap();
     let env = PowerSyncEnvironment::custom(
         reqwest::Client::new(),

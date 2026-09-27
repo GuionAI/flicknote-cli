@@ -196,9 +196,8 @@ pub(super) struct NoteRecallParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NoteCountParams {
-    #[serde(default)]
-    pub keywords: Vec<String>,
     pub project: Option<String>,
     #[serde(rename = "type")]
     pub note_type: Option<CountNoteType>,

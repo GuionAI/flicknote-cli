@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use flicknote_core::services::dto::{
     ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, NoteSummary,
-    ProjectDto, SectionDto,
+    ProjectDto, SearchHit, SectionDto,
 };
 use flicknote_core::services::source::SourceResult;
 use rmcp::handler::server::tool::schema_for_output;
@@ -55,6 +55,11 @@ pub(super) struct McpEntityListResult {
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct McpNoteListResult {
     pub notes: Vec<NoteListItem>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct McpSearchResult {
+    pub hits: Vec<SearchHit>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]

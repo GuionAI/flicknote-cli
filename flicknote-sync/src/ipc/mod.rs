@@ -6,7 +6,8 @@ use flicknote_core::services::dto::{
     InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail,
     NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteRecord,
     NoteRouteProjectInput, NoteRouteProjectResult, NoteSectionResult, NoteSummary, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult, UnshareResult,
+    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, SearchHit, ShareResult,
+    UnshareResult,
 };
 use flicknote_core::services::editable_document::EditableSaveResult;
 use flicknote_core::services::error::ServiceError;

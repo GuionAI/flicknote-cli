@@ -5,8 +5,8 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::NoteService;
 use flicknote_core::services::ports::{NoteCreator, ProjectAssignmentEventSink, ShareGateway};
 
+use crate::fts_search::FtsSearchService;
 use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
-use crate::search::SearchProjection;
 
 mod note;
 mod project;
@@ -17,7 +17,7 @@ pub struct Application {
     share_gateway: Arc<dyn ShareGateway>,
     assignment_events: Option<Arc<dyn ProjectAssignmentEventSink>>,
     web_url: Option<String>,
-    search: Option<SearchProjection>,
+    search: Option<FtsSearchService>,
 }
 
 impl Application {
@@ -49,8 +49,8 @@ impl Application {
         self
     }
 
-    pub(crate) fn with_search(mut self, search: Option<SearchProjection>) -> Self {
-        self.search = search;
+    pub fn with_search(mut self, search: FtsSearchService) -> Self {
+        self.search = Some(search);
         self
     }
 

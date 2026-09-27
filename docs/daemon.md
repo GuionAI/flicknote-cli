@@ -11,29 +11,38 @@ The daemon owns the local PowerSync SQLite database and its Unix IPC socket.
 Data commands and MCP use IPC only; they never start a service implicitly or
 open the database directly.
 
-## Search projection
+## Search index
 
-PowerSync/SQLite remains the canonical note store. The daemon owns a disposable
-Meilisearch projection for unfiltered keyword `find` queries up to 1,000 hits,
-maintained from PowerSync's reactive note-table watcher. Its initial snapshot rebuilds the
-index; later snapshots update changed notes and remove archived notes. Other
-find shapes (project, archive, or extraction filters) retain the canonical
-SQLite path. All Meilisearch hits are hydrated from SQLite before returning
-the existing CLI/MCP `find` DTO, so clients do not depend on Meilisearch.
+PowerSync/SQLite remains the canonical note store. Before accepting IPC
+requests, the daemon registers better-trigram and prepares an FTS5 index on
+PowerSync's pinned `ps_data__notes` backing table. SQLite triggers update the
+index in the same transaction as local writes and remote downloads. Existing
+indexes are reused on restart; missing or invalid indexes are rebuilt from
+canonical rows. Search startup errors prevent the daemon from advertising
+readiness.
 
-The daemon starts Meilisearch as a foreground child bound to `127.0.0.1:7702`.
-`FLICKNOTE_MEILI_PORT` overrides that port; invalid values degrade search to
-SQLite. The child uses private state below FlickNote's data directory, is
-terminated and waited for on normal daemon shutdown, and has no separate
-service installation. The generated Homebrew formula installs Meilisearch as
-a runtime dependency; source installs without it continue to work with SQLite
-search. A failed or rebuilding projection never invalidates canonical note
-operations. `daemon status --verbose` reports search readiness and the tracked
-active-document count from the canonical projection snapshot. Daemon logs record
-the actual `note_find` backend (`meili` or `sqlite`), SQLite routing/fallback
-reason, and projection rebuild/delta counts without query text or note content.
-Transient projection failures retry with bounded backoff and rebuild from the
-canonical snapshot.
+Lexical `find` queries use FTS5 candidate retrieval, title/summary/content
+coverage ranking (3/2/1), and one set-based snippet query. Lexical hits contain
+a segmented snippet; structured-only hits may have empty snippet segments.
+There is no per-hit note lookup. The final Latin term uses prefix matching from
+two characters; a single Latin character alone returns no results. CJK
+characters use indexed tokens. Project filtering stays in this path.
+Extraction-only queries use canonical SQLite filtering; lexical terms cannot
+be combined with extraction or archived filters. The CLI
+and MCP return the same dedicated search result shape. Daemon logs identify
+`fts` or `structured` routing without recording the query or note content.
+`note_count` stays on canonical SQLite and accepts only project, type, and
+archived filters; it does not count lexical matches.
+
+The FTS index follows the local database's ownership and does not apply a
+separate `user_id` filter. Reusing one database across accounts is outside this
+search contract. `flicknote logout` removes the local database; `login --force`
+retains it. Lexical search also does not combine with extraction filters or
+search archived notes; use extraction-only search for archived filtering.
+
+The local FTS projection carries an explicit `FTS_SCHEMA_VERSION`. Startup
+discards and rebuilds it when the version differs or a required maintenance
+trigger is missing, even if the index and source have equal row counts.
 
 ## Authentication symmetry
 

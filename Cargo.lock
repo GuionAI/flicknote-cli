@@ -753,9 +753,11 @@ name = "flicknote-core"
 version = "1.8.0"
 dependencies = [
  "async-trait",
+ "cc",
  "chrono",
  "dirs 6.0.0",
  "flicknote-auth",
+ "libsqlite3-sys",
  "log",
  "powersync",
  "pulldown-cmark",
@@ -776,6 +778,7 @@ name = "flicknote-sync"
 version = "1.8.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "flicknote-auth",
  "flicknote-core",

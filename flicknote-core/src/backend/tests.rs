@@ -448,68 +448,6 @@ async fn local_backend_list_filter() {
 }
 
 #[tokio::test]
-async fn local_backend_search_notes() {
-    let backend = make_backend().await;
-    let now = chrono::Utc::now().to_rfc3339();
-
-    let id = uuid::Uuid::new_v4().to_string();
-    backend
-        .insert_note(&InsertNoteReq {
-            id: &id,
-            note_type: "normal",
-            status: "ai_queued",
-            title: Some("Unique searchable title"),
-            content: Some("some body text"),
-            metadata: None,
-            project_id: None,
-            now: &now,
-        })
-        .await
-        .unwrap();
-
-    let results = backend
-        .search_notes(
-            &["Unique".to_string()],
-            &NoteFilter {
-                project_id: None,
-                no_project: false,
-                created_after_micros: None,
-                created_before_micros: None,
-                note_type: None,
-                status: None,
-                archived: false,
-                shared: false,
-                limit: 20,
-                cursor: None,
-            },
-        )
-        .await
-        .unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, id);
-
-    // Empty keywords should return Err
-    let err = backend
-        .search_notes(
-            &[],
-            &NoteFilter {
-                project_id: None,
-                no_project: false,
-                created_after_micros: None,
-                created_before_micros: None,
-                note_type: None,
-                status: None,
-                archived: false,
-                shared: false,
-                limit: 20,
-                cursor: None,
-            },
-        )
-        .await;
-    assert!(err.is_err());
-}
-
-#[tokio::test]
 async fn local_backend_search_notes_matches_all_extraction_filters() {
     let backend = make_backend().await;
     let now = chrono::Utc::now().to_rfc3339();
@@ -563,7 +501,6 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
     let results = backend
         .search_notes_structured(
             &NoteSearch {
-                keywords: vec!["Whisper".to_string()],
                 extractions: vec![
                     MetadataFilter {
                         key: TOPIC_EXTRACTION_KEY.to_string(),
@@ -622,7 +559,6 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
     let results = backend
         .search_notes_structured(
             &NoteSearch {
-                keywords: Vec::new(),
                 extractions: vec![MetadataFilter {
                     key: "::company".to_string(),
                     value: "OpenAI".to_string(),
@@ -1291,7 +1227,7 @@ async fn local_backend_list_extraction_values_dedupes_and_sorts() {
 }
 
 #[tokio::test]
-async fn local_backend_search_respects_type_filter() {
+async fn local_backend_count_respects_type_filter() {
     let backend = make_backend().await;
     let now = chrono::Utc::now().to_rfc3339();
 
@@ -1325,27 +1261,23 @@ async fn local_backend_search_respects_type_filter() {
         .await
         .unwrap();
 
-    let results = backend
-        .search_notes(
-            &["Shared".to_string()],
-            &NoteFilter {
-                project_id: None,
-                no_project: false,
-                created_after_micros: None,
-                created_before_micros: None,
-                note_type: Some("link"),
-                status: None,
-                archived: false,
-                shared: false,
-                limit: 20,
-                cursor: None,
-            },
-        )
+    let count = backend
+        .count_notes(&NoteFilter {
+            project_id: None,
+            no_project: false,
+            created_after_micros: None,
+            created_before_micros: None,
+            note_type: Some("link"),
+            status: None,
+            archived: false,
+            shared: false,
+            limit: 20,
+            cursor: None,
+        })
         .await
         .unwrap();
 
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].id, link_id);
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]

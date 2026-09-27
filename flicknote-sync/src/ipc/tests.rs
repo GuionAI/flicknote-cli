@@ -68,7 +68,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 12);
+    assert_eq!(PROTOCOL_VERSION, 13);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -76,7 +76,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
         serde_json::to_value(health).unwrap(),
         json!({
             "type": "health",
-            "payload": { "protocol": 12 }
+            "payload": { "protocol": 13 }
         })
     );
 
@@ -97,7 +97,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
     };
     let value = serde_json::to_value(request).unwrap();
     assert_eq!(value["type"], "app");
-    assert_eq!(value["payload"]["protocol"], 12);
+    assert_eq!(value["payload"]["protocol"], 13);
     assert!(value["payload"].get("surface").is_none());
     assert_eq!(value["payload"]["request"]["type"], "note_list");
     assert_eq!(value["payload"]["request"]["payload"]["status"], "ready");
@@ -105,7 +105,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
 }
 
 #[test]
-fn protocol_v12_uses_typed_project_contracts() {
+fn protocol_v13_uses_typed_project_contracts() {
     let project = ProjectDto {
         id: "project-id".to_string(),
         name: "Work".to_string(),
@@ -146,7 +146,7 @@ fn server_info_reports_precise_runtime_status_contract() {
     assert_eq!(
         serde_json::to_value(&info).unwrap(),
         json!({
-            "protocol": 12,
+            "protocol": 13,
             "version": env!("CARGO_PKG_VERSION"),
             "executable": info.executable,
             "sync_errors": {
@@ -249,7 +249,6 @@ async fn daemon_client_preserves_versioned_app_results_and_errors() {
     .await;
     let response = DaemonClient::new(&config)
         .app(AppRequest::NoteCount(NoteCountInput {
-            keywords: Vec::new(),
             project: None,
             note_type: None,
             archived: false,
@@ -299,19 +298,18 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v12_client_rejects_protocol_v11_server_info() {
+async fn protocol_v13_client_rejects_protocol_v12_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 11,
+            protocol: 12,
             version: "legacy".to_string(),
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
             sync_errors: PowerSyncErrors::default(),
             search: None,
-            search_documents: None,
         }),
     )
     .await;
@@ -321,22 +319,13 @@ async fn protocol_v12_client_rejects_protocol_v11_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 12",
+        "CLI version {} protocol 13",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
-    assert!(message.contains("daemon version legacy protocol 11"));
+    assert!(message.contains("daemon version legacy protocol 12"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
-}
-
-#[test]
-fn server_info_accepts_missing_search_document_count() {
-    let mut value = serde_json::to_value(ServerInfo::current()).unwrap();
-    value.as_object_mut().unwrap().remove("search_documents");
-    let info: ServerInfo = serde_json::from_value(value).unwrap();
-    assert_eq!(info.protocol, PROTOCOL_VERSION);
-    assert_eq!(info.search_documents, None);
 }
 
 #[tokio::test]
@@ -387,7 +376,6 @@ async fn application_maps_unknown_envelope_to_protocol_mismatch() {
 
     let error = DaemonClient::new(&config)
         .app(AppRequest::NoteCount(NoteCountInput {
-            keywords: Vec::new(),
             project: None,
             note_type: None,
             archived: false,
@@ -436,7 +424,6 @@ async fn malformed_transport_responses_are_classified_by_mutation_safety() {
         ),
         (
             AppRequest::NoteCount(NoteCountInput {
-                keywords: Vec::new(),
                 project: None,
                 note_type: None,
                 archived: false,
@@ -474,7 +461,6 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
     .await;
     let error = DaemonClient::new(&config)
         .call::<u64>(AppRequest::NoteCount(NoteCountInput {
-            keywords: Vec::new(),
             project: None,
             note_type: None,
             archived: false,

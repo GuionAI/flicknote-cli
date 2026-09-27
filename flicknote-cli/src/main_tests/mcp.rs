@@ -9,7 +9,9 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
 };
+use flicknote_core::sqlite_extension::register_better_trigram;
 use flicknote_sync::app::Application;
+use flicknote_sync::fts_search::FtsSearchService;
 use flicknote_sync::ipc::{ServerInfo, serve_app, socket_path};
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 use rmcp::ServiceExt;
@@ -78,13 +80,16 @@ impl McpHarness {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
         let (backend, database, note_uuid, alpha_id) = seeded_backend(&config).await;
+        let search = FtsSearchService::new(database.clone());
+        search.prepare().await.unwrap();
         let creator: Arc<dyn NoteCreator> = Arc::new(PersistingCreator {
             db: backend.clone(),
             database,
         });
         let app = Arc::new(
             Application::new(backend, creator, Arc::new(UnusedShareGateway))
-                .with_web_url(config.web_url.clone()),
+                .with_web_url(config.web_url.clone())
+                .with_search(search),
         );
         let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
         let daemon = tokio::spawn(async move {
@@ -185,6 +190,7 @@ fn test_database(config: &Config) -> PowerSyncDatabase {
     }
 
     PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    register_better_trigram().unwrap();
     let pool = ConnectionPool::open(&config.paths.db_file).unwrap();
     let environment =
         PowerSyncEnvironment::custom(NoHttp, pool, PowerSyncEnvironment::tokio_timer());
@@ -452,6 +458,7 @@ async fn mcp_server_exposes_stable_tool_contract() {
         count["inputSchema"]["$defs"]["NoteType"]["enum"],
         serde_json::json!(["normal", "meeting", "link", "file"])
     );
+    assert!(count["inputSchema"]["properties"].get("keywords").is_none());
     for tool in tools.iter().filter(|tool| {
         tool["name"]
             .as_str()
@@ -644,19 +651,22 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
         list["outputSchema"]["properties"]["notes"]["items"].is_object(),
         "note_list outputSchema must advertise the notes array item schema"
     );
-    for name in ["note_list", "note_find"] {
-        let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
-        let item = &tool["outputSchema"]["properties"]["notes"]["items"];
-        assert_eq!(item["$ref"], "#/$defs/NoteListItem");
-        let item = &tool["outputSchema"]["$defs"]["NoteListItem"];
-        assert_eq!(item["properties"]["content_bytes"]["type"], "integer");
-        assert!(
-            item["required"]
-                .as_array()
-                .unwrap()
-                .contains(&serde_json::json!("content_bytes"))
-        );
-    }
+    let item = &list["outputSchema"]["properties"]["notes"]["items"];
+    assert_eq!(item["$ref"], "#/$defs/NoteListItem");
+    let item = &list["outputSchema"]["$defs"]["NoteListItem"];
+    assert_eq!(item["properties"]["content_bytes"]["type"], "integer");
+    let find = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_find")
+        .unwrap();
+    assert_eq!(
+        find["outputSchema"]["properties"]["hits"]["items"]["$ref"],
+        "#/$defs/SearchHit"
+    );
+    let hit = &find["outputSchema"]["$defs"]["SearchHit"];
+    assert!(hit["properties"]["snippet"].is_object());
+    assert!(hit["properties"].get("score").is_none());
+    assert!(hit["properties"].get("content").is_none());
     let projects = tools
         .iter()
         .find(|tool| tool["name"] == "project_list")
@@ -1057,9 +1067,18 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
     let found = harness
         .call("note_find", serde_json::json!({ "keywords": ["MCP"] }))
         .await;
-    let found_note = &found["result"]["structuredContent"]["notes"][0];
-    assert_note_list_item_contract(found_note);
-    assert_eq!(found_note, listed_note);
+    let found_note = &found["result"]["structuredContent"]["hits"][0];
+    assert_eq!(found_note["short_id"], 42);
+    assert_eq!(found_note["title"], "MCP Note");
+    assert!(
+        found_note["snippet"]["segments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|segment| segment["highlighted"] == true)
+    );
+    assert!(found_note.get("content").is_none());
+    assert!(found_note.get("score").is_none());
 
     let fetched = harness
         .call("note_get", serde_json::json!({ "id": 42 }))
@@ -1090,6 +1109,43 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
             .as_str()
             .unwrap()
             .contains("invalid note ID")
+    );
+}
+
+#[tokio::test]
+async fn mcp_find_keeps_extraction_only_queries_and_rejects_mixed_queries() {
+    let mut harness = McpHarness::start().await;
+    let structured = harness
+        .call(
+            "note_find",
+            serde_json::json!({ "extractions": [{"key": "::topic", "value": "AI"}] }),
+        )
+        .await;
+    assert_eq!(structured["result"]["isError"], false);
+    assert_eq!(
+        structured["result"]["structuredContent"]["hits"][0]["short_id"],
+        42
+    );
+    assert_eq!(
+        structured["result"]["structuredContent"]["hits"][0]["snippet"]["segments"],
+        serde_json::json!([])
+    );
+
+    let mixed = harness
+        .call(
+            "note_find",
+            serde_json::json!({
+                "keywords": ["MCP"],
+                "extractions": [{"key": "::topic", "value": "AI"}]
+            }),
+        )
+        .await;
+    assert_eq!(mixed["result"]["isError"], true);
+    assert!(
+        mixed["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("cannot combine")
     );
 }
 
@@ -1166,7 +1222,7 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
         )
         .await;
     assert_eq!(
-        found["result"]["structuredContent"]["notes"]
+        found["result"]["structuredContent"]["hits"]
             .as_array()
             .unwrap()
             .len(),

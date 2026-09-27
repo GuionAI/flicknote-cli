@@ -106,6 +106,45 @@ pub struct NoteListItem {
     pub deleted_at: Option<String>,
 }
 
+/// Dedicated result of a note search. Content is represented only by a
+/// readable, segmented excerpt; ranking score and raw source stay internal.
+/// Lexical hits contain a snippet. Structured-only hits may have empty segments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchHit {
+    pub short_id: Option<i64>,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub project_id: Option<String>,
+    pub snippet: SearchSnippet,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchSnippet {
+    pub segments: Vec<SnippetSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SnippetSegment {
+    pub text: String,
+    pub highlighted: bool,
+}
+
+impl From<NoteListItem> for SearchHit {
+    fn from(note: NoteListItem) -> Self {
+        Self {
+            short_id: note.id,
+            title: note.title,
+            summary: note.summary,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            project_id: note.project_id,
+            snippet: SearchSnippet::default(),
+        }
+    }
+}
+
 impl From<NoteSummary> for NoteListItem {
     fn from(note: NoteSummary) -> Self {
         Self {
@@ -323,9 +362,8 @@ pub struct NoteAddInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct NoteCountInput {
-    #[serde(default)]
-    pub keywords: Vec<String>,
     pub project: Option<String>,
     #[serde(rename = "type")]
     pub note_type: Option<String>,
@@ -366,7 +404,26 @@ pub struct OpenResult {
 
 #[cfg(test)]
 mod tests {
-    use super::{NoteCreateResult, NoteListItem, NoteSummary, Patch, ProjectModifyInput};
+    use super::{
+        NoteCountInput, NoteCreateResult, NoteListItem, NoteSummary, Patch, ProjectModifyInput,
+    };
+
+    #[test]
+    fn note_count_accepts_only_structural_filters() {
+        let input: NoteCountInput = serde_json::from_value(serde_json::json!({
+            "project": "work", "type": "normal", "archived": true
+        }))
+        .unwrap();
+        assert_eq!(input.project.as_deref(), Some("work"));
+        assert_eq!(input.note_type.as_deref(), Some("normal"));
+        assert!(input.archived);
+        assert!(
+            serde_json::from_value::<NoteCountInput>(serde_json::json!({
+                "keywords": ["work"]
+            }))
+            .is_err()
+        );
+    }
 
     #[test]
     fn project_patch_distinguishes_missing_null_and_value() {

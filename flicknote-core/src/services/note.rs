@@ -206,16 +206,15 @@ impl<'a> NoteService<'a> {
     }
 
     pub async fn find(&self, input: NoteFindInput) -> Result<Vec<NoteListItem>, ServiceError> {
-        if input.keywords.is_empty() && input.extractions.is_empty() {
+        if !input.keywords.is_empty() || input.extractions.is_empty() {
             return Err(ServiceError::InvalidArgument(
-                "at least one keyword or extraction filter is required".to_string(),
+                "canonical find requires extraction filters only".to_string(),
             ));
         }
         let project_id = self
             .resolve_project_filter(input.project.as_deref())
             .await?;
         let search = NoteSearch {
-            keywords: input.keywords,
             extractions: input
                 .extractions
                 .into_iter()
@@ -246,20 +245,6 @@ impl<'a> NoteService<'a> {
         let mut items = Vec::with_capacity(notes.len());
         for note in notes {
             items.push(self.list_item(note).await?);
-        }
-        Ok(items)
-    }
-
-    /// Hydrate ranked search identifiers from canonical storage. A projection
-    /// can lag canonical deletion; missing hits are deliberately skipped.
-    pub async fn find_ranked_ids(&self, ids: &[String]) -> Result<Vec<NoteListItem>, ServiceError> {
-        let mut items = Vec::with_capacity(ids.len());
-        for id in ids {
-            match self.db.find_note(id).await {
-                Ok(note) => items.push(self.list_item(note).await?),
-                Err(crate::error::CliError::NoteNotFound { .. }) => {}
-                Err(error) => return Err(error.into()),
-            }
         }
         Ok(items)
     }
@@ -309,10 +294,7 @@ impl<'a> NoteService<'a> {
             limit: u32::MAX,
             cursor: None,
         };
-        if input.keywords.is_empty() {
-            return Ok(self.db.count_notes(&filter).await?);
-        }
-        Ok(self.db.search_notes(&input.keywords, &filter).await?.len() as u64)
+        Ok(self.db.count_notes(&filter).await?)
     }
 
     pub async fn add(
@@ -1753,7 +1735,6 @@ mod tests {
 
         let count = service
             .count(NoteCountInput {
-                keywords: vec!["PowerSync".to_string()],
                 project: None,
                 note_type: None,
                 archived: false,
@@ -1761,32 +1742,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1);
-    }
-
-    #[tokio::test]
-    async fn ranked_ids_keep_order_and_drop_stale_hits() {
-        let backend = make_backend().await;
-        let first = insert_normal_note(&backend, "first", "ready").await;
-        let second = insert_normal_note(&backend, "second", "draft").await;
-        backend
-            .update_note_title(&first, Some("First"))
-            .await
-            .unwrap();
-        backend
-            .update_note_title(&second, Some("Second"))
-            .await
-            .unwrap();
-        let service = NoteService::new(&*backend);
-
-        let found = service
-            .find_ranked_ids(&[second.clone(), "stale-id".to_string(), first.clone()])
-            .await
-            .unwrap();
-
-        assert_eq!(found.len(), 2);
-        assert_eq!(found[0].title.as_deref(), Some("Second"));
-        assert!(found[0].draft);
-        assert_eq!(found[1].title.as_deref(), Some("First"));
     }
 
     #[tokio::test]
@@ -1825,6 +1780,10 @@ mod tests {
     async fn draft_projection_is_consistent_for_list_find_detail_and_mutation() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "draft searchable body", "draft").await;
+        backend
+            .set_note_extractions(&id, "::topic", &["searchable".to_string()])
+            .await
+            .unwrap();
         let service = NoteService::new(&*backend);
 
         let listed = service
@@ -1844,8 +1803,11 @@ mod tests {
             .unwrap();
         let found = service
             .find(NoteFindInput {
-                keywords: vec!["searchable".to_string()],
-                extractions: Vec::new(),
+                keywords: Vec::new(),
+                extractions: vec![ExtractionFilterDto {
+                    key: "::topic".to_string(),
+                    value: "searchable".to_string(),
+                }],
                 project: None,
                 archived: false,
                 limit: 20,

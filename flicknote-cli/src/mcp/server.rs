@@ -6,8 +6,8 @@ use flicknote_core::error::CliError;
 use flicknote_core::services::dto::{
     NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput,
     NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult,
-    OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, ShareResult,
-    UnshareResult,
+    OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, SearchHit,
+    ShareResult, UnshareResult,
 };
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
@@ -22,8 +22,8 @@ use serde::Serialize;
 
 use super::dto::{
     McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteDetail,
-    McpNoteListResult, McpNoteMutationResult, McpProjectDto, McpProjectListResult, McpSourceResult,
-    McpTopicListResult, source_output_schema,
+    McpNoteListResult, McpNoteMutationResult, McpProjectDto, McpProjectListResult, McpSearchResult,
+    McpSourceResult, McpTopicListResult, source_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
@@ -177,15 +177,15 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_find",
-        description = "Find notes by OR keywords and exact extraction filters.",
+        description = "Find active notes by indexed OR keywords, or use exact extraction filters without keywords (including archived notes). Lexical keywords cannot combine with extraction filters or archived search.",
         annotations(read_only_hint = true)
     )]
     async fn note_find(
         &self,
         Parameters(params): Parameters<NoteFindParams>,
-    ) -> Result<Json<McpNoteListResult>, CallToolResult> {
+    ) -> Result<Json<McpSearchResult>, CallToolResult> {
         structured(
-            self.call::<Vec<NoteListItem>>(AppRequest::NoteFind(NoteFindInput {
+            self.call::<Vec<SearchHit>>(AppRequest::NoteFind(NoteFindInput {
                 keywords: params.keywords,
                 extractions: params.extractions,
                 project: params.project,
@@ -193,7 +193,7 @@ impl FlickNoteMcp {
                 limit: params.limit,
             }))
             .await
-            .map(|notes| McpNoteListResult { notes }),
+            .map(|hits| McpSearchResult { hits }),
         )
     }
 
@@ -218,7 +218,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_count",
-        description = "Count active or archived notes with optional OR keywords, project, and type.",
+        description = "Count active or archived notes with optional project and type filters.",
         annotations(read_only_hint = true)
     )]
     async fn note_count(
@@ -227,7 +227,6 @@ impl FlickNoteMcp {
     ) -> Result<Json<CountResult>, CallToolResult> {
         structured(
             self.call::<u64>(AppRequest::NoteCount(NoteCountInput {
-                keywords: params.keywords,
                 project: params.project,
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
                 archived: params.archived,

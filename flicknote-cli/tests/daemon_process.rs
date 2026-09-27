@@ -1,14 +1,16 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use flicknote_sync::ipc::{DaemonRequest, DaemonResponse, PROTOCOL_VERSION, ServerInfo};
+use flicknote_core::services::dto::NoteFindInput;
+use flicknote_sync::ipc::{
+    AppRequest, AppResponse, DaemonRequest, DaemonResponse, PROTOCOL_VERSION, ServerInfo,
+};
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 use rusqlite::params;
 use serde_json::json;
@@ -18,7 +20,6 @@ struct DaemonProcess {
     _directory: TempDir,
     config_home: PathBuf,
     data_home: PathBuf,
-    meili_port: u16,
     child: Child,
 }
 
@@ -62,16 +63,11 @@ impl DaemonProcess {
             seed_canonical_note(&data_home);
         }
 
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let meili_port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         let child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
             .args(["daemon", "run"])
             .env("XDG_CONFIG_HOME", &config_home)
             .env("XDG_DATA_HOME", &data_home)
             .env("FLICKNOTE_ENV", "dev")
-            .env("FLICKNOTE_MEILI_PORT", meili_port.to_string())
             .process_group(0)
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -81,7 +77,6 @@ impl DaemonProcess {
             _directory: directory,
             config_home,
             data_home,
-            meili_port,
             child,
         }
     }
@@ -149,6 +144,33 @@ impl DaemonProcess {
         }
     }
 
+    fn find(&self, keyword: &str) -> Vec<flicknote_core::services::dto::SearchHit> {
+        let mut stream = UnixStream::connect(self.socket()).unwrap();
+        let request = DaemonRequest::App {
+            protocol: PROTOCOL_VERSION,
+            request: Box::new(AppRequest::NoteFind(NoteFindInput {
+                keywords: vec![keyword.to_owned()],
+                extractions: Vec::new(),
+                project: None,
+                archived: false,
+                limit: 20,
+            })),
+        };
+        stream
+            .write_all(&serde_json::to_vec(&request).unwrap())
+            .unwrap();
+        stream.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        match serde_json::from_slice::<DaemonResponse>(&response).unwrap() {
+            DaemonResponse::App(app) => match *app {
+                AppResponse::SearchHits(hits) => hits,
+                other => panic!("unexpected find response: {other:?}"),
+            },
+            other => panic!("unexpected daemon response: {other:?}"),
+        }
+    }
+
     #[allow(unsafe_code)]
     fn signal(&mut self, signal: libc::c_int) -> DaemonExit {
         let result = unsafe { libc::kill(self.child.id() as libc::pid_t, signal) };
@@ -196,38 +218,33 @@ fn seed_canonical_note(data_home: &std::path::Path) {
     runtime.block_on(async {
         let writer = db.writer().await.unwrap();
         writer.execute(
-            "INSERT INTO notes (id, user_id, type, status, title, content) VALUES (?, 'daemon-process-test-user', 'normal', 'ready', 'Seed', 'Stored body')",
+            "INSERT INTO notes (id, short_id, user_id, type, status, title, content) VALUES (?, 77, 'daemon-process-test-user', 'normal', 'ready', 'Seed', 'Stored body')",
             params![uuid::Uuid::new_v4().to_string()],
         ).unwrap();
     });
 }
 
 #[test]
-fn seeded_daemon_reports_ready_projection_with_one_document() {
-    if Command::new("meilisearch")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        return;
-    }
+fn seeded_daemon_uses_fts_without_meilisearch_and_reopens_index() {
     let mut process = DaemonProcess::start_with_seed(true);
     process.wait_ready();
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        let info = process.info().unwrap();
-        if info.search.as_deref() == Some("ready") && info.search_documents == Some(1) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "projection did not become ready: {:?} documents {:?}",
-            info.search,
-            info.search_documents
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    assert_eq!(process.info().unwrap().search.as_deref(), Some("ready"));
+    let hits = process.find("Stor");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].short_id, Some(77));
+    assert!(
+        hits[0]
+            .snippet
+            .segments
+            .iter()
+            .any(|segment| segment.highlighted)
+    );
+    assert!(process.find("S").is_empty());
     assert!(process.signal(libc::SIGTERM).success());
+    let mut reopened = start_with_roots(&process);
+    reopened.wait_ready();
+    assert_eq!(reopened.find("Stor").len(), 1);
+    assert!(reopened.signal(libc::SIGTERM).success());
 }
 
 impl Drop for DaemonProcess {
@@ -266,7 +283,6 @@ fn start_with_roots(process: &DaemonProcess) -> DaemonProcess {
         .env("XDG_CONFIG_HOME", &process.config_home)
         .env("XDG_DATA_HOME", &process.data_home)
         .env("FLICKNOTE_ENV", "dev")
-        .env("FLICKNOTE_MEILI_PORT", process.meili_port.to_string())
         .process_group(0)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -276,7 +292,6 @@ fn start_with_roots(process: &DaemonProcess) -> DaemonProcess {
         _directory: tempfile::tempdir().unwrap(),
         config_home: process.config_home.clone(),
         data_home: process.data_home.clone(),
-        meili_port: process.meili_port,
         child,
     }
 }
