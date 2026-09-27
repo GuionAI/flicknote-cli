@@ -16,8 +16,7 @@ use tantivy::snippet::SnippetGenerator;
 use tantivy::tokenizer::{LowerCaser, NgramTokenizer, TextAnalyzer};
 use tantivy::{Index, TantivyDocument, Term};
 
-mod coverage;
-mod prefix;
+use flicknote_tantivy::{coverage, prefix};
 mod probe;
 
 #[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq)]

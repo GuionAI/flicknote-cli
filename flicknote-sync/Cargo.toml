@@ -13,6 +13,8 @@ dist = false
 [dependencies]
 flicknote-core = { path = "../flicknote-core" }
 flicknote-auth = { path = "../flicknote-auth" }
+flicknote-tantivy = { path = "../flicknote-tantivy" }
+tantivy = { workspace = true }
 powersync = { workspace = true }
 rusqlite = { workspace = true }
 async-trait = { workspace = true }

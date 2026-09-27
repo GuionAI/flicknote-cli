@@ -7,6 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
+flicknote-tantivy = { path = "../../../flicknote-tantivy" }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

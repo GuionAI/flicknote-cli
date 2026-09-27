@@ -312,6 +312,50 @@ incomplete input Miss@5 0/28 and complete controls 0/13. Incomplete-input
 median including final snippets: 11.37 ms at 2,445 notes and
 13.33 ms at 9,780 duplicated notes. Single-character misses were
 2/13 and 5/13 respectively; duplicate crowding is visible here. All returned
-snippets in these labeled groups were non-null. The current experiment is
-715 production-path/script lines and 176 integration-test lines, counted
-physically including whitespace/comments; this is not the production daemon LOC.
+snippets in these labeled groups were non-null. Before Slice A extraction, the
+experiment was 715 production-path/script lines and 176 integration-test lines,
+counted physically including whitespace/comments; this is not the production
+daemon LOC.
+
+## Slice A: embedded projection validation (2026-09-27)
+
+The daemon now owns a disposable Tantivy projection. This measurement used an
+isolated SQLite backup of the then-current KB (2,463 active notes, 16.86 MiB of
+UTF-8 title, summary, and content). The release daemon ran with a synthetic
+session and loopback-only service endpoints; Meilisearch was disabled. The real
+KB, session, service, and installed executable were not changed. The index was
+rebuilt at every daemon start, and the query code used by the benchmark and
+daemon is now shared in `flicknote-tantivy`.
+
+| Observation | Release build on isolated KB backup |
+| --- | ---: |
+| Cold rebuild, watcher snapshot to Ready | 12.4 s |
+| Index bytes immediately at Ready | 82.9 MiB |
+| Index bytes after asynchronous merge settled | 45.1–48.0 MiB across two runs |
+| Daemon RSS before rebuild | 37.6 MiB |
+| Peak daemon RSS during rebuild | 210.9 MiB |
+| RSS at Ready with writer retained | 209.3 MiB |
+| Settled RSS with writer retained | 175.0 MiB (137.5 MiB over the 37.5 MiB baseline in that run) |
+| One-note update to searchable | 321 ms (commit/reload: 119 ms) |
+| One-note archive to absent | 178 ms |
+| 100-note update burst to searchable | 1.15 s (commit/reload: 893 ms) |
+| 1,000-note update burst to searchable | 26.5 s (commit/reload: 17.0 s) |
+| Corrupt prior `meta.json` then restart to Ready | 12.7 s |
+| Kill during rebuild then restart to Ready | 15.7 s (concurrent build load) |
+| Indexed document count after each rebuild | 2,463, matching the canonical active count |
+
+The update measurements modified only a second disposable copy of the snapshot.
+Each burst appended a distinct marker to 100 or 1,000 active titles with one
+SQLite statement through PowerSync's writer; visibility was timed from the
+write through the projection watcher, commit, reader reload, and marker query.
+The numbers are single runs, not latency percentiles. The 1,000-note burst is
+slower than a full rebuild; it is evidence to revisit batch strategy if this
+write pattern becomes common. The settled disk and RSS values were measured
+after Tantivy's background merge; the Ready log samples them earlier.
+
+The private `.local/` query fixture was unavailable in this checkout, so target
+ranks could not be compared on the current KB. The tracked coverage and prefix
+integration cases passed with the extracted shared query modules. Pure query
+and query-plus-snippet times from the earlier benchmark are separate from the
+above daemon projection and update measurements. End-to-end `find` latency is
+reserved for Slice B.

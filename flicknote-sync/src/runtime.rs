@@ -25,6 +25,7 @@ use crate::project_assignment_events::JsonlProjectAssignmentEventSink;
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
 use crate::search;
 use crate::storage_maintenance::{WalCheckpointMode, checkpoint_wal_standalone_with_timeout};
+use crate::tantivy_projection;
 use crate::upload::FlickNoteConnector;
 
 const IPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
@@ -68,6 +69,7 @@ struct ActorHandles {
     socket: JoinHandle<Result<(), ipc::DaemonError>>,
     powersync: JoinSet<()>,
     search: Option<JoinHandle<()>>,
+    tantivy: JoinHandle<()>,
 }
 
 struct StartupSignals {
@@ -218,6 +220,12 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
         shutdown_rx.clone(),
     );
     let search_projection = search.as_ref().map(|(projection, _)| projection.clone());
+    let (_, tantivy) = tantivy_projection::start(
+        db.clone(),
+        backend.user_id().to_string(),
+        config.paths.data_dir.join("tantivy"),
+        shutdown_rx.clone(),
+    );
     let app = build_application(backend, &db, &auth, &config, search_projection.clone());
     let socket = spawn_socket_server(socket_listener, app, &db, search_projection, shutdown_rx);
     let mut actors = ActorHandles {
@@ -225,6 +233,7 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
         socket,
         powersync: powersync_tasks,
         search: search.map(|(_, task)| task),
+        tantivy,
     };
 
     let result = wait_for_shutdown(&mut actors, &startup_signals).await;
@@ -594,6 +603,13 @@ async fn shutdown_daemon(
         .await;
         search.abort();
     }
+    let _stage = run_shutdown_stage("stop Tantivy projection", Duration::from_secs(6), async {
+        (&mut actors.tantivy)
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    actors.tantivy.abort();
 
     let operations = RuntimeShutdownOperations { db, db_path };
     let _stage_results = run_storage_shutdown(
@@ -707,6 +723,7 @@ mod tests {
             socket: tokio::spawn(std::future::pending()),
             powersync,
             search: None,
+            tantivy: tokio::spawn(std::future::pending()),
         };
 
         let error = wait_for_runtime_event(&mut actors, std::future::pending())

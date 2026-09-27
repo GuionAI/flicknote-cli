@@ -4,6 +4,7 @@ members = [
     "flicknote-auth",
     "flicknote-cli",
     "flicknote-sync",
+    "flicknote-tantivy",
 ]
 resolver = "3"
 
@@ -35,6 +36,8 @@ toml = "0.8"
 dirs = "6"
 service-manager = "0.11"
 fs4 = "1.1"
+# Upstream #3034 upgrades lru past RUSTSEC-2026-0253.
+tantivy = { git = "https://github.com/quickwit-oss/tantivy", rev = "5ca39332002c2c87fb5d2abc707cf527b3319d42", default-features = false, features = ["mmap", "lz4-compression"] }
 
 [workspace.lints.rust]
 unsafe_code = "warn"

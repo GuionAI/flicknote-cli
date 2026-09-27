@@ -1,0 +1,18 @@
+[package]
+name = "flicknote-tantivy"
+version.workspace = true
+edition = "2024"
+publish = false
+license = "MIT"
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+tantivy = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -7,6 +7,7 @@ mod remote;
 mod runtime;
 mod search;
 mod storage_maintenance;
+mod tantivy_projection;
 mod upload;
 
 pub use runtime::{DaemonRunError, run};
