@@ -17,7 +17,8 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
-use rmcp::{Json, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
+use rmcp::service::RequestContext;
+use rmcp::{Json, RoleServer, ServerHandler, ServiceExt, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
@@ -146,11 +147,28 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
     result.map(Json).map_err(|error| tool_error(&error))
 }
 
+fn mcp_created_by(context: &RequestContext<RoleServer>) -> String {
+    if context
+        .client_info()
+        .as_ref()
+        .map(|info| info.name.as_str())
+        != Some("codex-mcp-client")
+    {
+        return "mcp".to_string();
+    }
+    context
+        .meta
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|id| uuid::Uuid::parse_str(id).ok())
+        .map_or_else(|| "mcp:codex".to_string(), |id| format!("mcp:codex:{id}"))
+}
+
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
     #[tool(
         name = "note_list",
-        description = "List active or archived notes with optional type, lifecycle status, project, and creation-time filters.",
+        description = "List active or archived notes with optional type, lifecycle status, project, creation-time, and human filters. human=true excludes notes created through MCP.",
         annotations(read_only_hint = true)
     )]
     async fn note_list(
@@ -165,6 +183,7 @@ impl FlickNoteMcp {
                 no_project: params.no_project,
                 created_after: params.created_after,
                 created_before: params.created_before,
+                human: params.human,
                 archived: params.archived,
                 shared: false,
                 limit: params.limit,
@@ -363,6 +382,7 @@ impl FlickNoteMcp {
     async fn note_add(
         &self,
         Parameters(params): Parameters<NoteAddParams>,
+        context: RequestContext<RoleServer>,
     ) -> Result<Json<NoteCreateResult>, CallToolResult> {
         structured(
             self.call::<NoteCreateResult>(AppRequest::NoteAdd(NoteAddInput {
@@ -371,6 +391,7 @@ impl FlickNoteMcp {
                 interpret_as_url: true,
                 draft: params.draft,
                 topics: Vec::new(),
+                created_by: Some(mcp_created_by(&context)),
                 created_at: None,
             }))
             .await,

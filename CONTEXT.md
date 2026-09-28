@@ -59,3 +59,13 @@ _Avoid_: Result array, batch
 **Note-list cursor**:
 The short ID from the final item of a note-list page. It selects later pages of the same list, whose notes have lower short IDs.
 _Avoid_: Offset, page number, opaque token
+
+## Note provenance
+
+**MCP-created note**:
+A note created through the FlickNote MCP interface, regardless of who wrote its content. Its `created_by` provenance records the MCP origin and, when available, a Codex session.
+_Avoid_: AI-authored note
+
+**Human-filtered note**:
+A note without MCP `created_by` provenance. This includes older notes whose creation channel was not recorded; it does not prove a person authored the content.
+_Avoid_: Human-authored note

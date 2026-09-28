@@ -49,6 +49,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(),
             interpret_as_url: args.value.is_some(),
             draft: args.draft,
             topics: Vec::new(),
+            created_by: None,
             created_at: None,
         }))
         .await?;

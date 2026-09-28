@@ -39,12 +39,12 @@ log = "0.4"
 rmcp = { version = "3.1.0", default-features = false, features = ["server", "transport-io", "macros"] }
 schemars = "1"
 httpdate = "1.0.3"
+uuid = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 powersync = { workspace = true }
 rusqlite = { workspace = true }
-uuid = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
 
 [lints]

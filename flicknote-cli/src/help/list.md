@@ -5,6 +5,7 @@ Examples:
   flicknote list --created-after 2026-09-24T04:00:00+08:00 --created-before 2026-09-25T04:00:00+08:00
   flicknote list --type link
   flicknote list --status ready
+  flicknote list --human
   flicknote list --limit 50
   flicknote list --limit 50 --cursor 123
   flicknote list --archived
@@ -20,6 +21,7 @@ note content or internal note UUIDs.
 --created-after is inclusive and --created-before is exclusive. Both accept
 RFC3339 timestamps. --project and --no-project cannot be combined.
 --status accepts draft, ai_queued, source_queued, or ready.
+--human excludes notes with MCP created_by provenance; older unmarked notes are included.
 --shared lists active notes with an unexpired synchronized share. It cannot be
 combined with --archived. Share creation and revocation may appear after sync.
 

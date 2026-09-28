@@ -436,6 +436,7 @@ async fn local_backend_list_filter() {
             created_before_micros: None,
             note_type: None,
             status: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -519,6 +520,7 @@ async fn local_backend_search_notes_matches_all_extraction_filters() {
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -571,6 +573,7 @@ async fn local_backend_search_notes_accepts_structured_only_query() {
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -687,6 +690,7 @@ async fn recall_ids(fixture: &BackendFixture, prompt: &str, limit: u32) -> Vec<i
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit,
@@ -884,6 +888,7 @@ async fn local_backend_recall_matches_entities_with_scope_ordering_and_literal_v
         created_before_micros: None,
         note_type: None,
         status: None,
+        human: false,
         archived: false,
         shared: false,
         limit: 20,
@@ -991,6 +996,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 3,
@@ -1029,6 +1035,7 @@ async fn local_backend_recall_ignores_whitespace_before_limit_and_dedupes_notes(
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -1081,6 +1088,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -1122,6 +1130,7 @@ async fn local_backend_recall_respects_project_filter_and_missing_summary() {
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -1175,6 +1184,7 @@ async fn local_backend_recall_applies_project_scope_to_topic_only_notes() {
                 created_before_micros: None,
                 note_type: None,
                 status: None,
+                human: false,
                 archived: false,
                 shared: false,
                 limit: 20,
@@ -1269,6 +1279,7 @@ async fn local_backend_count_respects_type_filter() {
             created_before_micros: None,
             note_type: Some("link"),
             status: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -1309,6 +1320,7 @@ async fn local_backend_archive() {
             created_before_micros: None,
             note_type: None,
             status: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -1333,6 +1345,7 @@ async fn local_backend_archive() {
             created_before_micros: None,
             note_type: None,
             status: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -1351,6 +1364,7 @@ async fn local_backend_archive() {
             created_before_micros: None,
             note_type: None,
             status: None,
+            human: false,
             archived: true,
             shared: false,
             limit: 20,
@@ -1370,6 +1384,7 @@ async fn local_backend_archive() {
             created_before_micros: None,
             note_type: None,
             status: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -1647,6 +1662,7 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
             status: None,
             created_after_micros: after.map(micros),
             created_before_micros: before.map(micros),
+            human: false,
             archived: false,
             shared: false,
             limit,
@@ -1711,6 +1727,54 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
 }
 
 #[tokio::test]
+async fn human_list_excludes_mcp_created_notes_before_pagination() {
+    let (_directory, db, backend) = make_powersync_backend().await;
+    for (short_id, metadata) in [
+        (201, None),
+        (202, Some(r#"{"created_by":"mcp:codex"}"#)),
+        (203, Some(r#"{"source":"human"}"#)),
+        (204, Some(r#"{"created_by":"mcp:codex"}"#)),
+    ] {
+        seed_routing_note(&db, short_id, "2026-09-24T00:00:00Z", None, metadata).await;
+    }
+
+    let filter = |human, cursor| NoteFilter {
+        project_id: None,
+        no_project: false,
+        note_type: None,
+        status: None,
+        created_after_micros: None,
+        created_before_micros: None,
+        human,
+        archived: false,
+        shared: false,
+        limit: 1,
+        cursor,
+    };
+    let id = |notes: Vec<Note>| notes[0].short_id;
+
+    assert_eq!(
+        id(backend.list_notes(&filter(false, None)).await.unwrap()),
+        Some(204)
+    );
+    assert_eq!(
+        id(backend.list_notes(&filter(true, None)).await.unwrap()),
+        Some(203)
+    );
+    assert_eq!(
+        id(backend.list_notes(&filter(true, Some(203))).await.unwrap()),
+        Some(201)
+    );
+    assert!(
+        backend
+            .list_notes(&filter(true, Some(201)))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn shared_list_filters_expiry_and_archive_before_pagination() {
     let (_directory, db, backend) = make_powersync_backend().await;
     let now = chrono::Utc::now();
@@ -1763,6 +1827,7 @@ async fn shared_list_filters_expiry_and_archive_before_pagination() {
         status: None,
         created_after_micros: None,
         created_before_micros: None,
+        human: false,
         archived: false,
         shared: true,
         limit,
@@ -1817,6 +1882,7 @@ async fn list_notes_status_composes_with_range_no_project_and_cursor() {
         status: Some("ready"),
         created_after_micros: Some(micros("2026-09-24T01:00:00Z")),
         created_before_micros: Some(micros("2026-09-24T06:00:00Z")),
+        human: false,
         archived: false,
         shared: false,
         limit,
@@ -1865,6 +1931,7 @@ async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
         status: None,
         created_after_micros: after,
         created_before_micros: before,
+        human: false,
         archived: false,
         shared: false,
         limit: 20,
@@ -1929,6 +1996,7 @@ async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
         status: None,
         created_after_micros: after,
         created_before_micros: before,
+        human: false,
         archived: false,
         shared: false,
         limit: 20,

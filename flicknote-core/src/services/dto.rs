@@ -268,6 +268,8 @@ pub struct NoteListInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_before: Option<String>,
     #[serde(default)]
+    pub human: bool,
+    #[serde(default)]
     pub archived: bool,
     #[serde(default)]
     pub shared: bool,
@@ -357,6 +359,9 @@ pub struct NoteAddInput {
     pub draft: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub topics: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }

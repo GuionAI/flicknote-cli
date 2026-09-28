@@ -29,6 +29,9 @@ pub(crate) struct ListArgs {
     /// Include notes created before this RFC3339 instant
     #[arg(long)]
     created_before: Option<String>,
+    /// Show notes without MCP creation provenance
+    #[arg(long)]
+    human: bool,
     /// Show only archived notes
     #[arg(long)]
     archived: bool,
@@ -56,6 +59,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<()
             no_project: args.no_project,
             created_after: args.created_after.clone(),
             created_before: args.created_before.clone(),
+            human: args.human,
             archived: args.archived,
             shared: args.shared,
             limit: args.limit,

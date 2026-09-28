@@ -13,6 +13,7 @@ pub struct NoteFilter<'a> {
     pub status: Option<&'a str>,
     pub created_after_micros: Option<i64>,
     pub created_before_micros: Option<i64>,
+    pub human: bool,
     pub archived: bool,
     pub shared: bool,
     pub limit: u32,

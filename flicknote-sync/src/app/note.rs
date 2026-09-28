@@ -310,6 +310,7 @@ async fn upload_text(
                     interpret_as_url: false,
                     draft: false,
                     topics: Vec::new(),
+                    created_by: None,
                     created_at,
                 },
             )

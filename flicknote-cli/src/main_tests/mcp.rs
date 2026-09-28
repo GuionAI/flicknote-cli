@@ -77,6 +77,10 @@ struct McpHarness {
 
 impl McpHarness {
     async fn start() -> Self {
+        Self::start_with_client("flicknote-test").await
+    }
+
+    async fn start_with_client(client_name: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
         let (backend, database, note_uuid, alpha_id) = seeded_backend(&config).await;
@@ -110,7 +114,7 @@ impl McpHarness {
         });
         let (reader, mut writer) = tokio::io::split(client_io);
         let mut reader = BufReader::new(reader);
-        initialize_mcp(&mut writer, &mut reader).await;
+        initialize_mcp(&mut writer, &mut reader, client_name).await;
         Self {
             _directory: directory,
             writer,
@@ -133,6 +137,19 @@ impl McpHarness {
         self.request(
             "tools/call",
             serde_json::json!({ "name": name, "arguments": arguments }),
+        )
+        .await
+    }
+
+    async fn call_with_meta(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+        meta: serde_json::Value,
+    ) -> serde_json::Value {
+        self.request(
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": arguments, "_meta": meta }),
         )
         .await
     }
@@ -295,6 +312,7 @@ async fn seeded_backend(
 async fn initialize_mcp(
     writer: &mut WriteHalf<DuplexStream>,
     reader: &mut BufReader<ReadHalf<DuplexStream>>,
+    client_name: &str,
 ) {
     let initialized = rpc_request(
         writer,
@@ -304,7 +322,7 @@ async fn initialize_mcp(
         serde_json::json!({
             "protocolVersion": "2025-11-25",
             "capabilities": {},
-            "clientInfo": { "name": "flicknote-test", "version": "0" }
+            "clientInfo": { "name": client_name, "version": "0" }
         }),
     )
     .await;
@@ -1174,6 +1192,111 @@ async fn mcp_note_list_pages_by_descending_short_id() {
             .as_str()
             .unwrap()
             .contains("cursor must be a positive note ID")
+    );
+}
+
+#[tokio::test]
+async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
+    let session_id = "0199a467-5b0e-7000-8000-000000000001";
+    for (content, draft, expected_type) in [
+        (
+            "# Written by a person\n\nSaved by an agent",
+            false,
+            "normal",
+        ),
+        ("Draft body", true, "normal"),
+        ("https://example.com/article", false, "link"),
+    ] {
+        let mut harness = McpHarness::start_with_client("codex-mcp-client").await;
+        let added = harness
+            .call_with_meta(
+                "note_add",
+                serde_json::json!({ "content": content, "draft": draft }),
+                serde_json::json!({ "sessionId": session_id }),
+            )
+            .await;
+        assert_eq!(added["result"]["isError"], false);
+        let id = added["result"]["structuredContent"]["id"].as_i64().unwrap();
+
+        let detail = harness
+            .call("note_get", serde_json::json!({ "id": id }))
+            .await;
+        assert_eq!(
+            detail["result"]["structuredContent"]["metadata"]["created_by"],
+            format!("mcp:codex:{session_id}")
+        );
+        assert_eq!(detail["result"]["structuredContent"]["type"], expected_type);
+        if expected_type == "link" {
+            assert_eq!(
+                detail["result"]["structuredContent"]["metadata"]["link"]["url"],
+                content
+            );
+        }
+
+        let all = harness.call("note_list", serde_json::json!({})).await;
+        assert_eq!(all["result"]["structuredContent"]["notes"][0]["id"], id);
+        let human = harness
+            .call("note_list", serde_json::json!({ "human": true }))
+            .await;
+        let human_ids: Vec<_> = human["result"]["structuredContent"]["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|note| note["id"].as_i64().unwrap())
+            .collect();
+        assert_eq!(human_ids, vec![43, 42]);
+    }
+}
+
+#[tokio::test]
+async fn mcp_note_add_without_codex_identity_still_records_mcp_origin() {
+    let mut harness = McpHarness::start().await;
+    let added = harness
+        .call(
+            "note_add",
+            serde_json::json!({ "content": "Another client" }),
+        )
+        .await;
+    assert_eq!(added["result"]["isError"], false);
+    let id = added["result"]["structuredContent"]["id"].as_i64().unwrap();
+
+    let detail = harness
+        .call("note_get", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(
+        detail["result"]["structuredContent"]["metadata"]["created_by"],
+        "mcp"
+    );
+    let human = harness
+        .call("note_list", serde_json::json!({ "human": true }))
+        .await;
+    assert_eq!(
+        human["result"]["structuredContent"]["notes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn mcp_note_add_without_codex_session_records_client_type() {
+    let mut harness = McpHarness::start_with_client("codex-mcp-client").await;
+    let added = harness
+        .call(
+            "note_add",
+            serde_json::json!({ "content": "No session metadata" }),
+        )
+        .await;
+    assert_eq!(added["result"]["isError"], false);
+    let id = added["result"]["structuredContent"]["id"].as_i64().unwrap();
+
+    let detail = harness
+        .call("note_get", serde_json::json!({ "id": id }))
+        .await;
+    assert_eq!(
+        detail["result"]["structuredContent"]["metadata"]["created_by"],
+        "mcp:codex"
     );
 }
 

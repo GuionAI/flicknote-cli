@@ -187,6 +187,7 @@ async fn app_routes_note_list_and_append_through_services() {
             no_project: false,
             created_after: None,
             created_before: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -308,6 +309,7 @@ async fn versioned_socket_routes_client_requests_through_application() {
             no_project: false,
             created_after: None,
             created_before: None,
+            human: false,
             archived: false,
             shared: false,
             limit: 20,
@@ -359,7 +361,7 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
             .is_some_and(|path| !path.is_empty())
     );
     assert_eq!(details["daemon_version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(details["daemon_protocol"], 13);
+    assert_eq!(details["daemon_protocol"], 14);
     server.await.unwrap().unwrap();
 }
 

@@ -169,6 +169,8 @@ pub(super) struct NoteListParams {
     pub created_after: Option<String>,
     pub created_before: Option<String>,
     #[serde(default)]
+    pub human: bool,
+    #[serde(default)]
     pub archived: bool,
     #[serde(default = "default_limit")]
     pub limit: u32,
