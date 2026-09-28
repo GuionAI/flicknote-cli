@@ -106,6 +106,93 @@ fn test_app(db: Arc<dyn NoteDb>) -> Application {
     app_with_creator(db, Arc::new(DetachedCreator))
 }
 
+#[tokio::test]
+async fn mcp_http_enforces_origin_and_serves_application_tools() {
+    let directory = tempfile::tempdir().unwrap();
+    let config = test_config(directory.path());
+    let app = Arc::new(test_app(test_backend(&config)));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server = tokio::spawn(flicknote_sync::mcp::http::serve(listener, app, shutdown_rx));
+    let client = reqwest::Client::new();
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "integration-test", "version": "0"}}
+    });
+
+    let wrong_origin = client
+        .post(&url)
+        .header("Origin", "https://evil.example")
+        .json(&initialize)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_origin.status(), reqwest::StatusCode::FORBIDDEN);
+    let wrong_host = client
+        .post(&url)
+        .header("Host", "evil.example")
+        .json(&initialize)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_host.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let initialized = client
+        .post(&url)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&initialize)
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        initialized.status().is_success(),
+        "{}",
+        initialized.status()
+    );
+    let session = initialized
+        .headers()
+        .get("mcp-session-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let body = initialized.text().await.unwrap();
+    assert!(body.contains("flicknote"), "{body}");
+
+    let listed = client
+        .post(&url)
+        .header("Mcp-Session-Id", &session)
+        .header("Accept", "application/json, text/event-stream")
+        .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}))
+        .send()
+        .await
+        .unwrap();
+    assert!(listed.status().is_success(), "{}", listed.status());
+    let body = listed.text().await.unwrap();
+    assert!(body.contains("note_add"), "{body}");
+    assert!(body.contains("project_list"), "{body}");
+
+    let called = client
+        .post(&url)
+        .header("Mcp-Session-Id", &session)
+        .header("Accept", "application/json, text/event-stream")
+        .json(
+            &serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/call",
+            "params":{"name":"project_list","arguments":{}}}),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert!(called.status().is_success(), "{}", called.status());
+    let body = called.text().await.unwrap();
+    assert!(body.contains("projects"), "{body}");
+
+    shutdown_tx.send(true).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 fn assert_no_status_field(value: &serde_json::Value) {
     match value {
         serde_json::Value::Array(values) => {

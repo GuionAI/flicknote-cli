@@ -65,6 +65,7 @@ impl DaemonProcess {
 
         let child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
             .args(["daemon", "run"])
+            .env("FLICKNOTE_MCP_PORT", "0")
             .env("XDG_CONFIG_HOME", &config_home)
             .env("XDG_DATA_HOME", &data_home)
             .env("FLICKNOTE_ENV", "dev")
@@ -280,6 +281,7 @@ fn socket_path_for(data_home: &std::path::Path) -> PathBuf {
 fn start_with_roots(process: &DaemonProcess) -> DaemonProcess {
     let child = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &process.config_home)
         .env("XDG_DATA_HOME", &process.data_home)
         .env("FLICKNOTE_ENV", "dev")
@@ -303,6 +305,7 @@ fn foreground_run_rejects_missing_auth_before_ownership() {
     let data_home = directory.path().join("data");
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
         .output()
@@ -319,6 +322,7 @@ fn managed_foreground_permanent_auth_failure_exits_without_restarting() {
     let data_home = directory.path().join("data");
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
         .env("FLICKNOTE_DAEMON_MANAGED", "1")
@@ -355,6 +359,7 @@ fn managed_daemon_redirects_main_error_output_to_its_log() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_DATA_HOME", &data_home)
         .env("FLICKNOTE_ENV", "dev")
@@ -374,6 +379,7 @@ fn second_foreground_daemon_cannot_take_ownership_or_remove_the_socket() {
     first.wait_ready();
     let second = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &first.config_home)
         .env("XDG_DATA_HOME", &first.data_home)
         .output()
@@ -383,6 +389,7 @@ fn second_foreground_daemon_cannot_take_ownership_or_remove_the_socket() {
 
     let managed = Command::new(env!("CARGO_BIN_EXE_flicknote"))
         .args(["daemon", "run"])
+        .env("FLICKNOTE_MCP_PORT", "0")
         .env("XDG_CONFIG_HOME", &first.config_home)
         .env("XDG_DATA_HOME", &first.data_home)
         .env("FLICKNOTE_DAEMON_MANAGED", "1")

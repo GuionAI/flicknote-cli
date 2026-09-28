@@ -7,9 +7,13 @@ managed user service both run:
 flicknote daemon run
 ```
 
-The daemon owns the local PowerSync SQLite database and its Unix IPC socket.
-Data commands and MCP use IPC only; they never start a service implicitly or
-open the database directly.
+The daemon owns the local PowerSync SQLite database, its Unix IPC socket, and
+the Streamable HTTP MCP endpoint at `http://127.0.0.1:37789/mcp`. CLI data
+commands use IPC; MCP handlers call the same daemon application directly.
+Neither entry point starts a service implicitly or opens the database outside
+the daemon.
+`FLICKNOTE_MCP_PORT` changes only the MCP loopback port when multiple local
+daemon instances must run; Codex's configured URL must use that port.
 
 ## Search index
 

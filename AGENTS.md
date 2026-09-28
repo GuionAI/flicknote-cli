@@ -13,16 +13,18 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — unified `flicknote` executable: thin CLI/MCP clients and foreground daemon entrypoint; data commands never open SQLite or Postgres
+- **flicknote-cli** — unified `flicknote` executable: thin CLI client and foreground daemon entrypoint; data commands never open SQLite or Postgres
 - **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Daemon application host, typed RPC boundary, backend ownership, and PowerSync ↔ Supabase sync
+- **flicknote-sync** — Daemon application host, MCP HTTP server, typed IPC boundary, backend ownership, and PowerSync ↔ Supabase sync
 
 ### MCP interface
 
-FlickNote MCP is the formal model interface for note operations. The CLI remains
-for human and operational workflows; structured section mutations remain MCP
-operations.
+FlickNote MCP is the formal model interface for note operations. The daemon
+serves it over loopback Streamable HTTP with Origin and Host validation. MCP
+handlers and CLI IPC requests share the daemon `Application` and operation
+DTOs. The CLI remains for human and operational
+workflows; structured section mutations remain MCP operations.
 
 ### Machine note operation contract
 

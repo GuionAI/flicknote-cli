@@ -32,18 +32,16 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 futures-util = "0.3"
 serde = { workspace = true }
 toml = { workspace = true }
-open = "5"
 tempfile = "3"
 env_logger = "0.11"
 log = "0.4"
-rmcp = { version = "3.1.0", default-features = false, features = ["server", "transport-io", "macros"] }
-schemars = "1"
 httpdate = "1.0.3"
 uuid = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
 powersync = { workspace = true }
+rmcp = { version = "=3.2.0", default-features = false, features = ["server", "transport-io", "macros"] }
 rusqlite = { workspace = true }
 tokio = { workspace = true, features = ["process", "test-util"] }
 

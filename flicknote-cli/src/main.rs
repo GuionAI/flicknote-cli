@@ -10,8 +10,6 @@ const ROOT_HELP: &str = include_str!("help/root.md");
 
 mod commands;
 mod gateway;
-mod mcp;
-mod recall;
 
 #[derive(Parser)]
 #[command(
@@ -27,8 +25,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run the local MCP server over stdio
-    Mcp,
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
     /// Import or upload a file as a note
@@ -156,9 +152,6 @@ async fn run(cli: Cli) -> Result<(), CliError> {
 
     let daemon = DaemonClient::new(&config);
     daemon.health().await?;
-    if matches!(cli.command, Some(Commands::Mcp)) {
-        return mcp::serve(std::sync::Arc::new(config)).await;
-    }
     dispatch(&cli, &daemon).await
 }
 
@@ -170,7 +163,6 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
         return Ok(());
     };
     match command {
-        Commands::Mcp => unreachable!("MCP is dispatched before regular CLI commands"),
         Commands::Add(args) => commands::add::run(daemon, args).await,
         Commands::Upload(args) => commands::upload::run(daemon, args).await,
         Commands::Append(args) => commands::append::run(daemon, args).await,

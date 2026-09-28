@@ -21,6 +21,7 @@ use tokio::signal::unix::SignalKind;
 use crate::app::Application;
 use crate::fts_search::FtsSearchService;
 use crate::ipc;
+use crate::mcp;
 use crate::ownership::{DataDirectoryLock, OwnershipError};
 use crate::project_assignment_events::JsonlProjectAssignmentEventSink;
 use crate::remote::{RemoteNoteCreator, RemoteShareGateway};
@@ -66,6 +67,7 @@ fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn s
 struct ActorHandles {
     checkpoint: JoinHandle<()>,
     socket: JoinHandle<Result<(), ipc::DaemonError>>,
+    mcp: JoinHandle<std::io::Result<()>>,
     powersync: JoinSet<()>,
 }
 
@@ -206,6 +208,15 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
         .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
     let (socket_listener, _socket_guard) =
         bind_socket(&config).map_err(|error| DaemonRunError::Startup(error.to_string()))?;
+    let mcp_listener = mcp::http::bind()
+        .await
+        .map_err(|error| DaemonRunError::Startup(format!("MCP endpoint: {error}")))?;
+    log::info!(
+        "FlickNote MCP listening on {}",
+        mcp_listener
+            .local_addr()
+            .map_err(|error| DaemonRunError::Startup(error.to_string()))?
+    );
 
     log::info!("FlickNote daemon initialized (pid {})", std::process::id());
     tokio::select! {
@@ -220,10 +231,12 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let app = build_application(backend, &db, &auth, &config, search);
-    let socket = spawn_socket_server(socket_listener, app, &db, shutdown_rx);
+    let socket = spawn_socket_server(socket_listener, Arc::clone(&app), &db, shutdown_rx.clone());
+    let mcp = tokio::spawn(mcp::http::serve(mcp_listener, app, shutdown_rx));
     let mut actors = ActorHandles {
         checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
         socket,
+        mcp,
         powersync: powersync_tasks,
     };
 
@@ -441,6 +454,13 @@ where
                 Err(error) => Err(format!("IPC server task panicked: {error}")),
             }
         }
+        result = &mut actors.mcp => {
+            match result {
+                Ok(Ok(())) => Err("MCP server exited unexpectedly".to_string()),
+                Ok(Err(error)) => Err(format!("MCP server failed: {error}")),
+                Err(error) => Err(format!("MCP server task panicked: {error}")),
+            }
+        }
         result = actors.powersync.join_next(), if !actors.powersync.is_empty() => {
             match result {
                 Some(Ok(())) => Err("PowerSync actor exited unexpectedly".to_string()),
@@ -577,6 +597,19 @@ async fn shutdown_daemon(
     if ipc_result.outcome == ShutdownStageOutcome::TimedOut {
         actors.socket.abort();
     }
+    let mcp_result = run_shutdown_stage("stop MCP", IPC_DRAIN_TIMEOUT, async {
+        if actors.mcp.is_finished() {
+            return Ok(());
+        }
+        (&mut actors.mcp)
+            .await
+            .map_err(|error| format!("MCP server task panicked: {error}"))?
+            .map_err(|error| format!("MCP server failed during shutdown: {error}"))
+    })
+    .await;
+    if mcp_result.outcome == ShutdownStageOutcome::TimedOut {
+        actors.mcp.abort();
+    }
 
     let operations = RuntimeShutdownOperations { db, db_path };
     let _stage_results = run_storage_shutdown(
@@ -688,6 +721,7 @@ mod tests {
         let mut actors = ActorHandles {
             checkpoint: tokio::spawn(std::future::pending()),
             socket: tokio::spawn(std::future::pending()),
+            mcp: tokio::spawn(std::future::pending()),
             powersync,
         };
 

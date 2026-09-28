@@ -244,8 +244,8 @@ fn logout_force_option_parses() {
 }
 
 #[test]
-fn mcp_subcommand_parses() {
-    assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_ok());
+fn removed_mcp_subcommand_is_rejected() {
+    assert!(Cli::try_parse_from(["flicknote", "mcp"]).is_err());
 }
 
 #[test]

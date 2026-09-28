@@ -6,7 +6,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-use crate::recall::RECALL_HOOK_TIMEOUT;
+use flicknote_sync::recall::RECALL_HOOK_TIMEOUT;
 
 const HOOK_EVENT: &str = "UserPromptSubmit";
 const COMMAND_HOOK_TYPE: &str = "command";

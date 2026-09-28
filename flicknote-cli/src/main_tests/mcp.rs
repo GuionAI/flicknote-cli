@@ -12,13 +12,12 @@ use flicknote_core::services::ports::{
 use flicknote_core::sqlite_extension::register_better_trigram;
 use flicknote_sync::app::Application;
 use flicknote_sync::fts_search::FtsSearchService;
-use flicknote_sync::ipc::{ServerInfo, serve_app, socket_path};
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 use rmcp::ServiceExt;
 use rusqlite::params;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
-use crate::mcp;
+use flicknote_sync::mcp;
 
 struct PersistingCreator {
     db: Arc<dyn NoteDb>,
@@ -72,7 +71,6 @@ struct McpHarness {
     note_uuid: String,
     alpha_id: String,
     server: tokio::task::JoinHandle<()>,
-    daemon: tokio::task::JoinHandle<()>,
 }
 
 impl McpHarness {
@@ -95,13 +93,7 @@ impl McpHarness {
                 .with_web_url(config.web_url.clone())
                 .with_search(search),
         );
-        let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
-        let daemon = tokio::spawn(async move {
-            serve_app(listener, app, ServerInfo::current())
-                .await
-                .unwrap();
-        });
-        let service = mcp::FlickNoteMcp::new(Arc::new(config));
+        let service = mcp::FlickNoteMcp::new(app);
         let (server_io, client_io) = tokio::io::duplex(8 * 1024);
         let server = tokio::spawn(async move {
             service
@@ -123,7 +115,6 @@ impl McpHarness {
             note_uuid,
             alpha_id,
             server,
-            daemon,
         }
     }
 
@@ -160,17 +151,11 @@ impl McpHarness {
             .unwrap()
             .clone()
     }
-
-    async fn stop_daemon(&mut self) {
-        self.daemon.abort();
-        drop((&mut self.daemon).await);
-    }
 }
 
 impl Drop for McpHarness {
     fn drop(&mut self) {
         self.server.abort();
-        self.daemon.abort();
     }
 }
 
@@ -944,29 +929,6 @@ async fn mcp_recall_returns_hook_context_and_empty_results_without_fabrication()
     assert_eq!(
         no_match["result"]["structuredContent"],
         serde_json::json!({})
-    );
-}
-
-#[tokio::test]
-async fn mcp_recall_reports_daemon_failure_without_fabricated_context() {
-    let mut harness = McpHarness::start().await;
-    harness.stop_daemon().await;
-
-    let unavailable = harness
-        .call(
-            "note_recall",
-            serde_json::json!({ "prompt": "Ada Lovelace" }),
-        )
-        .await;
-    assert_eq!(unavailable["result"]["isError"], true);
-    assert_eq!(
-        unavailable["result"]["structuredContent"]["code"],
-        "daemon_unavailable"
-    );
-    assert!(
-        unavailable["result"]["structuredContent"]
-            .get("hookSpecificOutput")
-            .is_none()
     );
 }
 

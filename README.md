@@ -1,6 +1,6 @@
 # flicknote-cli
 
-Daemon-backed note management CLI with local-first sync. The CLI and MCP server use a typed Unix-socket API; the daemon owns SQLite and PowerSync.
+Daemon-backed note management CLI with local-first sync. The CLI uses typed Unix-socket IPC; the daemon owns SQLite, PowerSync, and the local MCP HTTP endpoint.
 
 ## Features
 
@@ -8,7 +8,7 @@ Daemon-backed note management CLI with local-first sync. The CLI and MCP server 
 - **List & search notes** — filter by type, project, or keyword (`find`)
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor plus explicit machine append, write, metadata, and draft-submit workflows; structured section mutations are provided by MCP
-- **MCP server** — typed local note, source, and project tools over stdio
+- **MCP server** — typed local note, source, and project tools over Streamable HTTP
 - **Codex recall** — human-readable `recall QUERY` results and a read-only `UserPromptSubmit` hook with bounded historical note candidates
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
@@ -161,21 +161,18 @@ pre-upgrade uninstall boundary for installations using the old lifecycle.
 
 ## MCP server
 
-`flicknote mcp` runs a local MCP server over stdio. Configure an MCP client to
-start it as a subprocess:
+The daemon serves MCP over Streamable HTTP at `http://127.0.0.1:37789/mcp`.
+For Codex, replace the old `command = "flicknote"` MCP registration with:
 
-```json
-{
-  "mcpServers": {
-    "flicknote": {
-      "command": "flicknote",
-      "args": ["mcp"]
-    }
-  }
-}
+```toml
+[mcp_servers.flicknote]
+url = "http://127.0.0.1:37789/mcp"
 ```
 
-The MCP server requires the local daemon. It exposes typed note, discovery,
+Start the daemon before connecting Codex. The HTTP endpoint binds only to the
+loopback address and checks the request origin and host.
+
+The MCP server exposes typed note, discovery,
 note-source, project, and read-only recall tools. `note_get` returns actual stored
 note content; the synthesized editable document is used only by the human editor.
 Machine content, metadata, and lifecycle operations are orthogonal: ordinary

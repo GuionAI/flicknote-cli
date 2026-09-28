@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::io::{self, Read, Write};
 use std::time::Duration;
 
-use crate::recall::{
+use flicknote_sync::recall::{
     McpRecallResult, RECALL_HOOK_EVENT, RECALL_HOOK_TIMEOUT, RECALL_HUMAN_TIMEOUT, current_time,
     normalize_timestamp, recall_call_with_timeout,
 };
