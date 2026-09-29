@@ -1244,6 +1244,9 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
                 DaemonResponse::App(Box::new(AppResponse::SearchHits(vec![
                     flicknote_core::services::dto::SearchHit {
                         short_id: item.id,
+                        note_type: item.note_type.clone(),
+                        content_bytes: item.content_bytes,
+                        draft: item.draft,
                         title: item.title.clone(),
                         summary: item.summary.clone(),
                         created_at: item.created_at.clone(),
@@ -1288,6 +1291,9 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
         run_cli_json(&config_root, &data_root, &["find", "adapter", "--json"]),
         serde_json::json!([{
             "short_id": 77,
+            "type": "normal",
+            "content_bytes": 19,
+            "draft": false,
             "title": "Adapter note",
             "summary": "A lightweight item",
             "created_at": "2026-09-21T00:00:00Z",

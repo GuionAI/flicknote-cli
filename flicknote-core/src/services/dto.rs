@@ -106,12 +106,16 @@ pub struct NoteListItem {
     pub deleted_at: Option<String>,
 }
 
-/// Dedicated result of a note search. Content is represented only by a
+/// Dedicated result of a note search. Content text is represented only by a
 /// readable, segmented excerpt; ranking score and raw source stay internal.
 /// Lexical hits contain a snippet. Structured-only hits may have empty segments.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SearchHit {
     pub short_id: Option<i64>,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub content_bytes: u64,
+    pub draft: bool,
     pub title: Option<String>,
     pub summary: Option<String>,
     pub created_at: Option<String>,
@@ -135,6 +139,9 @@ impl From<NoteListItem> for SearchHit {
     fn from(note: NoteListItem) -> Self {
         Self {
             short_id: note.id,
+            note_type: note.note_type,
+            content_bytes: note.content_bytes,
+            draft: note.draft,
             title: note.title,
             summary: note.summary,
             created_at: note.created_at,
@@ -411,6 +418,7 @@ pub struct OpenResult {
 mod tests {
     use super::{
         NoteCountInput, NoteCreateResult, NoteListItem, NoteSummary, Patch, ProjectModifyInput,
+        SearchHit,
     };
 
     #[test]
@@ -474,6 +482,33 @@ mod tests {
         assert_eq!(value["id"], 42);
         assert_eq!(value["content_bytes"], 0);
         assert!(value.get("short_id").is_none());
+    }
+
+    #[test]
+    fn structured_search_hit_preserves_canonical_metadata() {
+        let hit = SearchHit::from(NoteListItem {
+            id: Some(42),
+            note_type: "meeting".into(),
+            title: Some("Planning".into()),
+            project_id: Some("project-uuid".into()),
+            project: None,
+            topics: Vec::new(),
+            summary: None,
+            content_bytes: 321,
+            metadata: None,
+            flagged: false,
+            draft: true,
+            created_at: None,
+            updated_at: None,
+            deleted_at: None,
+        });
+        let value = serde_json::to_value(hit).unwrap();
+        assert_eq!(value["type"], "meeting");
+        assert_eq!(value["content_bytes"], 321);
+        assert_eq!(value["draft"], true);
+        assert_eq!(value["project_id"], "project-uuid");
+        assert_eq!(value["snippet"]["segments"], serde_json::json!([]));
+        assert!(value.get("preview").is_none());
     }
 
     #[test]

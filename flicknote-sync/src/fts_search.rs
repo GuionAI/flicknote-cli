@@ -150,7 +150,7 @@ fn parse_snippet(value: &str) -> SearchSnippet {
     SearchSnippet { segments }
 }
 
-/// Retrieve indexed candidates and rank by literal term coverage (3/2/1).
+/// Retrieve non-draft indexed candidates and rank by literal term coverage (3/2/1).
 /// FTS markup is converted to the public segmented snippet contract.
 pub fn search(
     connection: &Connection,
@@ -251,6 +251,9 @@ fn search_internal(
         r#"
         SELECT f.rowid, f.short_id, f.title, f.summary,
             f.created_at, f.updated_at, f.project_id,
+            json_extract(n.data, '$.type'),
+            length(CAST(coalesce(json_extract(n.data, '$.content'), '') AS BLOB)),
+            json_extract(n.data, '$.status') = 'draft',
             (SELECT coalesce(sum(CASE
                 WHEN instr(lower(coalesce(f.title, '')), lower(t.value)) > 0 THEN 3
                 WHEN instr(lower(coalesce(f.summary, '')), lower(t.value)) > 0 THEN 2
@@ -258,7 +261,9 @@ fn search_internal(
                 ELSE 0 END), 0)
              FROM json_each(?2) t) AS coverage
         FROM note_search_fts f
+        JOIN ps_data__notes n ON n.rowid = f.rowid
         WHERE note_search_fts MATCH ?1
+          AND json_extract(n.data, '$.status') IS NOT 'draft'
           AND (?4 IS NULL OR f.project_id IN (SELECT id FROM projects WHERE name=?4))
         ORDER BY coverage DESC, f.updated_at DESC, f.short_id DESC, f.rowid DESC
         LIMIT ?3
@@ -272,6 +277,9 @@ fn search_internal(
                     row.get(0)?,
                     SearchHit {
                         short_id: row.get(1)?,
+                        note_type: row.get(7)?,
+                        content_bytes: row.get::<_, i64>(8)? as u64,
+                        draft: row.get(9)?,
                         title: row.get(2)?,
                         summary: row.get(3)?,
                         created_at: row.get(4)?,
@@ -464,13 +472,13 @@ mod tests {
             .unwrap();
         writer
             .execute(
-                "INSERT INTO notes (id, title, content, project_id) VALUES ('first', 'Office planning', '中文 notes design-review', 'project-1')",
+                "INSERT INTO notes (id, type, status, title, content, project_id) VALUES ('first', 'normal', 'ready', 'Office planning', '中文 notes design-review', 'project-1')",
                 [],
             )
             .unwrap();
         writer
             .execute(
-                "INSERT INTO notes (id, title, content) VALUES ('second', 'Officer handbook', 'unrelated')",
+                "INSERT INTO notes (id, type, status, title, content) VALUES ('second', 'normal', 'ready', 'Officer handbook', 'unrelated')",
                 [],
             )
             .unwrap();
@@ -550,7 +558,7 @@ mod tests {
         for index in 0..12 {
             writer
                 .execute(
-                    "INSERT INTO notes (id, short_id, title, content) VALUES (?1, ?2, 'Office', 'planning')",
+                    "INSERT INTO notes (id, short_id, type, status, title, content) VALUES (?1, ?2, 'normal', 'ready', 'Office', 'planning')",
                     params![format!("note-{index}"), index],
                 )
                 .unwrap();
@@ -568,6 +576,9 @@ mod tests {
         let serialized = serde_json::to_value(&hits[0]).unwrap();
         for field in [
             "short_id",
+            "type",
+            "content_bytes",
+            "draft",
             "title",
             "summary",
             "created_at",
@@ -580,7 +591,88 @@ mod tests {
         assert!(serialized.get("score").is_none());
         assert!(serialized.get("uuid").is_none());
         assert!(serialized.get("content").is_none());
+        assert!(serialized.get("preview").is_none());
         assert_eq!(serialized["snippet"]["segments"][0]["highlighted"], true);
+    }
+
+    #[tokio::test]
+    async fn search_reads_canonical_metadata_and_excludes_drafts_without_changing_rank() {
+        let (_directory, db) = test_powersync_db().await;
+        let writer = db.writer().await.unwrap();
+        install(&writer).unwrap();
+        writer
+            .execute(
+                "INSERT INTO projects (id, name) VALUES ('project-1', 'lab')",
+                [],
+            )
+            .unwrap();
+        for (id, short_id, note_type, status, title, content) in [
+            ("short", 1, "normal", "ready", "Office", "é"),
+            (
+                "long",
+                2,
+                "meeting",
+                "ai_queued",
+                "Other",
+                "Office planning 👩‍💻",
+            ),
+            (
+                "queued",
+                3,
+                "link",
+                "source_queued",
+                "Other",
+                "Office source",
+            ),
+            (
+                "draft",
+                4,
+                "normal",
+                "draft",
+                "Office draft",
+                "Office secret",
+            ),
+        ] {
+            writer.execute(
+                "INSERT INTO notes (id, short_id, type, status, title, content, project_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'project-1')",
+                params![id, short_id, note_type, status, title, content],
+            ).unwrap();
+        }
+        let hits = search(&writer, &["Office".into()], Some("lab"), 10).unwrap();
+        assert_eq!(
+            hits.iter().map(|hit| hit.short_id).collect::<Vec<_>>(),
+            vec![Some(1), Some(3), Some(2)]
+        );
+        assert_eq!(
+            hits.iter()
+                .map(|hit| hit.note_type.as_str())
+                .collect::<Vec<_>>(),
+            vec!["normal", "link", "meeting"]
+        );
+        assert_eq!(
+            hits.iter().map(|hit| hit.content_bytes).collect::<Vec<_>>(),
+            vec![
+                "é".len() as u64,
+                "Office source".len() as u64,
+                "Office planning 👩‍💻".len() as u64
+            ]
+        );
+        assert!(
+            hits.iter()
+                .all(|hit| !hit.draft && hit.project_id.as_deref() == Some("project-1"))
+        );
+        assert!(hits.iter().all(|hit| {
+            hit.snippet
+                .segments
+                .iter()
+                .any(|segment| segment.highlighted)
+        }));
+        assert_eq!(
+            search_ids(&writer, &["Office".into()], Some("lab"), 10)
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[tokio::test]
@@ -592,7 +684,7 @@ mod tests {
             let writer = db.writer().await.unwrap();
             writer
                 .execute(
-                    "INSERT INTO notes (id, title, content) VALUES ('recover', 'Office', 'planning')",
+                    "INSERT INTO notes (id, type, status, title, content) VALUES ('recover', 'normal', 'ready', 'Office', 'planning')",
                     [],
                 )
                 .unwrap();
@@ -624,7 +716,7 @@ mod tests {
             let writer = db.writer().await.unwrap();
             writer
                 .execute(
-                    "INSERT INTO notes (id, title) VALUES ('versioned', 'Current title')",
+                    "INSERT INTO notes (id, type, status, title) VALUES ('versioned', 'normal', 'ready', 'Current title')",
                     [],
                 )
                 .unwrap();
@@ -671,7 +763,7 @@ mod tests {
             let writer = db.writer().await.unwrap();
             writer
                 .execute(
-                    "INSERT INTO notes (id, title) VALUES ('triggered', 'Old title')",
+                    "INSERT INTO notes (id, type, status, title) VALUES ('triggered', 'normal', 'ready', 'Old title')",
                     [],
                 )
                 .unwrap();
@@ -720,7 +812,7 @@ mod tests {
                 .unwrap();
             writer
                 .execute(
-                    "INSERT INTO notes (id, title, content, project_id) VALUES (?1, ?2, ?3, 'project-1')",
+                    "INSERT INTO notes (id, type, status, title, content, project_id) VALUES (?1, 'normal', 'ready', ?2, ?3, 'project-1')",
                     params!["local", "bird", "👩‍💻 a\u{301} 中文 note"],
                 )
                 .unwrap();
@@ -786,7 +878,7 @@ mod tests {
             writer
                 .execute(
                     "INSERT INTO ps_data__notes (id, data) VALUES (?1, ?2)",
-                    params!["remote", r#"{"title":"remote", "content":"青い鳥"}"#],
+                    params!["remote", r#"{"type":"normal", "status":"ready", "title":"remote", "content":"青い鳥"}"#],
                 )
                 .unwrap();
             let count: i64 = writer
@@ -800,7 +892,7 @@ mod tests {
             writer
                 .execute(
                     "UPDATE ps_data__notes SET data=?2 WHERE id=?1",
-                    params!["remote", r#"{"title":"remote", "content":"赤い鳥"}"#],
+                    params!["remote", r#"{"type":"normal", "status":"ready", "title":"remote", "content":"赤い鳥"}"#],
                 )
                 .unwrap();
             let changed = search(&writer, &["赤".into()], None, 10).unwrap();

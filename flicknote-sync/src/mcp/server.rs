@@ -206,7 +206,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_find",
-        description = "Find active notes by indexed OR keywords, or use exact extraction filters without keywords (including archived notes). Lexical keywords cannot combine with extraction filters or archived search.",
+        description = "Find non-draft active notes by indexed OR keywords, or use exact extraction filters without keywords (including archived notes). Active searches exclude drafts; archived extraction searches include them. Lexical keywords cannot combine with extraction filters or archived search.",
         annotations(read_only_hint = true)
     )]
     async fn note_find(

@@ -1791,7 +1791,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn draft_projection_is_consistent_for_list_find_detail_and_mutation() {
+    async fn draft_projection_is_consistent_for_list_detail_and_mutation_but_find_excludes_it() {
         let backend = make_backend().await;
         let id = insert_normal_note(&backend, "draft searchable body", "draft").await;
         backend
@@ -1833,9 +1833,26 @@ mod tests {
         let mutation = service.append(&id, "more").await.unwrap();
 
         assert!(listed[0].draft);
-        assert!(found[0].draft);
+        assert!(found.is_empty());
         assert!(detail.note.draft);
         assert!(mutation.note.draft);
+
+        service.archive(&id).await.unwrap();
+        let archived = service
+            .find(NoteFindInput {
+                keywords: Vec::new(),
+                extractions: vec![ExtractionFilterDto {
+                    key: "::topic".to_string(),
+                    value: "searchable".to_string(),
+                }],
+                project: None,
+                archived: true,
+                limit: 20,
+            })
+            .await
+            .unwrap();
+        assert_eq!(archived.len(), 1);
+        assert!(archived[0].draft);
     }
 
     #[tokio::test]

@@ -386,6 +386,13 @@ fn assert_json_does_not_contain_key(value: &serde_json::Value, excluded: &str) {
     }
 }
 
+fn assert_search_hit_metadata(hit: &serde_json::Value, listed: &serde_json::Value) {
+    assert_eq!(hit["type"], listed["type"]);
+    assert_eq!(hit["content_bytes"], listed["content_bytes"]);
+    assert_eq!(hit["draft"], listed["draft"]);
+    assert!(hit.get("preview").is_none());
+}
+
 fn assert_note_list_item_contract(note: &serde_json::Value) {
     let keys = note
         .as_object()
@@ -667,7 +674,19 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
         "#/$defs/SearchHit"
     );
     let hit = &find["outputSchema"]["$defs"]["SearchHit"];
+    assert_eq!(hit["properties"]["type"]["type"], "string");
+    assert_eq!(hit["properties"]["content_bytes"]["type"], "integer");
+    assert_eq!(hit["properties"]["draft"]["type"], "boolean");
+    for field in ["type", "content_bytes", "draft"] {
+        assert!(
+            hit["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(field))
+        );
+    }
     assert!(hit["properties"]["snippet"].is_object());
+    assert!(hit["properties"].get("preview").is_none());
     assert!(hit["properties"].get("score").is_none());
     assert!(hit["properties"].get("content").is_none());
     let projects = tools
@@ -1049,6 +1068,7 @@ async fn mcp_note_queries_use_short_ids_and_hide_uuid() {
         .await;
     let found_note = &found["result"]["structuredContent"]["hits"][0];
     assert_eq!(found_note["short_id"], 42);
+    assert_search_hit_metadata(found_note, listed_note);
     assert_eq!(found_note["title"], "MCP Note");
     assert!(
         found_note["snippet"]["segments"]

@@ -68,7 +68,7 @@ fn socket_path_lives_in_data_dir() {
 
 #[test]
 fn versioned_health_and_app_requests_have_stable_contracts() {
-    assert_eq!(PROTOCOL_VERSION, 14);
+    assert_eq!(PROTOCOL_VERSION, 15);
     let health = DaemonRequest::Health {
         protocol: PROTOCOL_VERSION,
     };
@@ -76,7 +76,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
         serde_json::to_value(health).unwrap(),
         json!({
             "type": "health",
-            "payload": { "protocol": 14 }
+            "payload": { "protocol": 15 }
         })
     );
 
@@ -98,7 +98,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
     };
     let value = serde_json::to_value(request).unwrap();
     assert_eq!(value["type"], "app");
-    assert_eq!(value["payload"]["protocol"], 14);
+    assert_eq!(value["payload"]["protocol"], 15);
     assert!(value["payload"].get("surface").is_none());
     assert_eq!(value["payload"]["request"]["type"], "note_list");
     assert_eq!(value["payload"]["request"]["payload"]["status"], "ready");
@@ -107,7 +107,7 @@ fn versioned_health_and_app_requests_have_stable_contracts() {
 }
 
 #[test]
-fn protocol_v14_uses_typed_project_contracts() {
+fn protocol_v15_uses_typed_project_contracts() {
     let project = ProjectDto {
         id: "project-id".to_string(),
         name: "Work".to_string(),
@@ -148,7 +148,7 @@ fn server_info_reports_precise_runtime_status_contract() {
     assert_eq!(
         serde_json::to_value(&info).unwrap(),
         json!({
-            "protocol": 14,
+            "protocol": 15,
             "version": env!("CARGO_PKG_VERSION"),
             "executable": info.executable,
             "sync_errors": {
@@ -300,13 +300,13 @@ async fn health_rejects_unexpected_daemon_responses() {
 }
 
 #[tokio::test]
-async fn protocol_v14_client_rejects_protocol_v13_server_info() {
+async fn protocol_v15_client_rejects_protocol_v14_server_info() {
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
-            protocol: 13,
+            protocol: 14,
             version: "legacy".to_string(),
             executable: "/opt/legacy/flicknote".to_string(),
             sync: None,
@@ -321,11 +321,11 @@ async fn protocol_v14_client_rejects_protocol_v13_server_info() {
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     let message = error.to_string();
     assert!(message.contains(&format!(
-        "CLI version {} protocol 14",
+        "CLI version {} protocol 15",
         env!("CARGO_PKG_VERSION")
     )));
     assert!(message.contains("daemon executable /opt/legacy/flicknote"));
-    assert!(message.contains("daemon version legacy protocol 13"));
+    assert!(message.contains("daemon version legacy protocol 14"));
     assert!(message.contains("daemon restart"));
     server.await.unwrap();
 }

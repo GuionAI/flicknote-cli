@@ -113,6 +113,9 @@ mod tests {
     fn search_table_renders_segmented_snippet_as_readable_text() {
         let output = format_search_hits(&[SearchHit {
             short_id: Some(42),
+            note_type: "normal".into(),
+            content_bytes: 11,
+            draft: false,
             title: Some("Office plan".into()),
             summary: None,
             created_at: None,

@@ -519,6 +519,7 @@ impl NoteDb for LocalPowerSyncBackend {
             FROM notes
             WHERE user_id = ?
               AND (deleted_at IS NOT NULL) = ?
+              AND (? OR status IS NOT 'draft')
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
               AND NOT EXISTS (
@@ -536,6 +537,7 @@ impl NoteDb for LocalPowerSyncBackend {
             "#,
             params![
                 self.user_id,
+                filter.archived,
                 filter.archived,
                 filter.note_type,
                 filter.note_type,
