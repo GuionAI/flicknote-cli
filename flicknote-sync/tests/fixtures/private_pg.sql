@@ -22,8 +22,8 @@ CREATE TABLE notes (
 );
 CREATE TABLE note_extractions (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), note_id uuid NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
- user_id uuid NOT NULL DEFAULT auth.uid() REFERENCES auth.users(id), type text NOT NULL,
- value text NOT NULL, UNIQUE(note_id,type,value)
+ user_id uuid NOT NULL DEFAULT auth.uid() REFERENCES auth.users(id), key text NOT NULL,
+ value text NOT NULL, UNIQUE(note_id,key,value)
 );
 CREATE TABLE user_short_id_counters (user_id uuid PRIMARY KEY REFERENCES auth.users(id), next_id integer NOT NULL);
 CREATE FUNCTION assign_note_short_id() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN

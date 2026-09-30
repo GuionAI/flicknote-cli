@@ -82,8 +82,11 @@ The adapter expects the current fb columns and short-ID trigger contract:
 `notes` has `short_id`, `status`, `flag`, `metadata`, `source`, `project_id`,
 timestamps and user ownership; `projects` has `metadata`, `color`,
 `is_archived`, timestamps and user ownership; `note_extractions` has
-`note_id`, `user_id`, `type`, and `value`. Extraction types `topic`, `person`,
-`company`, `location`, and `product` are mapped to MCP keys with `::` prefixes.
+`note_id`, `user_id`, `key`, and `value`, with uniqueness on
+`(note_id, key, value)`. Keys are stored and queried verbatim: `::topic`,
+`::person`, `::company`, `::location`, and `::product`. Replacing one key
+preserves other keys; an empty replacement clears it and duplicate values
+produce one row. There is no legacy `type` column or prefix conversion.
 A schema mismatch fails the request. The server does not run migrations.
 
 Provision PGroonga and indexes through a separately reviewed fb db-init
@@ -104,8 +107,15 @@ its restore mode and primary/standby preload settings must be resolved before
 deployment. The image's recovery evidence is a separate cross-repository
 acceptance gate. The test-owned compatible fixture is
 [`flicknote-sync/tests/fixtures/private_pg.sql`](../flicknote-sync/tests/fixtures/private_pg.sql).
-Run `scripts/test-private-pg.sh` after the peer image is locally available; it
-creates and removes its own container and database. The integration test uses
+Run the current-schema extraction/RLS and MCP regression with the published
+immutable peer image (or another compatible test image via the same override):
+
+```bash
+FLICKNOTE_TEST_PG_IMAGE=ghcr.io/guionai/cloudnative-supabase-postgres-pgroonga@sha256:d555bf68fad60626664e22cf90390fc8936b42092d504f7f02a592ec70b92626 \
+  scripts/test-private-pg.sh
+```
+
+The script creates and removes its own container and database. The integration test uses
 real PGroonga and a scripted local verifier. This PR does not deploy or mutate
 any live database.
 

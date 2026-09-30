@@ -327,10 +327,16 @@ impl NoteDb for PgRequestDb {
             .map(Uuid::parse_str)
             .transpose()
             .map_err(pg_error)?;
-        let filters = serde_json::to_value(search.extractions.iter().map(|filter| serde_json::json!({"key": filter.key.trim_start_matches("::"), "value": filter.value})).collect::<Vec<_>>())?;
+        let filters = serde_json::to_value(
+            search
+                .extractions
+                .iter()
+                .map(|filter| serde_json::json!({"key": filter.key, "value": filter.value}))
+                .collect::<Vec<_>>(),
+        )?;
         let limit = i64::from(f.limit);
         let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.type=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->>'created_by' IS NULL) ORDER BY n.updated_at DESC LIMIT $5"
+            "SELECT {NOTE_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.key=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->>'created_by' IS NULL) ORDER BY n.updated_at DESC LIMIT $5"
         );
         Ok(self
             .query(
@@ -588,15 +594,12 @@ impl NoteDb for PgRequestDb {
             .map(|id| Uuid::parse_str(id))
             .collect::<Result<Vec<_>, _>>()
             .map_err(pg_error)?;
-        let types = keys
-            .iter()
-            .map(|key| key.trim_start_matches("::").to_string())
-            .collect::<Vec<_>>();
+        let keys = keys.to_vec();
         let mut output = HashMap::new();
-        for row in self.query("SELECT e.note_id,e.type,e.value FROM note_extractions e JOIN notes n ON n.id=e.note_id AND n.user_id=e.user_id WHERE e.user_id=auth.uid() AND e.note_id=ANY($1) AND e.type=ANY($2) ORDER BY e.type,e.value", &[&ids,&types]).await? {
+        for row in self.query("SELECT e.note_id,e.key,e.value FROM note_extractions e JOIN notes n ON n.id=e.note_id AND n.user_id=e.user_id WHERE e.user_id=auth.uid() AND e.note_id=ANY($1) AND e.key=ANY($2) ORDER BY e.key,e.value", &[&ids,&keys]).await? {
             let id = row.get::<_,Uuid>(0).to_string();
-            let kind: String = row.get(1);
-            output.entry(id).or_insert_with(Vec::new).push((format!("::{kind}"),row.get(2)));
+            let key: String = row.get(1);
+            output.entry(id).or_insert_with(Vec::new).push((key,row.get(2)));
         }
         Ok(output)
     }
@@ -608,11 +611,8 @@ impl NoteDb for PgRequestDb {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
-        let types = keys
-            .iter()
-            .map(|key| key.trim_start_matches("::").to_string())
-            .collect::<Vec<_>>();
-        Ok(self.query("SELECT DISTINCT e.value FROM note_extractions e JOIN notes n ON n.id=e.note_id AND n.user_id=e.user_id WHERE e.user_id=auth.uid() AND e.type=ANY($1) AND (n.deleted_at IS NOT NULL)=$2 ORDER BY e.value", &[&types,&archived]).await?.iter().map(|row| row.get(0)).collect())
+        let keys = keys.to_vec();
+        Ok(self.query("SELECT DISTINCT e.value FROM note_extractions e JOIN notes n ON n.id=e.note_id AND n.user_id=e.user_id WHERE e.user_id=auth.uid() AND e.key=ANY($1) AND (n.deleted_at IS NOT NULL)=$2 ORDER BY e.value", &[&keys,&archived]).await?.iter().map(|row| row.get(0)).collect())
     }
     async fn set_note_extractions(
         &self,
@@ -631,14 +631,13 @@ impl NoteDb for PgRequestDb {
         {
             return Err(note_missing(note_id));
         }
-        let kind = key.trim_start_matches("::");
         self.execute(
-            "DELETE FROM note_extractions WHERE note_id=$1 AND user_id=auth.uid() AND type=$2",
-            &[&id, &kind],
+            "DELETE FROM note_extractions WHERE note_id=$1 AND user_id=auth.uid() AND key=$2",
+            &[&id, &key],
         )
         .await?;
         for value in values {
-            self.execute("INSERT INTO note_extractions(note_id,user_id,type,value) VALUES($1,auth.uid(),$2,$3)", &[&id,&kind,&value]).await?;
+            self.execute("INSERT INTO note_extractions(note_id,user_id,key,value) VALUES($1,auth.uid(),$2,$3) ON CONFLICT (note_id,key,value) DO NOTHING", &[&id,&key,&value]).await?;
         }
         Ok(())
     }

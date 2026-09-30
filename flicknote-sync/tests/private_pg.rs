@@ -66,6 +66,154 @@ fn add_input(content: &str, draft: bool) -> NoteAddInput {
 
 #[tokio::test]
 #[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
+async fn canonical_extractions_replace_filter_and_isolate_owners() {
+    use flicknote_core::services::dto::ExtractionFilterDto;
+    let pool = pool();
+    let a = db(&pool, "11111111-1111-4111-8111-111111111111").await;
+    let note = NoteService::new(a.as_ref())
+        .add(
+            &PgNoteCreator(a.clone()),
+            add_input("Extraction contract", true),
+        )
+        .await
+        .unwrap();
+    let id = &note.uuid;
+    a.set_note_extractions(id, "::topic", &["old".into()])
+        .await
+        .unwrap();
+    a.set_note_extractions(id, "::person", &["Ada".into()])
+        .await
+        .unwrap();
+    a.set_note_extractions(id, "::topic", &["Rust".into(), "Rust".into()])
+        .await
+        .unwrap();
+    let rows = a
+        .list_note_extractions(&[id], &["::topic", "::person"])
+        .await
+        .unwrap();
+    assert_eq!(
+        rows[id],
+        vec![
+            ("::person".into(), "Ada".into()),
+            ("::topic".into(), "Rust".into())
+        ]
+    );
+    assert_eq!(a.list_note_topics(&[id]).await.unwrap()[id], vec!["Rust"]);
+    assert_eq!(
+        a.list_extraction_values(&["::person"], false)
+            .await
+            .unwrap(),
+        vec!["Ada"]
+    );
+    assert!(
+        a.list_note_extractions(&[id], &["topic", "person"])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(a.find_note(id).await.unwrap().status, "draft");
+    let search = NoteFindInput {
+        extractions: [("::topic", "Rust"), ("::person", "Ada")]
+            .into_iter()
+            .map(|(key, value)| ExtractionFilterDto {
+                key: key.into(),
+                value: value.into(),
+            })
+            .collect(),
+        keywords: Vec::new(),
+        project: None,
+        created_after: None,
+        created_before: None,
+        human: false,
+        archived: false,
+        limit: 10,
+    };
+    assert!(
+        NoteService::new(a.as_ref())
+            .find(search.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    NoteService::new(a.as_ref())
+        .submit(&note.short_id.unwrap().to_string())
+        .await
+        .unwrap();
+    assert_eq!(
+        NoteService::new(a.as_ref())
+            .find(search.clone())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    a.set_note_extractions(id, "::topic", &[]).await.unwrap();
+    assert!(a.list_note_topics(&[id]).await.unwrap().is_empty());
+    assert!(
+        NoteService::new(a.as_ref())
+            .find(search.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        a.list_extraction_values(&["::person"], false)
+            .await
+            .unwrap(),
+        vec!["Ada"]
+    );
+    assert_eq!(a.find_note(id).await.unwrap().status, "ai_queued");
+    a.finish(true).await.unwrap();
+    assert_extraction_owner_isolation(&pool, id, &search).await;
+}
+
+async fn assert_extraction_owner_isolation(pool: &Pool, id: &str, search: &NoteFindInput) {
+    let mut search = search.clone();
+    search.extractions.retain(|filter| filter.key == "::person");
+    let b = db(pool, "22222222-2222-4222-8222-222222222222").await;
+    assert!(
+        b.list_note_extractions(&[id], &["::person"])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        b.list_extraction_values(&["::person"], false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        NoteService::new(b.as_ref())
+            .find(search.clone())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        b.set_note_extractions(id, "::person", &["Mallory".into()])
+            .await
+            .is_err()
+    );
+    b.finish(false).await.unwrap();
+    let a = db(pool, "11111111-1111-4111-8111-111111111111").await;
+    assert_eq!(
+        NoteService::new(a.as_ref())
+            .find(search)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        a.list_note_extractions(&[id], &["::person"]).await.unwrap()[id],
+        vec![("::person".into(), "Ada".into())]
+    );
+    a.finish(true).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
 async fn private_notes_and_search_use_real_pgroonga() {
     let pool = pool();
     let alice = "11111111-1111-4111-8111-111111111111";
