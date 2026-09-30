@@ -338,6 +338,12 @@ pub struct NoteFindInput {
     #[serde(default)]
     pub extractions: Vec<ExtractionFilterDto>,
     pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_before: Option<String>,
+    #[serde(default)]
+    pub human: bool,
     #[serde(default)]
     pub archived: bool,
     #[serde(default = "default_note_limit")]

@@ -532,6 +532,17 @@ impl NoteDb for LocalPowerSyncBackend {
                     AND extraction.value = json_extract(filter.value, '$.value')
                 )
               )
+              AND (? = 0 OR json_extract(metadata, '$.created_by') IS NULL)
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END >= ?)
+              AND (? IS NULL OR
+                   CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
+                   CASE WHEN substr(created_at, 20, 1) = '.'
+                        THEN CAST(round(CAST(substr(created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                        ELSE 0 END < ?)
             ORDER BY updated_at DESC
             LIMIT ?
             "#,
@@ -544,6 +555,11 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.project_id,
                 filter.project_id,
                 extractions_json,
+                filter.human,
+                filter.created_after_micros,
+                filter.created_after_micros,
+                filter.created_before_micros,
+                filter.created_before_micros,
                 limit,
             ],
         )

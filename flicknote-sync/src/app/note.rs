@@ -22,6 +22,11 @@ pub(super) async fn handle_read(
             service_result(notes.list(input).await, AppResponse::NoteListItems)
         }
         AppRequest::NoteFind(input) => {
+            flicknote_core::services::note::validate_created_range(
+                input.created_after.as_deref(),
+                input.created_before.as_deref(),
+            )
+            .map_err(WireError::from_service)?;
             let started = Instant::now();
             let structured_only = input.keywords.is_empty();
             let result = if structured_only {
@@ -162,11 +167,11 @@ pub(super) async fn handle_write(
             service_result(notes.restore(&id).await, AppResponse::NoteArchive)
         }
         AppRequest::NoteShare { id } => service_result(
-            notes.share(app.share_gateway.as_ref(), &id).await,
+            notes.share(app.share_gateway()?, &id).await,
             AppResponse::Share,
         ),
         AppRequest::NoteUnshare { id } => service_result(
-            notes.unshare(app.share_gateway.as_ref(), &id).await,
+            notes.unshare(app.share_gateway()?, &id).await,
             AppResponse::Unshare,
         ),
         _ => unreachable!("request kind guarantees a mutating note request"),

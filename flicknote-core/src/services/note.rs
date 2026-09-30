@@ -26,7 +26,7 @@ use super::ports::{
 use super::sections::{content_starts_with_heading, find_section};
 use super::source::{SourceResult, SourceView, parse_source};
 
-fn validate_created_range(
+pub fn validate_created_range(
     created_after: Option<&str>,
     created_before: Option<&str>,
 ) -> Result<(Option<i64>, Option<i64>), ServiceError> {
@@ -215,6 +215,10 @@ impl<'a> NoteService<'a> {
         let project_id = self
             .resolve_project_filter(input.project.as_deref())
             .await?;
+        let (created_after_micros, created_before_micros) = validate_created_range(
+            input.created_after.as_deref(),
+            input.created_before.as_deref(),
+        )?;
         let search = NoteSearch {
             extractions: input
                 .extractions
@@ -234,9 +238,9 @@ impl<'a> NoteService<'a> {
                     no_project: false,
                     note_type: None,
                     status: None,
-                    created_after_micros: None,
-                    created_before_micros: None,
-                    human: false,
+                    created_after_micros,
+                    created_before_micros,
+                    human: input.human,
                     archived: input.archived,
                     shared: false,
                     limit: input.limit,
@@ -1738,6 +1742,9 @@ mod tests {
                     value: "Rust".to_string(),
                 }],
                 project: None,
+                created_after: None,
+                created_before: None,
+                human: false,
                 archived: false,
                 limit: 20,
             })
@@ -1824,6 +1831,9 @@ mod tests {
                     value: "searchable".to_string(),
                 }],
                 project: None,
+                created_after: None,
+                created_before: None,
+                human: false,
                 archived: false,
                 limit: 20,
             })
@@ -1846,6 +1856,9 @@ mod tests {
                     value: "searchable".to_string(),
                 }],
                 project: None,
+                created_after: None,
+                created_before: None,
+                human: false,
                 archived: true,
                 limit: 20,
             })
@@ -1853,6 +1866,23 @@ mod tests {
             .unwrap();
         assert_eq!(archived.len(), 1);
         assert!(archived[0].draft);
+        let filtered = service
+            .find(NoteFindInput {
+                keywords: Vec::new(),
+                extractions: vec![ExtractionFilterDto {
+                    key: "::topic".into(),
+                    value: "searchable".into(),
+                }],
+                project: None,
+                created_after: Some("2099-01-01T00:00:00Z".into()),
+                created_before: None,
+                human: false,
+                archived: true,
+                limit: 20,
+            })
+            .await
+            .unwrap();
+        assert!(filtered.is_empty());
     }
 
     #[tokio::test]

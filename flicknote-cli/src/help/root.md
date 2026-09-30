@@ -1,5 +1,7 @@
-Data commands require the FlickNote daemon. Start it with `flicknote daemon start`.
+Local data commands require the FlickNote daemon. Start it with `flicknote daemon start`.
 The daemon owns the local PowerSync database and remote synchronization.
+`flicknote private-mcp` is a separate foreground PostgreSQL server; see
+`flicknote private-mcp --help` and docs/private-mcp.md for required settings.
 Run `flicknote <command> --help` for exact flags and examples.
 
 Common workflows:

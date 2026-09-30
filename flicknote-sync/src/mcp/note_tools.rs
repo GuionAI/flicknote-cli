@@ -185,6 +185,10 @@ pub(super) struct NoteFindParams {
     #[serde(default)]
     pub extractions: Vec<ExtractionFilterDto>,
     pub project: Option<String>,
+    pub created_after: Option<String>,
+    pub created_before: Option<String>,
+    #[serde(default)]
+    pub human: bool,
     #[serde(default)]
     pub archived: bool,
     #[serde(default = "default_limit")]

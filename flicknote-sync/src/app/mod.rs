@@ -5,8 +5,8 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::NoteService;
 use flicknote_core::services::ports::{NoteCreator, ProjectAssignmentEventSink, ShareGateway};
 
-use crate::fts_search::FtsSearchService;
 use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
+use crate::search::NoteSearch;
 
 mod note;
 mod project;
@@ -14,10 +14,10 @@ mod project;
 pub struct Application {
     db: Arc<dyn NoteDb>,
     creator: Arc<dyn NoteCreator>,
-    share_gateway: Arc<dyn ShareGateway>,
+    share_gateway: Option<Arc<dyn ShareGateway>>,
     assignment_events: Option<Arc<dyn ProjectAssignmentEventSink>>,
     web_url: Option<String>,
-    search: Option<FtsSearchService>,
+    search: Option<Arc<dyn NoteSearch>>,
 }
 
 impl Application {
@@ -29,7 +29,18 @@ impl Application {
         Self {
             db,
             creator,
-            share_gateway,
+            share_gateway: Some(share_gateway),
+            assignment_events: None,
+            web_url: None,
+            search: None,
+        }
+    }
+
+    pub fn new_private(db: Arc<dyn NoteDb>, creator: Arc<dyn NoteCreator>) -> Self {
+        Self {
+            db,
+            creator,
+            share_gateway: None,
             assignment_events: None,
             web_url: None,
             search: None,
@@ -49,8 +60,8 @@ impl Application {
         self
     }
 
-    pub fn with_search(mut self, search: FtsSearchService) -> Self {
-        self.search = Some(search);
+    pub fn with_search(mut self, search: impl NoteSearch + 'static) -> Self {
+        self.search = Some(Arc::new(search));
         self
     }
 
@@ -82,6 +93,14 @@ impl Application {
 
     fn db_error(error: flicknote_core::error::CliError) -> WireError {
         WireError::from_service(ServiceError::from(error))
+    }
+
+    fn share_gateway(&self) -> Result<&dyn ShareGateway, WireError> {
+        self.share_gateway.as_deref().ok_or_else(|| {
+            WireError::from_service(ServiceError::InvalidArgument(
+                "sharing is unavailable on this server".into(),
+            ))
+        })
     }
 
     fn notes(&self) -> NoteService<'_> {

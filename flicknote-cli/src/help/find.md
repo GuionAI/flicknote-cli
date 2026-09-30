@@ -3,6 +3,7 @@ Examples:
   flicknote find "API" "REST"
   flicknote find "::topic::AI::person::瓜子"
   flicknote find "keyword" --project work
+  flicknote find "keyword" --created-after 2026-01-01T00:00:00Z --human
   flicknote find "keyword" --limit 50
   flicknote find "keyword" --json
 
@@ -16,3 +17,5 @@ dedicated search hits with type, UTF-8 content byte length, draft state, and
 segmented snippets, without full note content, internal scores, or source data.
 Active searches exclude drafts; archived extraction-only searches include
 matching archived notes regardless of draft state.
+Use --created-after and --created-before with RFC3339 timestamps to bound
+creation time. --human excludes notes created through MCP.

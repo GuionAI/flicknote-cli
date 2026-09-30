@@ -47,12 +47,12 @@ pub(super) async fn handle_write(
             .map(AppResponse::Project)
             .map_err(WireError::from_service),
         AppRequest::ProjectShare { id } => projects
-            .share(app.share_gateway.as_ref(), &id)
+            .share(app.share_gateway()?, &id)
             .await
             .map(AppResponse::Share)
             .map_err(WireError::from_service),
         AppRequest::ProjectUnshare { id } => projects
-            .unshare(app.share_gateway.as_ref(), &id)
+            .unshare(app.share_gateway()?, &id)
             .await
             .map(AppResponse::Unshare)
             .map_err(WireError::from_service),

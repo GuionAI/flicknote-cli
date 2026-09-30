@@ -1,6 +1,6 @@
 # flicknote-cli
 
-Daemon-backed note management CLI with local-first sync. The CLI uses typed Unix-socket IPC; the daemon owns SQLite, PowerSync, and the local MCP HTTP endpoint.
+Daemon-backed note management CLI with local-first sync and an explicit private remote MCP server. The CLI uses typed Unix-socket IPC; the daemon owns SQLite, PowerSync, and the local MCP HTTP endpoint.
 
 ## Features
 
@@ -9,6 +9,7 @@ Daemon-backed note management CLI with local-first sync. The CLI uses typed Unix
 - **Get note details** — retrieve by numeric short ID; view heading structure with `--tree`
 - **Edit notes** — human editor plus explicit machine append, write, metadata, and draft-submit workflows; structured section mutations are provided by MCP
 - **MCP server** — typed local note, source, and project tools over Streamable HTTP
+- **Private remote MCP** — verified full-grant HTTP access to each user's notes through PostgreSQL RLS and PGroonga
 - **Codex recall** — human-readable `recall QUERY` results and a read-only `UserPromptSubmit` hook with bounded historical note candidates
 - **Archive notes** — archive and unarchive
 - **Authentication** — email OTP or OAuth (Google/Apple) via Supabase
@@ -183,6 +184,21 @@ are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
+
+### Private remote MCP
+
+`flicknote private-mcp` runs a separate foreground server against PostgreSQL.
+It requires an explicit database URL environment variable, listen address,
+canonical public resource, OAuth issuer and verifier, and exact Host/Origin
+allowlists. It does not read the local login, configuration, or PowerSync data.
+The remote endpoint exposes the supported note, project, topic, and entity tool
+subset and verifies a resource-bound `flicknote:full` grant on every request.
+The fb OAuth Worker grant verifier and db-init PGroonga indexes are prerequisites
+for production use; this repository does not provide those fb changes.
+
+See [the private MCP operator contract](docs/private-mcp.md) for the command,
+grant response, database role/RLS requirements, supported tools, and the
+test-owned PGroonga verification command.
 
 ### Codex recall hook
 

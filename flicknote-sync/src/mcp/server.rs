@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::app::Application;
 use crate::browser::SystemBrowserOpener;
 use crate::ipc::{AppRequest, AppResult};
+use crate::pg::PgRequestDb;
 use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::services::dto::{
     NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput,
@@ -64,6 +65,32 @@ pub const EXPECTED_TOOLS: [&str; 30] = [
     "topic_list",
 ];
 
+pub(super) const REMOTE_TOOLS: [&str; 23] = [
+    "entity_list",
+    "note_add",
+    "note_append",
+    "note_archive",
+    "note_count",
+    "note_delete_section",
+    "note_find",
+    "note_get",
+    "note_get_section",
+    "note_insert",
+    "note_list",
+    "note_modify",
+    "note_rename_section",
+    "note_replace_section",
+    "note_restore",
+    "note_submit",
+    "note_write",
+    "project_add",
+    "project_archive",
+    "project_get",
+    "project_list",
+    "project_modify",
+    "topic_list",
+];
+
 #[derive(Debug, Serialize, JsonSchema)]
 struct CountResult {
     count: u64,
@@ -73,6 +100,7 @@ struct CountResult {
 pub struct FlickNoteMcp {
     app: Arc<Application>,
     tool_router: ToolRouter<Self>,
+    request_db: Option<Arc<PgRequestDb>>,
 }
 
 impl FlickNoteMcp {
@@ -80,7 +108,18 @@ impl FlickNoteMcp {
         Self {
             app,
             tool_router: Self::normalized_tool_router(),
+            request_db: None,
         }
+    }
+
+    pub fn new_remote(app: Arc<Application>, db: Arc<PgRequestDb>) -> Self {
+        let mut server = Self::new(app);
+        server.request_db = Some(db);
+        server
+            .tool_router
+            .map
+            .retain(|name, _| REMOTE_TOOLS.contains(&name.as_ref()));
+        server
     }
 
     fn normalized_tool_router() -> ToolRouter<Self> {
@@ -102,16 +141,18 @@ impl FlickNoteMcp {
     }
 
     async fn call_app<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
-        let response = self
-            .app
-            .handle(request)
-            .await
-            .map_err(|error| ServiceError::Remote {
-                code: error.code,
-                message: error.message,
-                retryable: error.retryable,
-                details: error.details,
-            })?;
+        let result = self.app.handle(request).await;
+        if let Some(db) = &self.request_db
+            && result.is_err()
+        {
+            db.mark_failed();
+        }
+        let response = result.map_err(|error| ServiceError::Remote {
+            code: error.code,
+            message: error.message,
+            retryable: error.retryable,
+            details: error.details,
+        })?;
         T::from_response(response).ok_or_else(|| {
             ServiceError::Internal("application returned an unexpected response".to_string())
         })
@@ -206,7 +247,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_find",
-        description = "Find non-draft active notes by indexed OR keywords, or use exact extraction filters without keywords (including archived notes). Active searches exclude drafts; archived extraction searches include them. Lexical keywords cannot combine with extraction filters or archived search.",
+        description = "Find non-draft active notes by indexed OR keywords, or use exact extraction filters without keywords (including archived notes). Filter by project, RFC3339 creation time, or human-created notes. Active searches exclude drafts; archived extraction searches include them. Lexical keywords cannot combine with extraction filters or archived search.",
         annotations(read_only_hint = true)
     )]
     async fn note_find(
@@ -218,6 +259,9 @@ impl FlickNoteMcp {
                 keywords: params.keywords,
                 extractions: params.extractions,
                 project: params.project,
+                created_after: params.created_after,
+                created_before: params.created_before,
+                human: params.human,
                 archived: params.archived,
                 limit: params.limit,
             }))

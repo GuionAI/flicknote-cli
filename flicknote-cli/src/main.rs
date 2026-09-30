@@ -5,6 +5,7 @@ use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_sync::ipc::DaemonClient;
 use std::ffi::OsStr;
+use std::net::SocketAddr;
 
 const ROOT_HELP: &str = include_str!("help/root.md");
 
@@ -25,6 +26,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Serve private notes over authenticated remote MCP (foreground)
+    PrivateMcp(PrivateMcpArgs),
     /// Add a note (text or URL — auto-detected)
     Add(commands::add::AddArgs),
     /// Import or upload a file as a note
@@ -87,6 +90,31 @@ enum Commands {
     Open(commands::open::OpenArgs),
 }
 
+#[derive(clap::Args)]
+struct PrivateMcpArgs {
+    /// Environment variable containing the PostgreSQL connection URL
+    #[arg(long, default_value = "FLICKNOTE_PRIVATE_DATABASE_URL")]
+    database_url_env: String,
+    /// Address to bind, independently of the public resource URL
+    #[arg(long)]
+    listen: SocketAddr,
+    /// Canonical public MCP URL ending in /mcp
+    #[arg(long)]
+    resource: String,
+    /// OAuth authorization server issuer URL
+    #[arg(long)]
+    issuer: String,
+    /// Full-grant token verification URL
+    #[arg(long)]
+    verifier: String,
+    /// Exact allowed Host authority; repeat for more than one
+    #[arg(long = "allowed-host", required = true)]
+    allowed_hosts: Vec<String>,
+    /// Exact allowed Origin; repeat for more than one
+    #[arg(long = "allowed-origin", required = true)]
+    allowed_origins: Vec<String>,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let hook_invocation = recall_hook_argv();
@@ -132,6 +160,25 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     if let Some(Commands::Hook(args)) = cli.command.as_ref() {
         return commands::hook::run(args);
     }
+    if let Some(Commands::PrivateMcp(args)) = cli.command.as_ref() {
+        let database_url = std::env::var(&args.database_url_env).map_err(|_| {
+            CliError::Other(format!(
+                "{} must contain a database URL",
+                args.database_url_env
+            ))
+        })?;
+        return flicknote_sync::private_mcp::serve(flicknote_sync::private_mcp::PrivateMcpConfig {
+            database_url,
+            listen: args.listen,
+            resource: args.resource.clone(),
+            issuer: args.issuer.clone(),
+            verifier: args.verifier.clone(),
+            allowed_hosts: args.allowed_hosts.clone(),
+            allowed_origins: args.allowed_origins.clone(),
+        })
+        .await
+        .map_err(CliError::Other);
+    }
     let config = Config::load()?;
 
     // Commands that don't need a database connection or session
@@ -164,6 +211,9 @@ async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> 
     };
     match command {
         Commands::Add(args) => commands::add::run(daemon, args).await,
+        Commands::PrivateMcp(_) => {
+            unreachable!("private MCP is dispatched before local configuration")
+        }
         Commands::Upload(args) => commands::upload::run(daemon, args).await,
         Commands::Append(args) => commands::append::run(daemon, args).await,
         Commands::Write(args) => commands::write::run(daemon, args).await,

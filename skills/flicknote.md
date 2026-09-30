@@ -8,6 +8,11 @@ description: "MCP-first interface for daemon-backed FlickNote notes and projects
 Use FlickNote MCP for normal note and project operations. The MCP schemas are
 the source of truth for tool names, arguments, and result fields; do not
 recreate them with shell commands or Gateway requests.
+The local daemon advertises the full tool set. The private remote MCP server
+advertises only its note, project, topic, and entity subset; sharing,
+source/open, and host-triggered recall remain local. Remote requests require
+one verified `flicknote:full` grant bound to the configured MCP resource.
+The user's identity comes from that grant, not a tool argument.
 
 ## Identifiers
 
@@ -56,6 +61,10 @@ A recall response timeout is a slow response, not daemon unavailability: report
 the timeout and continue without recalled context rather than giving daemon-start
 advice solely for that error. A ready local daemon can remain usable while
 remote PowerSync is offline.
+The private remote server is separate from the local daemon. A remote 401
+means the grant must be renewed or corrected; a remote 503 can indicate verifier
+or database unavailability. Local daemon start/status commands do not repair
+the remote server.
 
 ## Recall hook
 

@@ -160,7 +160,13 @@ pub fn search(
 ) -> Result<Vec<SearchHit>> {
     // The ranked candidates and their snippets must see the same FTS rows.
     let snapshot = connection.unchecked_transaction()?;
-    let hits = search_internal(&snapshot, terms, project, limit, true)?;
+    let hits = search_internal(
+        &snapshot,
+        terms,
+        SearchFilters::project(project),
+        limit,
+        true,
+    )?;
     snapshot.commit()?;
     Ok(hits)
 }
@@ -172,7 +178,32 @@ pub fn search_ids(
     project: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchHit>> {
-    search_internal(connection, terms, project, limit, false)
+    search_internal(
+        connection,
+        terms,
+        SearchFilters::project(project),
+        limit,
+        false,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct SearchFilters<'a> {
+    project: Option<&'a str>,
+    created_after: Option<i64>,
+    created_before: Option<i64>,
+    human: bool,
+}
+
+impl<'a> SearchFilters<'a> {
+    fn project(project: Option<&'a str>) -> Self {
+        Self {
+            project,
+            created_after: None,
+            created_before: None,
+            human: false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -227,28 +258,7 @@ fn match_expression(terms: &[String]) -> String {
         .join(" OR ")
 }
 
-fn search_internal(
-    connection: &Connection,
-    terms: &[String],
-    project: Option<&str>,
-    limit: usize,
-    with_snippets: bool,
-) -> Result<Vec<SearchHit>> {
-    if terms.is_empty()
-        || limit == 0
-        || (terms.len() == 1
-            && terms[0].chars().count() == 1
-            && terms[0]
-                .chars()
-                .all(|character| character.is_ascii_alphabetic()))
-    {
-        return Ok(Vec::new());
-    }
-    let expression = match_expression(terms);
-    let terms_json = serde_json::to_string(terms)
-        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-    let mut statement = connection.prepare(
-        r#"
+const SEARCH_QUERY: &str = r#"
         SELECT f.rowid, f.short_id, f.title, f.summary,
             f.created_at, f.updated_at, f.project_id,
             json_extract(n.data, '$.type'),
@@ -265,13 +275,53 @@ fn search_internal(
         WHERE note_search_fts MATCH ?1
           AND json_extract(n.data, '$.status') IS NOT 'draft'
           AND (?4 IS NULL OR f.project_id IN (SELECT id FROM projects WHERE name=?4))
+          AND (?5 IS NULL OR
+               CAST(strftime('%s', f.created_at) AS INTEGER) * 1000000 +
+               CASE WHEN substr(f.created_at, 20, 1) = '.'
+                    THEN CAST(round(CAST(substr(f.created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                    ELSE 0 END >= ?5)
+          AND (?6 IS NULL OR
+               CAST(strftime('%s', f.created_at) AS INTEGER) * 1000000 +
+               CASE WHEN substr(f.created_at, 20, 1) = '.'
+                    THEN CAST(round(CAST(substr(f.created_at, 20) AS REAL) * 1000000) AS INTEGER)
+                    ELSE 0 END < ?6)
+          AND (NOT ?7 OR json_extract(json_extract(n.data, '$.metadata'), '$.created_by') IS NULL)
         ORDER BY coverage DESC, f.updated_at DESC, f.short_id DESC, f.rowid DESC
         LIMIT ?3
-        "#,
-    )?;
+        "#;
+
+fn search_internal(
+    connection: &Connection,
+    terms: &[String],
+    filters: SearchFilters<'_>,
+    limit: usize,
+    with_snippets: bool,
+) -> Result<Vec<SearchHit>> {
+    if terms.is_empty()
+        || limit == 0
+        || (terms.len() == 1
+            && terms[0].chars().count() == 1
+            && terms[0]
+                .chars()
+                .all(|character| character.is_ascii_alphabetic()))
+    {
+        return Ok(Vec::new());
+    }
+    let expression = match_expression(terms);
+    let terms_json = serde_json::to_string(terms)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let mut statement = connection.prepare(SEARCH_QUERY)?;
     let mut hits: Vec<(i64, SearchHit)> = statement
         .query_map(
-            params![expression, terms_json, limit as i64, project],
+            params![
+                expression,
+                terms_json,
+                limit as i64,
+                filters.project,
+                filters.created_after,
+                filters.created_before,
+                filters.human
+            ],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -322,6 +372,13 @@ fn search_internal(
 #[derive(Clone)]
 pub struct FtsSearchService {
     db: PowerSyncDatabase,
+}
+
+#[async_trait::async_trait]
+impl crate::search::NoteSearch for FtsSearchService {
+    async fn find(&self, input: &NoteFindInput) -> Result<Vec<SearchHit>, String> {
+        Self::find(self, input).await
+    }
 }
 
 impl FtsSearchService {
@@ -402,14 +459,31 @@ impl FtsSearchService {
             .filter(|keyword| !keyword.is_empty())
             .map(str::to_owned)
             .collect::<Vec<_>>();
+        let (created_after, created_before) =
+            flicknote_core::services::note::validate_created_range(
+                input.created_after.as_deref(),
+                input.created_before.as_deref(),
+            )
+            .map_err(|error| error.to_string())?;
         let reader = self.db.reader().await.map_err(|error| error.to_string())?;
-        search(
-            &reader,
+        let snapshot = reader
+            .unchecked_transaction()
+            .map_err(|error| error.to_string())?;
+        let hits = search_internal(
+            &snapshot,
             &terms,
-            input.project.as_deref(),
+            SearchFilters {
+                project: input.project.as_deref(),
+                created_after,
+                created_before,
+                human: input.human,
+            },
             input.limit as usize,
+            true,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        snapshot.commit().map_err(|error| error.to_string())?;
+        Ok(hits)
     }
 }
 
@@ -460,6 +534,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one fixture verifies search filtering and snippets"
+    )]
     async fn prefix_search_keeps_project_filter_and_snippet() {
         let (_directory, db) = test_powersync_db().await;
         let writer = db.writer().await.unwrap();
@@ -525,17 +603,32 @@ mod tests {
                 .len(),
             0
         );
+        writer
+            .execute(
+                r#"UPDATE notes SET metadata='{"created_by":"mcp"}' WHERE id='first'"#,
+                [],
+            )
+            .unwrap();
         drop(writer);
         let service = FtsSearchService::new(db);
         let mut input = NoteFindInput {
             keywords: vec!["中文".into(), "offi".into()],
             extractions: Vec::new(),
             project: Some("lab".into()),
+            created_after: None,
+            created_before: None,
+            human: false,
             archived: false,
             limit: 10,
         };
         let hits = service.find(&input).await.unwrap();
         assert_eq!(hits.len(), 1);
+        input.human = true;
+        assert!(service.find(&input).await.unwrap().is_empty());
+        input.human = false;
+        input.created_after = Some("2099-01-01T00:00:00Z".into());
+        assert!(service.find(&input).await.unwrap().is_empty());
+        input.created_after = None;
         assert_eq!(hits[0].title.as_deref(), Some("Office planning"));
         assert!(
             hits[0]
@@ -695,6 +788,9 @@ mod tests {
             keywords: vec!["offi".into()],
             extractions: Vec::new(),
             project: None,
+            created_after: None,
+            created_before: None,
+            human: false,
             archived: false,
             limit: 10,
         };

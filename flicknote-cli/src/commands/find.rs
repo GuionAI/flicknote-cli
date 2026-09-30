@@ -14,6 +14,15 @@ pub(crate) struct FindArgs {
     /// Filter by project name
     #[arg(long)]
     project: Option<String>,
+    /// Include notes created at or after this RFC3339 timestamp
+    #[arg(long)]
+    created_after: Option<String>,
+    /// Include notes created before this RFC3339 timestamp
+    #[arg(long)]
+    created_before: Option<String>,
+    /// Exclude notes created through MCP
+    #[arg(long)]
+    human: bool,
     /// Search only archived notes
     #[arg(long)]
     archived: bool,
@@ -66,6 +75,9 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<()
             keywords: parsed.keywords,
             extractions: parsed.extractions,
             project,
+            created_after: args.created_after.clone(),
+            created_before: args.created_before.clone(),
+            human: args.human,
             archived: args.archived,
             limit: args.limit,
         }))

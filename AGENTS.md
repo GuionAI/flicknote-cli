@@ -13,10 +13,10 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 Rust workspace with 4 crates:
 
-- **flicknote-cli** — unified `flicknote` executable: thin CLI client and foreground daemon entrypoint; data commands never open SQLite or Postgres
+- **flicknote-cli** — unified `flicknote` executable: thin CLI client, foreground daemon, and explicit private remote MCP entrypoint; ordinary data commands never open SQLite or Postgres
 - **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Daemon application host, MCP HTTP server, typed IPC boundary, backend ownership, and PowerSync ↔ Supabase sync
+- **flicknote-sync** — Daemon application host, local and private remote MCP HTTP servers, typed IPC boundary, backend ownership, and PowerSync ↔ Supabase sync
 
 ### MCP interface
 
@@ -25,6 +25,15 @@ serves it over loopback Streamable HTTP with Origin and Host validation. MCP
 handlers and CLI IPC requests share the daemon `Application` and operation
 DTOs. The CLI remains for human and operational
 workflows; structured section mutations remain MCP operations.
+
+The explicit `flicknote private-mcp` foreground entrypoint uses a shared
+PostgreSQL pool, a per-request full-grant verifier, transaction-local Supabase
+identity, RLS, and PGroonga search. It reuses the application handlers and
+DTOs, advertises only the supported remote tool subset, and never loads the
+local config/session/PowerSync database. Do not route ordinary CLI commands
+through PostgreSQL. See `docs/private-mcp.md` for the verifier, role, schema,
+index, and operator contract. Real remote integration tests run through
+`scripts/test-private-pg.sh` against the test-owned peer image fixture.
 
 ### Machine note operation contract
 

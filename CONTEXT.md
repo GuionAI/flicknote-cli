@@ -1,6 +1,16 @@
-# FlickNote Recall
+# FlickNote
 
-Language for connecting the current conversation to existing notes.
+Language for note ownership, discovery, and connecting the current conversation to existing notes.
+
+## Note ownership
+
+**Note owner**:
+The FlickNote user to whom a note belongs. A note's project assignment and the client used to access it do not change its owner.
+_Avoid_: Project owner, MCP client, server operator
+
+**Private note collection**:
+The notes belonging to one FlickNote user, across all of that user's projects and notes without a project. Another user's authorization does not grant access to this collection.
+_Avoid_: Project, shared workspace
 
 ## Language
 
