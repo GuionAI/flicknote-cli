@@ -41,6 +41,14 @@ cargo build --release
 cargo install --path flicknote-cli
 ```
 
+The Linux musl distribution statically builds OpenSSL through its supported
+`vendored` feature. Its builder needs a musl C compiler, Perl, make, and
+clang/libclang for PowerSync bindings (on Debian/Ubuntu: `musl-tools`, `perl`,
+`make`, `clang`, `libclang-dev`). Build the unified binary with
+`cargo build --locked --profile dist --target x86_64-unknown-linux-musl -p flicknote-cli`.
+Other targets retain system OpenSSL discovery. See the
+[private MCP contract](docs/private-mcp.md) for runtime CA configuration.
+
 ## Install
 
 ### Homebrew (macOS + Linux)
@@ -66,6 +74,12 @@ tag triggers cargo-dist.
 Use `just --dry-run release patch` to print the commands without running them.
 If a push fails, keep `main` at the release commit and rerun the same command to
 resume the pending tag.
+
+The release uses cargo-dist 0.31.0 for `x86_64-unknown-linux-musl` and
+`aarch64-apple-darwin`. Verify the published Linux archive and its `.sha256`
+asset before handing the version to fse, which packages public GitHub Release
+binaries only. A failed public release tag stays immutable; publish a new
+patch after the correction is reviewed and merged.
 
 ## Usage
 
