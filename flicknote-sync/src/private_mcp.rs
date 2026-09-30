@@ -10,13 +10,12 @@ use axum::http::{HeaderMap, Request, Response, StatusCode, header};
 use axum::routing::any;
 use axum::{Json, Router, response::IntoResponse};
 use deadpool_postgres::{Manager, Pool};
-use openssl::ssl::{SslConnector, SslMethod};
-use postgres_openssl::MakeTlsConnector;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio_postgres::NoTls;
 use tower_service::Service;
 use uuid::Uuid;
 
@@ -284,12 +283,7 @@ pub async fn serve(config: PrivateMcpConfig) -> Result<(), String> {
     config.validate()?;
     let pg_config = tokio_postgres::Config::from_str(&config.database_url)
         .map_err(|_| "invalid database URL".to_string())?;
-    let tls = MakeTlsConnector::new(
-        SslConnector::builder(SslMethod::tls())
-            .map_err(|_| "TLS initialization failed".to_string())?
-            .build(),
-    );
-    let pool = Pool::builder(Manager::new(pg_config, tls))
+    let pool = Pool::builder(Manager::new(pg_config, NoTls))
         .max_size(16)
         .build()
         .map_err(|_| "PostgreSQL pool configuration failed".to_string())?;

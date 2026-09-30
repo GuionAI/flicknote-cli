@@ -25,13 +25,10 @@ flicknote private-mcp \
 
 The database URL is read from `FLICKNOTE_PRIVATE_DATABASE_URL` by default; use
 `--database-url-env NAME` when the operator supplies another environment key.
-The URL is never printed by this command. PostgreSQL TLS can be selected with
-its connection URL `sslmode` and must be configured for the target database.
-The Linux musl binary includes static OpenSSL, whose default CA location is
-`/usr/local/ssl`. For PostgreSQL TLS, provide the trusted PEM CA bundle through
-`SSL_CERT_FILE` (for example, `/etc/ssl/certs/ca-certificates.crt` when installed
-in the runtime image). Include the database's CA for a private certificate;
-certificate and hostname verification remain enabled.
+The URL is never printed by this command. PostgreSQL connections use `NoTls`
+inside the trusted server cluster; set `sslmode=disable` in the database URL.
+Database TLS and CA configuration are not supported. Public MCP and OAuth
+connections still use HTTPS; outbound HTTP clients use rustls.
 `--listen` is the socket inside the container and is independent of the
 canonical `--resource` URL. All three public URLs require HTTPS, except
 explicit localhost/loopback development URLs. The resource must end at `/mcp`.

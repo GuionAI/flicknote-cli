@@ -24,7 +24,6 @@
 
         buildInputs = with pkgs; [
           cacert
-          openssl
           sqlite
         ] ++ lib.optionals stdenv.isDarwin [
           darwin.apple_sdk.frameworks.Security
