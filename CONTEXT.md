@@ -4,6 +4,16 @@ Language for note ownership, discovery, and connecting the current conversation 
 
 ## Note ownership
 
+**FlickNote plugin**:
+The publicly discoverable FlickNote integration through which a person connects
+their FlickNote account and works with their own notes in ChatGPT.
+_Avoid_: CLI installer, shared note collection
+
+**Connected FlickNote account**:
+The FlickNote account a person has authorized the plugin to access. Publishing
+the plugin does not make that account's notes public.
+_Avoid_: OpenAI account, plugin publisher
+
 **Draft note**:
 A stored note that has not been submitted for processing. Editing its content
 or metadata does not submit it.

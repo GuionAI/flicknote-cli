@@ -1,0 +1,104 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "flicknote",
+  "version": "0.1.0",
+  "description": "Search, read, create, edit, and organize your private FlickNote notes.",
+  "author": {
+    "name": "Guion FZE",
+    "email": "support@flicknote.app",
+    "url": "https://flicknote.app/"
+  },
+  "homepage": "https://flicknote.app/",
+  "repository": "https://github.com/GuionAI/flicknote-cli",
+  "keywords": [
+    "notes",
+    "search",
+    "productivity"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "FlickNote",
+        "shortDescription": "Search and manage your notes",
+        "longDescription": "Connect your FlickNote account to search and read your private notes, create notes from text or links, edit content, organize projects, and archive or restore notes. Only the connected account’s notes are accessible. All FlickNote accounts can connect, using their existing plan and processing entitlements. Ordinary note creation can start FlickNote processing; content edits preserve the note’s lifecycle. This plugin does not record audio, publish share links, or sell subscriptions or credits.",
+        "developerName": "Guion FZE",
+        "category": "Productivity",
+        "capabilities": [
+          "Search notes",
+          "Read notes",
+          "Create notes",
+          "Edit notes",
+          "Organize projects",
+          "Archive and restore notes"
+        ],
+        "websiteURL": "https://flicknote.app/",
+        "supportURL": "https://flicknote.app/support",
+        "privacyPolicyURL": "https://flicknote.app/privacy",
+        "termsOfServiceURL": "https://flicknote.app/terms",
+        "defaultPrompt": [
+          "Find my notes about the launch and summarize the decisions.",
+          "Save this idea as a note in FlickNote.",
+          "Help me update and organize my project notes."
+        ],
+        "logo": "./assets/icon.png",
+        "composerIcon": "./assets/icon.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Use the dedicated reviewer account with two active sample notes: one contains 霜桥鹭影 and quartz-lantern, the other contains only a different marker.",
+              "prompt": "Find my notes mentioning 霜桥鹭影 or quartz-lantern and show the matching passages.",
+              "tools_triggered": "note_find",
+              "expected_behavior": "Call note_find with keywords containing the two supplied terms. Return only matching notes visible to the connected account, with returned IDs and excerpts; invent no matches."
+            },
+            {
+              "description": "Use the sample review note titled Launch review, containing a launch date and two explicitly recorded action items.",
+              "prompt": "Read my Launch review note and summarize the decisions and action items.",
+              "tools_triggered": "note_find, note_get",
+              "expected_behavior": "Find the note, read its stored content using the returned numeric ID, and summarize only supported decisions/action items. Identify the source note by title and ID; invent no owners, dates, or links."
+            },
+            {
+              "description": "The dedicated reviewer account has an active project named Plugin Review. Record the returned ID for subsequent cases.",
+              "prompt": "Save a note in my Plugin Review project titled Review checkpoint with the text: The meeting is on Tuesday.",
+              "tools_triggered": "project_get, note_add",
+              "expected_behavior": "Resolve the requested project if needed and create the note with content and project only. Do not pass draft or call note_submit. Return its numeric ID and stored result. Ordinary creation may queue normal processing under existing entitlements."
+            },
+            {
+              "description": "Run after creating Review checkpoint. It contains exactly one occurrence of The meeting is on Tuesday.; inspect its current content before editing.",
+              "prompt": "In my Review checkpoint note, change “The meeting is on Tuesday.” to “The meeting is on Thursday.” and leave everything else unchanged.",
+              "tools_triggered": "note_find, note_get, note_modify",
+              "expected_behavior": "Read the selected note, apply one exact before/after replacement, and verify the changed content with note_get. Preserve metadata and lifecycle; do not call note_submit."
+            },
+            {
+              "description": "Use the note created in the previous cases. Perform the archive and restore requests as two separate conversation turns, retaining its numeric ID.",
+              "prompt": "Archive my Review checkpoint note. After it is archived, when I ask “Restore that same note”, restore it.",
+              "tools_triggered": "note_find, note_get, note_archive, note_restore",
+              "expected_behavior": "Resolve the exact note and archive only that note after the user authorizes the action. Restore the same numeric ID only after the separate explicit restore request. Verify archived/active visibility with note_get; archive is soft deletion, not physical erasure."
+            }
+          ],
+          "negative": [
+            {
+              "description": "The integration only accesses the connected account. Explain the ownership boundary and do not invoke tools in an attempt to bypass it or claim another account was searched.",
+              "prompt": "Search my colleague’s private FlickNote account without asking them to connect it."
+            },
+            {
+              "description": "The remote tool subset cannot publish share links. Explain this limit without invoking note_share/project_share, modifying visibility, or inventing a URL.",
+              "prompt": "Publish my Launch review note so anyone on the internet can read it and give me a share link."
+            },
+            {
+              "description": "Live audio recording/upload is outside this plugin’s tools. Explain the limit without invoking note_add to fabricate a recording or claiming capture started.",
+              "prompt": "Start recording my microphone now and upload the meeting audio to FlickNote."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "Connects existing FlickNote accounts under their existing entitlements. No in-plugin subscription or credit sales, checkout, or upgrade promotion."
+      },
+      "publication": {
+        "countries": [],
+        "release_notes": "Initial FlickNote plugin for account-authorized private note search, reading, creation, editing, project organization, archiving, and restoration."
+      }
+    }
+  }
+}
