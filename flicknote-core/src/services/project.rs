@@ -4,11 +4,11 @@ use crate::backend::NoteDb;
 use crate::error::CliError;
 use crate::types::Project;
 
-use super::dto::{
-    Patch, ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
-};
 use super::error::ServiceError;
 use super::ports::{ShareGateway, ShareResource};
+use flicknote_client::dto::{
+    Patch, ProjectAddInput, ProjectDto, ProjectModifyInput, ShareResult, UnshareResult,
+};
 
 pub struct ProjectService<'a> {
     db: &'a dyn NoteDb,
@@ -145,10 +145,10 @@ impl From<Project> for ProjectDto {
 mod tests {
 
     use crate::backend::NoteDb;
-    use crate::services::dto::{Patch, ProjectAddInput, ProjectModifyInput};
     use crate::services::ports::{ShareGateway, ShareResource};
     use crate::services::test_support::make_backend;
     use async_trait::async_trait;
+    use flicknote_client::dto::{Patch, ProjectAddInput, ProjectModifyInput};
 
     use super::ProjectService;
 

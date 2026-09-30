@@ -66,7 +66,7 @@ fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn s
 
 struct ActorHandles {
     checkpoint: JoinHandle<()>,
-    socket: JoinHandle<Result<(), ipc::DaemonError>>,
+    socket: JoinHandle<Result<(), flicknote_client::DaemonError>>,
     mcp: JoinHandle<std::io::Result<()>>,
     powersync: JoinSet<()>,
 }
@@ -397,22 +397,22 @@ fn spawn_socket_server(
     app: Arc<Application>,
     db: &PowerSyncDatabase,
     shutdown: watch::Receiver<bool>,
-) -> JoinHandle<Result<(), ipc::DaemonError>> {
+) -> JoinHandle<Result<(), flicknote_client::DaemonError>> {
     let db = db.clone();
     let info_provider: ipc::ServerInfoProvider = Arc::new(move || {
         let status = db.status();
         let sync = if status.is_connected() {
-            ipc::SyncConnectionState::Connected
+            flicknote_client::SyncConnectionState::Connected
         } else if status.is_connecting() {
-            ipc::SyncConnectionState::Connecting
+            flicknote_client::SyncConnectionState::Connecting
         } else {
-            ipc::SyncConnectionState::Offline
+            flicknote_client::SyncConnectionState::Offline
         };
-        let sync_errors = ipc::PowerSyncErrors {
+        let sync_errors = flicknote_client::PowerSyncErrors {
             download: status.download_error().map(ToString::to_string),
             upload: status.upload_error().map(ToString::to_string),
         };
-        ipc::ServerInfo::current()
+        ipc::server_info()
             .with_sync_status(sync, sync_errors)
             .with_search_state("ready")
     });

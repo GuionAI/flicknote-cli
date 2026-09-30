@@ -1,4 +1,5 @@
 use super::*;
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -119,7 +120,7 @@ async fn serve_app_stream(
             }
         }
         DaemonRequest::Health { protocol } | DaemonRequest::App { protocol, .. } => {
-            let info = ServerInfo::current();
+            let info = server_info();
             DaemonResponse::AppError(WireError {
                 code: PROTOCOL_MISMATCH_CODE.to_string(),
                 message: format!(

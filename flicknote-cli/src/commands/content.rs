@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::{NoteDetail, NoteSectionResult};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteDetail, NoteSectionResult};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const CONTENT_HELP: &str = include_str!("../help/content.md");
 
@@ -15,7 +15,7 @@ pub(crate) struct ContentArgs {
     section: Option<String>,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ContentArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &ContentArgs) -> Result<(), CliError> {
     let output = match args.section.as_deref() {
         Some(section) => {
             daemon

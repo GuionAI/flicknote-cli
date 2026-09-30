@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::NoteMutationResult;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteMutationResult;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, read_stdin_required};
 
@@ -14,7 +14,7 @@ pub(crate) struct AppendArgs {
     id: String,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AppendArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &AppendArgs) -> Result<(), CliError> {
     let new_content = read_stdin_required()?;
     let result: NoteMutationResult = daemon
         .call(AppRequest::NoteAppend {

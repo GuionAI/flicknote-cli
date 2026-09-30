@@ -4,7 +4,7 @@ use crate::TOPIC_EXTRACTION_KEY;
 use crate::backend::NoteDb;
 use crate::error::CliError;
 use crate::types::Note;
-use serde::{Deserialize, Serialize};
+use flicknote_client::editable_document::EditableSaveResult;
 
 use super::frontmatter::{self, EditableDoc};
 
@@ -13,13 +13,6 @@ pub struct ParsedEditableNote {
     pub title: String,
     pub stored_content: String,
     pub topics: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EditableSaveResult {
-    pub title_changed: bool,
-    pub content_changed: bool,
-    pub stored_content: String,
 }
 
 pub async fn load_editable_note(db: &dyn NoteDb, note_id: &str) -> Result<String, CliError> {
@@ -127,8 +120,8 @@ async fn load_managed_topics(db: &dyn NoteDb, note_id: &str) -> Result<Vec<Strin
 mod tests {
     use super::*;
     use crate::backend::{InsertNoteReq, InsertedNote, NoteFilter, NoteSearch};
-    use crate::services::dto::RecallCandidate;
     use crate::types::Project;
+    use flicknote_client::dto::RecallCandidate;
     use std::collections::HashMap;
     use std::sync::Mutex;
 

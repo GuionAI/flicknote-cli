@@ -6,7 +6,7 @@
 use powersync::PowerSyncDatabase;
 use rusqlite::{Connection, Result, params};
 
-use flicknote_core::services::dto::{NoteFindInput, SearchHit, SearchSnippet, SnippetSegment};
+use flicknote_client::dto::{NoteFindInput, SearchHit, SearchSnippet, SnippetSegment};
 
 const BACKING_TABLE: &str = "ps_data__notes";
 pub const FTS_SCHEMA_VERSION: i64 = 1;

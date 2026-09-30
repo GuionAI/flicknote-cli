@@ -9,7 +9,7 @@ use flicknote_core::{
 };
 use serde::Deserialize;
 
-use crate::ipc::DaemonError;
+use flicknote_client::DaemonError;
 
 #[cfg(test)]
 mod tests;

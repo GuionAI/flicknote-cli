@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::{NoteModifyInput, NoteMutationResult, Patch};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteModifyInput, NoteMutationResult, Patch};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::{display_summary_id, print_section_tree};
 
@@ -46,7 +46,7 @@ pub(crate) struct ModifyArgs {
     unflagged: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ModifyArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &ModifyArgs) -> Result<(), CliError> {
     let flagged = if args.flagged {
         Patch::Value(true)
     } else if args.unflagged {

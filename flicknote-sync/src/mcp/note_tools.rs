@@ -1,8 +1,8 @@
-use flicknote_core::services::dto::{ExtractionFilterDto, Patch};
+use flicknote_client::dto::{ExtractionFilterDto, Patch};
 use flicknote_core::types::NoteStatus;
 
 use super::dto::McpEntityType;
-use flicknote_core::services::source::SourceView;
+use flicknote_client::source::SourceView;
 use rmcp::schemars::JsonSchema;
 use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -268,7 +268,7 @@ pub(super) struct NoteInsertParams {
     #[serde(deserialize_with = "deserialize_note_id")]
     pub id: i64,
     pub section: String,
-    pub position: flicknote_core::services::dto::InsertPosition,
+    pub position: flicknote_client::dto::InsertPosition,
     pub content: String,
 }
 

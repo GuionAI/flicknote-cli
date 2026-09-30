@@ -3,7 +3,7 @@ use std::path::Path;
 use flicknote_core::config::Config;
 use serde::Deserialize;
 
-use crate::ipc::DaemonError;
+use flicknote_client::DaemonError;
 
 fn attachment_endpoint(base_url: &str, path: &str) -> String {
     let versioned_base = base_url

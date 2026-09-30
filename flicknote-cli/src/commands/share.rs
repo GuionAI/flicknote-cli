@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::{ShareResult, UnshareResult};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{ShareResult, UnshareResult};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const SHARE_HELP: &str = include_str!("../help/share.md");
 const UNSHARE_HELP: &str = include_str!("../help/unshare.md");
@@ -20,7 +20,7 @@ pub(crate) struct UnshareArgs {
     pub(crate) id: String,
 }
 
-pub(crate) async fn run_note(daemon: &DaemonClient<'_>, args: &ShareArgs) -> Result<(), CliError> {
+pub(crate) async fn run_note(daemon: &DaemonClient, args: &ShareArgs) -> Result<(), CliError> {
     let result: ShareResult = daemon
         .call(AppRequest::NoteShare {
             id: args.id.clone(),
@@ -30,7 +30,7 @@ pub(crate) async fn run_note(daemon: &DaemonClient<'_>, args: &ShareArgs) -> Res
     Ok(())
 }
 
-pub(crate) async fn run_project(daemon: &DaemonClient<'_>, id: &str) -> Result<(), CliError> {
+pub(crate) async fn run_project(daemon: &DaemonClient, id: &str) -> Result<(), CliError> {
     let result: ShareResult = daemon
         .call(AppRequest::ProjectShare { id: id.to_string() })
         .await?;
@@ -39,7 +39,7 @@ pub(crate) async fn run_project(daemon: &DaemonClient<'_>, id: &str) -> Result<(
 }
 
 pub(crate) async fn run_unshare_note(
-    daemon: &DaemonClient<'_>,
+    daemon: &DaemonClient,
     args: &UnshareArgs,
 ) -> Result<(), CliError> {
     let _: UnshareResult = daemon
@@ -51,10 +51,7 @@ pub(crate) async fn run_unshare_note(
     Ok(())
 }
 
-pub(crate) async fn run_unshare_project(
-    daemon: &DaemonClient<'_>,
-    id: &str,
-) -> Result<(), CliError> {
+pub(crate) async fn run_unshare_project(daemon: &DaemonClient, id: &str) -> Result<(), CliError> {
     let _: UnshareResult = daemon
         .call(AppRequest::ProjectUnshare { id: id.to_string() })
         .await?;

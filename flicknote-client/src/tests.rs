@@ -1,69 +1,21 @@
 use super::*;
-use flicknote_core::config::{Config, ConfigPaths};
-use flicknote_core::services::dto::Patch;
+use crate::client::response_timeout_for;
+use crate::dto::*;
 use serde_json::json;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::UnixListener;
 
-fn test_config(directory: &std::path::Path) -> Config {
-    Config {
-        supabase_url: String::new(),
-        supabase_anon_key: String::new(),
-        powersync_url: String::new(),
-        api_url: String::new(),
-        gateway_url: String::new(),
-        web_url: None,
-        paths: ConfigPaths {
-            config_dir: directory.to_path_buf(),
-            data_dir: directory.to_path_buf(),
-            config_file: directory.join("config.json"),
-            session_file: directory.join("session.json"),
-            db_file: directory.join("flicknote.db"),
-            log_file: directory.join("daemon.log"),
-        },
-    }
-}
-
 async fn serve_response(
-    config: &Config,
+    config: &std::path::Path,
     response: DaemonResponse,
 ) -> tokio::task::JoinHandle<DaemonRequest> {
-    let listener = UnixListener::bind(socket_path(config)).unwrap();
+    let listener = UnixListener::bind(config).unwrap();
     tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let request = read_request(&mut stream).await.unwrap();
         write_response(&mut stream, &response).await.unwrap();
         request
     })
-}
-
-#[test]
-fn socket_path_lives_in_data_dir() {
-    let suffix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "flicknote-ipc-test-{}-{suffix}",
-        std::process::id()
-    ));
-    let config = Config {
-        supabase_url: String::new(),
-        supabase_anon_key: String::new(),
-        powersync_url: String::new(),
-        api_url: String::new(),
-        gateway_url: String::new(),
-        web_url: None,
-        paths: ConfigPaths {
-            config_dir: dir.clone(),
-            data_dir: dir.clone(),
-            config_file: dir.join("config.json"),
-            session_file: dir.join("session.json"),
-            db_file: dir.join("flicknote.db"),
-            log_file: dir.join("daemon.log"),
-        },
-    };
-
-    assert_eq!(socket_path(&config), dir.join("daemon.sock"));
 }
 
 #[test]
@@ -141,7 +93,7 @@ fn protocol_v15_uses_typed_project_contracts() {
 
 #[test]
 fn server_info_reports_precise_runtime_status_contract() {
-    let info = ServerInfo::current();
+    let info = test_server_info();
     assert_eq!(info.protocol, PROTOCOL_VERSION);
     assert!(!info.version.is_empty());
     assert!(!info.executable.is_empty());
@@ -159,26 +111,15 @@ fn server_info_reports_precise_runtime_status_contract() {
     );
 }
 
-#[test]
-fn wire_error_preserves_partial_success_details() {
-    let details = json!({"created": true, "short_id": 80});
-    let wire = WireError::from_service(ServiceError::Remote {
-        code: "note_create_partial".to_string(),
-        message: "note created; topics pending".to_string(),
-        retryable: false,
-        details: Some(details.clone()),
-    });
-
-    assert_eq!(wire.code, "note_create_partial");
-    assert_eq!(wire.details, Some(details));
-}
-
 #[tokio::test]
 async fn daemon_client_maps_missing_socket_to_retryable_unavailable() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("missing-data-dir/daemon.sock");
 
-    let error = DaemonClient::new(&config).health().await.unwrap_err();
+    let client = DaemonClient::new(&config);
+    assert!(!config.parent().unwrap().exists());
+    let error = client.health().await.unwrap_err();
+    assert!(!config.parent().unwrap().exists());
 
     assert_eq!(error.code(), "daemon_unavailable");
     assert!(error.retryable());
@@ -189,8 +130,8 @@ async fn daemon_client_maps_missing_socket_to_retryable_unavailable() {
 #[tokio::test]
 async fn health_request_has_a_bounded_response_wait() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let listener = UnixListener::bind(socket_path(&config)).unwrap();
+    let config = directory.path().join("daemon.sock");
+    let listener = UnixListener::bind(&config).unwrap();
     let server = tokio::spawn(async move {
         let (_stream, _) = listener.accept().await.unwrap();
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -243,7 +184,7 @@ fn recall_application_requests_use_the_long_generic_transport_guard() {
 #[tokio::test]
 async fn daemon_client_preserves_versioned_app_results_and_errors() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::App(Box::new(AppResponse::NoteCount { count: 7 })),
@@ -261,7 +202,7 @@ async fn daemon_client_preserves_versioned_app_results_and_errors() {
     assert!(matches!(server.await.unwrap(), DaemonRequest::App { .. }));
 
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::AppError(WireError {
@@ -287,7 +228,7 @@ async fn daemon_client_preserves_versioned_app_results_and_errors() {
 #[tokio::test]
 async fn health_rejects_unexpected_daemon_responses() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::App(Box::new(AppResponse::NoteCount { count: 0 })),
@@ -302,7 +243,7 @@ async fn health_rejects_unexpected_daemon_responses() {
 #[tokio::test]
 async fn protocol_v15_client_rejects_protocol_v14_server_info() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::ServerInfo(ServerInfo {
@@ -333,7 +274,7 @@ async fn protocol_v15_client_rejects_protocol_v14_server_info() {
 #[tokio::test]
 async fn health_preserves_protocol_mismatch_details_from_daemon() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::AppError(WireError {
@@ -353,7 +294,7 @@ async fn health_preserves_protocol_mismatch_details_from_daemon() {
 
     assert_eq!(error.code(), PROTOCOL_MISMATCH_CODE);
     match error {
-        ServiceError::Remote { details, .. } => {
+        ClientError::Remote { details, .. } => {
             let details = details.unwrap();
             assert_eq!(details["daemon_executable"], "/usr/local/bin/flicknote");
             assert_eq!(details["daemon_version"], "0.8.0");
@@ -366,8 +307,8 @@ async fn health_preserves_protocol_mismatch_details_from_daemon() {
 #[tokio::test]
 async fn application_maps_unknown_envelope_to_protocol_mismatch() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let listener = UnixListener::bind(socket_path(&config)).unwrap();
+    let config = directory.path().join("daemon.sock");
+    let listener = UnixListener::bind(&config).unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _request = read_request(&mut stream).await.unwrap();
@@ -393,8 +334,8 @@ async fn application_maps_unknown_envelope_to_protocol_mismatch() {
 #[tokio::test]
 async fn mutating_application_maps_incomplete_response_to_unknown_outcome() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let listener = UnixListener::bind(socket_path(&config)).unwrap();
+    let config = directory.path().join("daemon.sock");
+    let listener = UnixListener::bind(&config).unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _request = read_request(&mut stream).await.unwrap();
@@ -435,8 +376,8 @@ async fn malformed_transport_responses_are_classified_by_mutation_safety() {
         ),
     ] {
         let directory = tempfile::tempdir().unwrap();
-        let config = test_config(directory.path());
-        let listener = UnixListener::bind(socket_path(&config)).unwrap();
+        let config = directory.path().join("daemon.sock");
+        let listener = UnixListener::bind(&config).unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let _request = read_request(&mut stream).await.unwrap();
@@ -455,7 +396,7 @@ async fn malformed_transport_responses_are_classified_by_mutation_safety() {
 #[tokio::test]
 async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::App(Box::new(AppResponse::Values(Vec::new()))),
@@ -473,7 +414,7 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
     server.await.unwrap();
 
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
+    let config = directory.path().join("daemon.sock");
     let server = serve_response(
         &config,
         DaemonResponse::App(Box::new(AppResponse::Values(Vec::new()))),
@@ -492,8 +433,8 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
 #[tokio::test]
 async fn unexpected_outer_responses_are_classified_by_mutation_safety() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let server = serve_response(&config, DaemonResponse::ServerInfo(ServerInfo::current())).await;
+    let config = directory.path().join("daemon.sock");
+    let server = serve_response(&config, DaemonResponse::ServerInfo(test_server_info())).await;
 
     let error = DaemonClient::new(&config)
         .app(AppRequest::NoteArchive {
@@ -510,8 +451,8 @@ async fn unexpected_outer_responses_are_classified_by_mutation_safety() {
 #[tokio::test]
 async fn health_maps_legacy_daemon_error_to_protocol_mismatch() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let listener = UnixListener::bind(socket_path(&config)).unwrap();
+    let config = directory.path().join("daemon.sock");
+    let listener = UnixListener::bind(&config).unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let request = read_request(&mut stream).await.unwrap();
@@ -540,8 +481,8 @@ async fn health_maps_legacy_daemon_error_to_protocol_mismatch() {
 #[tokio::test]
 async fn health_maps_empty_startup_response_to_retryable_unavailable() {
     let directory = tempfile::tempdir().unwrap();
-    let config = test_config(directory.path());
-    let listener = UnixListener::bind(socket_path(&config)).unwrap();
+    let config = directory.path().join("daemon.sock");
+    let listener = UnixListener::bind(&config).unwrap();
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _request = read_request(&mut stream).await.unwrap();
@@ -553,4 +494,38 @@ async fn health_maps_empty_startup_response_to_retryable_unavailable() {
     assert_eq!(error.code(), "daemon_unavailable");
     assert!(error.retryable());
     server.await.unwrap();
+}
+
+fn test_server_info() -> ServerInfo {
+    ServerInfo {
+        protocol: PROTOCOL_VERSION,
+        version: env!("CARGO_PKG_VERSION").into(),
+        executable: "fake-daemon".into(),
+        sync: None,
+        sync_errors: PowerSyncErrors::default(),
+        search: None,
+    }
+}
+
+async fn read_request(
+    stream: &mut tokio::net::UnixStream,
+) -> Result<DaemonRequest, std::io::Error> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes).await?;
+    Ok(serde_json::from_slice(&bytes)?)
+}
+
+async fn write_response(
+    stream: &mut tokio::net::UnixStream,
+    response: &DaemonResponse,
+) -> Result<(), std::io::Error> {
+    write_json(stream, response).await
+}
+
+async fn write_json(
+    stream: &mut tokio::net::UnixStream,
+    response: &(impl serde::Serialize + Sync),
+) -> Result<(), std::io::Error> {
+    stream.write_all(&serde_json::to_vec(response)?).await?;
+    stream.shutdown().await
 }

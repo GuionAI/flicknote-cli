@@ -1,8 +1,8 @@
 use clap::Args;
+use flicknote_client::dto::{NoteListInput, NoteListItem};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteListInput, NoteListItem};
 use flicknote_core::types::NoteStatus;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::print_summaries_table;
 
@@ -49,7 +49,7 @@ pub(crate) struct ListArgs {
     json: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &ListArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let notes: Vec<NoteListItem> = match daemon
         .call(AppRequest::NoteList(NoteListInput {

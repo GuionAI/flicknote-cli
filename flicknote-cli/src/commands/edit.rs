@@ -1,9 +1,9 @@
 use super::util::display_summary_id;
 use clap::Args;
+use flicknote_client::dto::{NoteDetail, NoteSummary};
+use flicknote_client::editable_document::EditableSaveResult;
+use flicknote_client::{AppRequest, DaemonClient, EditableDocument};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteDetail, NoteSummary};
-use flicknote_core::services::editable_document::EditableSaveResult;
-use flicknote_sync::ipc::{AppRequest, DaemonClient, EditableDocument};
 use std::io::Write;
 #[derive(Args)]
 pub(crate) struct EditArgs {
@@ -66,7 +66,7 @@ fn open_in_editor(initial_content: &str) -> Result<String, CliError> {
     Ok(content.trim_end().to_string())
 }
 /// Edit an existing note.
-async fn edit_existing(daemon: &DaemonClient<'_>, id: &str) -> Result<(), CliError> {
+async fn edit_existing(daemon: &DaemonClient, id: &str) -> Result<(), CliError> {
     let display_content = daemon
         .call::<EditableDocument>(AppRequest::NoteLoadEditable { id: id.to_string() })
         .await?
@@ -106,7 +106,7 @@ async fn edit_existing(daemon: &DaemonClient<'_>, id: &str) -> Result<(), CliErr
 }
 /// Create a new note from editor.
 async fn create_from_editor(
-    daemon: &DaemonClient<'_>,
+    daemon: &DaemonClient,
     project_arg: &Option<String>,
 ) -> Result<(), CliError> {
     let edited = open_in_editor("")?;
@@ -130,7 +130,7 @@ async fn create_from_editor(
     }
     Ok(())
 }
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &EditArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &EditArgs) -> Result<(), CliError> {
     if args.id.is_some() && args.project.is_some() {
         return Err(CliError::Other(
             "--project is only valid when creating a new note (omit the ID)".into(),

@@ -1,9 +1,9 @@
 use std::io::Read;
 
 use clap::{Args, Subcommand};
+use flicknote_client::dto::{NoteRouteProjectInput, NoteRouteProjectResult};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteRouteProjectInput, NoteRouteProjectResult};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
 pub(crate) struct NoteArgs {
@@ -17,13 +17,13 @@ enum NoteCommand {
     RouteProject,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &NoteArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &NoteArgs) -> Result<(), CliError> {
     match args.command {
         NoteCommand::RouteProject => route_project(daemon).await,
     }
 }
 
-async fn route_project(daemon: &DaemonClient<'_>) -> Result<(), CliError> {
+async fn route_project(daemon: &DaemonClient) -> Result<(), CliError> {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input)?;
     let routes: Vec<NoteRouteProjectInput> = serde_json::from_str(&input)?;

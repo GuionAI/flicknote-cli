@@ -2,7 +2,7 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::project::ProjectService;
 
 use super::Application;
-use crate::ipc::{AppRequest, AppResponse, WireError};
+use flicknote_client::{AppRequest, AppResponse, WireError};
 
 pub(super) async fn handle_read(
     app: &Application,
@@ -14,12 +14,12 @@ pub(super) async fn handle_read(
             .list(include_archived)
             .await
             .map(AppResponse::Projects)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectGet { id } => projects
             .get(&id)
             .await
             .map(AppResponse::Project)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectGetByName { name } => project_by_name(app, &name).await,
         _ => unreachable!("request kind guarantees a read-only project request"),
     }
@@ -35,27 +35,27 @@ pub(super) async fn handle_write(
             .add(input)
             .await
             .map(AppResponse::Project)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectModify(input) => projects
             .modify(input)
             .await
             .map(AppResponse::Project)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectArchive { id } => projects
             .archive(&id)
             .await
             .map(AppResponse::Project)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectShare { id } => projects
             .share(app.share_gateway()?, &id)
             .await
             .map(AppResponse::Share)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::ProjectUnshare { id } => projects
             .unshare(app.share_gateway()?, &id)
             .await
             .map(AppResponse::Unshare)
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         _ => unreachable!("request kind guarantees a mutating project request"),
     }
 }
@@ -66,10 +66,10 @@ async fn project_by_name(app: &Application, name: &str) -> Result<AppResponse, W
         .find_project_by_name(name)
         .await
         .map_err(Application::db_error)?
-        .ok_or_else(|| WireError::from_service(ServiceError::ProjectNotFound(name.to_string())))?;
+        .ok_or_else(|| WireError::from(ServiceError::ProjectNotFound(name.to_string())))?;
     ProjectService::new(app.db.as_ref())
         .get(&id)
         .await
         .map(AppResponse::Project)
-        .map_err(WireError::from_service)
+        .map_err(WireError::from)
 }

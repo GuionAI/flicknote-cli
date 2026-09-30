@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::ENTITY_EXTRACTION_KEYS;
 use flicknote_core::error::CliError;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const ENTITY_HELP: &str = include_str!("../help/entity.md");
 const ENTITY_LIST_HELP: &str = "Examples:
@@ -32,13 +32,13 @@ struct ListArgs {
     entity_type: Option<String>,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &EntityArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &EntityArgs) -> Result<(), CliError> {
     match &args.command {
         EntityCommands::List(args) => list(daemon, args).await,
     }
 }
 
-async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
+async fn list(daemon: &DaemonClient, args: &ListArgs) -> Result<(), CliError> {
     let keys = if let Some(ref entity_type) = args.entity_type {
         vec![format!("::{entity_type}")]
     } else {

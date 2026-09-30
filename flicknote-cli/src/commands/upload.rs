@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::NoteSummary;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteSummary;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::display_summary_id;
 
@@ -17,7 +17,7 @@ pub(crate) struct UploadArgs {
     project: Option<String>,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &UploadArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &UploadArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let path = std::fs::canonicalize(&args.path)
         .map_err(|_| CliError::Other(format!("File not found or unsupported: {}", args.path)))?;

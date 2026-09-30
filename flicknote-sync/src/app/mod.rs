@@ -5,8 +5,8 @@ use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::NoteService;
 use flicknote_core::services::ports::{NoteCreator, ProjectAssignmentEventSink, ShareGateway};
 
-use crate::ipc::{AppRequest, AppRequestKind, AppResponse, WireError};
 use crate::search::NoteSearch;
+use flicknote_client::{AppRequest, AppRequestKind, AppResponse, WireError};
 
 mod note;
 mod project;
@@ -92,12 +92,12 @@ impl Application {
     }
 
     fn db_error(error: flicknote_core::error::CliError) -> WireError {
-        WireError::from_service(ServiceError::from(error))
+        WireError::from(ServiceError::from(error))
     }
 
     fn share_gateway(&self) -> Result<&dyn ShareGateway, WireError> {
         self.share_gateway.as_deref().ok_or_else(|| {
-            WireError::from_service(ServiceError::InvalidArgument(
+            WireError::from(ServiceError::InvalidArgument(
                 "sharing is unavailable on this server".into(),
             ))
         })

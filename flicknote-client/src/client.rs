@@ -1,13 +1,15 @@
-use super::*;
+use crate::{
+    AppRequest, AppResponse, AppResult, ClientError, DaemonError, DaemonRequest, DaemonResponse,
+    PROTOCOL_MISMATCH_CODE, PROTOCOL_VERSION, ServerInfo, WireError,
+};
+use std::path::Path;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::UnixStream;
 
 const IPC_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_HEALTH_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 const IPC_APP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
-
-pub fn socket_path(config: &Config) -> PathBuf {
-    config.paths.data_dir.join("daemon.sock")
-}
 
 pub(crate) fn unavailable(path: &std::path::Path, stage: &str) -> DaemonError {
     DaemonError::Unavailable {
@@ -50,16 +52,15 @@ pub(crate) fn response_timeout_for(request: &DaemonRequest) -> Option<std::time:
 }
 
 pub async fn send_request(
-    config: &Config,
+    path: &Path,
     request: &DaemonRequest,
 ) -> Result<DaemonResponse, DaemonError> {
-    let path = socket_path(config);
     let request_bytes = serde_json::to_vec(request).map_err(|error| DaemonError::Other {
         message: format!("Failed to serialize daemon request: {error}"),
     })?;
-    let mut stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(&path))
+    let mut stream = tokio::time::timeout(IPC_CONNECT_TIMEOUT, UnixStream::connect(path))
         .await
-        .map_err(|_| unavailable(&path, "connecting"))?
+        .map_err(|_| unavailable(path, "connecting"))?
         .map_err(|error| DaemonError::Unavailable {
             path: path.display().to_string(),
             message: error.to_string(),
@@ -77,7 +78,7 @@ pub async fn send_request(
     } else {
         tokio::time::timeout(IPC_WRITE_TIMEOUT, write_request)
             .await
-            .map_err(|_| request_timeout_error(request, &path, "sending a request"))?
+            .map_err(|_| request_timeout_error(request, path, "sending a request"))?
             .map_err(|error| DaemonError::PostConnectTransport {
                 message: format!("Failed to send daemon request: {error}"),
             })?;
@@ -87,7 +88,7 @@ pub async fn send_request(
         Some(response_timeout) => {
             tokio::time::timeout(response_timeout, stream.read_to_end(&mut buf))
                 .await
-                .map_err(|_| request_timeout_error(request, &path, "waiting for a response"))?
+                .map_err(|_| request_timeout_error(request, path, "waiting for a response"))?
         }
         None => stream.read_to_end(&mut buf).await,
     }
@@ -113,21 +114,21 @@ pub async fn send_request(
     })
 }
 
-pub struct DaemonClient<'a> {
-    config: &'a Config,
+pub struct DaemonClient {
+    path: std::path::PathBuf,
 }
 
-impl<'a> DaemonClient<'a> {
-    pub fn new(config: &'a Config) -> Self {
-        Self { config }
+impl DaemonClient {
+    pub fn new(path: impl Into<std::path::PathBuf>) -> Self {
+        Self { path: path.into() }
     }
 
-    async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ServiceError> {
+    async fn request(&self, request: DaemonRequest) -> Result<DaemonResponse, ClientError> {
         let is_mutating = is_mutating_app_request(&request);
-        send_request(self.config, &request)
+        send_request(&self.path, &request)
             .await
             .map_err(|error| match error {
-                DaemonError::Unavailable { .. } => ServiceError::DaemonUnavailable(
+                DaemonError::Unavailable { .. } => ClientError::DaemonUnavailable(
                     "Check `flicknote daemon status` and start it with `flicknote daemon start`."
                         .to_string(),
                 ),
@@ -136,7 +137,7 @@ impl<'a> DaemonClient<'a> {
                 | DaemonError::PostConnectTransport { .. }
                     if !is_mutating =>
                 {
-                    ServiceError::DaemonUnavailable(
+                    ClientError::DaemonUnavailable(
                         "The FlickNote daemon is not ready. Check `flicknote daemon status` and start it with `flicknote daemon start`."
                             .to_string(),
                     )
@@ -150,11 +151,11 @@ impl<'a> DaemonClient<'a> {
                     Self::outcome_unknown(message)
                 }
                 DaemonError::InvalidResponse { .. } => Self::protocol_mismatch(None),
-                other => ServiceError::Daemon(other.to_string()),
+                other => ClientError::Daemon(other.to_string()),
             })
     }
 
-    pub async fn health(&self) -> Result<ServerInfo, ServiceError> {
+    pub async fn health(&self) -> Result<ServerInfo, ClientError> {
         match self
             .request(DaemonRequest::Health {
                 protocol: PROTOCOL_VERSION,
@@ -171,7 +172,7 @@ impl<'a> DaemonClient<'a> {
         }
     }
 
-    pub async fn app(&self, request: AppRequest) -> Result<AppResponse, ServiceError> {
+    pub async fn app(&self, request: AppRequest) -> Result<AppResponse, ClientError> {
         let may_write = request.may_write();
         match self
             .request(DaemonRequest::App {
@@ -190,7 +191,7 @@ impl<'a> DaemonClient<'a> {
         }
     }
 
-    pub async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ServiceError> {
+    pub async fn call<T: AppResult>(&self, request: AppRequest) -> Result<T, ClientError> {
         let may_write = request.may_write();
         let response = self.app(request).await?;
         T::from_response(response).ok_or_else(|| {
@@ -204,8 +205,8 @@ impl<'a> DaemonClient<'a> {
         })
     }
 
-    fn remote_error(error: WireError) -> ServiceError {
-        ServiceError::Remote {
+    fn remote_error(error: WireError) -> ClientError {
+        ClientError::Remote {
             code: error.code,
             message: error.message,
             retryable: error.retryable,
@@ -213,7 +214,7 @@ impl<'a> DaemonClient<'a> {
         }
     }
 
-    fn protocol_mismatch(info: Option<&ServerInfo>) -> ServiceError {
+    fn protocol_mismatch(info: Option<&ServerInfo>) -> ClientError {
         let details = info.map(|info| {
             serde_json::json!({
                 "daemon_executable": info.executable,
@@ -224,7 +225,7 @@ impl<'a> DaemonClient<'a> {
         Self::protocol_mismatch_from_details(details.as_ref())
     }
 
-    fn protocol_mismatch_from_details(details: Option<&serde_json::Value>) -> ServiceError {
+    fn protocol_mismatch_from_details(details: Option<&serde_json::Value>) -> ClientError {
         let daemon_executable = details
             .and_then(|value| value.get("daemon_executable"))
             .and_then(serde_json::Value::as_str);
@@ -245,7 +246,7 @@ impl<'a> DaemonClient<'a> {
             env!("CARGO_PKG_VERSION"),
             PROTOCOL_VERSION,
         );
-        ServiceError::Remote {
+        ClientError::Remote {
             code: PROTOCOL_MISMATCH_CODE.to_string(),
             message,
             retryable: false,
@@ -259,8 +260,8 @@ impl<'a> DaemonClient<'a> {
         }
     }
 
-    fn outcome_unknown(message: String) -> ServiceError {
-        ServiceError::Remote {
+    fn outcome_unknown(message: String) -> ClientError {
+        ClientError::Remote {
             code: "daemon_request_outcome_unknown".to_string(),
             message,
             retryable: false,

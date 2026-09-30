@@ -1,5 +1,5 @@
 use chrono::{DateTime, SecondsFormat, Utc};
-use flicknote_core::services::dto::RecallCandidate;
+use flicknote_client::dto::RecallCandidate;
 use flicknote_core::services::error::ServiceError;
 use rmcp::schemars::{Schema, SchemaGenerator};
 use serde::Serialize;

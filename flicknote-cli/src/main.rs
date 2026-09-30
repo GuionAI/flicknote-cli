@@ -1,9 +1,9 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
+use flicknote_client::DaemonClient;
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_sync::ipc::DaemonClient;
 use std::ffi::OsStr;
 use std::net::SocketAddr;
 
@@ -197,12 +197,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return commands::recall::run(&config, args).await;
     }
 
-    let daemon = DaemonClient::new(&config);
+    let daemon = DaemonClient::new(config.paths.data_dir.join("daemon.sock"));
     daemon.health().await?;
     dispatch(&cli, &daemon).await
 }
 
-async fn dispatch(cli: &Cli, daemon: &DaemonClient<'_>) -> Result<(), CliError> {
+async fn dispatch(cli: &Cli, daemon: &DaemonClient) -> Result<(), CliError> {
     let Some(ref command) = cli.command else {
         Cli::command()
             .print_help()

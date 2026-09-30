@@ -1,7 +1,7 @@
 use clap::{Args, Subcommand};
+use flicknote_client::dto::{Patch, ProjectAddInput, ProjectDto, ProjectModifyInput};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{Patch, ProjectAddInput, ProjectDto, ProjectModifyInput};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const PROJECT_HELP: &str = include_str!("../help/project.md");
 
@@ -79,7 +79,7 @@ struct DeleteProjectArgs {
     id: String,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ProjectArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &ProjectArgs) -> Result<(), CliError> {
     match &args.command {
         ProjectCommands::List(a) => list(daemon, a).await,
         ProjectCommands::Add(a) => add(daemon, a).await,
@@ -91,7 +91,7 @@ pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ProjectArgs) -> Result
     }
 }
 
-async fn add(daemon: &DaemonClient<'_>, args: &AddProjectArgs) -> Result<(), CliError> {
+async fn add(daemon: &DaemonClient, args: &AddProjectArgs) -> Result<(), CliError> {
     let project: ProjectDto = daemon
         .call(AppRequest::ProjectAdd(ProjectAddInput {
             name: args.name.clone(),
@@ -102,7 +102,7 @@ async fn add(daemon: &DaemonClient<'_>, args: &AddProjectArgs) -> Result<(), Cli
     Ok(())
 }
 
-async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError> {
+async fn list(daemon: &DaemonClient, args: &ListArgs) -> Result<(), CliError> {
     let projects: Vec<ProjectDto> = daemon
         .call(AppRequest::ProjectList {
             include_archived: args.include_archived,
@@ -142,7 +142,7 @@ async fn list(daemon: &DaemonClient<'_>, args: &ListArgs) -> Result<(), CliError
     Ok(())
 }
 
-async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliError> {
+async fn detail(daemon: &DaemonClient, args: &DetailArgs) -> Result<(), CliError> {
     let project: ProjectDto = daemon
         .call(AppRequest::ProjectGet {
             id: args.id.clone(),
@@ -175,7 +175,7 @@ async fn detail(daemon: &DaemonClient<'_>, args: &DetailArgs) -> Result<(), CliE
     Ok(())
 }
 
-async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(), CliError> {
+async fn modify(daemon: &DaemonClient, args: &ModifyProjectArgs) -> Result<(), CliError> {
     let patch = |value: &Option<String>| match value.as_deref() {
         None => Patch::Missing,
         Some("none") => Patch::Null,
@@ -192,7 +192,7 @@ async fn modify(daemon: &DaemonClient<'_>, args: &ModifyProjectArgs) -> Result<(
     Ok(())
 }
 
-async fn delete(daemon: &DaemonClient<'_>, args: &DeleteProjectArgs) -> Result<(), CliError> {
+async fn delete(daemon: &DaemonClient, args: &DeleteProjectArgs) -> Result<(), CliError> {
     let project: ProjectDto = daemon
         .call(AppRequest::ProjectArchive {
             id: args.id.clone(),

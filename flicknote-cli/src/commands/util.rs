@@ -1,5 +1,5 @@
+use flicknote_client::dto::{NoteListItem, NoteRecord, NoteSummary, SectionDto};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteListItem, NoteRecord, NoteSummary, SectionDto};
 use std::io::{IsTerminal, Read};
 
 pub(crate) fn display_summary_id(note: &NoteSummary) -> String {

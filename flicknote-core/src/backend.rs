@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 
 use crate::error::CliError;
-use crate::services::dto::RecallCandidate;
 use crate::types::{Note, Project};
+use flicknote_client::dto::RecallCandidate;
 
 // ─── Filter / request types ──────────────────────────────────────────────────
 

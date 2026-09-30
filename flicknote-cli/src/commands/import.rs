@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use clap::Args;
+use flicknote_client::dto::NoteSummary;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteSummary;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::display_summary_id;
 
@@ -16,7 +16,7 @@ pub(crate) struct ImportArgs {
     project: Option<String>,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &ImportArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &ImportArgs) -> Result<(), CliError> {
     // Collect .md files
     let files = collect_md_files(&args.path)?;
     if files.is_empty() {

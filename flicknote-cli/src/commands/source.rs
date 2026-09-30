@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::source::{SourceResult, SourceView};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::source::{SourceResult, SourceView};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const SOURCE_HELP: &str = include_str!("../help/source.md");
 
@@ -23,7 +23,7 @@ pub(crate) struct SourceArgs {
     archived: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &SourceArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &SourceArgs) -> Result<(), CliError> {
     if args.info && args.json {
         return Err(CliError::Other(
             "--info cannot be used with --json source output".into(),
