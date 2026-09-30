@@ -11,12 +11,20 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 ## Architecture
 
-Rust workspace with 4 crates:
+Rust workspace with 5 crates:
 
 - **flicknote-cli** — unified `flicknote` executable: thin CLI client, foreground daemon, and explicit private remote MCP entrypoint; ordinary data commands never open SQLite or Postgres
-- **flicknote-core** — Shared library (db, config, schema, types, session, services, DTOs, errors)
+- **flicknote-client** — Canonical pure application DTOs, wire protocol, transport errors, and async Unix socket client with an explicit endpoint
+- **flicknote-core** — Database, config, schema, storage types, session, services, internal errors, and storage/Markdown-to-client DTO conversions
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
-- **flicknote-sync** — Daemon application host, local and private remote MCP HTTP servers, typed IPC boundary, backend ownership, and PowerSync ↔ Supabase sync
+- **flicknote-sync** — Daemon application host, local and private remote MCP HTTP servers, IPC server, backend ownership, and PowerSync ↔ Supabase sync
+
+Use `flicknote-client` imports for shared DTOs and protocol types. Keep backend
+conversions and business algorithms in core/sync. The standalone client graph
+must remain free of core/sync/auth, databases, PowerSync, MCP, and HTTP servers.
+Callers resolve and pass the socket path; client construction manages no config,
+credentials, directories, or services. See [client usage](flicknote-client/README.md)
+for the compiled async example and failure semantics.
 
 ### MCP interface
 

@@ -1,5 +1,4 @@
-//! Lightweight async Unix socket client and canonical daemon wire contract.
-//! The caller supplies the endpoint; the daemon owns storage and service lifecycle.
+#![doc = include_str!("../README.md")]
 mod client;
 pub mod dto;
 pub mod editable_document;
