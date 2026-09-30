@@ -44,8 +44,11 @@ replacement heading and subtree; section deletion is destructive.
 
 Archiving is the normal soft-delete operation. Treat archive as destructive and
 use restore only when the user explicitly wants the identified archived note
-back. `draft: true` is the sole public lifecycle projection. Create a draft with
-`note_add { "draft": true }` and use `note_submit` for the explicit
+back. Local and remote `note_add` accept content and optional project and create
+ordinary notes: text enters `ai_queued`, recognized URLs enter `source_queued`.
+A supplied `draft` argument is invalid input. Human CLI `flicknote add --draft`
+creates drafts. Existing drafts remain readable and editable; `draft: true` is
+the sole public lifecycle projection. Use `note_submit` for the explicit
 `draft → ai_queued` transition. Ordinary edits never requeue processing. Do not
 assume arbitrary processing or synchronization values are valid lifecycle
 states. `note_list` may filter the canonical `draft`, `ai_queued`,

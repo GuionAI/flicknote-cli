@@ -147,11 +147,21 @@ impl FlickNoteMcp {
         {
             db.mark_failed();
         }
-        let response = result.map_err(|error| ServiceError::Remote {
-            code: error.code,
-            message: error.message,
-            retryable: error.retryable,
-            details: error.details,
+        let response = result.map_err(|error| {
+            if self.request_db.is_some() && error.code == "note_create_partial" {
+                return ServiceError::Remote {
+                    code: "note_create_failed".to_string(),
+                    message: "Note creation failed; the request was rolled back.".to_string(),
+                    retryable: false,
+                    details: Some(serde_json::json!({"created": false, "rolled_back": true})),
+                };
+            }
+            ServiceError::Remote {
+                code: error.code,
+                message: error.message,
+                retryable: error.retryable,
+                details: error.details,
+            }
         })?;
         T::from_response(response).ok_or_else(|| {
             ServiceError::Internal("application returned an unexpected response".to_string())
@@ -430,7 +440,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_add",
-        description = "Create a note through the FlickNote daemon. A leading H1 becomes the title; draft=true creates a normal draft instead of a link note.",
+        description = "Create an ordinary non-draft note. A leading H1 becomes the title; recognized URLs create link notes.",
         annotations(open_world_hint = true)
     )]
     async fn note_add(
@@ -443,7 +453,7 @@ impl FlickNoteMcp {
                 content: params.content,
                 project: params.project,
                 interpret_as_url: true,
-                draft: params.draft,
+                draft: false,
                 topics: Vec::new(),
                 created_by: Some(mcp_created_by(&context)),
                 created_at: None,

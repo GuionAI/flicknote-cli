@@ -71,6 +71,7 @@ struct McpHarness {
     note_uuid: String,
     alpha_id: String,
     server: tokio::task::JoinHandle<()>,
+    app: Arc<Application>,
 }
 
 impl McpHarness {
@@ -93,7 +94,7 @@ impl McpHarness {
                 .with_web_url(config.web_url.clone())
                 .with_search(search),
         );
-        let service = mcp::FlickNoteMcp::new(app);
+        let service = mcp::FlickNoteMcp::new(app.clone());
         let (server_io, client_io) = tokio::io::duplex(8 * 1024);
         let server = tokio::spawn(async move {
             service
@@ -115,6 +116,7 @@ impl McpHarness {
             note_uuid,
             alpha_id,
             server,
+            app,
         }
     }
 
@@ -459,7 +461,8 @@ async fn mcp_server_exposes_stable_tool_contract() {
         serde_json::json!({ "id": { "type": "integer" } })
     );
     assert_eq!(add["outputSchema"]["required"], serde_json::json!(["id"]));
-    assert_eq!(add["inputSchema"]["properties"]["draft"]["type"], "boolean");
+    assert!(add["inputSchema"]["properties"].get("draft").is_none());
+    assert_eq!(add["inputSchema"]["additionalProperties"], false);
     let count = tools
         .iter()
         .find(|tool| tool["name"] == "note_count")
@@ -1180,20 +1183,15 @@ async fn mcp_note_list_pages_by_descending_short_id() {
 #[tokio::test]
 async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
     let session_id = "0199a467-5b0e-7000-8000-000000000001";
-    for (content, draft, expected_type) in [
-        (
-            "# Written by a person\n\nSaved by an agent",
-            false,
-            "normal",
-        ),
-        ("Draft body", true, "normal"),
-        ("https://example.com/article", false, "link"),
+    for (content, expected_type) in [
+        ("# Written by a person\n\nSaved by an agent", "normal"),
+        ("https://example.com/article", "link"),
     ] {
         let mut harness = McpHarness::start_with_client("codex-mcp-client").await;
         let added = harness
             .call_with_meta(
                 "note_add",
-                serde_json::json!({ "content": content, "draft": draft }),
+                serde_json::json!({ "content": content }),
                 serde_json::json!({ "sessionId": session_id }),
             )
             .await;
@@ -1208,6 +1206,7 @@ async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
             format!("mcp:codex:{session_id}")
         );
         assert_eq!(detail["result"]["structuredContent"]["type"], expected_type);
+        assert_eq!(detail["result"]["structuredContent"]["draft"], false);
         if expected_type == "link" {
             assert_eq!(
                 detail["result"]["structuredContent"]["metadata"]["link"]["url"],
@@ -1228,6 +1227,34 @@ async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
             .collect();
         assert_eq!(human_ids, vec![43, 42]);
     }
+}
+
+#[tokio::test]
+async fn mcp_note_add_rejects_draft_before_insertion() {
+    let mut harness = McpHarness::start().await;
+    let before = harness.call("note_count", serde_json::json!({})).await;
+    for draft in [true, false] {
+        let rejected = harness
+            .call(
+                "note_add",
+                serde_json::json!({
+                    "content": "Rejected stale draft argument", "draft": draft
+                }),
+            )
+            .await;
+        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+        assert!(
+            rejected["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("draft")
+        );
+    }
+    let after = harness.call("note_count", serde_json::json!({})).await;
+    assert_eq!(
+        before["result"]["structuredContent"],
+        after["result"]["structuredContent"]
+    );
 }
 
 #[tokio::test]
@@ -1354,23 +1381,33 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
     assert_eq!(restored["result"]["structuredContent"]["archived"], false);
 }
 
-async fn add_draft(harness: &mut McpHarness) -> i64 {
+async fn seed_draft(harness: &McpHarness) -> i64 {
+    use flicknote_core::services::dto::NoteAddInput;
+    use flicknote_sync::ipc::{AppRequest, AppResponse};
+
     let created = harness
-        .call(
-            "note_add",
-            serde_json::json!({ "content": "# Draft title\n\nDraft body", "draft": true }),
-        )
-        .await;
-    assert_eq!(created["result"]["isError"], false);
-    created["result"]["structuredContent"]["id"]
-        .as_i64()
-        .unwrap()
+        .app
+        .handle(AppRequest::NoteAdd(NoteAddInput {
+            content: "# Draft title\n\nDraft body".into(),
+            project: None,
+            interpret_as_url: true,
+            draft: true,
+            topics: Vec::new(),
+            created_by: None,
+            created_at: None,
+        }))
+        .await
+        .unwrap();
+    let AppResponse::NoteCreate(created) = created else {
+        panic!("expected create receipt")
+    };
+    created.id
 }
 
 #[tokio::test]
 async fn mcp_draft_write_metadata_and_submit_contracts_are_orthogonal() {
     let mut harness = McpHarness::start().await;
-    let id = add_draft(&mut harness).await;
+    let id = seed_draft(&harness).await;
 
     let detail = harness
         .call("note_get", serde_json::json!({ "id": id }))

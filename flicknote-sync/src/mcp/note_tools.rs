@@ -233,11 +233,10 @@ pub(super) struct NoteSectionParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NoteAddParams {
     pub content: String,
     pub project: Option<String>,
-    #[serde(default)]
-    pub draft: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

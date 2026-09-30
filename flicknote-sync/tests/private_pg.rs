@@ -38,7 +38,7 @@ fn pool_with_size(size: usize) -> Pool {
         .expect("run through test-private-pg.sh")
         .parse()
         .unwrap();
-    let url = format!("postgresql://flicknote_test:test@127.0.0.1:{port}/postgres?sslmode=disable");
+    let url = format!("postgresql://flicknote_mcp@127.0.0.1:{port}/supabase?sslmode=disable");
     Pool::builder(Manager::new(
         tokio_postgres::Config::from_str(&url).unwrap(),
         NoTls,
@@ -363,7 +363,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     let port = std::env::var("FLICKNOTE_TEST_PG_PORT").unwrap();
     let config = PrivateMcpConfig {
         database_url: format!(
-            "postgresql://flicknote_test:test@127.0.0.1:{port}/postgres?sslmode=disable"
+            "postgresql://flicknote_mcp@127.0.0.1:{port}/supabase?sslmode=disable"
         ),
         listen: format!("127.0.0.1:{mcp_port}").parse().unwrap(),
         resource: resource.clone(),
@@ -479,6 +479,28 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     }
     assert!(!names.contains(&"note_source"));
     assert!(!names.contains(&"note_share"));
+    let add_tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_add")
+        .unwrap();
+    assert!(add_tool["inputSchema"]["properties"].get("draft").is_none());
+    assert_eq!(add_tool["inputSchema"]["additionalProperties"], false);
+    let before = tool_call(&client, &resource, "full", "note_count", json!({})).await;
+    for draft in [true, false] {
+        let rejected = send(json!({"jsonrpc":"2.0","id":34,"method":"tools/call","params":{
+            "name":"note_add","arguments":{"content":"Rejected stale draft argument","draft":draft}
+        }}), "full").await.unwrap();
+        let rejected: Value = rejected.json().await.unwrap();
+        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+        assert!(
+            rejected["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("draft")
+        );
+    }
+    let after = tool_call(&client, &resource, "full", "note_count", json!({})).await;
+    assert_eq!(before, after);
     let added = send(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"note_add","arguments":{"content":"# HTTP note\n\n中文 苹果"}}}), "full").await.unwrap();
     assert_eq!(
         added.status(),
@@ -508,6 +530,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     seed.finish(true).await.unwrap();
     let detail = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     assert_eq!(detail["content"], "中文 苹果");
+    assert_eq!(detail["draft"], false);
     assert_eq!(detail["extractions"].as_array().unwrap().len(), 2);
     tool_call(
         &client,
@@ -565,6 +588,8 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     )
     .await;
     tool_call(&client, &resource, "full", "note_modify", json!({"id":id,"before":"replacement","after":"edited","summary":"Private summary","flagged":true})).await;
+    let flagged = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
+    assert_eq!(flagged["flagged"], true);
     tool_call(
         &client,
         &resource,
@@ -683,15 +708,106 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         json!({"project":"HTTP project"}),
     )
     .await;
-    let draft = tool_call(
+    let seed = db(&pg_pool, "11111111-1111-4111-8111-111111111111").await;
+    let draft = NoteService::new(seed.as_ref())
+        .add(
+            &PgNoteCreator(seed.clone()),
+            add_input("# HTTP draft\nwork", true),
+        )
+        .await
+        .unwrap();
+    let draft_id = draft.short_id.unwrap();
+    seed.finish(true).await.unwrap();
+    let link = tool_call(
         &client,
         &resource,
         "full",
         "note_add",
-        json!({"content":"# HTTP draft\nwork","draft":true}),
+        json!({"content":"https://example.com/article"}),
     )
     .await;
-    let draft_id = draft["id"].as_i64().unwrap();
+    let link_id = link["id"].as_i64().unwrap();
+    let link_detail = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":link_id}),
+    )
+    .await;
+    assert_eq!(link_detail["type"], "link");
+    assert_eq!(link_detail["draft"], false);
+    let check = db(&pg_pool, "11111111-1111-4111-8111-111111111111").await;
+    assert_eq!(check.find_note(&full_id).await.unwrap().status, "ai_queued");
+    let link_uuid = check.resolve_note_id(&link_id.to_string()).await.unwrap();
+    assert_eq!(
+        check.find_note(&link_uuid).await.unwrap().status,
+        "source_queued"
+    );
+    check.finish(true).await.unwrap();
+    let draft_detail = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":draft_id}),
+    )
+    .await;
+    assert_eq!(draft_detail["draft"], true);
+    assert_eq!(draft_detail["content"], "work");
+    let drafts = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_list",
+        json!({"status":"draft","limit":1}),
+    )
+    .await;
+    assert_eq!(drafts["notes"][0]["id"], draft_id);
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_modify",
+        json!({"id":draft_id,"flagged":true}),
+    )
+    .await;
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_write",
+        json!({"id":draft_id,"content":"draft updated"}),
+    )
+    .await;
+    let draft_detail = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":draft_id}),
+    )
+    .await;
+    assert_eq!(draft_detail["draft"], true);
+    assert_eq!(draft_detail["flagged"], true);
+    assert_eq!(draft_detail["content"], "draft updated");
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_modify",
+        json!({"id":draft_id,"flagged":false}),
+    )
+    .await;
+    let draft_detail = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":draft_id}),
+    )
+    .await;
+    assert_eq!(draft_detail["flagged"], false);
     tool_call(
         &client,
         &resource,
@@ -769,6 +885,39 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     .unwrap();
     assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
     assert!(calls.load(Ordering::SeqCst) >= 4);
+
+    // Permit INSERT/RETURNING but fail the canonical read in this test-owned DB.
+    let (admin, connection) = tokio_postgres::connect(
+        &format!("host=127.0.0.1 port={port} user=postgres dbname=supabase"),
+        NoTls,
+    )
+    .await
+    .unwrap();
+    let admin_task = tokio::spawn(connection);
+    admin.batch_execute("REVOKE SELECT ON notes FROM authenticated; GRANT SELECT (id,short_id,user_id) ON notes TO authenticated").await.unwrap();
+    let failed = send(json!({"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"note_add","arguments":{"content":"canonical-read-fault"}}}), "full").await.unwrap();
+    let failed: Value = failed.json().await.unwrap();
+    admin.batch_execute("GRANT SELECT ON notes TO authenticated; REVOKE SELECT (id,short_id,user_id) ON notes FROM authenticated").await.unwrap();
+    let row = admin
+        .query_one(
+            "SELECT count(*) FROM notes WHERE content=$1",
+            &[&"canonical-read-fault"],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, i64>(0), 0, "failed create must be rolled back");
+    assert_eq!(failed["result"]["isError"], true);
+    let error = &failed["result"]["structuredContent"];
+    assert_eq!(error["details"]["created"], false, "{failed}");
+    assert_eq!(error["details"]["rolled_back"], true);
+    assert_eq!(error["code"], "note_create_failed");
+    assert!(
+        !error["message"]
+            .as_str()
+            .unwrap()
+            .contains("Do not create it again")
+    );
+    admin_task.abort();
     mcp_task.abort();
     verifier_task.abort();
 }

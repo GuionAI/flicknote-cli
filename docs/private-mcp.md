@@ -81,7 +81,7 @@ Failed/cancelled requests roll back or discard the connection. Project assignmen
 checks ownership and active state in the same transaction.
 
 The adapter expects the current fb columns and short-ID trigger contract:
-`notes` has `short_id`, `status`, `flag`, `metadata`, `source`, `project_id`,
+`notes` has `short_id`, `status`, `is_flagged`, `metadata`, `source`, `project_id`,
 timestamps and user ownership; `projects` has `metadata`, `color`,
 `is_archived`, timestamps and user ownership; `note_extractions` has
 `note_id`, `user_id`, `key`, and `value`, with uniqueness on
@@ -106,20 +106,119 @@ compatible cnsupa PG18/PGroonga image with the WAL resource manager and crash
 safer settings. The peer fixture verified standby-mode WAL replay and indexed
 search without REINDEX. Native CNPG/Barman restore is not yet validated;
 its restore mode and primary/standby preload settings must be resolved before
-deployment. The image's recovery evidence is a separate cross-repository
-acceptance gate. The test-owned compatible fixture is
-[`flicknote-sync/tests/fixtures/private_pg.sql`](../flicknote-sync/tests/fixtures/private_pg.sql).
-Run the current-schema extraction/RLS and MCP regression with the published
-immutable peer image (or another compatible test image via the same override):
+deployment. Recovery evidence belongs to the image owner and is separate from
+CLI consumer verification. These checks do not establish backup/restore correctness.
+
+## Migration-backed CLI verification
+
+fb owns PostgreSQL DDL through `tanka/charts/db-init/db/migrations/*.sql`,
+applied by dbmate. Its `packages/queries/src/drizzle/schema.ts` maps the columns
+to TypeScript queries. Inspect both before changing a Rust PostgreSQL query:
+the SQL column is `is_flagged`, while Drizzle calls the property `isFlagged`.
+
+The CLI harness applies **all unchanged formal fb migrations**, verifies the
+complete `schema_migrations` version set against the source files, and then
+runs fb's opt-in `tanka/charts/db-init/db/opt-in/private-mcp.sql`. It does not
+copy business-table DDL, filter migrations, or weaken migrated constraints,
+triggers, or policies. The infrastructure-only
+[`private_pg_bootstrap.sql`](../flicknote-sync/tests/fixtures/private_pg_bootstrap.sql)
+creates minimal Auth prerequisites and referenced roles. `auth.uid()` reads
+transaction-local request claims, so Alice/Bob isolation exercises real RLS.
+The database is named `supabase` and enables `wal_level=logical` for CDC
+migrations. Test users are seeded after migrations and MCP preparation; only
+the disposable fixture activates the `flicknote_mcp` login without credentials.
+
+Requires Podman (or `CONTAINER_TOOL=docker`), dbmate 2.33.0, Git, Python 3,
+Rust and og with read access to fb. Run from this checkout:
 
 ```bash
-FLICKNOTE_TEST_PG_IMAGE=ghcr.io/guionai/cloudnative-supabase-postgres-pgroonga@sha256:d555bf68fad60626664e22cf90390fc8936b42092d504f7f02a592ec70b92626 \
-  scripts/test-private-pg.sh
+scripts/test-private-pg.sh
 ```
 
-The script creates and removes its own container and database. The integration test uses
-real PGroonga and a scripted local verifier. This PR does not deploy or mutate
-any live database.
+The default uses `og clone --reference` to obtain current fb `origin/main`,
+resolves one commit, and archives that immutable snapshot for the entire run.
+It prints `FB_COMMIT`, `FB_DIRTY`, the immutable PostgreSQL image reference and
+resolved local image ID, and `FB_MIGRATIONS_APPLIED`. The script owns its fresh
+source reference, temporary snapshot and container, and cleans them on exit,
+failed migrations or cancellation. Because og's reference destination is fixed,
+a pre-existing reference is preserved and causes an actionable error; use a
+checkout override in that case. The registered sibling fb checkout is untouched.
+
+Replay a logged commit, or test an explicitly selected local checkout:
+
+```bash
+FLICKNOTE_TEST_FB_REVISION=97356591a029a396c8172214f508057d518602ec scripts/test-private-pg.sh
+FLICKNOTE_TEST_FB_CHECKOUT=/path/to/fb \
+  FLICKNOTE_TEST_FB_REVISION=97356591a029a396c8172214f508057d518602ec scripts/test-private-pg.sh
+FLICKNOTE_TEST_FB_CHECKOUT=/path/to/fb scripts/test-private-pg.sh
+```
+
+With a revision, the checkout's committed snapshot is used. Without a revision,
+the checkout's working `tanka` tree is copied and dirty state is reported; this
+is useful for pending migration changes. Overrides are never reset or pulled.
+The script defaults to the published, digest-pinned PG18/PGroonga image and
+prints its immutable reference. Override `FLICKNOTE_TEST_PG_IMAGE` only for a
+compatible disposable test image.
+No mutating test accepts a shared/live database URL.
+
+The real PostgreSQL/HTTP suite verifies ordinary text/URL creation, rejection of
+draft input, seeded draft get/list, metadata and content edits preserving drafts, short IDs, owner isolation, extraction
+replacement, PGroonga search, cancellation, and a failed canonical read whose
+insert rolls back without durable rows or false success. Validate harness
+failure propagation and container cleanup separately:
+
+```bash
+python3 scripts/test-private-pg-harness.py /path/to/fb
+```
+
+`--provision-only` applies and checks the entire migration set and MCP
+preparation without running Rust tests. Missing or failed migrations fail the
+run. This fixture verifies fresh fb provisioning and CLI consumer behavior;
+it does not certify fse service migrations, historical upgrades/backfills,
+PowerSync download/upload, live OAuth, or disaster recovery. fse keeps its own
+service migrations and acceptance responsibilities; this CLI PR changes
+neither sibling repository.
+
+Local PowerSync tables remain defined in `flicknote-core/src/schema.rs`.
+For synchronized fields, check that schema, both adapters and fb's sync rules;
+SQLite and PostgreSQL representations can differ. Shared development databases
+are read-only diagnostic references, not fixtures. The host's ordinary fb
+postgres-dev image lacks PGroonga and cannot substitute for this fixture.
+
+For database-contract changes, record the fb commit/image, inspect migrations
+and Drizzle types/nullability/triggers/RLS, update affected adapters, then run
+the migration-backed consumer tests. MCP boundary changes also require the
+strict-client output-schema contract test. Tests and merge do not deploy the
+server; release, deployment and authenticated live acceptance are separate.
+
+## Forgejo/Woodpecker checks
+
+`.woodpecker/check.yaml` selects pull requests and pushes to main and invokes
+`dagger call -m dagger check --source=. --fb-token=env:FB_READ_TOKEN` using
+Dagger 0.21.7. It uses the existing Kubernetes agent/Dagger runner; it adds no privileged runner or host mount.
+The module runs formatting, workspace tests and Clippy with all features,
+then the same migration-backed PG checks inside its own PGroonga container.
+`FLICKNOTE_TEST_PG_IN_CONTAINER=1` is reserved for that disposable container;
+it starts and cleans a fresh local cluster, not an external database.
+The module resolves current fb main once per call through the existing
+`forgejo.devops.svc.cluster.local:3000` Service and logs its exact commit.
+It also supports `--fb-revision=COMMIT` and a read-only `--fb-source=/path/to/fb`
+for reproduction. Dependency directories are excluded from source imports.
+
+Configured YAML and local Dagger execution are separate from server execution.
+Repository activation and private fb read access on the runner must be verified
+before treating this as an active PR gate. If the runner lacks source access,
+an operator must provision the repository secret `fb-read-token` with approved
+read-only fb access and approve its PR availability, or supply a read-only
+checkout locally with `--fb-source`. The Dagger `--fb-token` Secret input keeps
+credentials out of source. No credentials are created or changed by these checks.
+Do not expose secrets to untrusted PRs or change repository trust to bypass a
+failed source clone. Retained GitHub workflows do not establish an active
+Forgejo validation gate. Validate syntax with Woodpecker CLI 3.18.0:
+
+```bash
+woodpecker-cli lint .woodpecker/check.yaml
+```
 
 ## Remote tools and behavior
 
@@ -132,8 +231,11 @@ The remote server advertises `entity_list`, `topic_list`; `note_add`,
 output schemas. The local server retains its complete tool set; remote sharing,
 source/open tools, and host-triggered recall are not advertised.
 
-Normal text creation enters `ai_queued`; recognized URLs enter
-`source_queued`; `draft:true` creates a draft. Content and metadata edits keep
+Local and remote MCP `note_add` accept content and optional project only.
+Text creation enters `ai_queued`; recognized URLs create link notes and enter
+`source_queued`. Supplied `draft` arguments are rejected before any write.
+Human CLI `flicknote add --draft` creates drafts; existing drafts remain readable
+and editable through MCP. Content and metadata edits keep
 the lifecycle state, and `note_submit` is the explicit draft transition.
 Keyword find uses PGroonga with OR terms, active non-draft notes, project
 and creation-time and human filtering, coverage ranking, and segmented snippets. Extraction-only find can

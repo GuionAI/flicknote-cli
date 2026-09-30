@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 use tokio_postgres::{Row, types::ToSql};
 use uuid::Uuid;
 
-const NOTE_COLUMNS: &str = "id, short_id, user_id, type, status, title, content, summary, flag, project_id, metadata, source, created_at, updated_at, deleted_at";
+const NOTE_COLUMNS: &str = "id, short_id, user_id, type, status, title, content, summary, is_flagged, project_id, metadata, source, created_at, updated_at, deleted_at";
 const PROJECT_COLUMNS: &str = "id, user_id, name, color, metadata, is_archived, created_at";
 const SAFE_ROLE_SQL: &str = "SELECT NOT (r.rolsuper OR r.rolbypassrls) AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('notes','projects','note_extractions') AND pg_has_role(r.oid,c.relowner,'member')) FROM pg_roles r WHERE r.rolname=current_user";
 
@@ -53,7 +53,7 @@ fn note(row: &Row) -> Note {
         title: row.get("title"),
         content: row.get("content"),
         summary: row.get("summary"),
-        is_flagged: Some(i64::from(row.get::<_, bool>("flag"))),
+        is_flagged: Some(i64::from(row.get::<_, bool>("is_flagged"))),
         project_id: project.map(|id| id.to_string()),
         metadata: metadata.map(|v| v.to_string()),
         source: source.map(|v| v.to_string()),
@@ -557,7 +557,7 @@ impl NoteDb for PgRequestDb {
         self.update_note_field(id, "summary=$2", &[&summary]).await
     }
     async fn update_note_flagged(&self, id: &str, flagged: Option<bool>) -> Result<(), CliError> {
-        self.update_note_field(id, "flag=$2", &[&flagged.unwrap_or(false)])
+        self.update_note_field(id, "is_flagged=$2", &[&flagged.unwrap_or(false)])
             .await
     }
     async fn count_notes(&self, f: &NoteFilter<'_>) -> Result<u64, CliError> {
@@ -867,7 +867,7 @@ mod tests {
 
         let port = std::env::var("FLICKNOTE_TEST_PG_PORT").expect("run through test-private-pg.sh");
         let config =
-            format!("postgresql://flicknote_test:test@127.0.0.1:{port}/postgres?sslmode=disable")
+            format!("postgresql://flicknote_mcp@127.0.0.1:{port}/supabase?sslmode=disable")
                 .parse()
                 .unwrap();
         let pool = Pool::builder(Manager::from_config(
@@ -921,7 +921,7 @@ mod tests {
             old_pid,
             "cancelled setup backend reentered the pool"
         );
-        assert_eq!(row.get::<_, String>(1), "flicknote_test");
+        assert_eq!(row.get::<_, String>(1), "flicknote_mcp");
         assert_eq!(row.get::<_, Option<String>>(2), None);
         tokio::time::timeout(std::time::Duration::from_secs(2), async {
             while clean

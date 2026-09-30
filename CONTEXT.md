@@ -4,6 +4,16 @@ Language for note ownership, discovery, and connecting the current conversation 
 
 ## Note ownership
 
+**Draft note**:
+A stored note that has not been submitted for processing. Editing its content
+or metadata does not submit it.
+_Avoid_: Unsaved note, queued note
+
+**Note submission**:
+The explicit transition that sends a draft note into processing. It is distinct
+from creating a draft or editing an existing note.
+_Avoid_: Save, content edit
+
 **Note owner**:
 The FlickNote user to whom a note belongs. A note's project assignment and the client used to access it do not change its owner.
 _Avoid_: Project owner, MCP client, server operator

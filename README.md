@@ -34,6 +34,16 @@ just check
 just install
 ```
 
+Private PostgreSQL/MCP verification uses every unchanged fb migration in an
+isolated PGroonga database. Run `scripts/test-private-pg.sh` with Podman,
+dbmate, Python 3 and og read access to fb. It logs the resolved mainline commit
+and image; use `FLICKNOTE_TEST_FB_REVISION=COMMIT` for replay or
+`FLICKNOTE_TEST_FB_CHECKOUT=/path/to/fb` for a read-only checkout override.
+See [migration-backed verification](docs/private-mcp.md#migration-backed-cli-verification)
+for prerequisites, failure checks and limitations. The Woodpecker configuration
+runs Rust and PostgreSQL checks through Dagger; repository activation and
+runner source access must be verified separately from YAML validity.
+
 Or directly with cargo:
 
 ```bash
@@ -192,8 +202,12 @@ note-source, project, and read-only recall tools. `note_get` returns actual stor
 note content; the synthesized editable document is used only by the human editor.
 Machine content, metadata, and lifecycle operations are orthogonal: ordinary
 content or metadata mutations preserve status and never start AI processing.
-`note_submit` is the explicit draft transition, while `note_write` replaces stored
-content without changing metadata or lifecycle. Note content and exact `before`/`after` edits
+Local and remote MCP `note_add` create ordinary notes: text enters `ai_queued`
+and recognized URLs enter `source_queued`. The tool accepts content and optional
+project; a supplied `draft` argument is rejected before insertion. Use the human
+CLI `flicknote add --draft` to create drafts. Existing drafts remain readable and
+editable through MCP. `note_submit` is the explicit draft transition, while
+`note_write` replaces stored content without changing metadata or lifecycle. Note content and exact `before`/`after` edits
 are structured JSON fields, so callers do not need shell heredocs. Note tools
 accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data. Every data tool uses the running daemon; the MCP process

@@ -33,7 +33,14 @@ DTOs, advertises only the supported remote tool subset, and never loads the
 local config/session/PowerSync database. Do not route ordinary CLI commands
 through PostgreSQL. See `docs/private-mcp.md` for the verifier, role, schema,
 index, and operator contract. Real remote integration tests run through
-`scripts/test-private-pg.sh` against the test-owned peer image fixture.
+`scripts/test-private-pg.sh` against an isolated PGroonga fixture provisioned
+from every unchanged fb migration via dbmate. The default resolves current fb main once and logs the
+commit; use `FLICKNOTE_TEST_FB_REVISION` to replay it.
+Before changing database columns, SQL adapters, or PostgreSQL test setup, read
+the schema ownership and verification workflow in `docs/private-mcp.md`.
+Use fb's dbmate migrations as the PostgreSQL DDL authority and cross-check its
+Drizzle mapping; shared development databases are read-only reference targets
+for tests, not disposable fixtures.
 
 ### Machine note operation contract
 
@@ -42,8 +49,11 @@ and lifecycle mutation are separate contracts. Ordinary content and metadata
 edits must preserve lifecycle status and never implicitly trigger AI processing.
 `submit` is the explicit draft lifecycle transition; do not add a generic
 public status setter or expose raw internal status fields through machine DTOs.
-Machine reads return stored note content. The synthesized editable document is
-reserved for the human `flicknote edit` workflow.
+Local and remote MCP `note_add` accept content and optional project only; text
+enters `ai_queued` and recognized URLs enter `source_queued`. Supplied `draft`
+arguments are invalid input. Human CLI draft creation and shared application/IPC
+draft support remain available. Machine reads return stored note content. The
+synthesized editable document is reserved for the human `flicknote edit` workflow.
 
 Every MCP structured result must have an object root, and each advertised output
 schema must be precise and derived from its boundary DTO's serialized JSON
@@ -127,13 +137,18 @@ lefthook run pre-push    # run pre-push hooks
 - Config via XDG dirs (`~/.config/flicknote/`) or env vars
 - Data stored at `~/.local/share/flicknote/`
 
-## CI (GitHub Actions)
+## CI and releases
 
-This repo uses GitHub Actions for CI/CD (no Woodpecker, no moon).
-
-- **pr.yaml** — Rust check (fmt/clippy/test/deny/build)
-- **ci.yaml** — two parallel jobs: build (cargo test + build), lint (cargo fmt/clippy)
-- **release.yml** — cargo-dist on version tags → GitHub Releases → GuionAI/homebrew-tap
+The forge workflow is Forgejo and Woodpecker. `.woodpecker/check.yaml` invokes
+the Dagger `check` function on PRs and main pushes using the existing
+Kubernetes/Dagger runner. It checks Rust formatting, workspace tests and Clippy,
+then the full-fb-migration PostgreSQL/HTTP regressions. Validate YAML separately
+from execution; repository activation and runner read access to private fb are
+not established by checked-in configuration. Report observed pipeline status
+and concrete external prerequisites, including the approved read-only
+`fb-read-token` secret and its PR availability. Retained
+`.github/workflows/` files are not evidence of an active Forgejo gate. Tests
+and merge do not deploy; verify release/deployment separately when requested.
 
 Commit scope: `ci`
 
