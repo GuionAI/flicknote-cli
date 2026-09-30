@@ -185,40 +185,31 @@ SQLite and PostgreSQL representations can differ. Shared development databases
 are read-only diagnostic references, not fixtures. The host's ordinary fb
 postgres-dev image lacks PGroonga and cannot substitute for this fixture.
 
-For database-contract changes, record the fb commit/image, inspect migrations
-and Drizzle types/nullability/triggers/RLS, update affected adapters, then run
-the migration-backed consumer tests. MCP boundary changes also require the
+For changes to columns, SQL adapters, PG setup, RLS, search, or shared database/MCP
+behavior that affects PostgreSQL, agents must inspect fb migrations and Drizzle
+types/nullability/triggers/RLS, update affected adapters, and run the isolated
+migration-backed consumer tests locally. Pin the resolved fb commit with
+`FLICKNOTE_TEST_FB_REVISION` for replay and report that revision, image and harness
+outcome in implementation and PR evidence. MCP boundary changes also require the
 strict-client output-schema contract test. Tests and merge do not deploy the
 server; release, deployment and authenticated live acceptance are separate.
 
-## Forgejo/Woodpecker checks
+## Routine CI and local PostgreSQL verification
 
-`.woodpecker/check.yaml` selects pull requests and pushes to main and invokes
-`dagger call -m dagger check --source=. --fb-token=env:FB_READ_TOKEN` using
-Dagger 0.21.7. It uses the existing Kubernetes agent/Dagger runner; it adds no privileged runner or host mount.
-The module runs formatting, workspace tests and Clippy with all features,
-then the same migration-backed PG checks inside its own PGroonga container.
-`FLICKNOTE_TEST_PG_IN_CONTAINER=1` is reserved for that disposable container;
-it starts and cleans a fresh local cluster, not an external database.
-The module resolves current fb main once per call through the existing
-`forgejo.devops.svc.cluster.local:3000` Service and logs its exact commit.
-It also supports `--fb-revision=COMMIT` and a read-only `--fb-source=/path/to/fb`
-for reproduction. Dependency directories are excluded from source imports.
+GitHub runs the routine Rust/dependency/release-fixture suite daily at 03:17 UTC,
+on manual dispatch, and on each release's exact source before any publication.
+The release gate requires successful checks before cargo-dist plan, public
+GitHub upload/release, and Homebrew updates. See the
+[developer workflow](../README.md#routine-verification) and
+[release regeneration procedure](../README.md#release).
 
-Configured YAML and local Dagger execution are separate from server execution.
-Repository activation and private fb read access on the runner must be verified
-before treating this as an active PR gate. If the runner lacks source access,
-an operator must provision the repository secret `fb-read-token` with approved
-read-only fb access and approve its PR availability, or supply a read-only
-checkout locally with `--fb-source`. The Dagger `--fb-token` Secret input keeps
-credentials out of source. No credentials are created or changed by these checks.
-Do not expose secrets to untrusted PRs or change repository trust to bypass a
-failed source clone. Retained GitHub workflows do not establish an active
-Forgejo validation gate. Validate syntax with Woodpecker CLI 3.18.0:
-
-```bash
-woodpecker-cli lint .woodpecker/check.yaml
-```
+The PostgreSQL harness never runs in CI. Ordinary workspace tests leave its
+integration tests ignored; passing routine CI does not prove PostgreSQL behavior.
+Relevant changes require the local isolated harness and pinned revision/result
+evidence described above. No private fb CI credentials, private-forge network,
+Woodpecker activation or Dagger runner is required. Existing local Git hooks
+and the Podman/Docker harness remain available. Configured workflows do not
+establish an observed scheduled run or an active branch-protection policy.
 
 ## Remote tools and behavior
 

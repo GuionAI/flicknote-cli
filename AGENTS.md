@@ -139,16 +139,30 @@ lefthook run pre-push    # run pre-push hooks
 
 ## CI and releases
 
-The forge workflow is Forgejo and Woodpecker. `.woodpecker/check.yaml` invokes
-the Dagger `check` function on PRs and main pushes using the existing
-Kubernetes/Dagger runner. It checks Rust formatting, workspace tests and Clippy,
-then the full-fb-migration PostgreSQL/HTTP regressions. Validate YAML separately
-from execution; repository activation and runner read access to private fb are
-not established by checked-in configuration. Report observed pipeline status
-and concrete external prerequisites, including the approved read-only
-`fb-read-token` secret and its PR availability. Retained
-`.github/workflows/` files are not evidence of an active Forgejo gate. Tests
-and merge do not deploy; verify release/deployment separately when requested.
+GitHub `.github/workflows/checks.yml` runs the routine suite daily at 03:17 UTC,
+on manual dispatch, and as the exact-source release gate. PRs and main pushes
+have no remote routine quality checks. Run `bash scripts/check-routine.sh` for
+the same formatting, locked all-feature workspace tests, locked all-target
+Clippy, dependency policy and release-script fixtures locally. Existing Git
+hooks remain in place. Ordinary tests skip ignored PostgreSQL integration tests.
+
+Release checks must pass on `github.sha` before cargo-dist's plan (including
+`dist host --steps=create`), public upload/release and Homebrew publication.
+Regenerate with cargo-dist 0.31.0 on PATH and
+`python3 scripts/generate-release-workflow.py`; verify with `--check`.
+The supported `plan-jobs` hook calls the reusable suite. The small generator
+adds strict success dependencies because cargo-dist's stock host condition
+accepts skipped builds; `allow-dirty = ["ci"]` preserves these owned changes.
+Plain `dist init`/`dist generate` is not the regeneration procedure. Check
+workflow semantics after changing release dependencies or upgrading cargo-dist.
+
+CI never runs the PG harness and requires no private fb token or network.
+For columns, SQL adapters, PG setup, RLS, search, or shared database/MCP behavior
+that affects PostgreSQL, read `docs/private-mcp.md`, run the isolated
+migration-backed harness locally, and report its pinned fb revision and outcome
+in implementation and PR evidence. Configuration alone does not establish live
+GitHub scheduling, mirror freshness, or branch protection. Tests and merge do
+not deploy; verify release/deployment separately when requested.
 
 Commit scope: `ci`
 

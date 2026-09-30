@@ -40,9 +40,10 @@ dbmate, Python 3 and og read access to fb. It logs the resolved mainline commit
 and image; use `FLICKNOTE_TEST_FB_REVISION=COMMIT` for replay or
 `FLICKNOTE_TEST_FB_CHECKOUT=/path/to/fb` for a read-only checkout override.
 See [migration-backed verification](docs/private-mcp.md#migration-backed-cli-verification)
-for prerequisites, failure checks and limitations. The Woodpecker configuration
-runs Rust and PostgreSQL checks through Dagger; repository activation and
-runner source access must be verified separately from YAML validity.
+for prerequisites, failure checks and limitations. This local harness is mandatory
+for columns, SQL adapters, PG setup, RLS, search, and shared database/MCP behavior
+that affects PostgreSQL. Record the pinned fb revision and harness outcome in
+implementation and PR evidence; CI excludes these ignored integration tests.
 
 Or directly with cargo:
 
@@ -58,6 +59,21 @@ clang/libclang for PowerSync bindings (on Debian/Ubuntu: `musl-tools`, `perl`,
 `cargo build --locked --profile dist --target x86_64-unknown-linux-musl -p flicknote-cli`.
 Other targets retain system OpenSSL discovery. See the
 [private MCP contract](docs/private-mcp.md) for runtime CA configuration.
+
+## Routine verification
+
+Run `bash scripts/check-routine.sh` locally for formatting, locked workspace
+all-feature tests, locked workspace/all-target/all-feature Clippy with warnings
+denied, `cargo deny check`, and the release-script fixtures. Install `cargo-deny`
+to run the full suite. Git hooks remain unchanged.
+
+GitHub runs this suite daily at **03:17 UTC** on its default branch and through
+**Actions → Routine checks → Run workflow** on the selected ref. There are no
+remote PR/main-push quality checks or daily binary snapshots. Scheduling requires
+the workflow on the GitHub default branch and enabled Actions; checked-in YAML
+and local checks do not establish a live scheduled run or that the GitHub mirror
+matches Forgejo main. No private fb CI token, network access, or runner setup is
+needed by the routine suite.
 
 ## Install
 
@@ -90,6 +106,27 @@ advanced, rerunning the same command restarts preparation from the new HEAD
 when the working tree is clean and `Cargo.toml`/`Cargo.lock` are unchanged.
 Version-changing commits without a tag or uncommitted preparation changes stay
 pending for inspection; the script does not discard them.
+
+Each release runs the same reusable routine checks on the tag event's exact
+`github.sha`, independently of previous daily results. Successful checks precede
+even cargo-dist's `host --steps=create` planning step. A failed, skipped or
+cancelled check blocks public GitHub assets/releases and Homebrew updates.
+
+The release configuration uses cargo-dist's supported reusable `plan-jobs`
+hook. Version 0.31.0 runs that hook alongside plan and permits skipped build
+jobs at host, so a small version-bound generator adds strict success dependencies
+and pins source checkouts to the event SHA. `allow-dirty = ["ci"]` prevents dist
+from overwriting that customization. With cargo-dist 0.31.0 on PATH:
+
+```bash
+python3 scripts/generate-release-workflow.py
+python3 scripts/generate-release-workflow.py --check
+```
+
+Use this procedure when editing dist configuration or upgrading cargo-dist;
+plain `dist init`/`dist generate` does not recreate the gate. The check generates
+in temporary state and fails on template drift or a different checked-in result.
+See [cargo-dist customization](https://axodotdev.github.io/cargo-dist/book/ci/customizing.html).
 
 The release uses cargo-dist 0.31.0 for `x86_64-unknown-linux-musl` and
 `aarch64-apple-darwin`. Verify the published Linux archive and its `.sha256`

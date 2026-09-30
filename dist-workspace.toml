@@ -20,7 +20,12 @@ targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-musl"]
 # Publish jobs to run in CI
 publish-jobs = ["homebrew"]
 # Which actions to run on pull requests
-pr-run-mode = "plan"
+pr-run-mode = "skip"
+# Supported reusable hook; the generator orders it before plan and requires success.
+plan-jobs = ["./checks"]
+# The version-bound generator below owns the additional publication dependencies.
+# Regenerate with python3 scripts/generate-release-workflow.py, not plain dist init.
+allow-dirty = ["ci"]
 
 [dist.dependencies.apt]
 libclang-dev = "*"

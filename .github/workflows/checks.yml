@@ -1,0 +1,54 @@
+name: Routine checks
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: recursive
+      - name: Verify exact source
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libclang-dev cmake pkg-config libssl-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: taiki-e/install-action@cargo-deny
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-routine-${{ hashFiles('**/Cargo.lock') }}
+      - name: Routine suite
+        run: bash scripts/check-routine.sh
+      - name: Install cargo-dist
+        shell: bash
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh
+      - name: Check release workflow generation
+        run: python3 scripts/generate-release-workflow.py --check
+      - name: Validate workflow contracts
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 scripts/test-release-workflow.py
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint@1.7.12
+      - name: Validate Actions syntax
+        # cargo-dist's stock shell snippets have unrelated ShellCheck findings.
+        run: actionlint -shellcheck="" .github/workflows/*.yml
