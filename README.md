@@ -366,14 +366,22 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 4 crates:
+Rust workspace with 5 crates:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
-| `flicknote-cli` | binary | Unified CLI/MCP client and foreground daemon executable |
-| `flicknote-core` | library | Database, config, shared services, DTOs, types, schema |
+| `flicknote-cli` | binary | Unified CLI, foreground daemon, and private remote MCP executable |
+| `flicknote-client` | library | Pure application DTOs, wire protocol, errors, and async Unix socket client |
+| `flicknote-core` | library | Database, config, shared services, storage types, schema, and DTO conversions |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
+
+Rust clients can call the daemon directly with an explicit socket path through
+[`flicknote-client`](flicknote-client/README.md), without linking database, sync,
+auth, or MCP server implementations. The unified executable still hosts the
+daemon and therefore retains those dependencies. This extraction preserves the
+existing user/operator commands, configuration, IPC wire version, and CLI/MCP
+outputs. It provides a library for future clients; no desktop app is included.
 
 ## License
 

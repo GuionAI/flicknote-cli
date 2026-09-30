@@ -261,7 +261,7 @@ struct StatusReport {
     service_state: ServiceStatusState,
     application_state: ApplicationStatusState,
     sync_state: SyncStatusState,
-    sync_errors: flicknote_sync::ipc::PowerSyncErrors,
+    sync_errors: flicknote_client::PowerSyncErrors,
     search: Option<String>,
     daemon_executable: Option<String>,
     version: VersionStatus,
@@ -279,7 +279,7 @@ impl StatusReport {
             service_state: ServiceStatusState::QueryFailed,
             application_state: ApplicationStatusState::Unknown,
             sync_state: SyncStatusState::Unavailable,
-            sync_errors: flicknote_sync::ipc::PowerSyncErrors::default(),
+            sync_errors: flicknote_client::PowerSyncErrors::default(),
             search: None,
             daemon_executable: None,
             version: VersionStatus {
@@ -287,7 +287,7 @@ impl StatusReport {
                 daemon: None,
             },
             protocol: ProtocolStatus {
-                cli: flicknote_sync::ipc::PROTOCOL_VERSION,
+                cli: flicknote_client::PROTOCOL_VERSION,
                 daemon: None,
             },
             error: None,
@@ -397,13 +397,13 @@ async fn build_status_report_with_probe(
             report.sync_errors = info.sync_errors;
             report.search = info.search;
             report.sync_state = match info.sync {
-                Some(flicknote_sync::ipc::SyncConnectionState::Connected) => {
+                Some(flicknote_client::SyncConnectionState::Connected) => {
                     SyncStatusState::Connected
                 }
-                Some(flicknote_sync::ipc::SyncConnectionState::Connecting) => {
+                Some(flicknote_client::SyncConnectionState::Connecting) => {
                     SyncStatusState::Connecting
                 }
-                Some(flicknote_sync::ipc::SyncConnectionState::Offline) | None => {
+                Some(flicknote_client::SyncConnectionState::Offline) | None => {
                     SyncStatusState::Offline
                 }
             };
@@ -415,7 +415,7 @@ async fn build_status_report_with_probe(
 
 fn apply_health_error(report: &mut StatusReport, error: ServiceError) {
     let code = error.code().to_string();
-    report.application_state = if code == flicknote_sync::ipc::PROTOCOL_MISMATCH_CODE {
+    report.application_state = if code == flicknote_client::PROTOCOL_MISMATCH_CODE {
         ApplicationStatusState::ProtocolIncompatible
     } else {
         ApplicationStatusState::Unavailable
@@ -474,8 +474,8 @@ fn format_sync_state(state: SyncStatusState) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flicknote_client::ServerInfo;
     use flicknote_core::config::ConfigPaths;
-    use flicknote_sync::ipc::ServerInfo;
 
     fn test_config(directory: &std::path::Path) -> Config {
         Config {
@@ -539,7 +539,7 @@ mod tests {
         let report = build_status_report_with_probe(
             &config,
             Ok(ServiceState::NotInstalled),
-            &FakeHealth(Some(ServerInfo::current())),
+            &FakeHealth(Some(flicknote_sync::ipc::server_info())),
         )
         .await;
         assert_eq!(report.service_state, ServiceStatusState::NotInstalled);
@@ -553,7 +553,7 @@ mod tests {
         let report = build_status_report_with_probe(
             &config,
             Ok(ServiceState::Stopped),
-            &FakeHealth(Some(ServerInfo::current())),
+            &FakeHealth(Some(flicknote_sync::ipc::server_info())),
         )
         .await;
 
@@ -570,7 +570,7 @@ mod tests {
         let report = build_status_report_with_probe(
             &config,
             Err(error),
-            &FakeHealth(Some(ServerInfo::current())),
+            &FakeHealth(Some(flicknote_sync::ipc::server_info())),
         )
         .await;
         assert_eq!(report.service_state, ServiceStatusState::QueryFailed);
@@ -587,7 +587,7 @@ mod tests {
         healthy.application_state = ApplicationStatusState::Ready;
         healthy.sync_state = SyncStatusState::Connected;
         healthy.version.daemon = Some("0.9.0".to_string());
-        healthy.protocol.daemon = Some(flicknote_sync::ipc::PROTOCOL_VERSION);
+        healthy.protocol.daemon = Some(flicknote_client::PROTOCOL_VERSION);
         let healthy_json = serde_json::to_value(healthy).unwrap();
         assert_eq!(healthy_json["application_state"], "ready");
         assert_eq!(healthy_json["sync_state"], "connected");
@@ -596,7 +596,7 @@ mod tests {
         apply_health_error(
             &mut incompatible,
             ServiceError::Remote {
-                code: flicknote_sync::ipc::PROTOCOL_MISMATCH_CODE.to_string(),
+                code: flicknote_client::PROTOCOL_MISMATCH_CODE.to_string(),
                 message: "protocol mismatch".to_string(),
                 retryable: false,
                 details: Some(serde_json::json!({
@@ -622,10 +622,10 @@ mod tests {
     async fn status_exposes_powersync_download_and_upload_errors() {
         let directory = tempfile::tempdir().unwrap();
         let config = test_config(directory.path());
-        let info = ServerInfo::current()
+        let info = flicknote_sync::ipc::server_info()
             .with_sync_status(
-                flicknote_sync::ipc::SyncConnectionState::Offline,
-                flicknote_sync::ipc::PowerSyncErrors {
+                flicknote_client::SyncConnectionState::Offline,
+                flicknote_client::PowerSyncErrors {
                     download: Some("download transport failed".to_string()),
                     upload: Some("upload rejected".to_string()),
                 },
@@ -653,7 +653,7 @@ mod tests {
             &config,
             Ok(ServiceState::Running),
             &FakeHealth(Some(
-                ServerInfo::current().with_search_state("degraded/unavailable"),
+                flicknote_sync::ipc::server_info().with_search_state("degraded/unavailable"),
             )),
         )
         .await;

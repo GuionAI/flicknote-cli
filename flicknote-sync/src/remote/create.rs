@@ -13,8 +13,8 @@ use powersync::PowerSyncDatabase;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 
-use crate::ipc::DaemonError;
 use crate::remote::attachment::{delete_attachment, upload_attachment};
+use flicknote_client::DaemonError;
 
 #[cfg(test)]
 mod tests;

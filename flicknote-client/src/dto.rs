@@ -1,4 +1,4 @@
-//! Shared application DTOs used by CLI and MCP adapters.
+//! Canonical application DTOs used by daemon, CLI and MCP adapters.
 
 use schemars::JsonSchema;
 use schemars::{Schema, SchemaGenerator};
@@ -195,42 +195,12 @@ pub struct NoteRecord {
     pub deleted_at: Option<String>,
 }
 
-impl From<crate::types::Note> for NoteRecord {
-    fn from(note: crate::types::Note) -> Self {
-        Self {
-            id: note.id,
-            short_id: note.short_id,
-            note_type: note.r#type,
-            title: note.title,
-            content: note.content,
-            summary: note.summary,
-            is_flagged: note.is_flagged,
-            draft: note.status == "draft",
-            project_id: note.project_id,
-            created_at: note.created_at,
-            updated_at: note.updated_at,
-            deleted_at: note.deleted_at,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SectionDto {
     pub id: String,
     pub level: usize,
     pub title: String,
     pub children: Vec<Self>,
-}
-
-impl From<super::markdown::HeadingNode> for SectionDto {
-    fn from(node: super::markdown::HeadingNode) -> Self {
-        Self {
-            id: node.heading.id,
-            level: node.heading.level,
-            title: node.heading.text,
-            children: node.children.into_iter().map(Self::from).collect(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

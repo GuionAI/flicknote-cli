@@ -15,6 +15,23 @@ the daemon.
 `FLICKNOTE_MCP_PORT` changes only the MCP loopback port when multiple local
 daemon instances must run; Codex's configured URL must use that port.
 
+## Rust client ownership
+
+`flicknote-client` owns the canonical pure application DTOs, versioned wire
+envelopes, typed result extraction, and async Unix socket transport. The CLI
+resolves its configured data directory and passes `data_dir/daemon.sock` to
+`DaemonClient::new`. Other Rust callers supply their own explicit socket path;
+the client neither loads configuration/credentials nor creates directories or
+starts a daemon. See the [async usage example](../flicknote-client/README.md),
+which is compiled as a Rust documentation test.
+
+`flicknote-sync::ipc` owns the socket server and daemon runtime diagnostics.
+IPC and MCP still dispatch through the same `Application`; core/sync own all
+database access, sync, parsing, business rules, and internal-to-wire conversions.
+The standalone client has no database, PowerSync, auth, MCP, or HTTP server
+dependencies. User/operator service commands and the existing wire/JSON
+contracts remain unchanged; this refactor adds no desktop application.
+
 ## Search index
 
 PowerSync/SQLite remains the canonical note store. Before accepting IPC

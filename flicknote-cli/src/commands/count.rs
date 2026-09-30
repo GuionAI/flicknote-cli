@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::NoteCountInput;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteCountInput;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
 pub(crate) struct CountArgs {
@@ -16,7 +16,7 @@ pub(crate) struct CountArgs {
     archived: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &CountArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &CountArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let count: u64 = match daemon
         .call(AppRequest::NoteCount(NoteCountInput {

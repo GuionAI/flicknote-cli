@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "flicknote-client",
     "flicknote-core",
     "flicknote-auth",
     "flicknote-cli",

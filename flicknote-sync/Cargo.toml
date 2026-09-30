@@ -11,6 +11,7 @@ license = "MIT"
 dist = false
 
 [dependencies]
+flicknote-client = { path = "../flicknote-client" }
 flicknote-core = { path = "../flicknote-core" }
 flicknote-auth = { path = "../flicknote-auth" }
 powersync = { workspace = true }

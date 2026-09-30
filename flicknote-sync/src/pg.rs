@@ -6,12 +6,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use deadpool_postgres::{Object, Pool};
+use flicknote_client::dto::RecallCandidate;
 use flicknote_core::backend::{
     InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteSearch as StructuredSearch,
     RouteProjectUpdate,
 };
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::RecallCandidate;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
 use flicknote_core::types::{Note, Project};
@@ -689,9 +689,9 @@ pub struct PgSearch(pub Arc<PgRequestDb>);
 impl crate::search::NoteSearch for PgSearch {
     async fn find(
         &self,
-        input: &flicknote_core::services::dto::NoteFindInput,
-    ) -> Result<Vec<flicknote_core::services::dto::SearchHit>, String> {
-        use flicknote_core::services::dto::{SearchHit, SearchSnippet};
+        input: &flicknote_client::dto::NoteFindInput,
+    ) -> Result<Vec<flicknote_client::dto::SearchHit>, String> {
+        use flicknote_client::dto::{SearchHit, SearchSnippet};
         if input.archived || !input.extractions.is_empty() {
             return Err("PGroonga search supports active keyword searches only".into());
         }
@@ -787,8 +787,8 @@ impl crate::search::NoteSearch for PgSearch {
         Ok(hits)
     }
 }
-fn snippet(content: &str, terms: &[String]) -> Vec<flicknote_core::services::dto::SnippetSegment> {
-    use flicknote_core::services::dto::SnippetSegment;
+fn snippet(content: &str, terms: &[String]) -> Vec<flicknote_client::dto::SnippetSegment> {
+    use flicknote_client::dto::SnippetSegment;
     if content.is_empty() {
         return Vec::new();
     }
@@ -860,7 +860,7 @@ mod tests {
     #[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
     async fn cancelled_identity_setup_discards_backend_before_pool_reuse() {
         use deadpool_postgres::{Manager, ManagerConfig, RecyclingMethod};
-        use flicknote_core::services::dto::NoteAddInput;
+        use flicknote_client::dto::NoteAddInput;
         use flicknote_core::services::note::NoteService;
         use tokio::sync::oneshot;
         use tokio_postgres::NoTls;

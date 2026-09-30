@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::{ExtractionFilterDto, NoteFindInput, SearchHit};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{ExtractionFilterDto, NoteFindInput, SearchHit};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 const FIND_HELP: &str = include_str!("../help/find.md");
 
@@ -67,7 +67,7 @@ fn parse_search_input(args: &[String]) -> Result<ParsedSearch, CliError> {
     })
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &FindArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &FindArgs) -> Result<(), CliError> {
     let project = args.project.clone();
     let parsed = parse_search_input(&args.keywords)?;
     let notes: Vec<SearchHit> = daemon
@@ -119,7 +119,7 @@ fn format_search_hits(hits: &[SearchHit]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flicknote_core::services::dto::{SearchSnippet, SnippetSegment};
+    use flicknote_client::dto::{SearchSnippet, SnippetSegment};
 
     #[test]
     fn search_table_renders_segmented_snippet_as_readable_text() {

@@ -2,18 +2,18 @@ use std::sync::Arc;
 
 use crate::app::Application;
 use crate::browser::SystemBrowserOpener;
-use crate::ipc::{AppRequest, AppResult};
 use crate::pg::PgRequestDb;
-use flicknote_core::TOPIC_EXTRACTION_KEY;
-use flicknote_core::services::dto::{
+use flicknote_client::dto::{
     NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail, NoteFindInput,
     NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteSectionResult,
     OpenResult, ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, SearchHit,
     ShareResult, UnshareResult,
 };
+use flicknote_client::source::SourceResult;
+use flicknote_client::{AppRequest, AppResult};
+use flicknote_core::TOPIC_EXTRACTION_KEY;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::BrowserOpener;
-use flicknote_core::services::source::SourceResult;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};

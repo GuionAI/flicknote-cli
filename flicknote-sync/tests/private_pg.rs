@@ -3,8 +3,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use deadpool_postgres::{Manager, Pool};
+use flicknote_client::dto::{NoteAddInput, NoteFindInput, ProjectAddInput};
 use flicknote_core::backend::NoteDb;
-use flicknote_core::services::dto::{NoteAddInput, NoteFindInput, ProjectAddInput};
 use flicknote_core::services::note::NoteService;
 use flicknote_core::services::project::ProjectService;
 use flicknote_sync::pg::{PgNoteCreator, PgRequestDb, PgSearch};
@@ -67,7 +67,7 @@ fn add_input(content: &str, draft: bool) -> NoteAddInput {
 #[tokio::test]
 #[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
 async fn canonical_extractions_replace_filter_and_isolate_owners() {
-    use flicknote_core::services::dto::ExtractionFilterDto;
+    use flicknote_client::dto::ExtractionFilterDto;
     let pool = pool();
     let a = db(&pool, "11111111-1111-4111-8111-111111111111").await;
     let note = NoteService::new(a.as_ref())

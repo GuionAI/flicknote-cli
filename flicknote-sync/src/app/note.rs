@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use flicknote_core::services::dto::{NoteAddInput, SearchHit};
+use flicknote_client::dto::{NoteAddInput, SearchHit};
 use flicknote_core::services::editable_document;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::note::confirmed_create_followup_error;
@@ -10,7 +10,7 @@ use flicknote_core::services::upload::{self, UploadKind};
 use flicknote_core::types::NoteStatus;
 
 use super::Application;
-use crate::ipc::{AppRequest, AppResponse, EditableDocument, WireError};
+use flicknote_client::{AppRequest, AppResponse, EditableDocument, WireError};
 
 pub(super) async fn handle_read(
     app: &Application,
@@ -26,7 +26,7 @@ pub(super) async fn handle_read(
                 input.created_after.as_deref(),
                 input.created_before.as_deref(),
             )
-            .map_err(WireError::from_service)?;
+            .map_err(WireError::from)?;
             let started = Instant::now();
             let structured_only = input.keywords.is_empty();
             let result = if structured_only {
@@ -59,7 +59,7 @@ pub(super) async fn handle_read(
             .count(input)
             .await
             .map(|count| AppResponse::NoteCount { count })
-            .map_err(WireError::from_service),
+            .map_err(WireError::from),
         AppRequest::NoteGet { id, archived } => {
             service_result(notes.get(&id, archived).await, AppResponse::NoteDetail)
         }
@@ -182,7 +182,7 @@ fn service_result<T>(
     result: Result<T, ServiceError>,
     response: impl FnOnce(T) -> AppResponse,
 ) -> Result<AppResponse, WireError> {
-    result.map(response).map_err(WireError::from_service)
+    result.map(response).map_err(WireError::from)
 }
 
 async fn load_editable(app: &Application, id: &str) -> Result<AppResponse, WireError> {
@@ -218,9 +218,10 @@ async fn note_record(
 }
 
 async fn open_note(app: &Application, id: &str) -> Result<AppResponse, WireError> {
-    let web_url = app.web_url.as_deref().ok_or_else(|| {
-        WireError::from_service(ServiceError::ConfigMissing("webUrl".to_string()))
-    })?;
+    let web_url = app
+        .web_url
+        .as_deref()
+        .ok_or_else(|| WireError::from(ServiceError::ConfigMissing("webUrl".to_string())))?;
     let full_id = app
         .db
         .resolve_note_id(id)
@@ -232,12 +233,10 @@ async fn open_note(app: &Application, id: &str) -> Result<AppResponse, WireError
         .await
         .map_err(Application::db_error)?;
     let url_id = note.short_id.map_or(full_id, |value| value.to_string());
-    Ok(AppResponse::Open(
-        flicknote_core::services::dto::OpenResult {
-            url: format!("{}/notes/{url_id}", web_url.trim_end_matches('/')),
-            opened: false,
-        },
-    ))
+    Ok(AppResponse::Open(flicknote_client::dto::OpenResult {
+        url: format!("{}/notes/{url_id}", web_url.trim_end_matches('/')),
+        opened: false,
+    }))
 }
 
 async fn add_editable(
@@ -261,7 +260,7 @@ async fn add_editable(
             attachment_path: None,
         })
         .await
-        .map_err(WireError::from_service)?;
+        .map_err(WireError::from)?;
     confirmed_summary(app, created).await
 }
 
@@ -298,9 +297,9 @@ async fn upload_text(
 ) -> Result<AppResponse, WireError> {
     let content = tokio::fs::read_to_string(path)
         .await
-        .map_err(|error| WireError::from_service(ServiceError::Io(error)))?;
+        .map_err(|error| WireError::from(ServiceError::Io(error)))?;
     if content.trim().is_empty() {
-        return Err(WireError::from_service(ServiceError::InvalidArgument(
+        return Err(WireError::from(ServiceError::InvalidArgument(
             "content must not be empty".to_string(),
         )));
     }
@@ -347,7 +346,7 @@ async fn upload_attachment(
             attachment_path: Some(path.to_string_lossy().into_owned()),
         })
         .await
-        .map_err(WireError::from_service)?;
+        .map_err(WireError::from)?;
     confirmed_summary(app, created).await
 }
 
@@ -363,7 +362,7 @@ async fn resolve_project_id(
         .await
         .map_err(Application::db_error)?
         .map(Some)
-        .ok_or_else(|| WireError::from_service(ServiceError::ProjectNotFound(name.to_string())))
+        .ok_or_else(|| WireError::from(ServiceError::ProjectNotFound(name.to_string())))
 }
 
 async fn confirmed_summary(
@@ -374,7 +373,7 @@ async fn confirmed_summary(
         .get(&created.inserted.uuid, false)
         .await
         .map(|detail| AppResponse::NoteSummary(detail.note))
-        .map_err(|error| WireError::from_service(confirmed_create_followup_error(&created, &error)))
+        .map_err(|error| WireError::from(confirmed_create_followup_error(&created, &error)))
 }
 
 async fn save_editable(

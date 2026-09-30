@@ -1,0 +1,23 @@
+[package]
+name = "flicknote-client"
+version.workspace = true
+edition = "2024"
+description = "Lightweight typed async client for the FlickNote daemon"
+license = "MIT"
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = "1"
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

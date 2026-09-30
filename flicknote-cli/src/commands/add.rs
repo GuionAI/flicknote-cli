@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::{NoteAddInput, NoteCreateResult};
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::{NoteAddInput, NoteCreateResult};
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use std::io::{IsTerminal, Read};
 
 const ADD_HELP: &str = include_str!("../help/add.md");
@@ -22,7 +22,7 @@ pub(crate) struct AddArgs {
     json: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &AddArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &AddArgs) -> Result<(), CliError> {
     let content = match &args.value {
         Some(v) => v.to_owned(),
         None => {

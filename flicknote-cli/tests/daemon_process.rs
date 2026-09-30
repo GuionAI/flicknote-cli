@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use flicknote_core::services::dto::NoteFindInput;
-use flicknote_sync::ipc::{
+use flicknote_client::dto::NoteFindInput;
+use flicknote_client::{
     AppRequest, AppResponse, DaemonRequest, DaemonResponse, PROTOCOL_VERSION, ServerInfo,
 };
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
@@ -145,7 +145,7 @@ impl DaemonProcess {
         }
     }
 
-    fn find(&self, keyword: &str) -> Vec<flicknote_core::services::dto::SearchHit> {
+    fn find(&self, keyword: &str) -> Vec<flicknote_client::dto::SearchHit> {
         let mut stream = UnixStream::connect(self.socket()).unwrap();
         let request = DaemonRequest::App {
             protocol: PROTOCOL_VERSION,

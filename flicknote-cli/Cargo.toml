@@ -15,6 +15,7 @@ path = "src/main.rs"
 formula = "flicknote"
 
 [dependencies]
+flicknote-client = { path = "../flicknote-client" }
 flicknote-core = { path = "../flicknote-core", default-features = false }
 flicknote-auth = { path = "../flicknote-auth" }
 flicknote-sync = { path = "../flicknote-sync" }

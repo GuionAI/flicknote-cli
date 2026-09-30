@@ -120,3 +120,75 @@ mod tests {
         assert!(timeout.retryable());
     }
 }
+
+impl From<ServiceError> for flicknote_client::WireError {
+    fn from(error: ServiceError) -> Self {
+        match error {
+            ServiceError::Remote {
+                code,
+                message,
+                retryable,
+                details,
+            } => Self {
+                code,
+                message,
+                retryable,
+                details,
+            },
+            error => Self {
+                code: error.code().to_string(),
+                message: error.to_string(),
+                retryable: error.retryable(),
+                details: None,
+            },
+        }
+    }
+}
+
+impl From<flicknote_client::ClientError> for ServiceError {
+    fn from(error: flicknote_client::ClientError) -> Self {
+        match error {
+            flicknote_client::ClientError::DaemonUnavailable(message) => {
+                Self::DaemonUnavailable(message)
+            }
+            flicknote_client::ClientError::Daemon(message) => Self::Daemon(message),
+            flicknote_client::ClientError::Remote {
+                code,
+                message,
+                retryable,
+                details,
+            } => Self::Remote {
+                code,
+                message,
+                retryable,
+                details,
+            },
+        }
+    }
+}
+
+impl From<flicknote_client::ClientError> for CliError {
+    fn from(error: flicknote_client::ClientError) -> Self {
+        ServiceError::from(error).into()
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::ServiceError;
+    use flicknote_client::WireError;
+    use serde_json::json;
+    #[test]
+    fn wire_error_preserves_partial_success_details() {
+        let details = json!({"created": true, "short_id": 80});
+        let wire = WireError::from(ServiceError::Remote {
+            code: "note_create_partial".to_string(),
+            message: "note created; topics pending".to_string(),
+            retryable: false,
+            details: Some(details.clone()),
+        });
+
+        assert_eq!(wire.code, "note_create_partial");
+        assert_eq!(wire.details, Some(details));
+    }
+}

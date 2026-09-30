@@ -1,38 +1,39 @@
-use std::fmt;
-use std::path::PathBuf;
-
-use flicknote_core::config::Config;
-use flicknote_core::services::dto::{
-    InsertPosition, NoteAddInput, NoteArchiveResult, NoteCountInput, NoteCreateResult, NoteDetail,
-    NoteFindInput, NoteListInput, NoteListItem, NoteModifyInput, NoteMutationResult, NoteRecord,
-    NoteRouteProjectInput, NoteRouteProjectResult, NoteSectionResult, NoteSummary, OpenResult,
-    ProjectAddInput, ProjectDto, ProjectModifyInput, RecallCandidate, SearchHit, ShareResult,
-    UnshareResult,
-};
-use flicknote_core::services::editable_document::EditableSaveResult;
-use flicknote_core::services::error::ServiceError;
-use flicknote_core::services::source::{SourceResult, SourceView};
-use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
-use tokio::net::UnixStream;
-
+//! Daemon-side Unix socket server; shared protocol and client live in flicknote-client.
 use crate::app::Application;
+use flicknote_client::{
+    DaemonError, DaemonRequest, DaemonResponse, PROTOCOL_MISMATCH_CODE, PROTOCOL_VERSION,
+    PowerSyncErrors, ServerInfo, WireError,
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{UnixListener, UnixStream};
 
-mod client;
-mod protocol;
 mod server;
-
-#[cfg(test)]
-pub(crate) use client::response_timeout_for;
-pub use client::{DaemonClient, send_request, socket_path};
-pub use protocol::*;
-#[cfg(test)]
-pub(crate) use server::write_json;
 pub use server::{
     ServerInfoProvider, read_request, serve_app, serve_app_once, serve_app_until_with_provider,
     write_response,
 };
 
-#[cfg(test)]
-mod tests;
+pub fn socket_path(config: &flicknote_core::config::Config) -> std::path::PathBuf {
+    config.paths.data_dir.join("daemon.sock")
+}
+
+pub fn server_info() -> ServerInfo {
+    ServerInfo {
+        protocol: PROTOCOL_VERSION,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        executable: current_executable(),
+        sync: None,
+        sync_errors: PowerSyncErrors::default(),
+        search: None,
+    }
+}
+
+fn current_executable() -> String {
+    std::env::current_exe()
+        .ok()
+        .or_else(|| std::env::args_os().next().map(std::path::PathBuf::from))
+        .map_or_else(
+            || "unavailable".to_string(),
+            |path| path.display().to_string(),
+        )
+}

@@ -1,8 +1,8 @@
 use async_trait::async_trait;
+use flicknote_client::{DaemonClient, PROTOCOL_MISMATCH_CODE, ServerInfo};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
 use flicknote_core::services::error::ServiceError;
-use flicknote_sync::ipc::{DaemonClient, PROTOCOL_MISMATCH_CODE, ServerInfo};
 use std::time::Duration;
 
 use super::service_manager::{
@@ -52,7 +52,10 @@ impl DaemonLifecycle for NativeDaemonLifecycle {
 #[async_trait]
 impl DaemonHealthProbe for IpcHealthProbe {
     async fn health(&self, config: &Config) -> Result<ServerInfo, ServiceError> {
-        DaemonClient::new(config).health().await
+        DaemonClient::new(config.paths.data_dir.join("daemon.sock"))
+            .health()
+            .await
+            .map_err(ServiceError::from)
     }
 }
 
@@ -399,7 +402,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .unwrap_or_else(|| Ok(ServerInfo::current()))
+                .unwrap_or_else(|| Ok(flicknote_sync::ipc::server_info()))
         }
     }
 
@@ -466,8 +469,8 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let health = FakeHealth::new([
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
         LifecycleController::new(&factory, &health)
             .install_and_wait(&config)
@@ -504,7 +507,7 @@ mod tests {
         let manager = Arc::new(FakeManager::new(ServiceState::Stopped));
         *manager.start_state.lock().unwrap() = ServiceState::Stopped;
         let factory = FakeFactory(Arc::clone(&manager));
-        let health = FakeHealth::new([Ok(ServerInfo::current())]);
+        let health = FakeHealth::new([Ok(flicknote_sync::ipc::server_info())]);
 
         let error = LifecycleController::new(&factory, &health)
             .start_and_wait_with_timeout(&config, Duration::from_millis(250))
@@ -529,8 +532,8 @@ mod tests {
         let health = FakeHealth::new([
             Err(unavailable()),
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
 
         LifecycleController::new(&factory, &health)
@@ -637,8 +640,8 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let health = FakeHealth::new([
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
 
         LifecycleController::new(&factory, &health)
@@ -659,8 +662,8 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let health = FakeHealth::new([
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
 
         LifecycleController::new(&factory, &health)
@@ -699,12 +702,12 @@ mod tests {
         let manager = Arc::new(FakeManager::new(ServiceState::Stopped));
         let factory = FakeFactory(Arc::clone(&manager));
         let health = FakeHealth::new([
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
             Err(unavailable()),
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
         let controller = LifecycleController::new(&factory, &health);
 
@@ -728,8 +731,8 @@ mod tests {
         let factory = FakeFactory(Arc::clone(&manager));
         let health = FakeHealth::new([
             Err(unavailable()),
-            Ok(ServerInfo::current()),
-            Ok(ServerInfo::current()),
+            Ok(flicknote_sync::ipc::server_info()),
+            Ok(flicknote_sync::ipc::server_info()),
         ]);
 
         LifecycleController::new(&factory, &health)
@@ -782,7 +785,7 @@ mod tests {
         let (_directory, config) = test_config();
         let manager = Arc::new(FakeManager::new(ServiceState::Stopped));
         let factory = FakeFactory(Arc::clone(&manager));
-        let health = FakeHealth::new([Ok(ServerInfo::current())]);
+        let health = FakeHealth::new([Ok(flicknote_sync::ipc::server_info())]);
 
         let error = LifecycleController::new(&factory, &health)
             .stop_running_with_timeout(&config, ServiceState::Stopped, Duration::from_millis(10))
@@ -798,7 +801,7 @@ mod tests {
         let (_directory, config) = test_config();
         let manager = Arc::new(FakeManager::new(ServiceState::NotInstalled));
         let factory = FakeFactory(Arc::clone(&manager));
-        let health = FakeHealth::new([Ok(ServerInfo::current())]);
+        let health = FakeHealth::new([Ok(flicknote_sync::ipc::server_info())]);
 
         let error = LifecycleController::new(&factory, &health)
             .uninstall_with_timeout(&config, Duration::from_millis(10))

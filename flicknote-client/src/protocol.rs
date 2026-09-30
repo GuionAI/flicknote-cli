@@ -1,4 +1,8 @@
-use super::*;
+use crate::dto::*;
+use crate::editable_document::EditableSaveResult;
+use crate::source::{SourceResult, SourceView};
+use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub const PROTOCOL_VERSION: u16 = 15;
 pub const PROTOCOL_MISMATCH_CODE: &str = "daemon_protocol_mismatch";
@@ -31,17 +35,6 @@ pub struct ServerInfo {
 }
 
 impl ServerInfo {
-    pub fn current() -> Self {
-        Self {
-            protocol: PROTOCOL_VERSION,
-            version: env!("CARGO_PKG_VERSION").to_string(),
-            executable: current_executable(),
-            sync: None,
-            sync_errors: PowerSyncErrors::default(),
-            search: None,
-        }
-    }
-
     pub fn with_sync_status(
         mut self,
         sync: SyncConnectionState,
@@ -56,16 +49,6 @@ impl ServerInfo {
         self.search = Some(state.to_string());
         self
     }
-}
-
-fn current_executable() -> String {
-    std::env::current_exe()
-        .ok()
-        .or_else(|| std::env::args_os().next().map(std::path::PathBuf::from))
-        .map_or_else(
-            || "unavailable".to_string(),
-            |path| path.display().to_string(),
-        )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,7 +172,7 @@ pub enum AppRequest {
 }
 
 impl AppRequest {
-    pub(crate) fn kind(&self) -> AppRequestKind {
+    pub fn kind(&self) -> AppRequestKind {
         match self {
             Self::NoteList(_)
             | Self::NoteFind(_)
@@ -239,7 +222,7 @@ impl AppRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppRequestKind {
+pub enum AppRequestKind {
     NoteRead,
     NoteWrite,
     ProjectRead,
@@ -332,30 +315,6 @@ pub struct WireError {
     pub retryable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<serde_json::Value>,
-}
-
-impl WireError {
-    pub fn from_service(error: ServiceError) -> Self {
-        match error {
-            ServiceError::Remote {
-                code,
-                message,
-                retryable,
-                details,
-            } => Self {
-                code,
-                message,
-                retryable,
-                details,
-            },
-            error => Self {
-                code: error.code().to_string(),
-                message: error.to_string(),
-                retryable: error.retryable(),
-                details: None,
-            },
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

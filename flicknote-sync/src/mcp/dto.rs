@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use flicknote_core::services::dto::{
+use flicknote_client::dto::{
     ExtractionDto, NoteArchiveResult, NoteDetail, NoteListItem, NoteMutationResult, NoteSummary,
     ProjectDto, SearchHit, SectionDto,
 };
-use flicknote_core::services::source::SourceResult;
+use flicknote_client::source::SourceResult;
 use rmcp::handler::server::tool::schema_for_output;
 use rmcp::model::JsonObject;
 use rmcp::schemars::{JsonSchema, Schema, SchemaGenerator};

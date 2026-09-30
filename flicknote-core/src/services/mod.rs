@@ -1,4 +1,4 @@
-pub mod dto;
+mod conversions;
 pub mod edit_match;
 pub mod editable_document;
 pub mod error;

@@ -5,6 +5,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use flicknote_client::{AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo};
 use flicknote_core::backend::{InsertNoteReq, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::schema::app_schema;
@@ -14,10 +15,7 @@ use flicknote_core::services::ports::{
 };
 use flicknote_sync::app::Application;
 use flicknote_sync::fts_search::FtsSearchService;
-use flicknote_sync::ipc::{
-    AppRequest, AppResponse, DaemonRequest, DaemonResponse, ServerInfo, read_request, serve_app,
-    socket_path, write_response,
-};
+use flicknote_sync::ipc::{read_request, serve_app, socket_path, write_response};
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 
 struct UnusedCreator;
@@ -202,7 +200,7 @@ fn spawn_test_daemon(config_root: &std::path::Path, data_root: &std::path::Path)
                 ready_tx.send(()).unwrap();
                 tokio::select! {
                     _ = shutdown_rx => {}
-                    result = serve_app(listener, app, ServerInfo::current()) => result.unwrap(),
+                    result = serve_app(listener, app, flicknote_sync::ipc::server_info()) => result.unwrap(),
                 }
             });
     });
@@ -336,8 +334,8 @@ fn cli_count_rejects_keyword_arguments() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument"));
 }
 
-fn fake_note_summary() -> flicknote_core::services::dto::NoteSummary {
-    flicknote_core::services::dto::NoteSummary {
+fn fake_note_summary() -> flicknote_client::dto::NoteSummary {
+    flicknote_client::dto::NoteSummary {
         short_id: Some(77),
         uuid: "550e8400-e29b-41d4-a716-446655440000".to_string(),
         note_type: "normal".to_string(),
@@ -996,10 +994,10 @@ fn cli_hook_emits_the_shared_context_and_sends_only_prompt_and_cli_project() {
     let daemon = spawn_scripted_daemon(
         &config_root,
         &data_root,
-        ServerInfo::current(),
+        flicknote_sync::ipc::server_info(),
         |_request| {
             DaemonResponse::App(Box::new(AppResponse::NoteRecall(vec![
-                flicknote_core::services::dto::RecallCandidate {
+                flicknote_client::dto::RecallCandidate {
                     id: 42,
                     title: Some("Hook candidate".to_string()),
                     summary: Some("Hook summary".to_string()),
@@ -1093,15 +1091,17 @@ fn cli_add_json_emits_only_the_public_note_id() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let daemon =
-        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
-            match request {
-                AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
-                    flicknote_core::services::dto::NoteCreateResult { id: 88 },
-                ))),
-                _ => panic!("unexpected request: {request:?}"),
-            }
-        });
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        flicknote_sync::ipc::server_info(),
+        |request| match request {
+            AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
+                flicknote_client::dto::NoteCreateResult { id: 88 },
+            ))),
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
 
     let output = run_cli_with_input(&config_root, &data_root, &["add", "--json"], "new note\n");
 
@@ -1125,23 +1125,25 @@ fn cli_draft_write_and_submit_use_distinct_machine_requests() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let daemon =
-        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
-            match request {
-                AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
-                    flicknote_core::services::dto::NoteCreateResult { id: 88 },
-                ))),
-                AppRequest::NoteWrite { .. } | AppRequest::NoteSubmit { .. } => {
-                    DaemonResponse::App(Box::new(AppResponse::NoteMutation(
-                        flicknote_core::services::dto::NoteMutationResult {
-                            note: fake_note_summary(),
-                            sections: Vec::new(),
-                        },
-                    )))
-                }
-                _ => panic!("unexpected request: {request:?}"),
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        flicknote_sync::ipc::server_info(),
+        |request| match request {
+            AppRequest::NoteAdd(_) => DaemonResponse::App(Box::new(AppResponse::NoteCreate(
+                flicknote_client::dto::NoteCreateResult { id: 88 },
+            ))),
+            AppRequest::NoteWrite { .. } | AppRequest::NoteSubmit { .. } => {
+                DaemonResponse::App(Box::new(AppResponse::NoteMutation(
+                    flicknote_client::dto::NoteMutationResult {
+                        note: fake_note_summary(),
+                        sections: Vec::new(),
+                    },
+                )))
             }
-        });
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
 
     let added = run_cli_with_input(
         &config_root,
@@ -1186,10 +1188,10 @@ fn cli_content_prints_only_actual_stored_content() {
     let daemon = spawn_scripted_daemon(
         &config_root,
         &data_root,
-        ServerInfo::current(),
+        flicknote_sync::ipc::server_info(),
         move |request| match request {
             AppRequest::NoteGet { .. } => DaemonResponse::App(Box::new(AppResponse::NoteDetail(
-                flicknote_core::services::dto::NoteDetail {
+                flicknote_client::dto::NoteDetail {
                     note: fake_note_summary(),
                     content: stored.to_string(),
                     metadata: None,
@@ -1216,7 +1218,7 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let item = flicknote_core::services::dto::NoteListItem {
+    let item = flicknote_client::dto::NoteListItem {
         id: Some(77),
         note_type: "normal".to_string(),
         title: Some("Adapter note".to_string()),
@@ -1235,14 +1237,14 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
     let daemon = spawn_scripted_daemon(
         &config_root,
         &data_root,
-        ServerInfo::current(),
+        flicknote_sync::ipc::server_info(),
         move |request| match request {
             AppRequest::NoteList(_) => {
                 DaemonResponse::App(Box::new(AppResponse::NoteListItems(vec![item.clone()])))
             }
             AppRequest::NoteFind(_) => {
                 DaemonResponse::App(Box::new(AppResponse::SearchHits(vec![
-                    flicknote_core::services::dto::SearchHit {
+                    flicknote_client::dto::SearchHit {
                         short_id: item.id,
                         note_type: item.note_type.clone(),
                         content_bytes: item.content_bytes,
@@ -1252,8 +1254,8 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
                         created_at: item.created_at.clone(),
                         updated_at: item.updated_at.clone(),
                         project_id: item.project_id.clone(),
-                        snippet: flicknote_core::services::dto::SearchSnippet {
-                            segments: vec![flicknote_core::services::dto::SnippetSegment {
+                        snippet: flicknote_client::dto::SearchSnippet {
+                            segments: vec![flicknote_client::dto::SnippetSegment {
                                 text: "Adapter".to_string(),
                                 highlighted: true,
                             }],
@@ -1314,19 +1316,19 @@ fn cli_route_project_reads_one_json_batch_from_stdin() {
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
     let project_id = uuid::Uuid::new_v4().to_string();
-    let daemon =
-        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
-            match request {
-                AppRequest::NoteRouteProject(routes) => {
-                    DaemonResponse::App(Box::new(AppResponse::NoteRouteProject(
-                        flicknote_core::services::dto::NoteRouteProjectResult {
-                            routed: routes.len(),
-                        },
-                    )))
-                }
-                _ => panic!("unexpected request: {request:?}"),
-            }
-        });
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        flicknote_sync::ipc::server_info(),
+        |request| match request {
+            AppRequest::NoteRouteProject(routes) => DaemonResponse::App(Box::new(
+                AppResponse::NoteRouteProject(flicknote_client::dto::NoteRouteProjectResult {
+                    routed: routes.len(),
+                }),
+            )),
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
     let input = serde_json::json!([
         {"note_id":3127,"project_id":project_id,"probability":0.91},
         {"note_id":3128,"project_id":null,"probability":0.78}
@@ -1357,14 +1359,19 @@ fn cli_mutation_adapter_sends_typed_request_and_preserves_output_contract() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let daemon = spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |_| {
-        DaemonResponse::App(Box::new(AppResponse::NoteMutation(
-            flicknote_core::services::dto::NoteMutationResult {
-                note: fake_note_summary(),
-                sections: Vec::new(),
-            },
-        )))
-    });
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        flicknote_sync::ipc::server_info(),
+        |_| {
+            DaemonResponse::App(Box::new(AppResponse::NoteMutation(
+                flicknote_client::dto::NoteMutationResult {
+                    note: fake_note_summary(),
+                    sections: Vec::new(),
+                },
+            )))
+        },
+    );
 
     let output = run_cli_with_input(
         &config_root,
@@ -1391,31 +1398,33 @@ fn detail_tree_json_serializes_the_shared_section_tree() {
     let directory = tempfile::tempdir().unwrap();
     let config_root = directory.path().join("config");
     let data_root = directory.path().join("data");
-    let daemon =
-        spawn_scripted_daemon(&config_root, &data_root, ServerInfo::current(), |request| {
-            match request {
-                AppRequest::NoteGet { .. } => DaemonResponse::App(Box::new(
-                    AppResponse::NoteDetail(flicknote_core::services::dto::NoteDetail {
-                        note: fake_note_summary(),
-                        content: "## Current section".to_string(),
-                        metadata: None,
-                        extractions: Vec::new(),
-                        sections: vec![flicknote_core::services::dto::SectionDto {
-                            id: "current".to_string(),
-                            level: 2,
-                            title: "Current section".to_string(),
-                            children: vec![flicknote_core::services::dto::SectionDto {
-                                id: "child".to_string(),
-                                level: 3,
-                                title: "Child section".to_string(),
-                                children: Vec::new(),
-                            }],
+    let daemon = spawn_scripted_daemon(
+        &config_root,
+        &data_root,
+        flicknote_sync::ipc::server_info(),
+        |request| match request {
+            AppRequest::NoteGet { .. } => DaemonResponse::App(Box::new(AppResponse::NoteDetail(
+                flicknote_client::dto::NoteDetail {
+                    note: fake_note_summary(),
+                    content: "## Current section".to_string(),
+                    metadata: None,
+                    extractions: Vec::new(),
+                    sections: vec![flicknote_client::dto::SectionDto {
+                        id: "current".to_string(),
+                        level: 2,
+                        title: "Current section".to_string(),
+                        children: vec![flicknote_client::dto::SectionDto {
+                            id: "child".to_string(),
+                            level: 3,
+                            title: "Child section".to_string(),
+                            children: Vec::new(),
                         }],
-                    }),
-                )),
-                _ => panic!("unexpected request: {request:?}"),
-            }
-        });
+                    }],
+                },
+            ))),
+            _ => panic!("unexpected request: {request:?}"),
+        },
+    );
 
     let tree = run_cli_json(
         &config_root,

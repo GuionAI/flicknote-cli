@@ -5,8 +5,8 @@ use std::collections::HashSet;
 
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
-use crate::services::dto::RecallCandidate;
 use crate::types::{Note, NoteStatus, Project};
+use flicknote_client::dto::RecallCandidate;
 
 use super::{
     InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, NoteShare,

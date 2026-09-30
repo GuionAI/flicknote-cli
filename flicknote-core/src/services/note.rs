@@ -4,14 +4,13 @@ use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch, RouteProjec
 use crate::types::NoteStatus;
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
-use super::dto::{
+use flicknote_client::dto::{
     ExtractionDto, NoteAddInput, NoteArchiveResult, NoteCreateResult, NoteDetail, NoteListItem,
     NoteMutationResult, NoteRouteProjectInput, NoteRouteProjectResult, NoteSectionResult,
     NoteSummary, OpenResult, Patch, RecallCandidate, SectionDto, ShareResult, UnshareResult,
 };
-pub use super::dto::{
-    ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
-    NoteModifyInput,
+use flicknote_client::dto::{
+    InsertPosition, NoteCountInput, NoteFindInput, NoteListInput, NoteModifyInput,
 };
 
 pub const RECALL_MAX_CANDIDATES: u32 = 5;
@@ -24,7 +23,8 @@ use super::ports::{
     ProjectAssignmentSource, ShareGateway, ShareResource,
 };
 use super::sections::{content_starts_with_heading, find_section};
-use super::source::{SourceResult, SourceView, parse_source};
+use super::source::parse_source;
+use flicknote_client::source::{SourceResult, SourceView};
 
 pub fn validate_created_range(
     created_after: Option<&str>,
@@ -983,17 +983,17 @@ pub fn confirmed_create_followup_error(
 mod tests {
 
     use crate::backend::NoteDb;
-    use crate::services::dto::{NoteAddInput, NoteRouteProjectInput, Patch};
     use crate::services::ports::{
         BrowserOpener, CreateNote, CreatedNote, NoteCreator, ProjectAssignmentEvent,
         ProjectAssignmentEventSink, ProjectAssignmentSource, ShareGateway, ShareResource,
     };
     use crate::services::test_support::{insert_normal_note, make_backend};
     use async_trait::async_trait;
+    use flicknote_client::dto::{ExtractionFilterDto, NoteAddInput, NoteRouteProjectInput, Patch};
 
     use super::{
-        ExtractionFilterDto, InsertPosition, NoteCountInput, NoteFindInput, NoteListInput,
-        NoteModifyInput, NoteService, validate_created_range,
+        InsertPosition, NoteCountInput, NoteFindInput, NoteListInput, NoteModifyInput, NoteService,
+        validate_created_range,
     };
 
     #[derive(Default)]
@@ -2278,13 +2278,13 @@ mod tests {
             .source(
                 &id,
                 true,
-                crate::services::source::SourceView::Rendered,
+                flicknote_client::source::SourceView::Rendered,
                 Some("2"),
             )
             .await
             .unwrap();
 
-        let crate::services::source::SourceResult::Rendered { content, .. } = result else {
+        let flicknote_client::source::SourceResult::Rendered { content, .. } = result else {
             panic!("expected rendered source");
         };
         assert_eq!(content, "two\n");

@@ -1382,8 +1382,8 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
 }
 
 async fn seed_draft(harness: &McpHarness) -> i64 {
-    use flicknote_core::services::dto::NoteAddInput;
-    use flicknote_sync::ipc::{AppRequest, AppResponse};
+    use flicknote_client::dto::NoteAddInput;
+    use flicknote_client::{AppRequest, AppResponse};
 
     let created = harness
         .app

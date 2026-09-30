@@ -1,7 +1,7 @@
 use clap::Args;
+use flicknote_client::dto::NoteMutationResult;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::NoteMutationResult;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 use super::util::display_summary_id;
 
@@ -17,7 +17,7 @@ pub(crate) struct SubmitArgs {
     json: bool,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &SubmitArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &SubmitArgs) -> Result<(), CliError> {
     let result: NoteMutationResult = daemon
         .call(AppRequest::NoteSubmit {
             id: args.id.clone(),

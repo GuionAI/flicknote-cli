@@ -1,4 +1,4 @@
-use flicknote_core::services::dto::Patch;
+use flicknote_client::dto::Patch;
 use rmcp::schemars::JsonSchema;
 use serde::Deserialize;
 

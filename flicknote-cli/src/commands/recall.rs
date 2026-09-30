@@ -1,8 +1,8 @@
 use clap::Args;
+use flicknote_client::dto::RecallCandidate;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::config::Config;
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::RecallCandidate;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 use serde::Deserialize;
 use std::io::{self, Read, Write};
 use std::time::Duration;
@@ -70,13 +70,15 @@ async fn recall_candidates(
     project: Option<String>,
     timeout: Duration,
 ) -> Result<Vec<RecallCandidate>, CliError> {
-    recall_call_with_timeout(
-        timeout,
-        DaemonClient::new(config).call(AppRequest::NoteRecall {
-            prompt: prompt.to_string(),
-            project,
-        }),
-    )
+    recall_call_with_timeout(timeout, async {
+        DaemonClient::new(config.paths.data_dir.join("daemon.sock"))
+            .call(AppRequest::NoteRecall {
+                prompt: prompt.to_string(),
+                project,
+            })
+            .await
+            .map_err(flicknote_core::services::error::ServiceError::from)
+    })
     .await
     .map_err(CliError::from)
 }
@@ -144,10 +146,9 @@ fn single_line(value: &str) -> String {
 mod tests {
     use std::path::Path;
 
+    use flicknote_client::{AppResponse, DaemonResponse};
     use flicknote_core::config::{Config, ConfigPaths};
-    use flicknote_sync::ipc::{
-        AppResponse, DaemonResponse, read_request, socket_path, write_response,
-    };
+    use flicknote_sync::ipc::{read_request, socket_path, write_response};
     use tokio::net::UnixListener;
     use tokio::sync::oneshot;
 

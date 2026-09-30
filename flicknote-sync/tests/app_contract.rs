@@ -1,19 +1,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use flicknote_client::dto::{NoteListInput, ProjectAddInput};
+use flicknote_client::{
+    AppRequest, AppResponse, DaemonClient, DaemonRequest, DaemonResponse, PROTOCOL_MISMATCH_CODE,
+};
 use flicknote_core::backend::{InsertNoteReq, InsertedNote, LocalPowerSyncBackend, NoteDb};
 use flicknote_core::config::{Config, ConfigPaths};
 use flicknote_core::schema::app_schema;
-use flicknote_core::services::dto::{NoteListInput, ProjectAddInput};
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{
     CreateNote, CreatedNote, NoteCreator, ShareGateway, ShareResource,
 };
 use flicknote_sync::app::Application;
-use flicknote_sync::ipc::{
-    AppRequest, AppResponse, DaemonClient, DaemonRequest, DaemonResponse, PROTOCOL_MISMATCH_CODE,
-    ServerInfo, serve_app_once, socket_path,
-};
+use flicknote_sync::ipc::{serve_app_once, socket_path};
 use powersync::{ConnectionPool, PowerSyncDatabase, env::PowerSyncEnvironment};
 
 fn test_config(directory: &std::path::Path) -> Config {
@@ -367,44 +367,76 @@ async fn app_owns_project_and_catalog_domain_operations() {
 
 #[tokio::test]
 async fn versioned_socket_routes_client_requests_through_application() {
+    use flicknote_client::dto::{NoteDetail, NoteMutationResult, ProjectDto};
+    use flicknote_sync::ipc::serve_app_until_with_provider;
+
+    const NOTE_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
     let directory = tempfile::tempdir().unwrap();
     let config = test_config(directory.path());
     let backend = test_backend(&config);
-    let app = Arc::new(test_app(backend));
-    let listener =
-        tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config)).unwrap();
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
+    backend
+        .insert_note(&InsertNoteReq {
+            id: NOTE_ID,
+            note_type: "normal",
+            status: "draft",
+            title: Some("Title"),
+            content: Some("Body"),
+            metadata: None,
+            project_id: None,
+            now: "2026-08-09T00:00:00Z",
+        })
+        .await
+        .unwrap();
+    let app = Arc::new(test_app(backend.clone()));
+    let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let server = tokio::spawn(serve_app_until_with_provider(
+        listener,
+        app,
+        Arc::new(flicknote_sync::ipc::server_info),
+        shutdown_rx,
+    ));
+    let client = DaemonClient::new(socket_path(&config));
+    assert_eq!(
+        client.health().await.unwrap().protocol,
+        flicknote_client::PROTOCOL_VERSION
+    );
 
-    let client = DaemonClient::new(&config);
-    let info = client.health().await.unwrap();
-    assert_eq!(info.protocol, flicknote_sync::ipc::PROTOCOL_VERSION);
-    server.await.unwrap().unwrap();
-
-    std::fs::remove_file(flicknote_sync::ipc::socket_path(&config)).unwrap();
-    let listener =
-        tokio::net::UnixListener::bind(flicknote_sync::ipc::socket_path(&config)).unwrap();
-    let directory2 = tempfile::tempdir().unwrap();
-    let config2 = test_config(directory2.path());
-    let backend = test_backend(&config2);
-    let app = Arc::new(test_app(backend));
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
-    let response = client
-        .app(AppRequest::NoteList(NoteListInput {
-            note_type: None,
-            status: None,
-            project: None,
-            no_project: false,
-            created_after: None,
-            created_before: None,
-            human: false,
+    let note: NoteDetail = client
+        .call(AppRequest::NoteGet {
+            id: NOTE_ID.into(),
             archived: false,
-            shared: false,
-            limit: 20,
-            cursor: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(note.content, "Body");
+    let mutation: NoteMutationResult = client
+        .call(AppRequest::NoteAppend {
+            id: NOTE_ID.into(),
+            content: "More".into(),
+        })
+        .await
+        .unwrap();
+    assert!(mutation.note.draft);
+    let stored = backend.find_note(NOTE_ID).await.unwrap();
+    assert_eq!(stored.status, "draft");
+    assert!(stored.content.unwrap().contains("More"));
+
+    let project: ProjectDto = client
+        .call(AppRequest::ProjectAdd(ProjectAddInput {
+            name: "Work".into(),
+            color: None,
         }))
         .await
         .unwrap();
-    assert!(matches!(response, AppResponse::NoteListItems(notes) if notes.is_empty()));
+    let fetched: ProjectDto = client
+        .call(AppRequest::ProjectGet {
+            id: project.id.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(fetched, project);
+    shutdown_tx.send(true).unwrap();
     server.await.unwrap().unwrap();
 }
 
@@ -417,7 +449,11 @@ async fn protocol_v1_app_request_is_rejected_before_application_dispatch() {
     let backend = test_backend(&config);
     let app = Arc::new(test_app(backend));
     let listener = tokio::net::UnixListener::bind(socket_path(&config)).unwrap();
-    let server = tokio::spawn(serve_app_once(listener, app, ServerInfo::current()));
+    let server = tokio::spawn(serve_app_once(
+        listener,
+        app,
+        flicknote_sync::ipc::server_info(),
+    ));
 
     let mut stream = tokio::net::UnixStream::connect(socket_path(&config))
         .await

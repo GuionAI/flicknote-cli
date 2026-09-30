@@ -1,9 +1,9 @@
 use clap::Args;
+use flicknote_client::dto::OpenResult;
+use flicknote_client::{AppRequest, DaemonClient};
 use flicknote_core::error::CliError;
-use flicknote_core::services::dto::OpenResult;
 use flicknote_core::services::ports::BrowserOpener;
 use flicknote_sync::browser::SystemBrowserOpener;
-use flicknote_sync::ipc::{AppRequest, DaemonClient};
 
 #[derive(Args)]
 pub(crate) struct OpenArgs {
@@ -11,7 +11,7 @@ pub(crate) struct OpenArgs {
     id: String,
 }
 
-pub(crate) async fn run(daemon: &DaemonClient<'_>, args: &OpenArgs) -> Result<(), CliError> {
+pub(crate) async fn run(daemon: &DaemonClient, args: &OpenArgs) -> Result<(), CliError> {
     let result: OpenResult = daemon
         .call(AppRequest::NoteOpen {
             id: args.id.clone(),
