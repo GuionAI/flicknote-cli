@@ -48,6 +48,17 @@ elif [[ "$phase" == "prepare" ]]; then
     start_head="$(<"$start_head_file")"
     current_head="$(git rev-parse HEAD)"
 
+    # A cancelled prepare may survive an ordinary fast-forward of main.
+    # Restart only when neither tracked state nor release manifests changed.
+    if [[ "$current_head" != "$start_head" ]] &&
+        [[ -z "$(git tag --points-at "$current_head" --list 'v[0-9]*')" ]] &&
+        git merge-base --is-ancestor "$start_head" "$current_head" &&
+        git diff --quiet "$start_head" "$current_head" -- Cargo.toml Cargo.lock &&
+        [[ -z "$(git status --porcelain)" ]]; then
+        start_head="$current_head"
+        printf '%s\n' "$start_head" >"$start_head_file"
+    fi
+
     if [[ "$current_head" == "$start_head" ]]; then
         cargo release "$level" --execute --no-push
         current_head="$(git rev-parse HEAD)"

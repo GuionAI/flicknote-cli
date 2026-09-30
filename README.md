@@ -85,6 +85,12 @@ Use `just --dry-run release patch` to print the commands without running them.
 If a push fails, keep `main` at the release commit and rerun the same command to
 resume the pending tag.
 
+If preparation was interrupted before changing the version and `main` later
+advanced, rerunning the same command restarts preparation from the new HEAD
+when the working tree is clean and `Cargo.toml`/`Cargo.lock` are unchanged.
+Version-changing commits without a tag or uncommitted preparation changes stay
+pending for inspection; the script does not discard them.
+
 The release uses cargo-dist 0.31.0 for `x86_64-unknown-linux-musl` and
 `aarch64-apple-darwin`. Verify the published Linux archive and its `.sha256`
 asset before handing the version to fse, which packages public GitHub Release

@@ -68,6 +68,7 @@ func (m *FlicknoteCliCheck) Check(ctx context.Context,
 		check = check.WithEnvVariable("FLICKNOTE_TEST_FB_REVISION", fbRevision)
 	}
 	return check.WithExec([]string{"cargo", "fmt", "--all", "--check"}).
+		WithExec([]string{"bash", "scripts/test-release.sh"}).
 		WithExec([]string{"cargo", "test", "--workspace", "--all-features", "--locked"}).
 		WithExec([]string{"cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings"}).
 		WithExec([]string{"bash", "scripts/test-private-pg.sh"}).Stdout(ctx)
