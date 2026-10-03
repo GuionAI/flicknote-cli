@@ -19,3 +19,6 @@ pub use runtime::{DaemonRunError, run};
 
 #[cfg(test)]
 mod test_support;
+
+#[cfg(feature = "experimental-spike")]
+pub mod spike;

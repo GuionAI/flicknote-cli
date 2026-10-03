@@ -1,0 +1,25 @@
+[package]
+name = "flicknote-gpui"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-kit = "=0.7.0"
+flicknote-spike = { path = "../flicknote-spike" }
+flicknote-sync = { path = "../flicknote-sync", features = ["experimental-spike"] }
+flicknote-client = { path = "../flicknote-client" }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+anyhow = "1"
+log = "0.4"
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-kit = { version = "=0.7.0", features = ["test-support"] }
+tempfile = "3"

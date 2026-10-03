@@ -178,6 +178,8 @@ pub(super) async fn handle_write(
     }
 }
 
+// GPUI unifies serde_json/preserve_order, enlarging JSON-backed boundary types.
+#[allow(clippy::result_large_err)]
 fn service_result<T>(
     result: Result<T, ServiceError>,
     response: impl FnOnce(T) -> AppResponse,

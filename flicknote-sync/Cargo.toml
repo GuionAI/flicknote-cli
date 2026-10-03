@@ -10,6 +10,9 @@ license = "MIT"
 [package.metadata.dist]
 dist = false
 
+[features]
+experimental-spike = []
+
 [dependencies]
 flicknote-client = { path = "../flicknote-client" }
 flicknote-core = { path = "../flicknote-core" }
@@ -26,6 +29,7 @@ log = "0.4"
 uuid = { workspace = true }
 chrono = "0.4"
 fs4 = { workspace = true }
+dirs = { workspace = true }
 thiserror = { workspace = true }
 libc = "0.2"
 rmcp = { version = "=3.2.0", default-features = false, features = ["server", "transport-streamable-http-server", "macros"] }
@@ -43,3 +47,4 @@ workspace = true
 tempfile = "3"
 tokio = { workspace = true, features = ["test-util"] }
 bytes = "1"
+chrono-tz = "0.10"

@@ -82,6 +82,10 @@ _Avoid_: Summary, generated answer
 
 ## Note discovery
 
+**FlickNote workspace**:
+The desktop surface where a person captures, reads, and organizes their FlickNote notes. Closing its window is distinct from quitting the application.
+_Avoid_: CLI window, MCP client
+
 **Note-list page**:
 A bounded, short-ID-descending segment of the active or archived notes selected by the same note-list filters. Its final item's short ID is the continuation cursor when another page is needed.
 _Avoid_: Result array, batch

@@ -396,6 +396,7 @@ mod tests {
 
     #[async_trait]
     impl DaemonHealthProbe for FakeHealth {
+        #[allow(clippy::result_large_err)] // GPUI unifies serde_json/preserve_order boundary types.
         async fn health(&self, _config: &Config) -> Result<ServerInfo, ServiceError> {
             self.polls.fetch_add(1, Ordering::SeqCst);
             self.results

@@ -366,7 +366,7 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 5 crates:
+Rust workspace with 5 production crates and 2 experimental packages:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
@@ -375,13 +375,37 @@ Rust workspace with 5 crates:
 | `flicknote-core` | library | Database, config, shared services, storage types, schema, and DTO conversions |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
+| `flicknote-spike` | library/binary | Synthetic independent-directory experimental host, without GPUI |
+| `flicknote-gpui` | macOS binary | Experimental embedded host with watched Today and native input |
 
 Rust clients can call the daemon directly with an explicit socket path through
 [`flicknote-client`](flicknote-client/README.md), without linking database, sync,
 auth, or MCP server implementations. The unified executable still hosts the
 daemon and therefore retains those dependencies. This extraction preserves the
 existing user/operator commands, configuration, IPC wire version, and CLI/MCP
-outputs. It provides a library for future clients; no desktop app is included.
+outputs. The separate experimental desktop package is described below.
+
+## Experimental embedded GPUI spike
+
+Build on Apple Silicon macOS with `cargo build --locked -p flicknote-gpui
+-p flicknote-spike`. Launch with an explicit independent absolute directory:
+
+```bash
+target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0
+# Headless alternative; do not run both against the same root:
+target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0
+```
+
+This is a synthetic fixture experiment. It embeds real PowerSync, shared
+application operations and the existing local MCP/IPC servers. It loads no login
+or cloud session. The GUI watches local Today snapshots; closing its window
+keeps the host alive, Command-1 reopens Today, and Command-Q stops the host.
+The operator output gives the isolated socket and loopback MCP endpoint.
+The installed daemon and desktop remain separate.
+
+See [the spike guide](docs/embedded-gpui-spike.md) for safety, CLI connection,
+fixture limits, build checks and the distinction between automated and native
+validation. This package is not included in release distribution.
 
 ## License
 

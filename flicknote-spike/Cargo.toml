@@ -1,0 +1,19 @@
+[package]
+name = "flicknote-spike"
+version.workspace = true
+edition = "2024"
+license = "MIT"
+publish = false
+
+[package.metadata.dist]
+dist = false
+
+[dependencies]
+flicknote-sync = { path = "../flicknote-sync", features = ["experimental-spike"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+env_logger = "0.11"
+
+[lints]
+workspace = true

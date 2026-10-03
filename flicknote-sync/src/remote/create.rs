@@ -213,6 +213,8 @@ async fn create_note_remotely(
     .await
 }
 
+// GPUI unifies serde_json/preserve_order, enlarging JSON-backed boundary types.
+#[allow(clippy::large_enum_variant)]
 enum NoteCreateAttempt {
     Response(NoteCreateResponse),
     Recovered(RemoteNoteRow),

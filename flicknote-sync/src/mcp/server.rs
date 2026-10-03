@@ -204,6 +204,8 @@ fn normalize_schema_formats(schema: &mut serde_json::Map<String, serde_json::Val
     }
 }
 
+// GPUI unifies serde_json/preserve_order, enlarging JSON-backed boundary types.
+#[allow(clippy::result_large_err)]
 fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolResult> {
     result.map(Json).map_err(|error| tool_error(&error))
 }

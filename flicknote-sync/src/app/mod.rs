@@ -95,6 +95,8 @@ impl Application {
         WireError::from(ServiceError::from(error))
     }
 
+    // GPUI unifies serde_json/preserve_order, enlarging JSON-backed boundary types.
+    #[allow(clippy::result_large_err)]
     fn share_gateway(&self) -> Result<&dyn ShareGateway, WireError> {
         self.share_gateway.as_deref().ok_or_else(|| {
             WireError::from(ServiceError::InvalidArgument(

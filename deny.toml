@@ -16,7 +16,13 @@ allow = [
     "CDLA-Permissive-2.0",
     "CC0-1.0",
 ]
-exceptions = []
+# Approved synthetic GPUI spike only; exact package/version evidence and
+# attribution obligations: docs/embedded-gpui-spike.md. Re-review before live data.
+exceptions = [
+    { name = "enum-iterator", version = "=2.3.0", allow = ["0BSD"] },
+    { name = "enum-iterator-derive", version = "=1.5.0", allow = ["0BSD"] },
+    { name = "libbz2-rs-sys", version = "=0.2.5", allow = ["bzip2-1.0.6"] },
+]
 # Workspace crates are private/unlicensed
 [[licenses.clarify]]
 crate = "flicknote-cli"
@@ -45,6 +51,13 @@ unknown-git = "deny"
 allow-git = ["https://github.com/GuionAI/powersync-native"]
 
 [advisories]
-# All previous ignores were stale — crates no longer in the dep graph after upgrades.
-# Re-add with justification if any appear again.
-ignore = []
+# User-approved informational unmaintained notices for the pinned synthetic GUI.
+# Never waive vulnerabilities/unsoundness; re-review before live-data takeover.
+# Paths, pinned versions and headless non-reachability are recorded in the guide.
+ignore = [
+    "RUSTSEC-2024-0384", # instant 0.1.13: gpui-kit -> gpui-base; no fixed upgrade.
+    "RUSTSEC-2024-0436", # paste 1.0.15: gpui-kit -> gpui-component macros.
+    "RUSTSEC-2025-0134", # rustls-pemfile 2.2.0: assets -> gpui-pre-reqwest; non-Mac.
+    "RUSTSEC-2026-0206", # rustybuzz 0.20.1: gpui-pre -> usvg text shaping.
+    "RUSTSEC-2026-0192", # ttf-parser 0.25.1: gpui-pre font parsing.
+]

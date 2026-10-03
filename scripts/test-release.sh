@@ -93,7 +93,8 @@ cat >"$bin_dir/cargo" <<'SH'
 set -euo pipefail
 [[ "$*" == 'release patch --execute --no-push' ]]
 printf 'prepare\n' >>"$CARGO_CALLS"
-sed -i 's/0.4.0/0.4.1/' Cargo.toml
+sed -i.bak 's/0.4.0/0.4.1/' Cargo.toml
+rm -- Cargo.toml.bak
 git add Cargo.toml
 git -c user.name='Release Test' -c user.email='release-test@example.com' \
     commit -qm 'chore(cli): release 0.4.1'
@@ -111,7 +112,8 @@ echo "release retry after main advances test passed"
 # A version-changing commit without its tag is a partial release, not a safe
 # main advance. Preserve it for inspection rather than bumping or publishing.
 start_head="$(git rev-parse HEAD)"
-sed -i 's/0.4.1/0.4.2/' Cargo.toml
+sed -i.bak 's/0.4.1/0.4.2/' Cargo.toml
+rm -- Cargo.toml.bak
 git add Cargo.toml
 git -c user.name='Release Test' -c user.email='release-test@example.com' \
     commit -qm 'chore(cli): partially prepare release'
@@ -145,7 +147,8 @@ printf 'another ordinary update\n' >>README.md
 git add README.md
 git -c user.name='Release Test' -c user.email='release-test@example.com' \
     commit -qm 'fix(cli): another main update'
-sed -i 's/0.4.2/0.4.3/' Cargo.toml
+sed -i.bak 's/0.4.2/0.4.3/' Cargo.toml
+rm -- Cargo.toml.bak
 before_diff="$(git diff)"
 assert_prepare_preserved
 [[ "$(git diff)" == "$before_diff" ]]

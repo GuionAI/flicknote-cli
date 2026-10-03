@@ -32,7 +32,7 @@ const IPC_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 const POWERSYNC_DISCONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const WAL_CHECKPOINT_TIMEOUT: Duration = Duration::from_secs(2);
 
-struct SocketGuard(PathBuf);
+pub(crate) struct SocketGuard(PathBuf);
 
 impl Drop for SocketGuard {
     fn drop(&mut self) {
@@ -47,7 +47,9 @@ impl Drop for SocketGuard {
     }
 }
 
-fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn std::error::Error>> {
+pub(crate) fn bind_socket(
+    config: &Config,
+) -> Result<(UnixListener, SocketGuard), Box<dyn std::error::Error>> {
     let path = ipc::socket_path(config);
     if path.exists() {
         std::fs::remove_file(&path)?;
@@ -64,11 +66,11 @@ fn bind_socket(config: &Config) -> Result<(UnixListener, SocketGuard), Box<dyn s
     Ok((listener, SocketGuard(path)))
 }
 
-struct ActorHandles {
-    checkpoint: JoinHandle<()>,
-    socket: JoinHandle<Result<(), flicknote_client::DaemonError>>,
-    mcp: JoinHandle<std::io::Result<()>>,
-    powersync: JoinSet<()>,
+pub(crate) struct ActorHandles {
+    pub(crate) checkpoint: JoinHandle<()>,
+    pub(crate) socket: JoinHandle<Result<(), flicknote_client::DaemonError>>,
+    pub(crate) mcp: JoinHandle<std::io::Result<()>>,
+    pub(crate) powersync: JoinSet<()>,
 }
 
 struct StartupSignals {
@@ -245,14 +247,14 @@ pub async fn run(config: Config) -> Result<(), DaemonRunError> {
     result.map_err(DaemonRunError::Runtime)
 }
 
-fn spawn_powersync_actors(db: &PowerSyncDatabase) -> JoinSet<()> {
+pub(crate) fn spawn_powersync_actors(db: &PowerSyncDatabase) -> JoinSet<()> {
     let mut actors = JoinSet::new();
     let abort_handles = db.async_tasks().spawn_with(|future| actors.spawn(future));
     drop(abort_handles);
     actors
 }
 
-fn open_powersync_database(
+pub(crate) fn open_powersync_database(
     config: &Config,
 ) -> Result<PowerSyncDatabase, Box<dyn std::error::Error>> {
     PowerSyncEnvironment::powersync_auto_extension()?;
@@ -350,7 +352,7 @@ fn build_application(
     )
 }
 
-fn spawn_checkpoint_worker(db_path: PathBuf) -> JoinHandle<()> {
+pub(crate) fn spawn_checkpoint_worker(db_path: PathBuf) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(30));
         interval.tick().await;
@@ -392,7 +394,7 @@ fn spawn_wal_checkpoint(
     Ok(done_rx)
 }
 
-fn spawn_socket_server(
+pub(crate) fn spawn_socket_server(
     listener: UnixListener,
     app: Arc<Application>,
     db: &PowerSyncDatabase,
@@ -432,7 +434,10 @@ async fn wait_for_shutdown(
     .await
 }
 
-async fn wait_for_runtime_event<F>(actors: &mut ActorHandles, shutdown: F) -> Result<(), String>
+pub(crate) async fn wait_for_runtime_event<F>(
+    actors: &mut ActorHandles,
+    shutdown: F,
+) -> Result<(), String>
 where
     F: Future<Output = Result<(), String>>,
 {
@@ -575,7 +580,7 @@ async fn shutdown_startup(actors: &mut JoinSet<()>, db: &PowerSyncDatabase, db_p
     log::info!("Daemon startup shutdown coordinator finished");
 }
 
-async fn shutdown_daemon(
+pub(crate) async fn shutdown_daemon(
     actors: &mut ActorHandles,
     db: &PowerSyncDatabase,
     db_path: PathBuf,
