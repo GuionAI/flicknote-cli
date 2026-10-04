@@ -1,18 +1,18 @@
 use crate::model::Model;
+use crate::workspace::{MIN_HEIGHT, MIN_WIDTH, apply_theme};
 use flicknote_client::dto::NoteAddInput;
 use flicknote_client::{AppRequest, AppResponse};
 use flicknote_sync::{app::Application as NoteApplication, spike::today::TodayWatch};
-use gpui_kit::base::{Disableable, TestSupportExt};
 use gpui_kit::{
     App, Bounds, Context, Entity, EntityInputHandler, KeyBinding, Menu, MenuItem, QuitMode, Role,
     Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
     component::{
-        button::Button,
+        Theme,
         input::{InputEvent, Textarea, TextareaState},
     },
     div,
     prelude::*,
-    px, rgb, size, uniform_list,
+    px, size,
 };
 use std::{
     sync::{Arc, Mutex},
@@ -42,13 +42,38 @@ impl Services {
         }
     }
 }
-actions!(spike, [Quit, Reopen]);
+actions!(
+    spike,
+    [
+        Quit,
+        Reopen,
+        SystemTheme,
+        LightTheme,
+        DarkTheme,
+        NextNote,
+        PreviousNote,
+        ArchiveNote
+    ]
+);
+
+fn install_today_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("alt-j", NextNote, Some("Today")),
+        KeyBinding::new("alt-k", PreviousNote, Some("Today")),
+        KeyBinding::new("alt-a", ArchiveNote, Some("Today")),
+        KeyBinding::new("escape", gpui_kit::base::input::Escape, Some("Today")),
+    ]);
+}
 
 struct Today {
     services: Arc<Services>,
     model: Model,
     composer: Entity<TextareaState>,
     detail: Entity<TextareaState>,
+    detail_open: bool,
+    list_scroll: gpui_kit::UniformListScrollHandle,
+    escape_composing: bool,
+    enter_composing: bool,
     error: Option<String>,
     watch_error: Option<String>,
     archive_busy: bool,
@@ -66,9 +91,9 @@ impl Today {
     fn new(services: Arc<Services>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .rows(3)
+                .auto_grow(1, 6)
                 .submit_on_enter(true)
-                .placeholder("Write a note… Return to save · Shift-Return for a new line")
+                .placeholder("Create a new note")
         });
         let detail = cx.new(|cx| TextareaState::new(window, cx).rows(12));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
@@ -79,7 +104,14 @@ impl Today {
                     secondary: false
                 }
             ) {
-                this.submit(window, cx);
+                let composing_at_enter = std::mem::take(&mut this.enter_composing);
+                if !composing_at_enter {
+                    if this.composer.read(cx).value().is_empty() {
+                        this.open_selected(window, cx);
+                    } else {
+                        this.submit(window, cx);
+                    }
+                }
             }
             cx.notify();
         });
@@ -89,6 +121,10 @@ impl Today {
             model: Model::default(),
             composer,
             detail,
+            detail_open: false,
+            list_scroll: gpui_kit::UniformListScrollHandle::new(),
+            escape_composing: false,
+            enter_composing: false,
             error: None,
             watch_error: None,
             archive_busy: false,
@@ -243,6 +279,9 @@ impl Today {
     }
 
     fn refresh_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.detail_open && self.model.selected.is_none() {
+            self.close_detail(window, cx);
+        }
         let text = self
             .model
             .selected
@@ -257,7 +296,44 @@ impl Today {
 
     fn select(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         self.model.selected = Some(id);
+        self.detail_open = true;
         self.refresh_detail(window, cx);
+        cx.notify();
+    }
+
+    fn shortcuts_blocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        !self.composer.read(cx).value().is_empty() || self.composing(window, cx)
+    }
+
+    fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shortcuts_blocked(window, cx) {
+            return;
+        }
+        if let Some(id) = self.model.selected {
+            self.select(id, window, cx);
+        }
+    }
+
+    fn navigate(&mut self, next: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shortcuts_blocked(window, cx) || self.model.rows.is_empty() {
+            return;
+        }
+        let index = self
+            .model
+            .selected
+            .and_then(|id| self.model.rows.iter().position(|r| r.id == id));
+        let index = match index {
+            None => 0,
+            Some(index) if next => (index + 1).min(self.model.rows.len() - 1),
+            Some(index) => index.saturating_sub(1),
+        };
+        self.model.selected = Some(self.model.rows[index].id);
+        if self.detail_open {
+            self.refresh_detail(window, cx);
+        }
+        // A semantic key action reveals the row above the composer; snapshots never scroll.
+        self.list_scroll
+            .scroll_to_item_strict(index, gpui_kit::ScrollStrategy::Center);
         cx.notify();
     }
 
@@ -311,210 +387,28 @@ impl Drop for Today {
     }
 }
 
-impl Today {
-    fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .id("today-notes")
-            .role(Role::ListBox)
-            .aria_label("Today notes")
-            .flex()
-            .flex_col()
-            .w(px(420.))
-            .min_w_0()
-            .gap_1()
-            .children(self.model.pending.iter().map(|p| {
-                div()
-                    .id(("pending", p.token))
-                    .w_full()
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .px_2()
-                    .text_color(rgb(0x777777))
-                    .overflow_hidden()
-                    .truncate()
-                    .child(format!(
-                        "Saving… {}",
-                        p.text.split_whitespace().collect::<Vec<_>>().join(" ")
-                    ))
-                    .test_support()
-            }))
-            .children(self.model.rows.is_empty().then(|| {
-                div().p_2().child(
-                    if self
-                        .watch
-                        .as_ref()
-                        .is_some_and(|w| w.receiver.borrow().is_none())
-                    {
-                        "Loading Today…"
-                    } else {
-                        "No notes today"
-                    },
-                )
-            }))
-            .child(
-                uniform_list(
-                    "today-list",
-                    self.model.rows.len(),
-                    cx.processor(|this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .map(|index| {
-                                let row = &this.model.rows[index];
-                                let id = row.id;
-                                div()
-                                    .id(("note", id as u64))
-                                    .role(Role::ListBoxOption)
-                                    .aria_selected(this.model.selected == Some(id))
-                                    .aria_label(format!("Note {id}: {}", row.preview))
-                                    .h(px(32.))
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .hover(|row| row.bg(rgb(0xeeeeec)))
-                                    .when(this.model.selected == Some(id), |row| {
-                                        row.bg(rgb(0xe5e7eb))
-                                    })
-                                    .px_2()
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .flex_1()
-                                            .truncate()
-                                            .child(row.preview.clone()),
-                                    )
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.select(id, window, cx)
-                                    }))
-                                    .test_support()
-                            })
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .w_full()
-                .h_full(),
-            )
-            .test_support()
-    }
-    fn render_detail(&self, archive_disabled: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
-                    .child(
-                        Button::new("previous")
-                            .label("Previous")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.model.move_selection(false);
-                                this.refresh_detail(window, cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(Button::new("next").label("Next").on_click(cx.listener(
-                        |this, _, window, cx| {
-                            this.model.move_selection(true);
-                            this.refresh_detail(window, cx);
-                            cx.notify();
-                        },
-                    )))
-                    .child(
-                        Button::new("archive")
-                            .label("Archive")
-                            .disabled(archive_disabled)
-                            .on_click(cx.listener(|this, _, window, cx| this.archive(window, cx))),
-                    ),
-            )
-            .child(
-                Textarea::new(&self.detail)
-                    .accessibility_id("detail")
-                    .aria_label("Note detail")
-                    .readonly(true)
-                    .h_full(),
-            )
-    }
-}
-impl Render for Today {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.visible && window.is_visible() {
-            self.frames += 1;
-        }
-        self.visible = window.is_visible();
-        let selected = self.model.selected;
-        let archive_disabled =
-            selected.is_none() || self.archive_busy || !self.composer.read(cx).value().is_empty();
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(0xf7f7f5))
-            .text_color(rgb(0x262626))
-            .p_4()
-            .gap_3()
-            .child(
-                div()
-                    .flex()
-                    .justify_between()
-                    .items_center()
-                    .child(div().text_lg().child("Today"))
-                    .child(div().text_sm().child("Synthetic workspace")),
-            )
-            .child(
-                Textarea::new(&self.composer)
-                    .accessibility_id("composer")
-                    .aria_label("New note")
-                    .h(px(88.)),
-            )
-            .children(
-                self.error
-                    .clone()
-                    .or_else(|| self.watch_error.clone())
-                    .map(|error| {
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xa02c28))
-                            .child(error)
-                            .child(Button::new("retry-watch").label("Retry Today").on_click(
-                                cx.listener(|this, _, window, cx| this.subscribe(window, cx)),
-                            ))
-                    }),
-            )
-            .children((!self.model.recovery.is_empty()).then(|| {
-                Button::new("recover")
-                    .label("Recover unsaved text")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.composer.read(cx).value().is_empty()
-                            && !this.composing(window, cx)
-                            && let Some(text) = this.model.recovery.pop()
-                        {
-                            this.composer
-                                .update(cx, |input, cx| input.set_value(text, window, cx));
-                        }
-                    }))
-            }))
-            .child(
-                div()
-                    .flex()
-                    .gap_4()
-                    .flex_1()
-                    .min_h_0()
-                    .child(self.render_list(cx))
-                    .child(self.render_detail(archive_disabled, cx)),
-            )
-    }
-}
+#[path = "presentation.rs"]
+mod presentation;
 
 type HostState = tokio::sync::watch::Receiver<Option<Result<Arc<Services>, String>>>;
 struct Shell {
+    _appearance: Subscription,
     content: Option<Entity<Today>>,
     error: Option<String>,
     _startup: Task<()>,
 }
 impl Shell {
-    fn new(mut state: HostState, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        mut state: HostState,
+        system: std::rc::Rc<std::cell::Cell<bool>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let appearance = window.observe_window_appearance(move |window, cx| {
+            if system.get() {
+                apply_theme(window.appearance(), cx);
+            }
+        });
         let task = cx.spawn_in(window, async move |entity, cx| {
             loop {
                 let result = state.borrow_and_update().clone();
@@ -539,6 +433,7 @@ impl Shell {
             content: None,
             error: None,
             _startup: task,
+            _appearance: appearance,
         }
     }
 }
@@ -556,12 +451,33 @@ impl Render for Shell {
             })
     }
 }
-fn open(state: HostState, cx: &mut App) {
+fn install_appearance_menu(system: &std::rc::Rc<std::cell::Cell<bool>>, cx: &mut App) {
+    use gpui_kit::component::ThemeMode;
+    apply_theme(cx.window_appearance(), cx);
+    let flag = system.clone();
+    cx.on_action(move |_: &SystemTheme, cx| {
+        flag.set(true);
+        apply_theme(cx.window_appearance(), cx);
+    });
+    let flag = system.clone();
+    cx.on_action(move |_: &LightTheme, cx| {
+        flag.set(false);
+        apply_theme(ThemeMode::Light, cx);
+    });
+    let flag = system.clone();
+    cx.on_action(move |_: &DarkTheme, cx| {
+        flag.set(false);
+        apply_theme(ThemeMode::Dark, cx);
+    });
+}
+
+fn open(state: HostState, system: std::rc::Rc<std::cell::Cell<bool>>, cx: &mut App) {
     if let Some(window) = cx.windows().first().copied() {
         let _result = cx.update_window(window, |_, window, _| window.activate_window());
         return;
     }
     let options = WindowOptions {
+        window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         titlebar: Some(TitlebarOptions {
             title: Some("FlickNote — Synthetic Spike".into()),
             ..Default::default()
@@ -574,7 +490,7 @@ fn open(state: HostState, cx: &mut App) {
         ..Default::default()
     };
     match gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| Shell::new(state, window, cx))
+        cx.new(|cx| Shell::new(state, system, window, cx))
     }) {
         Ok(_) => cx.activate(true),
         Err(error) => log::error!("Could not open window: {error}"),
@@ -613,24 +529,36 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .await
     });
     let application = gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(crate::assets::TodayAssets)
         .with_quit_mode(QuitMode::Explicit);
     let reopen = state.clone();
-    application.on_reopen(move |cx| open(reopen.clone(), cx));
+    let system = std::rc::Rc::new(std::cell::Cell::new(true));
+    let reopen_system = system.clone();
+    application.on_reopen(move |cx| open(reopen.clone(), reopen_system.clone(), cx));
     application.run(move |cx| {
         gpui_kit::init(cx);
+        install_appearance_menu(&system, cx);
+        install_today_keys(cx);
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-1", Reopen, None),
         ]);
         cx.on_action(|_: &Quit, cx| cx.quit());
         let reopen = state.clone();
-        cx.on_action(move |_: &Reopen, cx| open(reopen.clone(), cx));
+        let reopen_system = system.clone();
+        cx.on_action(move |_: &Reopen, cx| open(reopen.clone(), reopen_system.clone(), cx));
         cx.set_menus(vec![Menu {
             name: "FlickNote".into(),
             disabled: false,
             items: vec![
                 MenuItem::action("Open Today", Reopen),
+                MenuItem::action("Next note", NextNote),
+                MenuItem::action("Previous note", PreviousNote),
+                MenuItem::action("Archive selected note", ArchiveNote),
+                MenuItem::separator(),
+                MenuItem::action("Appearance: System", SystemTheme),
+                MenuItem::action("Appearance: Light", LightTheme),
+                MenuItem::action("Appearance: Dark", DarkTheme),
                 MenuItem::separator(),
                 MenuItem::action("Quit FlickNote Spike", Quit),
             ],
@@ -643,7 +571,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             async {}
         })
         .detach();
-        open(state, cx);
+        open(state, system, cx);
     });
     // Native event loop has exited; wait for the existing shutdown coordinator.
     runtime.block_on(task)?.map_err(anyhow::Error::msg)?;

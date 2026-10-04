@@ -9,6 +9,12 @@ use powersync::PowerSyncDatabase;
 use rusqlite::params;
 use std::time::Duration;
 
+pub const PROJECTS: [(&str, &str, &str); 3] = [
+    ("fixture-ideas", "Ideas", "05C7F7"),
+    ("fixture-reading", "Reading", "A78BFA"),
+    ("fixture-work", "Workspace", "F59E0B"),
+];
+
 pub(super) const USER: &str = "embedded-gpui-synthetic-user";
 
 pub(super) struct FixtureCreator {
@@ -67,8 +73,19 @@ pub(super) async fn seed(db: &PowerSyncDatabase, count: u32) -> Result<(), Strin
         .map_err(|e| e.to_string())?;
     if existing == 0 {
         let now = chrono::Utc::now().to_rfc3339();
+        for (key, name, color) in PROJECTS {
+            tx.execute("INSERT OR IGNORE INTO projects (id, user_id, name, color, is_archived, created_at) VALUES (?, ?, ?, ?, 0, ?)", params![key, USER, name, color, now]).map_err(|e| e.to_string())?;
+        }
         for id in 1..=count {
-            tx.execute("INSERT INTO notes (id, short_id, user_id, type, status, title, content, is_flagged, created_at, updated_at) VALUES (?, ?, ?, 'normal', 'ready', ?, ?, 0, ?, ?)", params![format!("fixture-{id}"), id, USER, format!("Synthetic note {id}"), format!("Synthetic note {id}\nPlain detail — 合成笔记. This is fixture-owned content."), now, now]).map_err(|e| e.to_string())?;
+            let (note_type, content) = match id % 5 {
+                0 => ("normal", "A quiet place to collect ideas".to_string()),
+                1 => ("normal", "今天的想法：把复杂的事情写清楚。\n下一步，做一个小实验。".to_string()),
+                2 => ("link", "https://example.com/synthetic-reading".to_string()),
+                3 => ("normal", "Review the workspace spacing and typography with a long line that reaches the edge of the timeline and truncates cleanly.".repeat(3)),
+                _ => ("normal", format!("Planning note {id}\nFirst, write down the idea.\nThen choose one useful next step.")),
+            };
+            let project = PROJECTS[(id as usize) % PROJECTS.len()].0;
+            tx.execute("INSERT INTO notes (id, short_id, user_id, type, status, title, content, project_id, is_flagged, created_at, updated_at) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, 0, ?, ?)", params![format!("fixture-{id}"), id, USER, note_type, format!("Synthetic note {id}"), content, project, now, now]).map_err(|e| e.to_string())?;
         }
     }
     tx.commit().map_err(|e| e.to_string())

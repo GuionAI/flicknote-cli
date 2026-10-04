@@ -1,7 +1,8 @@
 # Synthetic embedded GPUI experiment
 
 Spec #3240 / ADR #3239 evaluates an embedded local host before any production
-cutover. `flicknote-gpui` provides a simple English macOS Today window;
+cutover. Spec #3258 gives `flicknote-gpui` an English macOS Today workspace
+referenced to the existing Swift desktop;
 `flicknote-spike` runs the same host headlessly. Neither is distributed or
 installed by the release workflow. The production CLI/daemon and Swift desktop
 keep their existing behavior.
@@ -62,6 +63,9 @@ sync-style updates, not a replacement cloud server.
 Today spans the local calendar from 04:00 through next-day 04:00, including DST
 length changes. The watched projection includes canonical content and collapsed
 single-line previews, ordered by real short ID descending, capped at 10,000.
+The same bounded watched query resolves note type and project color, including
+project-color updates. The small synthetic project set is Ideas, Reading and
+Workspace. Fixtures include short, long, multiline, Chinese and URL content.
 Rows have stable IDs, a fixed 32-point height and truncated previews. Confirmed
 and pending rows fill the list viewport, independently of preview length; selected
 and hover backgrounds and confirmed-row hit targets span that same width. One watched
@@ -74,7 +78,22 @@ and reconcile by persisted ID whether watch or acknowledgement arrives first.
 A failed capture restores text only into an empty, noncomposing composer;
 otherwise a recovery action retains it without replacing new typing. The detail
 is selectable, copyable plain canonical text. Selection does not retarget editor
-focus. Previous/Next and row clicks select notes. Archive is blocked while the
+focus. A confirmed row opens or replaces detail; Close, Escape or exposed canvas
+dismisses it while preserving selection and composer text. Escape consumed by
+marked composition or the input's own transient surface does not close detail.
+Home closes detail and keeps Today active. In the focused Today window, Option-J
+selects the next confirmed note and Option-K the previous. Either starts at the
+first note when nothing is selected; neither wraps. These actions retain editor
+focus, reveal the selected row through the existing virtual list and update
+canonical detail only when it is already open. Empty-composer Return opens the
+selected note. Nonempty Return creates; Shift-Return inserts a newline. IME Return
+commits composition without prematurely creating or opening. Option-A uses the
+same guarded archive action. Navigation/open/archive shortcuts are blocked by
+unsubmitted or marked composer input; native Command-A/C/V editing is retained.
+The supported selection/archive actions are also in the application menu.
+
+The composer always creates new notes,
+even with detail open; it never implies append support. Archive is blocked while the
 composer has unsubmitted text or marked composition. On success it selects the
 first surviving successor from the prior persisted-ID order, or surviving
 predecessor if no successor remains. Batched insertions/removals and either
@@ -86,6 +105,92 @@ or Command-1 to reopen a fresh subscription. Command-Q explicitly stops the host
 drains existing services and releases socket/ownership. Headless Ctrl-C/SIGTERM
 uses the same shutdown coordinator. GUI database/runtime operations run on Tokio;
 the native event loop receives snapshots and operation completions.
+
+## Today presentation
+
+The layout is sourced from the read-only Swift desktop checkout at
+`65c4b6380d1c9b2087205fc0d09ed06c34b513fd`: `FlickNotePanelController`
+(workspace, rail, header, composer and detail), `FlickNoteTimelineView`,
+`FlickNoteWorkspaceTheme` and `FlickNoteSourceToggleStyle`.
+
+The rail is 252 points wide with 22-point outer insets; the main pane starts
+after a 24-point gap. Today uses a 23-point semibold header and full-width
+32-point rows with 14-point previews, packaged vector type glyphs and trailing
+project dots. Pending captures have the same appearance without status labels
+or spinners and remain nonselectable. Search, project destinations, Shared,
+Archive browsing and Charts are static inactive landmarks excluded from keyboard
+focus. Inactive destination labels use Kit’s secondary foreground; Home uses
+foreground. Every destination reserves the same 17-point icon/dot slot and 10-point gap,
+so text aligns regardless of symbol size. Unsupported filter, day-navigation,
+microphone, project-add, sharing and title-edit actions are omitted.
+
+The bottom composer is centered across the whole canvas, at most 620 points wide,
+with 16-point padding, an 18-point radius, 17-point text and a 28-point bottom
+inset. Kit's textarea grows from one to six wrapped lines, then scrolls internally.
+A fixed blank timeline tail lets the final row scroll above the largest composer
+without a geometry feedback loop. Read/copy detail is a bounded right overlay
+with an approved 520-point maximum width, 16-point radius and right inset.
+Its reading area fills the height above the current composer, including feedback,
+with a 16-point gap. It narrows within the main pane and leaves row content
+exposed at the native minimum window size of 760×560 points. These width/height
+adaptations reflect the manual feedback on spec #3258. This is a desktop slice;
+there is no phone layout contract.
+
+Choose Appearance: System, Light or Dark from the FlickNote application menu.
+Selection is session-local, including across close/reopen; System follows native
+appearance changes while a window is open. It changes this app only.
+
+Text and caret colors follow the active iOS universal Light/Dark assets in read-only registered
+`fn-ios` at `300261c7467827208dfd71f7af0eb6615d9935cb`:
+`Shared/Theme/Color+Theme.swift` and
+`Resources/Assets.xcassets/ThemeColor`. The user approved this after trying Kit’s
+default colors; it supersedes both the original Swift desktop palette and the
+intermediate default-Kit decision. Following the rejected v3 Light screenshot,
+the user approved distinct desktop surface roles instead of the shared iOS
+surface/label fills. One local adapter maps these roles into the existing Kit
+theme; presentation still reads Kit semantic tokens.
+Mac/watch asset overrides are excluded. Fixture project dots retain stored colors.
+
+| iOS universal asset | Light / Dark | Kit roles |
+| --- | --- | --- |
+| theme-background | FFFFFF / 0D0D0D | background |
+| font-primary | 171717 / EDEDED | foreground, surface/accent/button foreground, glyphs |
+| font-secondary | 525252 / A6A6A6 | secondary foreground/inactive destinations |
+| font-tertiary | 737373 / 808080 | muted foreground/search/headings |
+| theme-primary | 2E2E2E / C6C6C6 | primary |
+| font-on-primary | E2E2E2 / 222222 | primary foreground |
+| theme-cursor | 05C7F7 / 05C7F7 | caret and focus ring |
+
+| Approved desktop role | Light / Dark | Kit roles |
+| --- | --- | --- |
+| Quiet rail | FAFAFA / 141414 | secondary |
+| Elevated composer/detail | FFFFFF / 1C1C1C | popover/surface, neutral button |
+| Hover / muted search landmark | F5F5F5 / 202020 | accent, muted, neutral button hover |
+| Selection | EBEBEB / 2B2B2B | selection, neutral button active |
+| Subtle edge | E8E8E8 / 303030 | border, input |
+
+These are product-authored starting values, not exact Radix tokens. The role
+separation follows [Radix's use cases](https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale)
+and [Spectrum's background layers](https://spectrum.adobe.com/foundations/color/background-layers).
+Only composer/detail use GPUI's restrained `shadow_xs` (5% black, 1pt offset,
+2pt blur); Dark separation comes primarily from the lighter fill and border.
+Appearance-free textareas expose their enclosing elevated background. Search
+stays inactive and uses a weaker fill than selected Home. Keyboard actions
+remain immediate, without animation. The user manually accepted the v4 visual
+direction with “可，先这样吧。” No v4 screenshots or explicit native shortcut/IME
+results were supplied; neither the v3 image nor this acceptance proves every state.
+
+Kit retains structural radii, typography machinery, shadows, motion, scrollbars
+and unused specialized component colors (e.g. warning/destructive). Today keeps
+the approved explicit layout/type sizes. No XCAsset runtime parser, generator,
+extra accent palette, customization framework or dependency was introduced.
+Inline Apple semantic accent is unnecessary for plain text.
+
+The synthetic boundary is identified in the window title and these operator docs.
+Plain text rather than Markdown and creation rather than append are intentional
+limits. Lucide vector icons are optical equivalents, not SF Symbols replicas.
+The app packages its screen icons explicitly alongside Kit’s default component
+assets; icon names alone do not register the full catalog.
 
 ## Verification and limits
 
@@ -114,13 +219,41 @@ compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
 
-This slice supplies no login, real cloud connectivity, projects/search/charts,
-Markdown parity, voice/global trigger, updater/signing distribution, Linux GUI,
-production takeover or GUI/headless handoff. It makes no design-fidelity claim.
+This slice supplies no login, real cloud connectivity, functional projects/search/charts,
+Markdown parity, unsupported navigation/date shortcuts, voice/global
+trigger, updater/signing distribution, Linux GUI,
+production takeover or GUI/headless handoff. The source layout targets Swift
+fidelity for the supported Today slice;
+the user accepted the current v4 direction and chose to proceed without the
+exhaustive screenshot matrix as a further gate for this slice.
 Native/automated results and outstanding evidence gates must be reported
 separately; build success alone does not establish responsiveness.
 
-## Current verification evidence
+## Visual verification workflow
+
+Use a newly built scratch-only app and a new short synthetic root; record the
+source commit, binary SHA-256 and root in the local implementation report. Keep
+previous trial artifacts and running apps intact. Capture only the owned
+synthetic app, never the installed desktop or personal notes. Foreground the
+scratch app with `open -a /absolute/path/to/OwnedSynthetic.app` before using
+native app capture. Capture tooling failures are unresolved evidence, not proof
+of an application repaint failure or of correct pixels.
+
+Record actual images at 980×720 and 1440×900 points in Light and Dark with detail
+closed/open, selected/hovered rows and composer text. Also cover empty/error and
+760×560 minimum-size behavior. Compare each image against the pinned source
+reference, with a table of viewport, theme, state, screenshot path and
+match/deviation/unverified reason. Note intentional omissions and icon optical
+differences. Any reconstructed SwiftUI reference is source-derived, not a
+production screenshot; keep it scratch-only. No Penpot design is identified.
+Rendered bounds, AX state and compilation do not establish visual fidelity;
+missing native pixels remain unverified evidence. For this accepted #3258 slice,
+the user's v4 proceed decision removes the exhaustive matrix as a further user
+gate; it does not establish an all-state pass or native shortcut/IME results.
+Preserve native vs simulated evidence separately. No repeat captures, manual
+matrix requests or prior fixed-ID scratch stress run are required for this handoff.
+
+## Historical verification evidence (before #3258)
 
 Mac Apple Silicon native compilation and the routine suite pass, including
 498 workspace tests, Clippy, dependency policy and release fixtures. Temporary

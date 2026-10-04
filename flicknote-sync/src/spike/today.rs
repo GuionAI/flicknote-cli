@@ -12,6 +12,8 @@ pub struct TodayRow {
     pub uuid: String,
     pub preview: String,
     pub content: String,
+    pub note_type: String,
+    pub project_color: Option<String>,
 }
 
 pub fn bounds<T: TimeZone>(now: &DateTime<T>) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
@@ -68,7 +70,7 @@ impl TodayWatch {
                     }
                 };
                 let sql = format!(
-                    "SELECT short_id, id, coalesce(content, '') FROM notes WHERE user_id = ? AND deleted_at IS NULL AND short_id IS NOT NULL AND julianday(created_at) >= julianday(?) AND julianday(created_at) < julianday(?) ORDER BY short_id DESC LIMIT {LIMIT}"
+                    "SELECT n.short_id, n.id, coalesce(n.content, ''), coalesce(n.type, 'normal'), p.color FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ? AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND julianday(n.created_at) >= julianday(?) AND julianday(n.created_at) < julianday(?) ORDER BY n.short_id DESC LIMIT {LIMIT}"
                 );
                 let params = [
                     super::fixture::USER.to_string(),
@@ -85,6 +87,8 @@ impl TodayWatch {
                                 uuid: r.get(1)?,
                                 preview,
                                 content,
+                                note_type: r.get(3)?,
+                                project_color: r.get(4)?,
                             })
                         })?
                         .collect::<Result<Vec<_>, _>>()?;

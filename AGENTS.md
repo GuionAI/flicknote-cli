@@ -130,7 +130,11 @@ with `cargo test --locked -p flicknote-gpui`. Native OS IME and visible input/
 scroll/lifecycle checks need a real foreground window; simulated tests and
 compilation do not establish them. Build acceptance is macOS Apple Silicon;
 Linux/musl compilation and runtime validation are deferred. Preserve headless
-GPUI-free dependencies and record unperformed native evidence explicitly. The ordinary routine suite remains required.
+GPUI-free dependencies and record unperformed native evidence explicitly. The
+ordinary routine suite remains required. For experimental presentation changes,
+follow the visual verification workflow in `docs/embedded-gpui-spike.md`: record
+native synthetic screenshots and source/artifact hashes separately from rendered
+bounds tests; missing native pixels leave visual acceptance unverified.
 
 ## Git Hooks (lefthook)
 

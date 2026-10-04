@@ -72,17 +72,6 @@ impl Model {
             self.rows.iter().filter(|r| r.id != id).cloned().collect(),
         ));
     }
-    pub(crate) fn move_selection(&mut self, next: bool) {
-        let index = self
-            .selected
-            .and_then(|id| self.rows.iter().position(|r| r.id == id));
-        let index = match index {
-            None => 0,
-            Some(i) if next => (i + 1).min(self.rows.len().saturating_sub(1)),
-            Some(i) => i.saturating_sub(1),
-        };
-        self.selected = self.rows.get(index).map(|r| r.id);
-    }
 }
 
 #[cfg(test)]
@@ -96,6 +85,8 @@ mod tests {
                     uuid: format!("uuid-{id}"),
                     preview: format!("Note {id}"),
                     content: format!("Content {id}"),
+                    note_type: "normal".into(),
+                    project_color: None,
                 })
                 .collect(),
         )

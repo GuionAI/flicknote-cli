@@ -398,8 +398,19 @@ target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0
 
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
 application operations and the existing local MCP/IPC servers. It loads no login
-or cloud session. The GUI watches local Today snapshots; closing its window
-keeps the host alive, Command-1 reopens Today, and Command-Q stops the host.
+or cloud session. The GUI presents a source-referenced Today workspace with a
+quiet rail, compact rows, a bottom create-only composer and a dismissible plain-text detail overlay.
+Use the FlickNote application menu for System, Light or Dark appearance with
+the approved desktop surface hierarchy and iOS text/caret colors adapted through Kit. The
+minimum window size is 760×560 points. Search, projects, Shared, Archive browsing
+and Charts remain inactive rail landmarks with aligned packaged Lucide icons
+and project dots. Detail expands above the current composer, up to 520 points wide.
+Option-J/K select next/previous confirmed notes without wrapping and preserve
+editor focus; empty Return opens selected detail, and Option-A archives with
+the existing input guard. Unsubmitted/marked input blocks selection shortcuts.
+Append, Markdown, unsupported navigation shortcuts, global trigger,
+voice and full Swift desktop parity remain deferred. The GUI watches local Today snapshots;
+closing its window keeps the host alive, Command-1 reopens Today, and Command-Q stops the host.
 The operator output gives the isolated socket and loopback MCP endpoint.
 The installed daemon and desktop remain separate.
 

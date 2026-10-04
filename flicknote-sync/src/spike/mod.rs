@@ -16,6 +16,7 @@ use std::{
 use tokio::{net::TcpListener, sync::watch};
 
 mod fixture;
+pub use fixture::PROJECTS;
 mod paths;
 pub mod today;
 

@@ -1,7 +1,11 @@
 #[cfg(target_os = "macos")]
+mod assets;
+#[cfg(target_os = "macos")]
 mod model;
 #[cfg(target_os = "macos")]
 mod ui;
+#[cfg(target_os = "macos")]
+mod workspace;
 
 #[cfg(target_os = "macos")]
 fn main() -> anyhow::Result<()> {

@@ -127,6 +127,32 @@ async fn isolated_host_real_ipc_mcp_watch_ownership_and_persistence() {
         [5, 4, 3, 2, 1]
     );
     assert!(initial.rows.iter().all(|r| !r.preview.contains('\n')));
+    assert_eq!(
+        initial
+            .rows
+            .iter()
+            .filter(|r| r.note_type == "link")
+            .count(),
+        1
+    );
+    assert!(initial.rows.iter().all(|r| r.project_color.is_some()));
+    // Context belongs to the same watched projection; a project edit emits new row context.
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET color = '123456' WHERE id = 'fixture-reading'",
+                [],
+            )
+            .unwrap();
+    }
+    let context = snapshot(&mut watch, |s| {
+        s.rows
+            .iter()
+            .any(|r| r.project_color.as_deref() == Some("123456"))
+    })
+    .await;
+    assert_eq!(context.rows.len(), 5);
     assert!(client.health().await.is_ok());
     let duplicate = SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
         .await
@@ -324,4 +350,19 @@ fn semantic_calendar_four_am_and_dst() {
     let fall = zone.with_ymd_and_hms(2026, 11, 1, 3, 59, 59).unwrap();
     let (start, end) = bounds(&fall).unwrap();
     assert_eq!((end - start).num_hours(), 25);
+}
+
+#[tokio::test]
+async fn empty_fixture_restarts_without_duplicating_project_context() {
+    let root = tempfile::tempdir().unwrap();
+    for count in [0, 0, 5] {
+        let host = SpikeHost::start(root.path(), 0, count, Duration::ZERO)
+            .await
+            .unwrap();
+        let mut watch = TodayWatch::start(host.db.clone());
+        let rows = snapshot(&mut watch, |s| s.rows.len() == count as usize).await;
+        assert!(rows.rows.iter().all(|row| row.project_color.is_some()));
+        drop(watch);
+        host.shutdown().await;
+    }
 }
