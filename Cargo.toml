@@ -11,7 +11,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "1.13.3"
+version = "1.14.0"
 
 [workspace.metadata.release]
 shared-version = true
