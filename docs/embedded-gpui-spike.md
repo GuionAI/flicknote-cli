@@ -12,15 +12,20 @@ This guide covers explicit synthetic `--root` mode. The independent real-account
 [the real-account trial guide](real-account-gpui-trial.md); it reuses the production
 host rather than the synthetic fixture creator.
 
+All subsequent local trial/spike/test packages explicitly use **dev**; prod is
+reserved for formal releases. New real-account dev trials use a new absent short
+profile and versioned artifact; preserve historical prod apps/profiles/services.
+See [the dev trial packaging instructions](real-account-gpui-trial.md).
+
 ## Build and launch
 
 On Apple Silicon macOS, using the repository Rust toolchain:
 
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
-target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
+FLICKNOTE_ENV=dev target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
 # Alternative, after quitting the GUI host:
-target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
+FLICKNOTE_ENV=dev target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
 ```
 
 The root must be explicit, absolute and independent. Normal FlickNote data and
@@ -86,7 +91,7 @@ is selectable, copyable plain canonical text. Selection does not retarget editor
 focus. A confirmed row opens or replaces detail; Close, Escape or exposed canvas
 dismisses it while preserving selection and composer text. Escape consumed by
 marked composition or the input's own transient surface does not close detail.
-Home closes detail and keeps Today active. In the focused Today window, Option-J
+Home selects current Today and closes detail. In the focused Today window, Option-J
 selects the next confirmed note and Option-K the previous. Either starts at the
 first note when nothing is selected; neither wraps. These actions retain editor
 focus, reveal the selected row through the existing virtual list and update
@@ -97,6 +102,16 @@ same guarded archive action. Navigation/open/archive shortcuts are blocked by
 unsubmitted or marked composer input; native Command-A/C/V editing is retained.
 The supported selection/archive actions are also in the application menu.
 
+Active projects are UUID destinations showing All active notes across dates,
+bounded at 10,000 and ordered by canonical short ID. Cmd1 selects Home;
+Cmd2..9 select the first eight active projects in rail order, retaining draft/caret
+unless marked. Empty/unmarked Option-Up/Down traverses Home and projects without
+wrap. Shared/Archive/Charts are unavailable and skipped. A watched missing or
+archived project falls back Home while preserving the composer. Switching drops
+the old list/detail/selection and watch; capture stays global/unassigned with
+pending/recovery/unknown identity retained. Unmatched captures stay out of project
+lists. See [the shortcuts audit](shortcuts-audit.md) for deferred mappings.
+
 The composer always creates new notes,
 even with detail open; it never implies append support. Archive is blocked while the
 composer has unsubmitted text or marked composition. On success it selects the
@@ -106,7 +121,8 @@ watch/acknowledgement order preserve that choice; failure keeps rows/detail usab
 mutation retries occur automatically. Watch errors offer an explicit retry.
 
 Closing the window keeps MCP/IPC available. Use the application menu's Open Today
-or Command-1 to reopen a fresh subscription. Command-Q explicitly stops the host,
+or Command-1 to open Home with a fresh subscription. Ordinary reopen retains the
+last available destination during the process lifetime. Command-Q explicitly stops the host,
 drains existing services and releases socket/ownership. Headless Ctrl-C/SIGTERM
 uses the same shutdown coordinator. GUI database/runtime operations run on Tokio;
 the native event loop receives snapshots and operation completions.
@@ -122,8 +138,7 @@ The rail is 252 points wide with 22-point outer insets; the main pane starts
 after a 24-point gap. Today uses a 23-point semibold header and full-width
 32-point rows with 14-point previews, packaged vector type glyphs and trailing
 project dots. Pending captures have the same appearance without status labels
-or spinners and remain nonselectable. Search, project destinations, Shared,
-Archive browsing and Charts are static inactive landmarks excluded from keyboard
+or spinners and remain nonselectable. Search, Shared, Archive browsing and Charts are static inactive landmarks excluded from keyboard
 focus. Inactive destination labels use Kit’s secondary foreground; Home uses
 foreground. Every destination reserves the same 17-point icon/dot slot and 10-point gap,
 so text aligns regardless of symbol size. Unsupported filter, day-navigation,
@@ -224,15 +239,19 @@ compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
 
-Synthetic mode supplies no login, real cloud connectivity, functional projects/search/charts,
+Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
 Markdown parity, unsupported navigation/date shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The source layout targets Swift
 fidelity for the supported Today slice;
 the user accepted the current v4 direction and chose to proceed without the
 exhaustive screenshot matrix as a further gate for this slice.
-Native/automated results and outstanding evidence gates must be reported
+Native/automated results and outstanding evidence must be reported
 separately; build success alone does not establish responsiveness.
+
+For #3290, existing source/rendered evidence is the automated gate. No new native
+launch, CUA, cloud trial or manual stress/matrix is required. Native keyboard,
+IME, pixels and real dev cloud acceptance remain unperformed for this source.
 
 ## Visual verification workflow
 

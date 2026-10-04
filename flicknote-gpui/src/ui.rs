@@ -1,8 +1,11 @@
-use crate::model::Model;
+use crate::model::{Capture, Model};
 use crate::workspace::{MIN_HEIGHT, MIN_WIDTH, apply_theme};
 use flicknote_client::dto::NoteAddInput;
 use flicknote_client::{AppRequest, AppResponse};
-use flicknote_sync::{app::Application as NoteApplication, today::TodayWatch};
+use flicknote_sync::{
+    app::Application as NoteApplication,
+    today::{Destination, TodayWatch},
+};
 use gpui_kit::{
     App, Bounds, Context, Entity, EntityInputHandler, KeyBinding, Menu, MenuItem, QuitMode, Role,
     Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
@@ -26,6 +29,10 @@ pub(super) struct Services {
     pub(super) operations: Mutex<Vec<tokio::task::AbortHandle>>,
     pub(super) user_id: String,
     pub(super) real_account: bool,
+    pub(super) destination: Mutex<Destination>,
+    pub(super) capture: Arc<Mutex<Capture>>,
+    pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
+    pub(super) capture_changed: tokio::sync::watch::Sender<()>,
 }
 impl Services {
     fn track<T>(&self, job: &tokio::task::JoinHandle<T>) {
@@ -54,12 +61,41 @@ actions!(
         DarkTheme,
         NextNote,
         PreviousNote,
-        ArchiveNote
+        ArchiveNote,
+        Project2,
+        Project3,
+        Project4,
+        Project5,
+        Project6,
+        Project7,
+        Project8,
+        Project9,
+        NextDestination,
+        PreviousDestination
     ]
 );
 
 fn install_today_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-1", Reopen, Some("Today")),
+        KeyBinding::new("cmd-2", Project2, Some("Today")),
+        KeyBinding::new("cmd-3", Project3, Some("Today")),
+        KeyBinding::new("cmd-4", Project4, Some("Today")),
+        KeyBinding::new("cmd-5", Project5, Some("Today")),
+        KeyBinding::new("cmd-6", Project6, Some("Today")),
+        KeyBinding::new("cmd-7", Project7, Some("Today")),
+        KeyBinding::new("cmd-8", Project8, Some("Today")),
+        KeyBinding::new("cmd-9", Project9, Some("Today")),
+        KeyBinding::new(
+            "alt-up",
+            PreviousDestination,
+            Some("Today && destination_navigation"),
+        ),
+        KeyBinding::new(
+            "alt-down",
+            NextDestination,
+            Some("Today && destination_navigation"),
+        ),
         KeyBinding::new("alt-j", NextNote, Some("Today")),
         KeyBinding::new("alt-k", PreviousNote, Some("Today")),
         KeyBinding::new("alt-a", ArchiveNote, Some("Today")),
@@ -69,6 +105,8 @@ fn install_today_keys(cx: &mut App) {
 
 struct Today {
     services: Arc<Services>,
+    destination: Destination,
+    loaded: bool,
     model: Model,
     composer: Entity<TextareaState>,
     detail: Entity<TextareaState>,
@@ -82,6 +120,7 @@ struct Today {
     first_synced: bool,
     projects: Arc<Vec<flicknote_sync::today::ProjectContext>>,
     status_task: Option<Task<()>>,
+    capture_task: Option<Task<()>>,
     archive_busy: bool,
     archived: Vec<i64>,
     watch: Option<TodayWatch>,
@@ -100,6 +139,11 @@ impl Today {
                 .auto_grow(1, 6)
                 .submit_on_enter(true)
                 .placeholder("Create a new note")
+        });
+        let (text, caret) = services.draft.lock().expect("composer draft").clone();
+        composer.update(cx, |input, cx| {
+            input.set_value(text, window, cx);
+            input.set_selected_range(caret, cx);
         });
         let detail = cx.new(|cx| TextareaState::new(window, cx).rows(12));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
@@ -122,9 +166,19 @@ impl Today {
             cx.notify();
         });
         composer.update(cx, |input, cx| input.focus(window, cx));
+        let destination = services
+            .destination
+            .lock()
+            .expect("window destination")
+            .clone();
         let mut this = Self {
+            destination,
+            loaded: false,
+            model: Model {
+                capture: services.capture.clone(),
+                ..Model::default()
+            },
             services,
-            model: Model::default(),
             composer,
             detail,
             detail_open: false,
@@ -137,6 +191,7 @@ impl Today {
             first_synced: false,
             projects: Arc::default(),
             status_task: None,
+            capture_task: None,
             archive_busy: false,
             archived: vec![],
             watch: None,
@@ -155,6 +210,7 @@ impl Today {
                     this.visible = visibility.is_visible();
                 });
             }));
+        this.subscribe_capture(window, cx);
         this.subscribe(window, cx);
         // Measure main-loop scheduling without notifying or requesting repaint.
         // Render count is diagnostic; idle time between renders is not a stall.
@@ -186,8 +242,12 @@ impl Today {
         self.watch_task.take();
         self.watch.take();
         let _entered = self.services.runtime.enter();
-        let watcher =
-            TodayWatch::start_for_user(self.services.db.clone(), self.services.user_id.clone());
+        let destination = self.destination.clone();
+        let watcher = TodayWatch::start_destination(
+            self.services.db.clone(),
+            self.services.user_id.clone(),
+            destination.clone(),
+        );
         let mut receiver = watcher.receiver.clone();
         self.watch = Some(watcher);
         self.watch_task = Some(cx.spawn_in(window, async move |entity, cx| {
@@ -196,6 +256,9 @@ impl Today {
                 if let Some(result) = snapshot
                     && entity
                         .update_in(cx, |this, window, cx| {
+                            if this.destination != destination {
+                                return;
+                            }
                             match result {
                                 Ok(snapshot) => {
                                     this.archived
@@ -213,13 +276,20 @@ impl Today {
                                         )
                                     };
                                     this.projects = snapshot.projects;
+                                    if let Destination::Project(id) = &this.destination
+                                        && !this.projects.iter().any(|p| &p.id == id)
+                                    {
+                                        this.set_destination(Destination::Home, window, cx);
+                                        return;
+                                    }
+                                    this.loaded = true;
                                     this.model.snapshot(rows);
                                     this.refresh_detail(window, cx);
                                     this.watch_error = None;
                                 }
                                 Err(error) => {
                                     this.watch_error =
-                                        Some(format!("Could not load Today: {error}"))
+                                        Some(format!("Could not load notes: {error}"))
                                 }
                             }
                             cx.notify();
@@ -233,6 +303,86 @@ impl Today {
                 }
             }
         }));
+    }
+
+    fn change_destination(
+        &mut self,
+        destination: Destination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.composing(window, cx) {
+            return;
+        }
+        self.set_destination(destination, window, cx);
+    }
+
+    fn select_number(&mut self, number: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(project) = number
+            .checked_sub(2)
+            .and_then(|index| self.projects.get(index))
+        {
+            self.change_destination(Destination::Project(project.id.clone()), window, cx);
+        }
+    }
+
+    fn traverse_destination(&mut self, next: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if self.shortcuts_blocked(window, cx) {
+            return;
+        }
+        let index = match &self.destination {
+            Destination::Home => 0,
+            Destination::Project(id) => {
+                let Some(index) = self.projects.iter().position(|p| &p.id == id) else {
+                    return;
+                };
+                index + 1
+            }
+        };
+        let target = if next {
+            index + 1
+        } else {
+            index.saturating_sub(1)
+        };
+        if target == 0 {
+            self.change_destination(Destination::Home, window, cx);
+        } else if let Some(project) = self.projects.get(target - 1) {
+            self.change_destination(Destination::Project(project.id.clone()), window, cx);
+        }
+    }
+
+    fn set_destination(
+        &mut self,
+        destination: Destination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Destination::Project(id) = &destination
+            && !self.projects.iter().any(|p| &p.id == id)
+        {
+            return;
+        }
+        self.close_detail(window, cx);
+        self.composer
+            .update(cx, |input, cx| input.focus(window, cx));
+        if destination == self.destination {
+            return;
+        }
+        self.destination = destination.clone();
+        *self
+            .services
+            .destination
+            .lock()
+            .expect("window destination") = destination;
+        self.model.selected = None;
+        self.model.rows = Arc::default();
+        self.archived.clear();
+        self.loaded = false;
+        self.watch_error = None;
+        self.list_scroll = gpui_kit::UniformListScrollHandle::new();
+        self.refresh_detail(window, cx);
+        self.subscribe(window, cx);
+        cx.notify();
     }
 
     fn subscribe_status(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -287,6 +437,40 @@ impl Today {
         }));
     }
 
+    fn subscribe_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let services = self.services.clone();
+        let app: &mut App = cx;
+        self._subscriptions
+            .push(app.observe(&self.composer, move |input, cx| {
+                let input = input.read(cx);
+                *services.draft.lock().expect("composer draft") =
+                    (input.value().to_string(), input.selected_range());
+            }));
+        let mut receiver = self.services.capture_changed.subscribe();
+        self.refresh_capture(window, cx);
+        self.capture_task = Some(cx.spawn_in(window, async move |entity, cx| {
+            while receiver.changed().await.is_ok() {
+                if entity.update_in(cx, Self::refresh_capture).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn refresh_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.model.reconcile();
+        self.error = self.model.capture().error.clone();
+        let restore = std::mem::take(&mut self.model.capture().restore);
+        if restore && self.composer.read(cx).value().is_empty() && !self.composing(window, cx) {
+            let text = self.model.capture().recovery.pop();
+            if let Some(text) = text {
+                self.composer
+                    .update(cx, |input, cx| input.set_value(text, window, cx));
+            }
+        }
+        cx.notify();
+    }
+
     fn composing(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.composer.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
@@ -304,56 +488,30 @@ impl Today {
         let token = self.model.accept(text.clone());
         self.composer
             .update(cx, |input, cx| input.set_value("", window, cx));
-        let app = self.services.app.clone();
+        *self.services.draft.lock().expect("composer draft") = (String::new(), 0..0);
+        let services = self.services.clone();
         let job = self.services.runtime.spawn(async move {
-            app.handle(AppRequest::NoteAdd(NoteAddInput {
-                content: text,
-                project: None,
-                interpret_as_url: false,
-                draft: false,
-                topics: vec![],
-                created_by: None,
-                created_at: None,
-            }))
-            .await
+            let result = services
+                .app
+                .handle(AppRequest::NoteAdd(NoteAddInput {
+                    content: text,
+                    project: None,
+                    interpret_as_url: false,
+                    draft: false,
+                    topics: vec![],
+                    created_by: None,
+                    created_at: None,
+                }))
+                .await;
+            let restore = services.draft.lock().expect("composer draft").0.is_empty();
+            services
+                .capture
+                .lock()
+                .expect("capture state")
+                .complete(token, result, restore);
+            services.capture_changed.send_replace(());
         });
         self.services.track(&job);
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = match job.await {
-                Ok(Ok(AppResponse::NoteCreate(note))) => Ok(note.id),
-                Ok(Ok(_)) => Err("Unexpected create response".into()),
-                Ok(Err(error)) => {
-                    if matches!(
-                        error.code.as_str(),
-                        "note_create_unknown" | "note_create_partial"
-                    ) {
-                        let _result = entity.update_in(cx, |this, _, cx| {
-                            this.model.uncertain(token, error.clone());
-                            this.error =
-                                Some(format!("{} Do not submit this note again.", error.message));
-                            cx.notify();
-                        });
-                        return;
-                    }
-                    Err(error.message)
-                }
-                Err(error) => Err(error.to_string()),
-            };
-            let _result = entity.update_in(cx, |this, window, cx| {
-                if let Some(error) = this.model.ack(token, result) {
-                    this.error = Some(format!("Could not save: {error}"));
-                    if this.composer.read(cx).value().is_empty()
-                        && !this.composing(window, cx)
-                        && let Some(text) = this.model.recovery.pop()
-                    {
-                        this.composer
-                            .update(cx, |input, cx| input.set_value(text, window, cx));
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
         cx.notify();
     }
 
@@ -661,7 +819,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
         cx.on_action(|_: &Quit, cx| cx.quit());
         let reopen = state.clone();
         let reopen_system = system.clone();
-        cx.on_action(move |_: &Reopen, cx| open(reopen.clone(), reopen_system.clone(), cx));
+        cx.on_action(move |_: &Reopen, cx| {
+            if let Some(Ok(WorkspaceState::Ready(services))) = reopen.borrow().as_ref() {
+                *services.destination.lock().expect("window destination") = Destination::Home;
+            }
+            open(reopen.clone(), reopen_system.clone(), cx);
+        });
         cx.set_menus(vec![Menu {
             name: "FlickNote".into(),
             disabled: false,

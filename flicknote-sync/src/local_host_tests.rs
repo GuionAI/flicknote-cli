@@ -490,3 +490,85 @@ async fn authentication_failure_cancel_and_required_actor_failure_release_owner(
     ));
     server.abort();
 }
+
+#[tokio::test]
+async fn project_all_and_home_watch_account_membership_and_archival() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
+    let mut home = TodayWatch::start_for_user(host.db.clone(), host.user_id.clone());
+    let mut all = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+    );
+    snapshot(&mut home, |s| s.rows.len() == 1).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        for (id, user, short, assigned, date, deleted) in [
+            (
+                "old",
+                "account-a",
+                20,
+                project,
+                "2020-01-01T12:00:00Z",
+                None,
+            ),
+            (
+                "foreign",
+                "account-b",
+                90,
+                project,
+                "2020-01-01T12:00:00Z",
+                None,
+            ),
+            (
+                "unassigned",
+                "account-a",
+                30,
+                "",
+                "2020-01-01T12:00:00Z",
+                None,
+            ),
+            (
+                "deleted",
+                "account-a",
+                40,
+                project,
+                "2020-01-01T12:00:00Z",
+                Some("2020-01-02T12:00:00Z"),
+            ),
+        ] {
+            writer.execute("INSERT INTO notes(id,user_id,short_id,project_id,created_at,deleted_at,content,type) VALUES(?,?,?,?,?,?,'Old canonical body','normal')", rusqlite::params![id,user,short,assigned,date,deleted]).unwrap();
+        }
+        writer.execute("INSERT INTO projects(id,user_id,name,is_archived) VALUES('archived','account-a','Archived',1),('nullable','account-a','Nullable',NULL)", []).unwrap();
+    }
+    let notes = snapshot(&mut all, |s| s.rows.len() == 2 && s.projects.len() == 2).await;
+    assert_eq!(notes.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [20, 3]);
+    assert_eq!(notes.rows[0].content, "Old canonical body");
+    assert_eq!(notes.projects[0].id, project);
+    let day = snapshot(&mut home, |s| s.projects.len() == 2).await;
+    assert_eq!(day.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [3]);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("UPDATE projects SET is_archived=1 WHERE id=?", [project])
+        .unwrap();
+    snapshot(&mut all, |s| !s.projects.iter().any(|p| p.id == project)).await;
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("DELETE FROM projects WHERE id='nullable'", [])
+        .unwrap();
+    snapshot(&mut home, |s| s.projects.is_empty()).await;
+    drop(all);
+    drop(home);
+    assert!(DaemonClient::new(&host.socket).health().await.is_ok());
+    let count = mcp(host.mcp_port, "note_count", json!({})).await;
+    assert!(!count["result"]["isError"].as_bool().unwrap_or(false));
+    host.shutdown().await;
+    server.abort();
+}

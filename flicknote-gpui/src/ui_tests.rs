@@ -34,6 +34,10 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
     });
@@ -70,7 +74,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     cx.run_until_parked();
     cx.update(|cx| {
         assert!(
-            view.read(cx).model.pending.is_empty(),
+            view.read(cx).model.capture().pending.is_empty(),
             "composing Return must not submit"
         )
     });
@@ -88,11 +92,11 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     cx.run_until_parked();
     cx.update(|cx| {
         assert!(composer.read(cx).value().is_empty());
-        assert_eq!(view.read(cx).model.pending.len(), 1);
+        assert_eq!(view.read(cx).model.capture().pending.len(), 1);
     });
     settle(cx, |cx| {
         cx.update(|cx| {
-            view.read(cx).model.rows.len() == 6 && view.read(cx).model.pending.is_empty()
+            view.read(cx).model.rows.len() == 6 && view.read(cx).model.capture().pending.is_empty()
         })
     });
     cx.update_window(window.into(), |_, window, cx| {
@@ -198,11 +202,11 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     })
     .unwrap();
     settle(cx, |cx| {
-        cx.update(|cx| view.read(cx).model.pending.is_empty())
+        cx.update(|cx| view.read(cx).model.capture().pending.is_empty())
     });
     cx.update(|cx| {
         assert_eq!(composer.read(cx).value(), "new typing");
-        assert_eq!(view.read(cx).model.recovery, ["[fixture-fail]"]);
+        assert_eq!(view.read(cx).model.capture().recovery, ["[fixture-fail]"]);
     });
     // Remove all but one through the actual host/watch, then remove the selected
     // final row while detail owns focus. A still-visible detail must keep focus.
@@ -254,7 +258,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     .unwrap();
     settle(cx, |cx| {
         cx.update(|cx| {
-            view.read(cx).model.rows.len() == 1 && view.read(cx).model.pending.is_empty()
+            view.read(cx).model.rows.len() == 1 && view.read(cx).model.capture().pending.is_empty()
         })
     });
     cx.update_window(window.into(), |_, window, cx| {
@@ -374,6 +378,10 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
     });
@@ -478,6 +486,10 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
     });
@@ -568,7 +580,7 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
                 assert!(!view.read(cx).detail_open);
                 assert!(composer.read(cx).value().len() > 100);
                 // Inactive rail destinations never retarget selection/input.
-                window.click_at("navigation-rail", point(px(100.), px(200.)), cx);
+                window.click_at("navigation-rail", point(px(100.), px(500.)), cx);
                 assert_eq!(view.read(cx).model.selected, Some(1));
                 assert!(composer.read(cx).focus_handle(cx).is_focused(window));
                 composer.update(cx, |input, cx| input.set_value("", window, cx));
@@ -672,6 +684,10 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
     });
@@ -711,7 +727,7 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
     cx.run_until_parked();
     cx.update_window(window.into(), |_, window, cx| {
         assert!(!view.read(cx).detail_open);
-        assert!(view.read(cx).model.pending.is_empty());
+        assert!(view.read(cx).model.capture().pending.is_empty());
         let composer = view.read(cx).composer.clone();
         composer.update(cx, |input, cx| {
             input.unmark_text(window, cx);
@@ -813,7 +829,7 @@ fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity
     assert_eq!(view.read(cx).model.selected, Some(1));
     assert!(!view.read(cx).detail_open);
     assert!(!view.read(cx).archive_busy);
-    assert!(view.read(cx).model.pending.is_empty());
+    assert!(view.read(cx).model.capture().pending.is_empty());
     // Simulate native composition ending before the queued PressEnter callback.
     // Capture-phase composition must still prevent open or submission.
     composer.update(cx, |input, cx| {
@@ -865,17 +881,54 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
         )))
         .unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+    let server_requests = requests.clone();
+    let server_gate = gate.clone();
+    let server_calls = calls.clone();
     let server = runtime.spawn(async move {
         let router = Router::new()
             .route(
                 "/rest/v1/notes",
-                post(|Json(mut note): Json<Value>| async move {
-                    note["short_id"] = json!(80);
-                    note["is_flagged"] = json!(false);
-                    note["summary"] = Value::Null;
-                    note["source"] = Value::Null;
-                    note["deleted_at"] = Value::Null;
-                    Json(json!([note]))
+                post(move |Json(mut note): Json<Value>| {
+                    let gate = server_gate.clone();
+                    let calls = server_calls.clone();
+                    let requests = server_requests.clone();
+                    async move {
+                        let first = {
+                            let mut requests = requests.lock().unwrap();
+                            let id = note["id"].as_str().unwrap().to_owned();
+                            let first = !requests.contains(&id);
+                            requests.push(id);
+                            first
+                        };
+                        if first {
+                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        let content = note["content"].as_str().unwrap_or_default().to_owned();
+                        if content.starts_with("closed-") {
+                            if first {
+                                gate.acquire().await.unwrap().forget();
+                            }
+                            if content == "closed-rejected" {
+                                return Err(axum::http::StatusCode::BAD_REQUEST);
+                            }
+                            if content == "closed-unknown" {
+                                return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+                            }
+                        }
+                        note["short_id"] = if content == "closed-partial" {
+                            Value::Null
+                        } else {
+                            json!(80)
+                        };
+                        note["is_flagged"] = json!(false);
+                        note["summary"] = Value::Null;
+                        note["source"] = Value::Null;
+                        note["deleted_at"] = Value::Null;
+                        Ok(Json(json!([note])))
+                    }
                 }),
             )
             .fallback(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE });
@@ -910,6 +963,10 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::default(),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
         user_id: host.user_id.clone(),
         real_account: true,
     });
@@ -968,13 +1025,22 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
     });
     settle(cx, |cx| {
         cx.update(|cx| {
-            view.read(cx).model.rows.len() == 1 && view.read(cx).model.pending.is_empty()
+            view.read(cx).model.rows.len() == 1 && view.read(cx).model.capture().pending.is_empty()
         })
     });
     cx.update(|cx| {
         let row = &view.read(cx).model.rows[0];
         assert_eq!(row.id, 80);
         assert_eq!(row.content, "真实账户 capture");
+    });
+    cx.update(|cx| {
+        cx.update_window(window, |_, window, cx| {
+            view.read(cx).composer.clone().update(cx, |input, cx| {
+                input.set_value("retained draft", window, cx);
+                input.set_selected_range(4..4, cx);
+            });
+        })
+        .unwrap();
     });
     cx.update(|cx| {
         cx.update_window(window, |_, window, _| window.remove_window())
@@ -1006,7 +1072,455 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
                 .is_some_and(|r| r.content == "Updated while closed")
         })
     });
+    cx.update(|cx| {
+        let composer = reopened.read(cx).composer.read(cx);
+        assert_eq!(composer.value().as_ref(), "retained draft");
+        assert_eq!(composer.selected_range(), 4..4);
+        assert!(!reopened.read(cx).detail_open);
+        assert!(reopened.read(cx).model.selected.is_none());
+    });
+    let mut reopened = reopened;
+    for (index, text) in ["closed-rejected", "closed-unknown", "closed-partial"]
+        .into_iter()
+        .enumerate()
+    {
+        let window = cx.update(|cx| cx.windows()[0]);
+        cx.update(|cx| {
+            cx.update_window(window, |_, window, cx| {
+                reopened.update(cx, |this, cx| {
+                    this.composer
+                        .update(cx, |input, cx| input.set_value(text, window, cx));
+                    this.submit(window, cx);
+                });
+                window.remove_window();
+            })
+            .unwrap();
+        });
+        drop(reopened);
+        cx.run_until_parked();
+        settle(cx, |_| {
+            calls.load(std::sync::atomic::Ordering::SeqCst) == index + 2
+        });
+        gate.add_permits(1);
+        // Wait for the production create task to finish while no window exists.
+        settle(cx, |_| {
+            services
+                .operations
+                .lock()
+                .unwrap()
+                .iter()
+                .all(tokio::task::AbortHandle::is_finished)
+        });
+        assert!(runtime.block_on(client.health()).is_ok());
+        reopened = cx.update(|cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Today::new(services.clone(), window, cx))
+            })
+            .unwrap()
+            .1
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let this = reopened.read(cx);
+            if index == 0 {
+                assert_eq!(this.composer.read(cx).value().as_ref(), text);
+                assert!(
+                    this.error
+                        .as_deref()
+                        .unwrap()
+                        .starts_with("Could not save:")
+                );
+            } else {
+                assert!(this.composer.read(cx).value().is_empty());
+                assert!(this.model.capture().recovery.is_empty());
+                assert_eq!(this.model.capture().uncertain.len(), index);
+                let capture = this.model.capture();
+                let (original, error) = capture.uncertain.last().unwrap();
+                assert_eq!(original, text);
+                assert_eq!(
+                    error.code,
+                    if index == 1 {
+                        "note_create_unknown"
+                    } else {
+                        "note_create_partial"
+                    }
+                );
+                assert_eq!(
+                    error.details.as_ref().unwrap()["note_id"].as_str().unwrap(),
+                    requests.lock().unwrap()[if index == 1 { 2 } else { 4 }]
+                );
+                assert!(
+                    this.error
+                        .as_deref()
+                        .unwrap()
+                        .contains("Do not submit this note again.")
+                );
+            }
+        });
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), index + 2);
+    }
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 5); // Existing creator retries unknown once with the SAME UUID.
+    assert_eq!(requests[2], requests[3]);
+    assert_eq!(
+        requests
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        4
+    );
+    drop(requests);
     services.cancel_operations();
     runtime.block_on(host.shutdown());
     server.abort();
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One rendered window carries operation identity across watch swaps.
+fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = runtime
+        .block_on(flicknote_sync::spike::SpikeHost::start(
+            root.path(),
+            0,
+            5,
+            Duration::from_millis(150),
+        ))
+        .unwrap();
+    let services = Arc::new(Services {
+        app: host.app.clone(),
+        db: host.db.clone(),
+        runtime: runtime.handle().clone(),
+        operations: Mutex::default(),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
+    });
+    cx.update(gpui_kit::init);
+    let (window, view) = cx.update(|cx| {
+        let (window, view) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Today::new(services.clone(), window, cx))
+        })
+        .unwrap();
+        (window.downcast::<gpui_kit::base::Root>().unwrap(), view)
+    });
+    settle(cx, |cx| cx.update(|cx| view.read(cx).projects.len() == 3));
+    let project = cx.update(|cx| view.read(cx).projects[0].id.clone());
+    runtime.block_on(async {
+        host.db.writer().await.unwrap().execute("INSERT INTO notes(id,user_id,short_id,project_id,content,type,created_at) VALUES('historical',?,500,?,'Historical canonical','normal','2020-01-01T12:00:00Z')", [flicknote_sync::spike::USER, project.as_str()]).unwrap();
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |this, cx| {
+            this.select(5, window, cx);
+            this.composer.update(cx, |input, cx| {
+                input.set_value("Draft to retain", window, cx);
+                input.replace_text_in_range(Some(5..5), "!", window, cx);
+            });
+        });
+        window.render_frame(cx);
+        window.click(
+            gpui_kit::SharedString::from(format!("project-{project}")),
+            cx,
+        );
+        let this = view.read(cx);
+        assert_eq!(this.destination, Destination::Project(project.clone()));
+        assert!(this.model.rows.is_empty());
+        assert!(this.model.selected.is_none());
+        assert!(!this.detail_open);
+        assert_eq!(this.composer.read(cx).value().as_ref(), "Draft! to retain");
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .rows
+                .first()
+                .is_some_and(|r| r.id == 500)
+        })
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        // A capture remains global while switching twice before its completion.
+        view.update(cx, |this, cx| {
+            this.submit(window, cx);
+            this.change_destination(Destination::Home, window, cx);
+            this.change_destination(Destination::Project(project.clone()), window, cx);
+            assert_eq!(this.model.capture().pending.len(), 1);
+        });
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .capture()
+                .pending
+                .first()
+                .is_some_and(|p| p.id.is_some())
+        })
+    });
+    cx.update(|cx| {
+        assert!(view.read(cx).model.rows.iter().all(|r| r.id != 501));
+        assert_eq!(view.read(cx).model.rows[0].id, 500);
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |this, cx| {
+            // The production host tests establish these create failure DTOs;
+            // here their completion is delivered while another surface is active.
+            for (code, id) in [
+                ("note_create_unknown", None),
+                ("note_create_partial", Some(9000)),
+            ] {
+                let token = this.model.accept("uncertain capture".into());
+                this.model.uncertain(
+                    token,
+                    flicknote_client::WireError {
+                        code: code.into(),
+                        message: "Do not create again".into(),
+                        retryable: false,
+                        details: Some(
+                            serde_json::json!({"note_id":"uncertain-uuid","short_id":id}),
+                        ),
+                    },
+                );
+            }
+            this.select(500, window, cx);
+            assert_eq!(
+                this.detail.read(cx).value().as_ref(),
+                "Historical canonical"
+            );
+            this.change_destination(Destination::Home, window, cx);
+            this.change_destination(Destination::Project(project.clone()), window, cx);
+            assert!(!this.detail_open);
+            assert!(this.model.selected.is_none());
+            assert_eq!(this.model.capture().uncertain.len(), 2);
+            assert!(this.model.capture().recovery.is_empty());
+        });
+    })
+    .unwrap();
+    runtime.block_on(async {
+        host.db.writer().await.unwrap().execute("INSERT INTO notes(id,user_id,short_id,content,type,created_at) VALUES('uncertain-uuid',?,9000,'Acknowledged partial','normal',strftime('%Y-%m-%dT%H:%M:%SZ','now'))", [flicknote_sync::spike::USER]).unwrap();
+    });
+    // Archive the selected project while a composition is active: fallback must
+    // not reject the watch-driven change or clear marked text.
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |this, cx| {
+            this.composer.update(cx, |input, cx| {
+                input.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx)
+            });
+        });
+    })
+    .unwrap();
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE projects SET is_archived=1 WHERE id=?", [&project])
+            .unwrap();
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx).destination == Destination::Home
+                && view.read(cx).model.capture().pending.is_empty()
+        })
+    });
+    cx.update_window(window.into(), |_, window, cx| {
+        view.update(cx, |this, cx| {
+            assert_eq!(this.composer.read(cx).value().as_ref(), "ni");
+            assert!(this.composing(window, cx));
+            assert!(this.model.rows.iter().all(|r| r.id != 500));
+            assert!(!this.projects.iter().any(|p| p.id == project));
+            assert_eq!(this.model.capture().uncertain.len(), 2);
+            assert_eq!(
+                this.model.capture().uncertain[1]
+                    .1
+                    .details
+                    .as_ref()
+                    .unwrap()["note_id"],
+                "uncertain-uuid"
+            );
+            assert!(this.model.capture().recovery.is_empty());
+        });
+        window.remove_window();
+    })
+    .unwrap();
+    drop(view);
+    assert!(
+        runtime
+            .block_on(flicknote_client::DaemonClient::new(&host.socket).health())
+            .is_ok()
+    );
+    runtime.block_on(host.shutdown());
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One window verifies draft, marked, keyboard and reopen state together.
+fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = runtime
+        .block_on(flicknote_sync::spike::SpikeHost::start(
+            root.path(),
+            0,
+            2,
+            Duration::ZERO,
+        ))
+        .unwrap();
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        for index in 0..7 {
+            let id = format!("00000000-0000-4000-8000-{index:012}");
+            let name = format!("A project {index}");
+            writer
+                .execute(
+                    "INSERT INTO projects(id,user_id,name,is_archived) VALUES(?,?,?,0)",
+                    [id.as_str(), flicknote_sync::spike::USER, name.as_str()],
+                )
+                .unwrap();
+        }
+    });
+    let services = Arc::new(Services {
+        app: host.app.clone(),
+        db: host.db.clone(),
+        runtime: runtime.handle().clone(),
+        operations: Mutex::default(),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
+    });
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = cx.update(|cx| {
+        let (window, view) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Today::new(services.clone(), window, cx))
+        })
+        .unwrap();
+        (window.downcast::<gpui_kit::base::Root>().unwrap(), view)
+    });
+    settle(cx, |cx| cx.update(|cx| view.read(cx).projects.len() == 10));
+    let projects = cx.update(|cx| view.read(cx).projects.clone());
+    cx.update_window(window.into(), |_, window, cx| {
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |input, cx| {
+            input.set_value("retained draft", window, cx);
+            input.set_selected_range(3..3, cx);
+        });
+        for number in 2..=9 {
+            window.render_frame(cx);
+            window.press(&format!("cmd-{number}"), cx);
+            assert_eq!(
+                view.read(cx).destination,
+                Destination::Project(projects[number - 2].id.clone())
+            );
+            assert_eq!(composer.read(cx).value().as_ref(), "retained draft");
+            assert_eq!(composer.read(cx).selected_range(), 3..3);
+            assert!(composer.read(cx).focus_handle(cx).is_focused(window));
+        }
+        window.render_frame(cx);
+        window.press("alt-down", cx);
+        assert_eq!(
+            view.read(cx).destination,
+            Destination::Project(projects[7].id.clone())
+        );
+        window.press("cmd-1", cx);
+        assert_eq!(view.read(cx).destination, Destination::Home);
+        composer.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
+        });
+        window.render_frame(cx);
+        window.press("cmd-2", cx);
+        window.press("alt-down", cx);
+        assert_eq!(view.read(cx).destination, Destination::Home);
+        composer.update(cx, |input, cx| {
+            input.unmark_text(window, cx);
+            input.set_value("", window, cx);
+        });
+        window.render_frame(cx);
+        window.press("alt-up", cx);
+        assert_eq!(view.read(cx).destination, Destination::Home);
+        for project in projects.iter() {
+            window.render_frame(cx);
+            window.press("alt-down", cx);
+            assert_eq!(
+                view.read(cx).destination,
+                Destination::Project(project.id.clone())
+            );
+        }
+        window.render_frame(cx);
+        window.press("alt-down", cx);
+        assert_eq!(
+            view.read(cx).destination,
+            Destination::Project(projects[9].id.clone())
+        );
+        for _ in 0..10 {
+            window.render_frame(cx);
+            window.press("alt-up", cx);
+        }
+        assert_eq!(view.read(cx).destination, Destination::Home);
+        // Native editing continues to own ordinary draft movement and undo.
+        composer.update(cx, |input, cx| input.set_value("abc", window, cx));
+        window.render_frame(cx);
+        window.press("cmd-a", cx);
+        window.press("cmd-c", cx);
+        assert_eq!(cx.read_from_clipboard().unwrap().text(), Some("abc".into()));
+        window.press("left", cx);
+        assert_eq!(composer.read(cx).selected_range(), 0..0);
+        composer.update(cx, |input, cx| input.set_value("", window, cx));
+        view.update(cx, |this, cx| {
+            this.change_destination(Destination::Project(projects[0].id.clone()), window, cx)
+        });
+        window.remove_window();
+    })
+    .unwrap();
+    drop(view);
+    let (reopened_window, reopened) = cx.update(|cx| {
+        let (window, view) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Today::new(services.clone(), window, cx))
+        })
+        .unwrap();
+        (window.downcast::<gpui_kit::base::Root>().unwrap(), view)
+    });
+    settle(cx, |cx| cx.update(|cx| reopened.read(cx).loaded));
+    cx.update(|cx| {
+        assert_eq!(
+            reopened.read(cx).destination,
+            Destination::Project(projects[0].id.clone())
+        )
+    });
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE projects SET is_archived=1", [])
+            .unwrap();
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            reopened.read(cx).destination == Destination::Home
+                && reopened.read(cx).projects.is_empty()
+        })
+    });
+    cx.update_window(reopened_window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("cmd-9", cx);
+        window.press("alt-down", cx);
+        assert_eq!(reopened.read(cx).destination, Destination::Home);
+        window.remove_window();
+    })
+    .unwrap();
+    runtime.block_on(host.shutdown());
 }

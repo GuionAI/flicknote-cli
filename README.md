@@ -391,9 +391,9 @@ Build on Apple Silicon macOS with `cargo build --locked -p flicknote-gpui
 -p flicknote-spike`. Launch with an explicit independent absolute directory:
 
 ```bash
-target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0
+FLICKNOTE_ENV=dev target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0
 # Headless alternative; do not run both against the same root:
-target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0
+FLICKNOTE_ENV=dev target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0
 ```
 
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
@@ -402,15 +402,22 @@ or cloud session. The GUI presents a source-referenced Today workspace with a
 quiet rail, compact rows, a bottom create-only composer and a dismissible plain-text detail overlay.
 Use the FlickNote application menu for System, Light or Dark appearance with
 the approved desktop surface hierarchy and iOS text/caret colors adapted through Kit. The
-minimum window size is 760×560 points. Search, projects, Shared, Archive browsing
-and Charts remain inactive rail landmarks with aligned packaged Lucide icons
+minimum window size is 760×560 points. Home and active projects are working
+destinations; search, Shared, Archive browsing and Charts remain inactive rail landmarks with aligned packaged Lucide icons
 and project dots. Detail expands above the current composer, up to 520 points wide.
 Option-J/K select next/previous confirmed notes without wrapping and preserve
 editor focus; empty Return opens selected detail, and Option-A archives with
-the existing input guard. Unsubmitted/marked input blocks selection shortcuts.
+the existing input guard. Unsubmitted/marked input blocks note-selection shortcuts.
 Append, Markdown, unsupported navigation shortcuts, global trigger,
-voice and full Swift desktop parity remain deferred. The GUI watches local Today snapshots;
-closing its window keeps the host alive, Command-1 reopens Today, and Command-Q stops the host.
+voice and full Swift desktop parity remain deferred. Home watches current Today;
+projects watch All active project notes across dates, capped at 10,000. Cmd1 selects
+Home; Cmd2..9 select the first eight active projects in displayed rail order,
+retaining draft text/caret unless marked. Empty/unmarked Option-Up/Down traverses
+Home and projects without wrap, skipping unavailable groups. Closing keeps the
+host alive; ordinary reopen keeps the last available destination and draft/caret.
+Capture results arriving while closed retain recovery or canonical identity and
+do-not-submit-again guidance. Cmd1 opens Home, and CmdQ stops the host.
+Capture always creates an unassigned new note.
 The operator output gives the isolated socket and loopback MCP endpoint.
 The installed daemon and desktop remain separate.
 
@@ -418,27 +425,39 @@ See [the spike guide](docs/embedded-gpui-spike.md) for safety, CLI connection,
 fixture limits, build checks and the distinction between automated and native
 validation. This package is not included in release distribution.
 
-## Experimental real-account Today
+## Experimental dev-account workspace
 
-On Apple Silicon macOS, the same experimental GUI can open an explicit independent
-real-account profile with English email-code login:
+All local trial/spike/test packages use **dev**; **prod is reserved for formal
+releases**. Never repoint a historical prod profile, copy its tokens/database,
+or replace a running trial or installed service. On Apple Silicon macOS, build
+from committed source and package a new version with a new absent short profile:
 
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
-FLICKNOTE_ENV=prod target/debug/flicknote-gpui --profile /tmp/flicknote-real-account-trial --mcp-port 0
+python3 scripts/package-gpui-dev.py \
+  --output .scratch/gpui-dev-project-navigation/dev-v1-3290 \
+  --profile /private/tmp/fn-dev-3290-v1
 ```
 
-A usable stored session skips login. The GUI and foreground daemon reuse the
-production local host; cached Today and local Unix IPC/loopback MCP are ready
-before the first download. Close keeps the host running; Command-1 reopens Today,
-and Command-Q quits. Existing CLI `login --auth-only` remains a service-free
-operator alternative. Never copy live sessions/data or run two profile owners.
+Packaging does not launch the app or create the intended profile. The launcher
+pins dev public endpoints, overrides inherited endpoint settings, and allocates
+local MCP port 0. `SOURCE.json`, `SHA256SUMS`, a matching CLI companion and `RUN.md`
+identify the source, environment, binary hashes and profile. Follow that package's
+instructions for a separate opt-in email/cloud launch. Choose a fresh version
+and profile if either example already exists; preserve earlier artifacts.
 
-See [the real-account operator guide](docs/real-account-gpui-trial.md) for profile
-safety, GUI email setup, CLI/headless endpoints, sync/offline limits and uncertain
-creation recovery. Private remote PostgreSQL MCP remains separate and unchanged.
-This is an opt-in cloud trial, not an installed desktop replacement; manual cloud
-and native OS validation are unperformed, and Linux/distribution remain deferred.
+Home/current Today and project-All use the production local host's watched local
+cache with Unix IPC and loopback MCP ready before the first download. Project
+archival/removal falls back Home while retaining the composer. Capture remains
+global/unassigned even inside a project, with no offline queue or automatic
+retry of unknown/partial creation. Close keeps the owner alive; Quit releases it.
+
+See [the dev-account operator guide](docs/real-account-gpui-trial.md) for login,
+profile/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)
+for implemented, partial and deferred desktop mappings. Private remote PostgreSQL
+MCP stays separate. Native OS input/pixels and real dev cloud acceptance are
+unperformed; rendered tests and builds establish separate evidence. Linux and
+installed distribution remain deferred.
 
 ## License
 

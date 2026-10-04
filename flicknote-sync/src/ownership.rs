@@ -23,11 +23,21 @@ pub enum OwnershipError {
 /// Holds the kernel lock for the complete lifetime of a daemon.
 ///
 /// The file remains on disk after the guard is dropped. Its contents are only
-/// diagnostic metadata; the open file descriptor is the ownership authority.
+/// diagnostic metadata; the kernel lock held by this guard is the ownership authority.
 #[derive(Debug)]
 pub struct DataDirectoryLock {
-    _file: File,
+    file: File,
     directory: std::path::PathBuf,
+}
+
+impl Drop for DataDirectoryLock {
+    fn drop(&mut self) {
+        // Closing alone waits for duplicated/inherited descriptors. Ownership
+        // ends at the guard boundary, even during another thread's fork/exec.
+        if let Err(error) = FileExt::unlock(&self.file) {
+            log::warn!("Could not release data-directory ownership: {error}");
+        }
+    }
 }
 
 impl DataDirectoryLock {
@@ -66,7 +76,7 @@ impl DataDirectoryLock {
         file.flush()?;
 
         Ok(Self {
-            _file: file,
+            file,
             directory: data_dir.canonicalize()?,
         })
     }
@@ -109,6 +119,21 @@ mod tests {
         assert!(error.to_string().contains("pid="));
 
         drop(first);
+        DataDirectoryLock::acquire(directory.path()).unwrap();
+    }
+
+    #[test]
+    fn dropping_owner_releases_lock_even_with_an_inherited_descriptor() {
+        let directory = tempfile::tempdir().unwrap();
+        let owner = DataDirectoryLock::acquire(directory.path()).unwrap();
+        // A fork briefly duplicates this same open-file description before exec.
+        // Duplication makes the ownership-release race deterministic without a process.
+        let inherited = owner.file.try_clone().unwrap();
+        drop(owner);
+        let replacement = DataDirectoryLock::acquire(directory.path()).unwrap();
+        drop(inherited);
+        assert!(DataDirectoryLock::acquire(directory.path()).is_err());
+        drop(replacement);
         DataDirectoryLock::acquire(directory.path()).unwrap();
     }
 

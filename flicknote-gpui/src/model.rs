@@ -1,5 +1,5 @@
 use flicknote_sync::spike::today::TodayRow;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[derive(Debug)]
 pub(crate) struct Pending {
@@ -8,23 +8,26 @@ pub(crate) struct Pending {
     pub(crate) id: Option<i64>,
 }
 #[derive(Default)]
-pub(crate) struct Model {
-    pub(crate) rows: Arc<Vec<TodayRow>>,
-    pub(crate) selected: Option<i64>,
+pub(crate) struct Capture {
     pub(crate) pending: Vec<Pending>,
     pub(crate) recovery: Vec<String>,
     pub(crate) uncertain: Vec<(String, flicknote_client::WireError)>,
+    pub(crate) error: Option<String>,
+    pub(crate) restore: bool,
     next_token: u64,
 }
+#[derive(Default)]
+pub(crate) struct Model {
+    pub(crate) rows: Arc<Vec<TodayRow>>,
+    pub(crate) selected: Option<i64>,
+    pub(crate) capture: Arc<Mutex<Capture>>,
+}
 impl Model {
+    pub(crate) fn capture(&self) -> MutexGuard<'_, Capture> {
+        self.capture.lock().expect("capture state")
+    }
     pub(crate) fn accept(&mut self, text: String) -> u64 {
-        self.next_token += 1;
-        self.pending.push(Pending {
-            token: self.next_token,
-            text,
-            id: None,
-        });
-        self.next_token
+        self.capture().accept(text)
     }
     pub(crate) fn snapshot(&mut self, rows: Arc<Vec<TodayRow>>) {
         if let Some(id) = self.selected
@@ -50,12 +53,71 @@ impl Model {
         self.rows = rows;
         self.reconcile();
     }
+    #[cfg(test)]
+    pub(crate) fn ack(&mut self, token: u64, result: Result<i64, String>) -> Option<String> {
+        let error = self.capture().ack(token, result);
+        self.reconcile();
+        error
+    }
+    #[cfg(test)]
+    pub(crate) fn uncertain(&mut self, token: u64, error: flicknote_client::WireError) {
+        self.capture().uncertain(token, error);
+        self.reconcile();
+    }
+    pub(crate) fn reconcile(&mut self) {
+        self.capture()
+            .pending
+            .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));
+    }
+    pub(crate) fn archive_success(&mut self, id: i64) {
+        self.snapshot(Arc::new(
+            self.rows.iter().filter(|r| r.id != id).cloned().collect(),
+        ));
+    }
+}
+
+impl Capture {
+    pub(crate) fn accept(&mut self, text: String) -> u64 {
+        self.next_token += 1;
+        self.pending.push(Pending {
+            token: self.next_token,
+            text,
+            id: None,
+        });
+        self.next_token
+    }
+    pub(crate) fn complete(
+        &mut self,
+        token: u64,
+        result: Result<flicknote_client::AppResponse, flicknote_client::WireError>,
+        restore: bool,
+    ) {
+        use flicknote_client::AppResponse;
+        let result = match result {
+            Ok(AppResponse::NoteCreate(note)) => Ok(note.id),
+            Ok(_) => Err("Unexpected create response".into()),
+            Err(error)
+                if matches!(
+                    error.code.as_str(),
+                    "note_create_unknown" | "note_create_partial"
+                ) =>
+            {
+                self.error = Some(format!("{} Do not submit this note again.", error.message));
+                self.uncertain(token, error);
+                return;
+            }
+            Err(error) => Err(error.message),
+        };
+        if let Some(error) = self.ack(token, result) {
+            self.error = Some(format!("Could not save: {error}"));
+            self.restore = restore;
+        }
+    }
     pub(crate) fn ack(&mut self, token: u64, result: Result<i64, String>) -> Option<String> {
         let index = self.pending.iter().position(|p| p.token == token)?;
         match result {
             Ok(id) => {
                 self.pending[index].id = Some(id);
-                self.reconcile();
                 None
             }
             Err(error) => {
@@ -73,19 +135,9 @@ impl Model {
                     id: Some(id),
                     ..pending
                 });
-                self.reconcile();
             }
             self.uncertain.push((text, error));
         }
-    }
-    fn reconcile(&mut self) {
-        self.pending
-            .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));
-    }
-    pub(crate) fn archive_success(&mut self, id: i64) {
-        self.snapshot(Arc::new(
-            self.rows.iter().filter(|r| r.id != id).cloned().collect(),
-        ));
     }
 }
 
@@ -117,10 +169,10 @@ mod tests {
             }
             assert!(model.ack(token, Ok(7)).is_none());
             if !watch_first {
-                assert_eq!(model.pending.len(), 1);
+                assert_eq!(model.capture().pending.len(), 1);
                 model.snapshot(rows(&[7, 5]));
             }
-            assert!(model.pending.is_empty());
+            assert!(model.capture().pending.is_empty());
             model.snapshot(rows(&[7, 5]));
             assert_eq!(model.rows.len(), 2);
         }
@@ -140,12 +192,12 @@ mod tests {
                 details: Some(serde_json::json!({"note_id":"stable-uuid","short_id":id})),
             };
             model.uncertain(token, error.clone());
-            assert!(model.recovery.is_empty());
-            assert_eq!(model.uncertain[0].1, error);
+            assert!(model.capture().recovery.is_empty());
+            assert_eq!(model.capture().uncertain[0].1, error);
             if id.is_some() {
                 model.snapshot(rows(&[80]));
             }
-            assert!(model.pending.is_empty());
+            assert!(model.capture().pending.is_empty());
         }
     }
     #[test]
@@ -158,8 +210,8 @@ mod tests {
             model.ack(token, Err("failure".into())),
             Some("failure".into())
         );
-        assert_eq!(model.recovery, ["unsaved"]);
-        assert!(model.pending.is_empty());
+        assert_eq!(model.capture().recovery, ["unsaved"]);
+        assert!(model.capture().pending.is_empty());
         assert_eq!(model.selected, Some(4));
         assert_eq!(model.rows.len(), 3);
         model.archive_success(4);

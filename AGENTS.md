@@ -117,8 +117,16 @@ Or use the justfile: `just build`, `just test`, `just check`, `just install`
 
 ## Experimental spike checks and safety
 
-Read `docs/embedded-gpui-spike.md` before running the experiment. Use only explicit
-spike-owned independent roots and synthetic fixtures. Never copy live notes,
+Read `docs/embedded-gpui-spike.md` before running the experiment. All local
+trial/spike/test packages explicitly use dev; prod is reserved for formal
+releases. For a dev trial package, build clean committed source, use
+`scripts/package-gpui-dev.py` with a new versioned `.scratch` output and a new
+absent short absolute independent dev profile. Verify its source/hash manifest,
+effective public dev endpoints and owned matching-length Unix socket bind.
+Preserve existing apps/profiles/sessions and services, including historical prod
+trials; never repoint or copy them. Packaging authorizes no real email/cloud or
+native app launch. Read `docs/real-account-gpui-trial.md` before opt-in launch.
+Use only explicit spike-owned independent roots and synthetic fixtures. Never copy live notes,
 databases or auth sessions, install spike binaries/services, change MCP
 registrations, or stop the production daemon/desktop for spike verification.
 The injected creator is experimental; production creation remains remote-backed.
@@ -152,7 +160,11 @@ Check the production host with `cargo test --locked -p flicknote-sync
 CLI/GUI/headless builds on final amended source. Keep versioned source/hash-bound
 trial artifacts in ignored `.scratch`; use a new profile and preserve prior
 artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
-or native CUA gate is required for #3279.
+or native CUA/cloud gate is required for #3279/#3290. Home/current Today and
+project-All are the implemented destinations; global capture stays unassigned.
+See `docs/shortcuts-audit.md` before extending desktop shortcuts. Keep source,
+rendered and native/cloud evidence separate. For #3290, send IMPL_COMPLETE with
+final SHA/PR/report, then wait for explicit user signal before opening review.
 
 ## Git Hooks (lefthook)
 

@@ -96,6 +96,82 @@ impl Today {
         self.detail_open = false;
         cx.notify();
     }
+    fn render_home(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("home")
+            .role(Role::Button)
+            .aria_label("Home")
+            .aria_selected(self.destination == Destination::Home)
+            .h(px(36.))
+            .px(px(13.))
+            .rounded(px(9.))
+            .when(self.destination == Destination::Home, |d| d.bg(p.selection))
+            .hover(|d| d.bg(p.accent))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .text_color(p.foreground)
+            .child(rail_slot(icon(IconName::House, p.foreground, 14.)))
+            .child(div().flex_1().child(rail_label("Home")))
+            .child(
+                div()
+                    .text_color(p.muted_foreground)
+                    .text_size(px(12.))
+                    .child("⌘1"),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.change_destination(Destination::Home, window, cx);
+            }))
+    }
+    fn render_project(
+        &self,
+        index: usize,
+        project: &flicknote_sync::today::ProjectContext,
+        p: ColorTokens,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let destination = Destination::Project(project.id.clone());
+        let selected = self.destination == destination;
+        div()
+            .id(gpui_kit::SharedString::from(format!(
+                "project-{}",
+                project.id
+            )))
+            .role(Role::Button)
+            .aria_label(project.name.clone())
+            .aria_selected(selected)
+            .rounded(px(9.))
+            .when(selected, |d| d.bg(p.selection))
+            .hover(|d| d.bg(p.accent))
+            .h(px(36.))
+            .px(px(13.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .text_color(if selected {
+                p.foreground
+            } else {
+                p.secondary_foreground
+            })
+            .child(rail_slot(dot(
+                project.color.as_deref().unwrap_or(""),
+                8.,
+                p.secondary_foreground,
+            )))
+            .child(div().flex_1().child(rail_label(&project.name)))
+            .children((index < 8).then(|| {
+                div()
+                    .text_size(px(12.))
+                    .text_color(p.muted_foreground)
+                    .child(format!("⌘{}", index + 2))
+            }))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.change_destination(destination.clone(), window, cx);
+            }))
+            .test_support()
+    }
     fn render_rail(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("navigation-rail")
@@ -128,35 +204,15 @@ impl Today {
             )
             .child(
                 div()
+                    .id("rail-destinations")
                     .mx(px(10.))
+                    .min_h_0()
+                    .flex_1()
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
                     .gap(px(3.))
-                    .child(
-                        div()
-                            .id("home")
-                            .role(Role::Button)
-                            .aria_label("Home")
-                            .h(px(36.))
-                            .px(px(13.))
-                            .rounded(px(9.))
-                            .bg(p.selection)
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .text_color(p.foreground)
-                            .child(rail_slot(icon(IconName::House, p.foreground, 14.)))
-                            .child(div().flex_1().child(rail_label("Home")))
-                            .child(
-                                div()
-                                    .text_color(p.muted_foreground)
-                                    .text_size(px(12.))
-                                    .child("⌘1"),
-                            )
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.close_detail(window, cx)),
-                            ),
-                    )
+                    .child(self.render_home(p, cx))
                     .child(
                         div()
                             .px(px(13.))
@@ -167,21 +223,12 @@ impl Today {
                             .text_color(p.muted_foreground)
                             .child("PROJECTS"),
                     )
-                    .children(self.projects.iter().map(|project| {
-                        div()
-                            .h(px(36.))
-                            .px(px(13.))
-                            .flex()
-                            .items_center()
-                            .gap(px(10.))
-                            .text_color(p.secondary_foreground)
-                            .child(rail_slot(dot(
-                                project.color.as_deref().unwrap_or(""),
-                                8.,
-                                p.secondary_foreground,
-                            )))
-                            .child(rail_label(&project.name))
-                    }))
+                    .children(
+                        self.projects
+                            .iter()
+                            .enumerate()
+                            .map(|(index, project)| self.render_project(index, project, p, cx)),
+                    )
                     .child(
                         div()
                             .mt(px(20.))
@@ -193,56 +240,66 @@ impl Today {
             .test_support()
     }
     fn render_list(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let capture = self.model.capture();
         div()
             .id("today-notes")
             .role(Role::ListBox)
-            .aria_label("Today notes")
+            .aria_label(if self.destination == Destination::Home {
+                "Today notes"
+            } else {
+                "Project All notes"
+            })
             .w_full()
             .h_full()
             .min_w_0()
             .min_h_0()
             .flex()
             .flex_col()
-            .children(self.model.pending.iter().rev().map(|pending| {
-                div()
-                    .id(("pending", pending.token))
-                    .w_full()
-                    .h(px(32.))
-                    .flex_shrink_0()
-                    .child(preview(
-                        &pending
-                            .text
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                        "normal",
-                        None,
-                        p,
-                    ))
-                    .test_support()
-            }))
             .children(
-                (self.model.rows.is_empty() && self.model.pending.is_empty()).then(|| {
+                capture
+                    .pending
+                    .iter()
+                    .filter(|_| self.destination == Destination::Home)
+                    .rev()
+                    .map(|pending| {
+                        div()
+                            .id(("pending", pending.token))
+                            .w_full()
+                            .h(px(32.))
+                            .flex_shrink_0()
+                            .child(preview(
+                                &pending
+                                    .text
+                                    .split_whitespace()
+                                    .collect::<Vec<_>>()
+                                    .join(" "),
+                                "normal",
+                                None,
+                                p,
+                            ))
+                            .test_support()
+                    }),
+            )
+            .children(
+                (self.model.rows.is_empty()
+                    && (self.destination != Destination::Home || capture.pending.is_empty()))
+                .then(|| {
                     div()
                         .px(px(8.))
                         .py(px(12.))
                         .text_size(px(14.))
                         .text_color(p.secondary_foreground)
-                        .child(
-                            if self
-                                .watch
-                                .as_ref()
-                                .is_some_and(|w| w.receiver.borrow().is_none())
-                            {
-                                "Loading Today…"
-                            } else {
-                                if self.services.real_account && !self.first_synced {
-                                    "Waiting for the first sync…"
-                                } else {
-                                    "No notes today"
-                                }
-                            },
-                        )
+                        .child(if self.watch_error.is_some() {
+                            "Notes unavailable"
+                        } else if !self.loaded {
+                            "Loading notes…"
+                        } else if self.services.real_account && !self.first_synced {
+                            "Waiting for the first sync…"
+                        } else if self.destination == Destination::Home {
+                            "No notes today"
+                        } else {
+                            "No active notes in this project"
+                        })
                 }),
             )
             .children(self.sync_message.clone().map(|message| {
@@ -259,7 +316,7 @@ impl Today {
                     .text_size(px(12.))
                     .child(error)
                     .child(
-                        Button::new("retry-watch").label("Retry Today").on_click(
+                        Button::new("retry-watch").label("Retry notes").on_click(
                             cx.listener(|this, _, window, cx| this.subscribe(window, cx)),
                         ),
                     )
@@ -388,6 +445,7 @@ impl Today {
             .test_support()
     }
     fn render_composer(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let capture = self.model.capture();
         div()
             .id("composer-surface")
             .w_full()
@@ -416,7 +474,7 @@ impl Today {
                     .text_color(p.secondary_foreground)
                     .child(error)
             }))
-            .children(self.model.uncertain.last().map(|(text, error)| {
+            .children(capture.uncertain.last().map(|(text, error)| {
                 let id = error
                     .details
                     .as_ref()
@@ -436,14 +494,14 @@ impl Today {
                             }),
                     )
             }))
-            .children((!self.model.recovery.is_empty()).then(|| {
+            .children((!capture.recovery.is_empty()).then(|| {
                 Button::new("recover")
                     .label("Recover unsaved text")
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
                         if this.composer.read(cx).value().is_empty()
                             && !this.composing(window, cx)
-                            && let Some(text) = this.model.recovery.pop()
+                            && let Some(text) = this.model.capture().recovery.pop()
                         {
                             this.composer
                                 .update(cx, |input, cx| input.set_value(text, window, cx));
@@ -453,6 +511,42 @@ impl Today {
                     }))
             }))
             .test_support()
+    }
+    fn render_canvas(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .pt(px(6.))
+            .gap(px(12.))
+            .child(
+                div()
+                    .px(px(16.))
+                    .text_size(px(23.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(match &self.destination {
+                        Destination::Home => "Today".to_string(),
+                        Destination::Project(id) => format!(
+                            "{} — All",
+                            self.projects
+                                .iter()
+                                .find(|p| &p.id == id)
+                                .map_or("Project", |p| p.name.as_str())
+                        ),
+                    }),
+            )
+            .child(
+                div()
+                    .id("main-canvas")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .px(px(16.))
+                    .child(self.render_list(p, cx))
+                    .test_support(),
+            )
     }
     fn render_floating_surfaces(
         &self,
@@ -497,13 +591,48 @@ impl Render for Today {
             self.frames += 1;
         }
         self.visible = window.is_visible();
+        let navigation_context = if self.shortcuts_blocked(window, cx) {
+            "Today"
+        } else {
+            "Today destination_navigation"
+        };
         let p = Theme::global(cx).color_tokens();
         let viewport = window.viewport_size();
         // Keep at least 32pt of row content exposed at the minimum window width.
         let detail_width = 520_f32.min(f32::from(viewport.width) - 394.);
         div()
             .id("workspace")
-            .key_context("Today")
+            .key_context(navigation_context)
+            .on_action(
+                cx.listener(|this, _: &Project2, window, cx| this.select_number(2, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project3, window, cx| this.select_number(3, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project4, window, cx| this.select_number(4, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project5, window, cx| this.select_number(5, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project6, window, cx| this.select_number(6, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project7, window, cx| this.select_number(7, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project8, window, cx| this.select_number(8, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Project9, window, cx| this.select_number(9, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &NextDestination, window, cx| {
+                this.traverse_destination(true, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviousDestination, window, cx| {
+                this.traverse_destination(false, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &NextNote, window, cx| this.navigate(true, window, cx)),
             )
@@ -537,8 +666,7 @@ impl Render for Today {
                 }),
             )
             .on_action(cx.listener(|this, _: &Reopen, window, cx| {
-                this.close_detail(window, cx);
-                cx.propagate();
+                this.change_destination(Destination::Home, window, cx);
             }))
             .on_click(cx.listener(|this, _, window, cx| this.close_detail(window, cx)))
             .child(
@@ -550,33 +678,7 @@ impl Render for Today {
                     .pr(px(32.))
                     .py(px(22.))
                     .child(self.render_rail(p, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .flex()
-                            .flex_col()
-                            .pt(px(6.))
-                            .gap(px(12.))
-                            .child(
-                                div()
-                                    .px(px(16.))
-                                    .text_size(px(23.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child("Today"),
-                            )
-                            .child(
-                                div()
-                                    .id("main-canvas")
-                                    .relative()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .px(px(16.))
-                                    .child(self.render_list(p, cx))
-                                    .test_support(),
-                            ),
-                    ),
+                    .child(self.render_canvas(p, cx)),
             )
             .child(self.render_floating_surfaces(p, detail_width, cx))
     }

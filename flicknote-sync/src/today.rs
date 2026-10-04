@@ -37,8 +37,17 @@ pub fn bounds<T: TimeZone>(now: &DateTime<T>) -> Result<(DateTime<Utc>, DateTime
     Ok((start.with_timezone(&Utc), end.with_timezone(&Utc)))
 }
 
+/// Window-local workspace identity; project names and rail indices are presentation only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Destination {
+    #[default]
+    Home,
+    Project(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectContext {
+    pub id: String,
     pub name: String,
     pub color: Option<String>,
 }
@@ -67,6 +76,13 @@ impl TodayWatch {
         Self::start_for_user(db, crate::spike::USER.to_string())
     }
     pub fn start_for_user(db: PowerSyncDatabase, user_id: String) -> Self {
+        Self::start_destination(db, user_id, Destination::Home)
+    }
+    pub fn start_destination(
+        db: PowerSyncDatabase,
+        user_id: String,
+        destination: Destination,
+    ) -> Self {
         let (sender, receiver) = watch::channel(None);
         let task = tokio::spawn(async move {
             let started = Instant::now();
@@ -80,10 +96,25 @@ impl TodayWatch {
                         return;
                     }
                 };
+                let membership = match &destination {
+                    Destination::Home => {
+                        "?4 = '' AND julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3)"
+                    }
+                    Destination::Project(_) => "n.project_id = ?4",
+                };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3) ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name FROM context ORDER BY short_id DESC, name"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name FROM context ORDER BY short_id DESC, name, id"
                 );
-                let params = [user_id.clone(), start.to_rfc3339(), end.to_rfc3339()];
+                let project_id = match &destination {
+                    Destination::Home => String::new(),
+                    Destination::Project(id) => id.clone(),
+                };
+                let params = [
+                    user_id.clone(),
+                    start.to_rfc3339(),
+                    end.to_rfc3339(),
+                    project_id,
+                ];
                 let stream = db.watch_statement(sql, params, |stmt, params| {
                     let mut rows = Vec::new();
                     let mut projects = Vec::new();
@@ -102,6 +133,7 @@ impl TodayWatch {
                             });
                         } else {
                             projects.push(ProjectContext {
+                                id: r.get(1)?,
                                 name: r.get(5)?,
                                 color: r.get(4)?,
                             });
@@ -116,7 +148,7 @@ impl TodayWatch {
                 loop {
                     tokio::select! {
                         _ = sender.closed() => return,
-                        _ = &mut boundary => break,
+                        _ = &mut boundary, if destination == Destination::Home => break,
                         result = stream.next() => {
                             let Some(result) = result else { return; };
                             emission += 1;

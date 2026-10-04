@@ -95,6 +95,10 @@ impl Host {
             real_account,
             runtime,
             operations: std::sync::Mutex::new(vec![]),
+            destination: std::sync::Mutex::default(),
+            capture: std::sync::Arc::default(),
+            draft: std::sync::Mutex::default(),
+            capture_changed: tokio::sync::watch::channel(()).0,
         }
     }
     pub(crate) async fn burst(&self, count: u32) -> Result<(), String> {
