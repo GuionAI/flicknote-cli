@@ -1,7 +1,7 @@
 //! Explicit launch modes; real mode never initializes synthetic storage.
 use clap::Parser;
 use flicknote_sync::{LocalHost, spike::SpikeHost};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 #[derive(Parser)]
 #[command(about = "Experimental FlickNote Today — explicit independent profile")]
@@ -56,18 +56,31 @@ impl Options {
             endpoints("REAL ACCOUNT TRIAL", &host.socket, host.mcp_port);
             return Ok(Host::Real(host));
         }
-        let options = flicknote_spike::Options {
-            root: self.root.clone().ok_or("Explicit root required")?,
-            mcp_port: self.mcp_port,
-            seed: self.seed,
-            delay_ms: self.delay_ms,
-            burst_batches: self.burst_batches,
-        };
-        options
-            .start()
-            .await
-            .map(Host::Synthetic)
-            .map_err(|e| e.to_string())
+        self.start_synthetic().await.map(Host::Synthetic)
+    }
+
+    async fn start_synthetic(&self) -> Result<SpikeHost, String> {
+        if self.delay_ms > 10_000 || self.burst_batches > 100 {
+            return Err("Fixture latency/burst exceeds bounded limits".into());
+        }
+        let host = SpikeHost::start(
+            self.root.as_deref().ok_or("Explicit root required")?,
+            self.mcp_port,
+            self.seed,
+            Duration::from_millis(self.delay_ms),
+        )
+        .await?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(host.log_path())
+            .map_err(|e| e.to_string())?;
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .target(env_logger::Target::Pipe(Box::new(file)))
+            .try_init()
+            .map_err(|e| e.to_string())?;
+        endpoints("SYNTHETIC SPIKE ONLY", &host.socket, host.mcp_port);
+        Ok(host)
     }
 }
 #[allow(clippy::print_stderr)]
@@ -141,6 +154,100 @@ impl Host {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn synthetic_launch_rejects_unbounded_options_before_creating_state() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("fixture");
+        for (delay_ms, burst_batches) in [(10_001, 0), (0, 101)] {
+            let options = Options {
+                profile: None,
+                root: Some(root.clone()),
+                mcp_port: 0,
+                seed: 5,
+                delay_ms,
+                burst_batches,
+            };
+            let (_, cancel) = tokio::sync::watch::channel(false);
+            let error = options
+                .start(cancel, |_| panic!("synthetic login"))
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains("bounded limits"));
+            assert!(!root.exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn synthetic_launch_seeds_delays_bursts_and_logs_in_owned_root() {
+        use flicknote_client::{AppRequest, AppResponse, dto::NoteAddInput};
+        let root = tempfile::tempdir().unwrap();
+        let options = Options::try_parse_from([
+            "trial",
+            "--root",
+            root.path().to_str().unwrap(),
+            "--mcp-port",
+            "0",
+            "--seed",
+            "5",
+            "--delay-ms",
+            "25",
+            "--burst-batches",
+            "1",
+        ])
+        .unwrap();
+        let (_, cancel) = tokio::sync::watch::channel(false);
+        let host = options
+            .start(cancel, |_| panic!("synthetic login"))
+            .await
+            .unwrap();
+        let Host::Synthetic(ref synthetic) = host else {
+            panic!("synthetic host")
+        };
+        {
+            let writer = synthetic.db.writer().await.unwrap();
+            let count: i64 = writer
+                .query_row("SELECT count(*) FROM notes", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, 5);
+        }
+        assert!(
+            synthetic
+                .socket
+                .starts_with(root.path().canonicalize().unwrap())
+        );
+        assert_ne!(synthetic.mcp_port, 0);
+        assert_ne!(synthetic.mcp_port, 37789);
+        let started = std::time::Instant::now();
+        let input: NoteAddInput =
+            serde_json::from_value(serde_json::json!({"content":"[fixture-fail]"})).unwrap();
+        assert!(
+            synthetic
+                .app
+                .handle(AppRequest::NoteAdd(input))
+                .await
+                .is_err()
+        );
+        assert!(started.elapsed() >= Duration::from_millis(25));
+        host.burst(options.burst_batches).await.unwrap();
+        let AppResponse::NoteDetail(note) = synthetic
+            .app
+            .handle(AppRequest::NoteGet {
+                id: "1".into(),
+                archived: false,
+            })
+            .await
+            .unwrap()
+        else {
+            panic!("fixture detail")
+        };
+        assert!(note.content.starts_with("Synthetic update batch 0"));
+        assert!(synthetic.log_path().is_file());
+        let socket = synthetic.socket.clone();
+        host.run_until(async { Ok(()) }, || {}).await.unwrap();
+        assert!(!socket.exists());
+    }
+
     #[test]
     fn real_and_synthetic_modes_require_explicit_separate_roots_and_ports() {
         assert!(

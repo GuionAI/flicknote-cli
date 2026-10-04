@@ -2,10 +2,11 @@
 
 Spec #3240 / ADR #3239 evaluates an embedded local host before any production
 cutover. Spec #3258 gives `flicknote-gpui` an English macOS Today workspace
-referenced to the existing Swift desktop;
-`flicknote-spike` runs the same host headlessly. Neither is distributed or
-installed by the release workflow. The production CLI/daemon and Swift desktop
-keep their existing behavior.
+referenced to the existing Swift desktop. The standalone `flicknote-spike`
+package from #3240 was retired in #3313; synthetic launch now belongs to the
+macOS GPUI `--root` path, reusing `flicknote-sync::spike::SpikeHost`. GPUI is not
+distributed or installed by the release workflow. The production CLI/daemon
+and Swift desktop keep their existing behavior.
 
 This guide covers explicit synthetic `--root` mode. The independent real-account
 `--profile` mode and GUI email login are documented in
@@ -22,10 +23,8 @@ See [the dev trial packaging instructions](real-account-gpui-trial.md).
 On Apple Silicon macOS, using the repository Rust toolchain:
 
 ```bash
-cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
+cargo build --locked -p flicknote-gpui -p flicknote-cli
 FLICKNOTE_ENV=dev target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
-# Alternative, after quitting the GUI host:
-FLICKNOTE_ENV=dev target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0 --seed 30
 ```
 
 The root must be explicit, absolute and independent. Normal FlickNote data and
@@ -129,8 +128,9 @@ mutation retries occur automatically. Watch errors offer an explicit retry.
 Closing the window keeps MCP/IPC available. Use the application menu's Open Today
 or Command-1 to open Home with a fresh subscription. Ordinary reopen retains the
 last available destination during the process lifetime. Command-Q explicitly stops the host,
-drains existing services and releases socket/ownership. Headless Ctrl-C/SIGTERM
-uses the same shutdown coordinator. GUI database/runtime operations run on Tokio;
+drains existing services and releases socket/ownership. Normal headless operation
+uses `flicknote daemon run`, as documented in [the daemon guide](daemon.md);
+synthetic mode requires the macOS GUI. GUI database/runtime operations run on Tokio;
 the native event loop receives snapshots and operation completions.
 
 ## Today presentation
@@ -226,7 +226,8 @@ assets; icon names alone do not register the full catalog.
 ```bash
 cargo test --locked -p flicknote-sync --features experimental-spike --test spike -- --nocapture
 cargo test --locked -p flicknote-gpui
-cargo tree --locked -p flicknote-spike
+cargo tree --locked -p flicknote-cli
+cargo tree --locked -p flicknote-client
 bash scripts/check-routine.sh
 ```
 
@@ -243,7 +244,8 @@ heartbeat measurements go to the fixture log, without note content.
 The stack is pinned to `gpui-kit = 0.7.0` (Apache-2.0), using its matched
 `gpui-pre = 0.3.7` family and component/base/assets 0.7.0. It uses GPUI's native
 runtime and the maintained input component, without a framework fork or a
-second UI runtime. The headless package does not depend on GPUI. Build acceptance for this slice is macOS Apple Silicon only. Linux/musl
+second UI runtime. The production CLI/daemon and pure client do not depend on
+GPUI. Build acceptance for this slice is macOS Apple Silicon only. Linux/musl
 compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
@@ -335,10 +337,11 @@ patched 1.0.103 for RUSTSEC-2026-0190.
 | RUSTSEC-2026-0206 | rustybuzz 0.20.1 | gpui-pre 0.3.7 → usvg 0.46.0 → rustybuzz | SVG text shaping; upstream parser/shaper migration deferred |
 | RUSTSEC-2026-0192 | ttf-parser 0.25.1 | gpui-pre 0.3.7 → ttf-parser | Native font parsing; upstream migration deferred |
 
-`cargo metadata --locked --format-version 1` normal/build dependency paths show
-none of these five reachable from production `flicknote-cli`, standalone
-`flicknote-client`, or headless `flicknote-spike`. The same metadata with
-`--filter-platform aarch64-apple-darwin` excludes rustls-pemfile. This is graph
+The original #3240 `cargo metadata --locked --format-version 1` normal/build
+dependency evidence showed none of these five reachable from production
+`flicknote-cli`, standalone `flicknote-client`, or the then-existing headless
+`flicknote-spike`. After #3313, recheck the retained CLI and client graphs.
+Metadata with `--filter-platform aarch64-apple-darwin` excludes rustls-pemfile. This is graph
 evidence, not a Linux build/runtime claim. Recheck versions and reachability on
 upgrades. All five exceptions must be re-reviewed before any live-data takeover;
 they are not automatically approved for production. Future cloud/auth/sync

@@ -375,7 +375,7 @@ Data directory: `~/.local/share/flicknote/`
 
 ## Architecture
 
-Rust workspace with 5 production crates and 2 experimental packages:
+Rust workspace with 5 production crates and 1 experimental package:
 
 | Crate | Type | Purpose |
 |-------|------|---------|
@@ -384,7 +384,6 @@ Rust workspace with 5 production crates and 2 experimental packages:
 | `flicknote-core` | library | Database, config, shared services, storage types, schema, and DTO conversions |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
-| `flicknote-spike` | library/binary | Synthetic independent-directory experimental host, without GPUI |
 | `flicknote-gpui` | macOS binary | Experimental embedded host with watched Today and native input |
 
 Rust clients can call the daemon directly with an explicit socket path through
@@ -397,13 +396,14 @@ outputs. The separate experimental desktop package is described below.
 ## Experimental embedded GPUI spike
 
 Build on Apple Silicon macOS with `cargo build --locked -p flicknote-gpui
--p flicknote-spike`. Launch with an explicit independent absolute directory:
+-p flicknote-cli`. Launch with an explicit independent absolute directory:
 
 ```bash
 FLICKNOTE_ENV=dev target/debug/flicknote-gpui --root /tmp/flicknote-synthetic-spike --mcp-port 0
-# Headless alternative; do not run both against the same root:
-FLICKNOTE_ENV=dev target/debug/flicknote-spike --root /tmp/flicknote-synthetic-spike --mcp-port 0
 ```
+
+Synthetic mode is available through the macOS GUI. Normal headless operation
+uses `flicknote daemon run`; it does not use synthetic fixtures.
 
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
 application operations and the existing local MCP/IPC servers. It loads no login
@@ -442,7 +442,7 @@ or replace a running trial or installed service. On Apple Silicon macOS, build
 from committed source and package a new version with a new absent short profile:
 
 ```bash
-cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
+cargo build --locked -p flicknote-gpui -p flicknote-cli
 python3 scripts/package-gpui-dev.py \
   --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
   --profile /private/tmp/fn-dev-3296-v3

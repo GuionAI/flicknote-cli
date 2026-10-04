@@ -11,14 +11,13 @@ Local-first note management CLI with cloud sync via PowerSync and Supabase.
 
 ## Architecture
 
-Rust workspace with 5 production crates and 2 experimental packages:
+Rust workspace with 5 production crates and 1 experimental package:
 
 - **flicknote-cli** — unified `flicknote` executable: thin CLI client, foreground daemon, and explicit private remote MCP entrypoint; ordinary data commands never open SQLite or Postgres
 - **flicknote-client** — Canonical pure application DTOs, wire protocol, transport errors, and async Unix socket client with an explicit endpoint
 - **flicknote-core** — Database, config, schema, storage types, session, services, internal errors, and storage/Markdown-to-client DTO conversions
 - **flicknote-auth** — Supabase GoTrue authentication (OTP + OAuth2/PKCE)
 - **flicknote-sync** — Daemon application host, local and private remote MCP HTTP servers, IPC server, backend ownership, and PowerSync ↔ Supabase sync
-- **flicknote-spike** — Synthetic-only isolated experimental headless host; no GPUI dependency
 - **flicknote-gpui** — macOS experimental native Today UI over embedded host/watch
 
 Use `flicknote-client` imports for shared DTOs and protocol types. Keep backend
@@ -140,7 +139,9 @@ databases or auth sessions, install spike binaries/services, change MCP
 registrations, or stop the production daemon/desktop for spike verification.
 The injected creator is experimental; production creation remains remote-backed.
 
-Build with `cargo build --locked -p flicknote-spike -p flicknote-gpui` on macOS.
+Build with `cargo build --locked -p flicknote-cli -p flicknote-gpui` on macOS.
+Synthetic launch uses GPUI’s explicit `--root` mode and `flicknote-sync::spike::SpikeHost`;
+normal headless operation uses `flicknote daemon run`.
 Check host behavior with `cargo test --locked -p flicknote-sync --features
 experimental-spike --test spike -- --nocapture` and native test-window behavior
 with `cargo test --locked -p flicknote-gpui`. Native OS IME and visible input/
@@ -166,7 +167,7 @@ Check the production host with `cargo test --locked -p flicknote-sync
 --all-features runtime::local_host_tests -- --nocapture`, GUI/auth integration with
 `cargo test --locked -p flicknote-gpui`, and CLI profile dispatch with
 `cargo test --locked -p flicknote-cli`. Run the full routine and locked Mac
-CLI/GUI/headless builds on final amended source. Keep versioned source/hash-bound
+CLI/GUI builds on final amended source. Keep versioned source/hash-bound
 trial artifacts in ignored `.scratch`; use a new profile and preserve prior
 artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
 or native CUA/cloud gate is required for #3279/#3290. Home/current Today and

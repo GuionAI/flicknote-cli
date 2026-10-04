@@ -5,7 +5,6 @@ members = [
     "flicknote-auth",
     "flicknote-cli",
     "flicknote-sync",
-    "flicknote-spike",
     "flicknote-gpui",
 ]
 resolver = "3"

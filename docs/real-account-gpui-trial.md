@@ -14,7 +14,7 @@ running services; never repoint, migrate or copy them into a dev trial.
 Use Apple Silicon macOS and the repository toolchain:
 
 ```bash
-cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
+cargo build --locked -p flicknote-gpui -p flicknote-cli
 # From clean committed source, choose a NEW absent short independent profile:
 python3 scripts/package-gpui-dev.py \
   --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
@@ -225,6 +225,6 @@ Full native IME composition/candidate behavior and corrected selection appearanc
 remain unverified;
 these tests do not establish OS candidate windows or pixels. No repeated manual
 matrix, CUA, cloud or stress gate is required.
-Run the full routine and locked Mac CLI/GUI/headless builds on final source;
+Run the full routine and locked Mac CLI/GUI builds on final source;
 keep source-bound package evidence in ignored `.scratch`. Implementation completion
 waits for the user's explicit signal before review begins; it does not deploy.

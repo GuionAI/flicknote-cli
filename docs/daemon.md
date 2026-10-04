@@ -33,9 +33,9 @@ dependencies. User/operator service commands and the existing wire/JSON
 contracts remain unchanged.
 
 The `experimental-spike` feature exposes a narrow lifecycle and Today-watch
-seam used by `flicknote-spike` and the macOS `flicknote-gpui` package. Those
-entrypoints own an explicit synthetic directory, reuse the same socket/MCP
-handlers and shutdown coordinator, and inject a fixture creator. They never
+seam used by owned integration tests and the macOS `flicknote-gpui` synthetic
+`--root` mode. Synthetic hosts own an explicit synthetic directory, reuse the
+same socket/MCP handlers and shutdown coordinator, and inject a fixture creator. They never
 load the production session or register services. Closing the experimental
 window drops its watch while its host stays available; explicit Quit drains
 services and releases the socket/ownership lock. This does not change normal

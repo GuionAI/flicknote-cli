@@ -2321,27 +2321,16 @@ dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "env_logger",
  "flicknote-auth",
  "flicknote-client",
  "flicknote-core",
- "flicknote-spike",
  "flicknote-sync",
  "futures-lite",
  "gpui-kit",
  "log",
  "serde_json",
  "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "flicknote-spike"
-version = "1.14.0"
-dependencies = [
- "anyhow",
- "clap",
- "env_logger",
- "flicknote-sync",
  "tokio",
 ]
 

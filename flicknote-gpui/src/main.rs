@@ -24,5 +24,7 @@ fn main() -> anyhow::Result<()> {
 #[cfg(not(target_os = "macos"))]
 #[allow(clippy::print_stderr)]
 fn main() {
-    eprintln!("The experimental GPUI window is macOS-only. Use flicknote-spike for headless.");
+    eprintln!(
+        "The experimental GPUI window is macOS-only. Use flicknote daemon run for the headless application host."
+    );
 }
