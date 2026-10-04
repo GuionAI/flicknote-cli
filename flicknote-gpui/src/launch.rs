@@ -93,6 +93,7 @@ impl Host {
             db,
             user_id,
             real_account,
+            first_sync: std::sync::Mutex::default(),
             runtime,
             operations: std::sync::Mutex::new(vec![]),
             destination: std::sync::Mutex::default(),

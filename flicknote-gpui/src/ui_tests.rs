@@ -3,7 +3,7 @@ use super::*;
 use gpui_kit::test::TestWindowExt;
 use gpui_kit::{Focusable, TestAppContext, point};
 
-fn settle(cx: &mut TestAppContext, predicate: impl Fn(&mut TestAppContext) -> bool) {
+pub(super) fn settle(cx: &mut TestAppContext, predicate: impl Fn(&mut TestAppContext) -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         cx.run_until_parked();
@@ -40,6 +40,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -384,6 +385,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(gpui_kit::init);
     for width in [980., 760.] {
@@ -492,6 +494,7 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(gpui_kit::init);
     for (width, height) in [(980., 720.), (1440., 900.), (760., 560.)] {
@@ -690,6 +693,7 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -771,6 +775,27 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
 }
 
 fn assert_initial_navigation(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
+    use gpui_kit::InputHandler;
+    let composer = view.read(cx).composer.clone();
+    let mut native = crate::native_input::ComposerInput::new(composer.clone(), cx).unwrap();
+    assert!(
+        !native.prefers_ime_for_printable_keys(window, cx),
+        "empty unmarked composer must offer Option bindings before an active Chinese IME"
+    );
+    assert_native_composer_contract(window, cx, &composer);
+    // Replay the normalized US-layout macOS Option-J event, including the
+    // printable character omitted by TestWindowExt::press("alt-j"). This
+    // exercises GPUI dispatch, not AppKit's earlier input-context routing.
+    window.dispatch_event(
+        gpui_kit::PlatformInput::KeyDown(gpui_kit::KeyDownEvent {
+            keystroke: gpui_kit::Keystroke::parse("alt-j->∆").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        }),
+        cx,
+    );
+    assert_eq!(view.read(cx).model.selected, Some(80));
+    view.update(cx, |this, _| this.model.selected = None);
     window.press("alt-k", cx);
     assert_eq!(view.read(cx).model.selected, Some(80));
     assert!(!view.read(cx).detail_open);
@@ -780,6 +805,70 @@ fn assert_initial_navigation(window: &mut Window, cx: &mut App, view: &Entity<To
     window.press("alt-j", cx);
     assert_eq!(view.read(cx).model.selected, Some(80));
     window.press("enter", cx);
+}
+
+fn assert_native_composer_contract(
+    window: &mut Window,
+    cx: &mut App,
+    composer: &Entity<TextareaState>,
+) {
+    use gpui_kit::InputHandler;
+    let bounds = composer.read(cx).text_bounds().unwrap();
+    let mut native = crate::native_input::ComposerInput::new(composer.clone(), cx).unwrap();
+    let mut kit = gpui_kit::ElementInputHandler::new(bounds, composer.clone());
+    assert!(native.accepts_text_input(window, cx));
+    assert_eq!(
+        native.element_bounds(window, cx),
+        kit.element_bounds(window, cx)
+    );
+    assert_eq!(
+        native.bounds_for_range(0..0, window, cx),
+        kit.bounds_for_range(0..0, window, cx)
+    );
+    // The pinned AppKit branch calls inputContext when callback propagation is
+    // true. An unmatched first Chinese syllable letter must remain unconsumed.
+    let result = window.dispatch_event(
+        gpui_kit::PlatformInput::KeyDown(gpui_kit::KeyDownEvent {
+            keystroke: gpui_kit::Keystroke::parse("n->n").unwrap(),
+            is_held: false,
+            prefer_character_input: false,
+        }),
+        cx,
+    );
+    assert!(result.propagate);
+    assert!(composer.read(cx).value().is_empty());
+    native.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
+    assert!(native.prefers_ime_for_printable_keys(window, cx));
+    assert_eq!(
+        native.marked_text_range(window, cx),
+        kit.marked_text_range(window, cx)
+    );
+    native.replace_text_in_range(None, "你", window, cx);
+    assert_eq!(composer.read(cx).value(), "你");
+    assert!(native.prefers_ime_for_printable_keys(window, cx));
+    assert_eq!(
+        native.text_length_utf16(window, cx),
+        kit.text_length_utf16(window, cx)
+    );
+    native.set_selected_text_range(0..1, window, cx);
+    assert_eq!(
+        native.selected_text_range(false, window, cx).unwrap().range,
+        kit.selected_text_range(false, window, cx).unwrap().range
+    );
+    assert!(composer.read(cx).focus_handle(cx).is_focused(window));
+    native.replace_text_in_range(Some(0..1), "", window, cx);
+    native.unmark_text(window, cx);
+    assert!(!native.prefers_ime_for_printable_keys(window, cx));
+    window.render_frame(cx);
+    let mut native = crate::native_input::ComposerInput::new(composer.clone(), cx).unwrap();
+    let mut kit = gpui_kit::ElementInputHandler::new(
+        composer.read(cx).text_bounds().unwrap(),
+        composer.clone(),
+    );
+    assert_eq!(
+        native.bounds_for_range(0..0, window, cx),
+        kit.bounds_for_range(0..0, window, cx)
+    );
 }
 
 fn assert_navigation_shortcuts(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
@@ -803,11 +892,32 @@ fn assert_navigation_shortcuts(window: &mut Window, cx: &mut App, view: &Entity<
     assert!(row.bottom() <= window.find("composer-surface").bounds().origin.y);
     assert!(row.origin.y >= window.find("today-notes").bounds().origin.y);
     assert!(composer.read(cx).focus_handle(cx).is_focused(window));
+    view.update(cx, |this, cx| this.open_selected(window, cx));
+    let detail = view.read(cx).detail.clone();
+    detail.update(cx, |input, cx| input.focus(window, cx));
+    window.press("alt-k", cx);
+    assert_eq!(view.read(cx).model.selected, Some(2));
+    assert!(detail.read(cx).focus_handle(cx).is_focused(window));
+    window.press("cmd-a", cx);
+    window.press("cmd-c", cx);
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().unwrap(),
+        detail.read(cx).value().as_ref()
+    );
+    window.press("alt-j", cx);
+    assert_eq!(view.read(cx).model.selected, Some(1));
+    view.update(cx, |this, cx| this.close_detail(window, cx));
 }
 
 fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
+    use gpui_kit::InputHandler;
     let composer = view.read(cx).composer.clone();
     composer.update(cx, |input, cx| input.set_value("draft", window, cx));
+    assert!(
+        crate::native_input::ComposerInput::new(composer.clone(), cx)
+            .unwrap()
+            .prefers_ime_for_printable_keys(window, cx)
+    );
     for key in ["alt-j", "alt-k", "alt-a"] {
         window.press(key, cx);
     }
@@ -823,6 +933,11 @@ fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity
         input.set_value("", window, cx);
         input.replace_and_mark_text_in_range(None, "ni", Some(2..2), window, cx);
     });
+    assert!(
+        crate::native_input::ComposerInput::new(composer.clone(), cx)
+            .unwrap()
+            .prefers_ime_for_printable_keys(window, cx)
+    );
     for key in ["alt-j", "alt-k", "alt-a", "enter"] {
         window.press(key, cx);
     }
@@ -847,7 +962,7 @@ fn assert_workspace_theme_roles(mode: gpui_kit::component::ThemeMode, cx: &App) 
     assert_eq!(colors.surface, pair(0xffffff, 0x1c1c1c));
     assert_eq!(colors.accent, pair(0xf5f5f5, 0x202020));
     assert_eq!(colors.muted, colors.accent);
-    assert_eq!(colors.selection, pair(0xebebeb, 0x2b2b2b));
+    assert_eq!(theme.list_active, pair(0xebebeb, 0x2b2b2b));
     assert_eq!(colors.border, pair(0xe8e8e8, 0x303030));
     assert_ne!(colors.secondary, colors.surface);
     assert_ne!(colors.muted, colors.selection);
@@ -862,7 +977,7 @@ fn assert_workspace_theme_roles(mode: gpui_kit::component::ThemeMode, cx: &App) 
     assert_eq!(colors.input, colors.border);
     assert_eq!(theme.button, colors.surface);
     assert_eq!(theme.button_hover, colors.accent);
-    assert_eq!(theme.button_active, colors.selection);
+    assert_eq!(theme.button_active, theme.list_active);
     assert_eq!(theme.button_foreground, colors.foreground);
 }
 
@@ -969,6 +1084,7 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: host.user_id.clone(),
         real_account: true,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(gpui_kit::init);
     let view = cx.update(|cx| {
@@ -1200,8 +1316,12 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
-    cx.update(gpui_kit::init);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
     let (window, view) = cx.update(|cx| {
         let (window, view) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| Today::new(services.clone(), window, cx))
@@ -1245,6 +1365,7 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
         })
     });
     cx.update_window(window.into(), |_, window, cx| {
+        assert_project_note_navigation(window, cx, &view);
         // A capture remains global while switching twice before its completion.
         view.update(cx, |this, cx| {
             this.submit(window, cx);
@@ -1397,6 +1518,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
+        first_sync: std::sync::Mutex::default(),
     });
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -1523,4 +1645,37 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
     })
     .unwrap();
     runtime.block_on(host.shutdown());
+}
+
+fn assert_project_note_navigation(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
+    let composer = view.read(cx).composer.clone();
+    let draft = composer.read(cx).value().to_string();
+    let caret = composer.read(cx).selected_range();
+    composer.update(cx, |input, cx| input.set_value("", window, cx));
+    let ids: Vec<_> = view.read(cx).model.rows.iter().map(|row| row.id).collect();
+    assert!(!ids.is_empty());
+    let second = ids.get(1).copied().unwrap_or(ids[0]);
+    window.press("alt-j->∆", cx);
+    assert_eq!(view.read(cx).model.selected, Some(ids[0]));
+    view.update(cx, |this, cx| this.open_selected(window, cx));
+    window.press("alt-j->∆", cx);
+    assert_eq!(view.read(cx).model.selected, Some(second));
+    assert!(view.read(cx).detail_open);
+    let content = &view
+        .read(cx)
+        .model
+        .rows
+        .iter()
+        .find(|row| row.id == second)
+        .unwrap()
+        .content;
+    assert_eq!(view.read(cx).detail.read(cx).value().as_ref(), content);
+    window.press("alt-k->˚", cx);
+    assert_eq!(view.read(cx).model.selected, Some(ids[0]));
+    window.press("alt-k->˚", cx);
+    assert_eq!(view.read(cx).model.selected, Some(ids[0]));
+    composer.update(cx, |input, cx| {
+        input.set_value(draft, window, cx);
+        input.set_selected_range(caret, cx);
+    });
 }

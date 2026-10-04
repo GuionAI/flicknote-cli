@@ -1,7 +1,7 @@
 # Desktop shortcuts audit and GPUI implementation reference
 
 Audit date: **2026-10-04**. This records authoritative audit #3289 and the final
-runtime behavior of spec #3290, with its documentation delta. Source pins:
+runtime behavior of specs #3290 and #3296. Source pins:
 
 - Read-only `fn-desktop`: `65c4b6380d1c9b2087205fc0d09ed06c34b513fd`.
 - `fn-cli` pre-change baseline: `52ab28b27b1efd65758285b4b088ce45cb7496f2`.
@@ -25,7 +25,7 @@ surface or native acceptance.
 | Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, project-All; no numbering for Shared/Archive/Charts |
 | OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Partial desktop scope: implemented Home + active projects only, bounded/no wrap; unavailable groups skipped |
 | OptionLeft/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Deferred: fixed current Today and project-All only; no date/Week surface |
-| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Implemented on either active GPUI note surface with the same selection/detail behavior |
+| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
 | Return | Nonempty composer submits; empty composer opens selected detail | Implemented primary Return; marked Return commits composition without premature create/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
@@ -68,3 +68,67 @@ All local trial/spike/test packages use dev; prod is reserved for formal release
 Follow [the dev-account operator guide](real-account-gpui-trial.md) for new-profile,
 source/hash-bound packaging and opt-in launch. This audit authorizes no account,
 service, installed-app, release or deployment change.
+
+## Chinese input-source Option routing (#3296)
+
+The user’s owned five-note diagnostic established **English source: navigation
+works; Chinese source: symbols are inserted**. The prior Swift/AppKit desktop
+worked under the Chinese source according to the user; that comparison is a
+manual baseline, not an automated native result. Exact input source names were
+not recorded. UTC 2026-10-04 12:15:48–12:15:56 contains English `alt-j/k` callback,
+navigation action and selection. At 12:16:02 the Chinese stage inserts U+2206
+without a corresponding J callback/action. Earlier 12:15:40–12:15:41 records
+U+2206/U+02DA; source identity for those earlier events is unknown.
+
+Pinned Swift `FlickNotePanel.sendEvent` routes workspace hardware keys before
+`super.sendEvent`; marked input passes through, and note navigation requires an
+empty composer. Pinned `gpui-pre-macos 0.3.7` `window.rs` routes printable keys
+to an active IME before the application callback when its input handler prefers
+IME. Its unmatched callback path subsequently calls `inputContext.handleEvent`,
+so giving bindings first refusal does not replace ordinary initial composition.
+Kit’s `ElementInputHandler` opts into IME-first for editable inputs.
+
+The local composer adapter uses the public `InputHandler` priority capability
+only while empty/unmarked and delegates all other methods to Kit. It registers
+after Kit paint because the last focused handler is the native handler; it uses
+Kit’s public `text_bounds()` after rendered layout, preserving candidate geometry
+without measurement state or feedback. Login and read-only detail retain their
+own handlers. Draft/marked input keeps IME-first priority; editing and focus stay
+with Kit. No global interception, key remapping or dependency fork was added.
+
+The [Kit 0.7 keybinding guide](https://gpui-kit.com/docs/keybinding/) documents
+focused contexts, consuming handlers and platform-delivery limits. The historical
+[Zed Option-key issue](https://github.com/zed-industries/zed/issues/20425) is
+comparative context; it does not prove current pinned runtime behavior.
+The normalized `alt-j→∆` replay passed before repair and is not native proof.
+The native priority regression failed before the policy change and passes with
+empty/draft/marked, unmatched input, composition, exact bounds and focus checks.
+**Corrected-source native Chinese green remains unverified.** Automated event
+posting was unavailable; no system permission change or repeated matrix is implied.
+
+
+## DEV-v2 navigation and selection feedback
+
+The user reports Option-J/K now effective on DEV-v2 source
+`310f05e30d6d4e98a71d84bc86f00905856a0916`: manual corrected-source native
+navigation PASS. This does not establish full IME composition/candidate behavior.
+The user then clarifies functional text selection is likely painted but too faint.
+
+The minimal workspace adapter had assigned neutral list-row selection to Kit’s
+`Theme.selection`, whose documented role is **input selection background**.
+Pinned Kit defaults are Light `#55a0fc` / Dark `#1d4ed8` with intended alpha `0.3`.
+The correction retains those maintained defaults and puts neutral row selection
+in the dedicated list-active role. No input-handler or global palette change.
+Read-only iOS `RsEditor` uses cursor tint at alpha `0.3` for text selection; Swift
+desktop `selectionFill` is a workspace row role and its NSTextView leaves text
+selection defaults intact. These comparisons clarify roles, not a palette to copy.
+Apple documents distinct [selected-text background](https://developer.apple.com/documentation/appkit/nscolor/selectedtextbackgroundcolor)
+and [selected-text foreground](https://developer.apple.com/documentation/appkit/nscolor/selectedtextcolor)
+roles. No system-color bridge was added.
+
+Owned rendered tests compare baseline Kit and wrapper functional partial selection,
+focus, marking and positive identical text bounds in Light/Dark, retain the default
+role/alpha, and verify composed selected-area color distinction and text readability.
+The old neutral override fails the regression. Public standard test windows cannot
+capture pixels (`no HeadlessRenderer configured`); that limitation is recorded,
+not an extra gate. Corrected native selection appearance awaits personal user trial.

@@ -34,7 +34,8 @@ pub(crate) fn apply_theme(mode: impl Into<gpui_kit::component::ThemeMode>, cx: &
         theme.muted_foreground = tertiary;
         theme.accent = hover;
         theme.accent_foreground = foreground;
-        theme.selection = selection;
+        // Kit selection is for input text; keep neutral workspace rows separate.
+        theme.list_active = selection;
         theme.border = border;
         theme.input = border;
         theme.primary = primary;

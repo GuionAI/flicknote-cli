@@ -29,6 +29,7 @@ pub(super) struct Services {
     pub(super) operations: Mutex<Vec<tokio::task::AbortHandle>>,
     pub(super) user_id: String,
     pub(super) real_account: bool,
+    pub(super) first_sync: Mutex<crate::sync_progress::FirstSync>,
     pub(super) destination: Mutex<Destination>,
     pub(super) capture: Arc<Mutex<Capture>>,
     pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
@@ -117,6 +118,7 @@ struct Today {
     error: Option<String>,
     watch_error: Option<String>,
     sync_message: Option<String>,
+    sync_progress: Option<crate::sync_progress::Progress>,
     first_synced: bool,
     projects: Arc<Vec<flicknote_sync::today::ProjectContext>>,
     status_task: Option<Task<()>>,
@@ -188,6 +190,7 @@ impl Today {
             error: None,
             watch_error: None,
             sync_message: None,
+            sync_progress: None,
             first_synced: false,
             projects: Arc::default(),
             status_task: None,
@@ -212,9 +215,15 @@ impl Today {
             }));
         this.subscribe_capture(window, cx);
         this.subscribe(window, cx);
+        this.observe_main_loop(window, cx);
+        this.subscribe_status(window, cx);
+        this
+    }
+
+    fn observe_main_loop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Measure main-loop scheduling without notifying or requesting repaint.
         // Render count is diagnostic; idle time between renders is not a stall.
-        this.heartbeat = Some(cx.spawn_in(window, async move |entity, cx| {
+        self.heartbeat = Some(cx.spawn_in(window, async move |entity, cx| {
             loop {
                 let tick = Instant::now();
                 cx.background_executor()
@@ -234,8 +243,6 @@ impl Today {
                 }
             }
         }));
-        this.subscribe_status(window, cx);
-        this
     }
 
     fn subscribe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -389,23 +396,40 @@ impl Today {
         if !self.services.real_account {
             return;
         }
-        let db = self.services.db.clone();
+        let services = self.services.clone();
+        let db = services.db.clone();
         let (sender, mut receiver) = tokio::sync::watch::channel(None);
         let job = self.services.runtime.spawn(async move {
             use futures_lite::StreamExt;
+            let notes_stream = db.sync_stream("notes", None);
             let stream = db.watch_status();
             futures_lite::pin!(stream);
             while let Some(status) = stream.next().await {
-                let synced = status.streams().any(|s| s.subscription.has_synced());
-                let message = if status.download_error().is_some() || status.upload_error().is_some() {
-                    Some("Sync unavailable. Cached notes remain available; new notes need a connection.".to_string())
-                } else if status.is_connecting() || status.is_downloading() {
-                    Some("Syncing…".to_string())
-                } else if !status.is_connected() {
-                    Some("Offline. Showing cached notes.".to_string())
-                } else { None };
-                sender.send_replace(Some((synced, message)));
-                if sender.is_closed() { break; }
+                let mut defaults = status
+                    .streams()
+                    .filter(|s| s.subscription.is_default() && s.subscription.is_active())
+                    .peekable();
+                let required_ready = defaults.peek().map(|_| ());
+                let required_ready =
+                    required_ready.map(|()| defaults.all(|s| s.subscription.has_synced()));
+                let notes = status.for_stream(&notes_stream);
+                let snapshot = crate::sync_progress::Snapshot {
+                    connected: status.is_connected(),
+                    connecting: status.is_connecting(),
+                    downloading: status.is_downloading(),
+                    error: status.download_error().is_some() || status.upload_error().is_some(),
+                    required_ready,
+                    notes_applied: notes.as_ref().is_some_and(|s| s.subscription.has_synced()),
+                    notes_progress: notes
+                        .and_then(|s| s.progress)
+                        .map(|p| (p.total, p.downloaded)),
+                };
+                let mut first_sync = services.first_sync.lock().expect("first-sync presentation");
+                let message = first_sync.update(snapshot);
+                sender.send_replace(Some((first_sync.complete, message, first_sync.progress)));
+                if sender.is_closed() {
+                    break;
+                }
             }
         });
         // Dropping the window receiver ends this observer even while sync is quiet.
@@ -419,11 +443,12 @@ impl Today {
             }
             let _guard = AbortOnDrop(abort);
             loop {
-                if let Some((synced, message)) = receiver.borrow_and_update().clone()
+                if let Some((synced, message, progress)) = receiver.borrow_and_update().clone()
                     && entity
                         .update_in(cx, |this, _, cx| {
                             this.first_synced |= synced;
                             this.sync_message = message;
+                            this.sync_progress = progress;
                             cx.notify();
                         })
                         .is_err()
@@ -859,3 +884,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 #[path = "ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sync_progress_tests.rs"]
+mod sync_progress_tests;

@@ -6,6 +6,7 @@ use gpui_kit::base::{Disableable, TestSupportExt};
 use gpui_kit::component::{
     Icon,
     button::{Button, ButtonVariants},
+    progress::Progress,
 };
 use gpui_kit::{ClipboardItem, FontWeight, Hsla, rgb, uniform_list};
 
@@ -239,6 +240,25 @@ impl Today {
             )
             .test_support()
     }
+    fn render_sync_progress(&self) -> Option<impl IntoElement> {
+        self.sync_progress.map(|progress| {
+            let bar = match progress {
+                crate::sync_progress::Progress::Indeterminate => {
+                    Progress::new("first-sync-bar").loading(true)
+                }
+                crate::sync_progress::Progress::Percent(value) => {
+                    Progress::new("first-sync-bar").value(f32::from(value))
+                }
+            };
+            div()
+                .id("first-sync-progress")
+                .test_support()
+                .px(px(8.))
+                .py(px(4.))
+                .child(bar.accessibility_label("First sync progress"))
+        })
+    }
+
     fn render_list(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
         let capture = self.model.capture();
         div()
@@ -302,6 +322,7 @@ impl Today {
                         })
                 }),
             )
+            .children(self.render_sync_progress())
             .children(self.sync_message.clone().map(|message| {
                 div()
                     .px(px(8.))
@@ -596,7 +617,11 @@ impl Render for Today {
         } else {
             "Today destination_navigation"
         };
-        let p = Theme::global(cx).color_tokens();
+        let theme = Theme::global(cx);
+        let p = ColorTokens {
+            selection: theme.list_active,
+            ..theme.color_tokens()
+        };
         let viewport = window.viewport_size();
         // Keep at least 32pt of row content exposed at the minimum window width.
         let detail_width = 520_f32.min(f32::from(viewport.width) - 394.);
@@ -681,5 +706,6 @@ impl Render for Today {
                     .child(self.render_canvas(p, cx)),
             )
             .child(self.render_floating_surfaces(p, detail_width, cx))
+            .child(crate::native_input::install(self.composer.clone()))
     }
 }

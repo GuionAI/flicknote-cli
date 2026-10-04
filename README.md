@@ -435,8 +435,8 @@ from committed source and package a new version with a new absent short profile:
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
 python3 scripts/package-gpui-dev.py \
-  --output .scratch/gpui-dev-project-navigation/dev-v1-3290 \
-  --profile /private/tmp/fn-dev-3290-v1
+  --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
+  --profile /private/tmp/fn-dev-3296-v3
 ```
 
 Packaging does not launch the app or create the intended profile. The launcher
@@ -448,8 +448,15 @@ and profile if either example already exists; preserve earlier artifacts.
 
 Home/current Today and project-All use the production local host's watched local
 cache with Unix IPC and loopback MCP ready before the first download. Project
-archival/removal falls back Home while retaining the composer. Capture remains
-global/unassigned even inside a project, with no offline queue or automatic
+archival/removal falls back Home while retaining the composer. First-sync progress
+uses a visible Kit bar: notes download maps to 0–90%, then holds at 90% while
+other required default streams finish, and hides on applied completion. It measures SDK operations,
+not remaining unique notes. Unknown totals stay indeterminate; offline/errors
+keep honest cached-data status. Cached first-sync completion skips the indicator.
+The empty, unmarked composer offers Option-J/K to workspace bindings before an
+active Chinese IME; draft/marked input retains Kit IME routing and native editing.
+Text highlighting keeps Kit’s dedicated input-selection role; neutral workspace
+row selection is separate. Capture remains global/unassigned even inside a project, with no offline queue or automatic
 retry of unknown/partial creation. Close keeps the owner alive; Quit releases it.
 
 See [the dev-account operator guide](docs/real-account-gpui-trial.md) for login,

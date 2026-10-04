@@ -7,6 +7,12 @@ mod login;
 #[cfg(target_os = "macos")]
 mod model;
 #[cfg(target_os = "macos")]
+mod native_input;
+#[cfg(all(test, target_os = "macos"))]
+mod selection_tests;
+#[cfg(target_os = "macos")]
+mod sync_progress;
+#[cfg(target_os = "macos")]
 mod ui;
 #[cfg(target_os = "macos")]
 mod workspace;

@@ -74,7 +74,7 @@ def package(output, profile, binaries):
         plistlib.dump({"CFBundleExecutable": "launch", "CFBundleIdentifier": bundle_id,
                       "CFBundleName": "FlickNote Dev", "CFBundlePackageType": "APPL",
                       "CFBundleVersion": commit[:12], "NSHighResolutionCapable": True}, file)
-    manifest = {"spec": 3290, "environment": "dev", "source_commit": commit,
+    manifest = {"spec": 3296, "environment": "dev", "source_commit": commit,
                 "source_tree": tree, "bundle_id": bundle_id, "profile": str(profile),
                 "profile_absent_at_packaging": True, "socket_bytes": socket_bytes,
                 "mcp_port": 0, "public_endpoints": ENDPOINTS,
@@ -95,6 +95,8 @@ def package(output, profile, binaries):
         "Use this profile only with dev. Preserve previous apps/profiles/services; never copy sessions.\n"
         "Capture stays global/unassigned. Home is current Today; projects show All active notes, capped at 10k.\n"
         "Cmd1 Home; Cmd2..9 first eight projects; OptionUp/Down empty/unmarked only, without wrap.\n"
+        "Visible Kit first-sync bar weights notes to 90%; unknown totals are indeterminate; all active defaults complete then hide.\n"
+        "Empty/unmarked composer gives bindings first refusal; draft/marked retains Kit IME routing.\n"
         "Native IME/cloud acceptance is unperformed; rendered tests/builds are separate evidence.\n"
     )
     return manifest

@@ -40,6 +40,7 @@ class DevPackage(unittest.TestCase):
             self.assertEqual(metadata["CFBundleIdentifier"], manifest["bundle_id"])
             self.assertEqual(metadata["CFBundleExecutable"], "launch")
             self.assertEqual(manifest["environment"], "dev")
+            self.assertEqual(manifest["spec"], 3296)
             self.assertEqual(manifest["profile"], str(profile))
             self.assertEqual(manifest["socket_bytes"], len(os.fsencode(profile / "data/flicknote/daemon.sock")))
             for path, digest in manifest["sha256"].items():

@@ -101,6 +101,12 @@ commits composition without prematurely creating or opening. Option-A uses the
 same guarded archive action. Navigation/open/archive shortcuts are blocked by
 unsubmitted or marked composer input; native Command-A/C/V editing is retained.
 The supported selection/archive actions are also in the application menu.
+The empty/unmarked composer gives native shortcut dispatch first refusal before
+an active Chinese input source. A local public `InputHandler` adapter delegates
+the retained Kit text/selection/composition methods and exact text bounds; draft
+or marked input restores IME-first routing. Unmatched initial letters still reach
+the native input context. The #3296 regression covers this seam, not native
+Chinese acceptance on the corrected source; see the shortcuts audit for evidence.
 
 Active projects are UUID destinations showing All active notes across dates,
 bounded at 10,000 and ordered by canonical short ID. Cmd1 selects Home;
@@ -186,8 +192,11 @@ Mac/watch asset overrides are excluded. Fixture project dots retain stored color
 | Quiet rail | FAFAFA / 141414 | secondary |
 | Elevated composer/detail | FFFFFF / 1C1C1C | popover/surface, neutral button |
 | Hover / muted search landmark | F5F5F5 / 202020 | accent, muted, neutral button hover |
-| Selection | EBEBEB / 2B2B2B | selection, neutral button active |
+| List-row selection | EBEBEB / 2B2B2B | list_active, neutral button active |
 | Subtle edge | E8E8E8 / 303030 | border, input |
+
+Text selection retains Kit’s dedicated `selection` role and intended alpha,
+separate from the neutral list-row fill.
 
 These are product-authored starting values, not exact Radix tokens. The role
 separation follows [Radix's use cases](https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale)
@@ -364,3 +373,8 @@ GUI reaches the existing exact exceptions except non-Mac rustls-pemfile; CLI,
 pure client and headless normal graphs remain free of them. The source-bound
 report records the graph and matching license hashes; the full routine deny check
 passes. This is experimental trial approval, not installed production takeover.
+
+First-sync presentation uses the pinned Kit horizontal progress component, with
+a structured weighted value from SDK events. Unknown totals use indeterminate
+loading without a percentage; applied required-default completion removes the bar.
+Kit owns presentation animation; no application timer advances readiness.

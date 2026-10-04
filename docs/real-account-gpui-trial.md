@@ -17,8 +17,8 @@ Use Apple Silicon macOS and the repository toolchain:
 cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
 # From clean committed source, choose a NEW absent short independent profile:
 python3 scripts/package-gpui-dev.py \
-  --output .scratch/gpui-dev-project-navigation/dev-v1-3290 \
-  --profile /private/tmp/fn-dev-3290-v1
+  --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
+  --profile /private/tmp/fn-dev-3296-v3
 ```
 
 Packaging creates no profile and launches nothing. Choose another unique version
@@ -66,7 +66,7 @@ assume all inherited `FLICKNOTE_*` endpoint/key overrides have been cleared;
 the new profile's defaults then resolve to dev. Never use an old prod profile:
 
 ```bash
-PROFILE=/private/tmp/fn-dev-3290-v1
+PROFILE=/private/tmp/fn-dev-3296-v3
 ```
 
 ```bash
@@ -119,8 +119,17 @@ Host/Origin and retains machine provenance, lifecycle and strict output schemas.
 ## Home, project-All, sync and creation
 
 Cached database/Application/IPC/MCP readiness precedes the first network download.
-Connection, refresh and reconnect work does not block foreground input. Quiet
-loading/auth/sync-error messages follow existing sync events; an empty cache
+Connection, refresh and reconnect work does not block foreground input. A visible
+Kit progress bar and restrained status text follow the existing SDK status stream,
+without polling or counts from the database/cloud. Notes download operations map to 0–90%.
+Downloaded 100% still waits for the notes applied checkpoint; applied notes show
+“90% — Finishing sync…” until **all active default subscriptions** have applied.
+Completion reaches the weighted 100% state and immediately hides the first-sync
+indicator; ongoing sync retains quiet status. Optional subscriptions do not block
+completion. This is weighted progress, not a count of remaining unique notes.
+Unknown/zero totals use the Kit indeterminate bar with Connecting/Syncing text
+and no percentage. Offline/error states cannot complete an in-progress first sync. Previously completed cached sync
+skips the indicator, and reconnect/window reopen does not restart it. An empty cache
 before the first download is not a definitive empty day. Today watches current
 account notes from local 04:00 to next-day 04:00, including DST transitions,
 ordered by confirmed numeric ID descending, capped at 10,000. Canonical metadata
@@ -136,7 +145,14 @@ allowing a draft but blocking marked composition. Missing numbers do nothing.
 Option-Up/Down requires an empty, unmarked composer and traverses only Home and
 active projects without wrap; with a draft it leaves editor dispatch intact.
 Option-J/K, empty Return, Option-A and Escape retain their note/detail guards on
-the active surface. Shared/Archive/Charts remain unavailable. Project Week,
+the active surface. The composer’s local native input adapter gives bindings first
+refusal only while input is empty/unmarked, so Chinese-source Option letters can
+reach navigation before AppKit inserts a symbol. Unmatched initial letters still
+fall through to the native IME; drafts and marked input keep IME-first priority.
+Kit continues to own text, selection, undo, composition and candidate geometry.
+Text highlighting retains Kit’s dedicated input-selection color and intended
+alpha in Light/Dark; neutral workspace row selection uses a separate list role.
+Shared/Archive/Charts remain unavailable. Project Week,
 date navigation, workspace search, settings, global shortcuts and keypad Enter
 are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
@@ -200,7 +216,15 @@ Versions and exception lists are unchanged; CLI/client/headless normal graphs
 exclude them, and the pure client remains backend/GPUI-free. `cargo deny check`
 passes without a new vulnerability/soundness waiver, broad ignore or fork. The
 source-bound implementation report records graph paths, license hashes, tests,
-builds and unperformed native/cloud evidence. No new manual matrix, CUA, cloud or native acceptance gate is required for #3290.
+builds and unperformed native/cloud evidence. For #3296, the owned diagnostic established English-source Option-J/K navigation
+and Chinese-source symbol insertion on the prior routing. Automated regression
+checks the corrected public native priority seam, unmatched initial input, Kit
+composition delegation, exact rendered text bounds, Home/project navigation and
+focus. The user reports DEV-v2 Option-J/K now effective: manual native navigation PASS.
+Full native IME composition/candidate behavior and corrected selection appearance
+remain unverified;
+these tests do not establish OS candidate windows or pixels. No repeated manual
+matrix, CUA, cloud or stress gate is required.
 Run the full routine and locked Mac CLI/GUI/headless builds on final source;
 keep source-bound package evidence in ignored `.scratch`. Implementation completion
 waits for the user's explicit signal before review begins; it does not deploy.
