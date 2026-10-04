@@ -148,6 +148,7 @@ const SQ_RECALL: &str = r#"
     WHERE n.user_id = ?
       AND n.deleted_at IS NULL
       AND (? IS NULL OR n.project_id = ?)
+      AND (NOT ? OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true')
       AND n.short_id IS NOT NULL
       AND e.key IN ('::topic', '::person', '::company', '::location', '::product')
       AND trim(
@@ -435,7 +436,7 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (? IS NULL OR status = ?)
               AND (? IS NULL OR project_id = ?)
               AND (? = 0 OR project_id IS NULL)
-              AND (? = 0 OR json_extract(metadata, '$.created_by') IS NULL)
+              AND (? = 0 OR json_type(metadata, '$.created_by_ai') IS NOT 'true')
               AND (? IS NULL OR
                    CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
                    CASE WHEN substr(created_at, 20, 1) = '.'
@@ -532,7 +533,7 @@ impl NoteDb for LocalPowerSyncBackend {
                     AND extraction.value = json_extract(filter.value, '$.value')
                 )
               )
-              AND (? = 0 OR json_extract(metadata, '$.created_by') IS NULL)
+              AND (? = 0 OR json_type(metadata, '$.created_by_ai') IS NOT 'true')
               AND (? IS NULL OR
                    CAST(strftime('%s', created_at) AS INTEGER) * 1000000 +
                    CASE WHEN substr(created_at, 20, 1) = '.'
@@ -578,7 +579,13 @@ impl NoteDb for LocalPowerSyncBackend {
         let reader = self.db.reader().await?;
         let mut statement = reader.prepare(SQ_RECALL)?;
         let rows = statement.query_map(
-            params![self.user_id, filter.project_id, filter.project_id, prompt],
+            params![
+                self.user_id,
+                filter.project_id,
+                filter.project_id,
+                filter.human,
+                prompt
+            ],
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -993,6 +1000,7 @@ impl NoteDb for LocalPowerSyncBackend {
               AND (deleted_at IS NOT NULL) = ?
               AND (? IS NULL OR type = ?)
               AND (? IS NULL OR project_id = ?)
+              AND (NOT ? OR json_type(metadata, '$.created_by_ai') IS NOT 'true')
             "#,
             params![
                 self.user_id,
@@ -1001,6 +1009,7 @@ impl NoteDb for LocalPowerSyncBackend {
                 filter.note_type,
                 filter.project_id,
                 filter.project_id,
+                filter.human,
             ],
             |row| row.get::<_, i64>(0),
         )?;

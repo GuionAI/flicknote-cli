@@ -18,4 +18,5 @@ segmented snippets, without full note content, internal scores, or source data.
 Active searches exclude drafts; archived extraction-only searches include
 matching archived notes regardless of draft state.
 Use --created-after and --created-before with RFC3339 timestamps to bound
-creation time. --human excludes notes created through MCP.
+creation time. --human excludes only metadata.created_by_ai set to JSON boolean
+true; absent and false markers remain included.

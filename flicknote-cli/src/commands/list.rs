@@ -29,7 +29,7 @@ pub(crate) struct ListArgs {
     /// Include notes created before this RFC3339 instant
     #[arg(long)]
     created_before: Option<String>,
-    /// Show notes without MCP creation provenance
+    /// Exclude notes with created_by_ai set to JSON boolean true
     #[arg(long)]
     human: bool,
     /// Show only archived notes

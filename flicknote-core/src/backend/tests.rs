@@ -1731,9 +1731,9 @@ async fn human_list_excludes_mcp_created_notes_before_pagination() {
     let (_directory, db, backend) = make_powersync_backend().await;
     for (short_id, metadata) in [
         (201, None),
-        (202, Some(r#"{"created_by":"mcp:codex"}"#)),
-        (203, Some(r#"{"source":"human"}"#)),
-        (204, Some(r#"{"created_by":"mcp:codex"}"#)),
+        (202, Some(r#"{"created_by_ai":true}"#)),
+        (203, Some(r#"{"created_by_ai":false,"source":"human"}"#)),
+        (204, Some(r#"{"created_by_ai":true}"#)),
     ] {
         seed_routing_note(&db, short_id, "2026-09-24T00:00:00Z", None, metadata).await;
     }
@@ -1772,6 +1772,76 @@ async fn human_list_excludes_mcp_created_notes_before_pagination() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn human_filters_exclude_only_json_true_and_preserve_creation_metadata() {
+    use crate::services::note::NoteService;
+    use flicknote_client::dto::NoteCountInput;
+
+    let (_directory, db, backend) = make_powersync_backend().await;
+    let metadata = [
+        None,
+        Some(r#"{"created_by_ai":false,"link":{"url":"https://example.test"}}"#),
+        Some(r#"{"created_by_ai":true}"#),
+        Some(r#"{"created_by_ai":"true"}"#),
+        Some(r#"{"created_by_ai":1}"#),
+        Some(r#"{"created_by_ai":null}"#),
+    ];
+    for (index, value) in metadata.iter().enumerate() {
+        let id = seed_routing_note(
+            &db,
+            301 + index as i64,
+            "2026-09-24T00:00:00Z",
+            None,
+            *value,
+        )
+        .await;
+        backend
+            .set_note_extractions(&id, "::topic", &["Creation".into()])
+            .await
+            .unwrap();
+        let service = NoteService::new(&backend);
+        service.append(&id, "updated body").await.unwrap();
+        service.archive(&id).await.unwrap();
+        service.restore(&id).await.unwrap();
+        assert_eq!(
+            backend.find_note(&id).await.unwrap().metadata.as_deref(),
+            *value
+        );
+    }
+    let service = NoteService::new(&backend);
+    let count = |human| NoteCountInput {
+        project: None,
+        note_type: None,
+        archived: false,
+        human,
+    };
+    assert_eq!(service.count(count(false)).await.unwrap(), 6);
+    assert_eq!(service.count(count(true)).await.unwrap(), 5);
+    let hits = service
+        .find(flicknote_client::dto::NoteFindInput {
+            keywords: Vec::new(),
+            extractions: vec![flicknote_client::dto::ExtractionFilterDto {
+                key: "::topic".into(),
+                value: "Creation".into(),
+            }],
+            project: None,
+            created_after: None,
+            created_before: None,
+            human: true,
+            archived: false,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    let mut ids: Vec<_> = hits.iter().map(|n| n.id.unwrap()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec![301, 302, 304, 305, 306]);
+    let recalled = service.recall("Creation", None).await.unwrap();
+    let mut recalled_ids: Vec<_> = recalled.iter().map(|n| n.id).collect();
+    recalled_ids.sort_unstable();
+    assert_eq!(recalled_ids, vec![301, 302, 304, 305, 306]);
 }
 
 #[tokio::test]

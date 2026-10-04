@@ -5,7 +5,9 @@ Human mode takes one query argument:
 
 The query is text supplied by a person or the current conversation. An explicit
 empty query is valid and returns no candidates. The command prints at most the
-daemon's bounded recall candidates; it does not read note bodies.
+daemon's bounded human-created recall candidates; it does not read note bodies.
+Only metadata.created_by_ai set to JSON boolean true is excluded; missing and
+false markers remain eligible.
 Human recall allows five seconds for the complete daemon call, including the
 IPC connection and response.
 

@@ -524,7 +524,7 @@ impl Today {
                     interpret_as_url: false,
                     draft: false,
                     topics: vec![],
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 }))
                 .await;

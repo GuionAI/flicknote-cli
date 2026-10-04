@@ -59,9 +59,145 @@ fn add_input(content: &str, draft: bool) -> NoteAddInput {
         interpret_as_url: true,
         draft,
         topics: Vec::new(),
-        created_by: Some("mcp".into()),
+        created_by_ai: true,
         created_at: None,
     }
+}
+
+#[tokio::test]
+#[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
+async fn human_filters_use_json_boolean_across_pagination_count_and_search() {
+    use flicknote_client::dto::{ExtractionFilterDto, NoteCountInput, NoteListInput};
+    let pool = pool();
+    let a = db(&pool, "11111111-1111-4111-8111-111111111111").await;
+    let project = ProjectService::new(a.as_ref())
+        .add(ProjectAddInput {
+            name: "Creation filters".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let mut expected = seed_creation_filters(&a, &project.id).await;
+    let service = NoteService::new(a.as_ref());
+    assert_eq!(
+        service
+            .count(NoteCountInput {
+                project: Some(project.name.clone()),
+                note_type: None,
+                archived: false,
+                human: true
+            })
+            .await
+            .unwrap(),
+        5
+    );
+    expected.reverse();
+    let mut paged = Vec::new();
+    loop {
+        let rows = service
+            .list(NoteListInput {
+                project: Some(project.name.clone()),
+                no_project: false,
+                note_type: None,
+                status: None,
+                human: true,
+                archived: false,
+                shared: false,
+                created_after: None,
+                created_before: None,
+                limit: 1,
+                cursor: paged.last().copied(),
+            })
+            .await
+            .unwrap();
+        if rows.is_empty() {
+            break;
+        }
+        paged.push(rows[0].id.unwrap());
+    }
+    assert_eq!(paged, expected);
+    let mut input = NoteFindInput {
+        keywords: vec!["Classification".into()],
+        extractions: Vec::new(),
+        project: Some(project.name),
+        created_after: None,
+        created_before: None,
+        human: true,
+        archived: false,
+        limit: 10,
+    };
+    let mut lexical_ids: Vec<_> = PgSearch(a.clone())
+        .find(&input)
+        .await
+        .unwrap()
+        .iter()
+        .map(|hit| hit.short_id.unwrap())
+        .collect();
+    lexical_ids.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(lexical_ids, expected);
+    input.keywords.clear();
+    input.extractions = vec![ExtractionFilterDto {
+        key: "::topic".into(),
+        value: "Classification".into(),
+    }];
+    let mut extracted_ids: Vec<_> = service
+        .find(input)
+        .await
+        .unwrap()
+        .iter()
+        .map(|hit| hit.id.unwrap())
+        .collect();
+    extracted_ids.sort_unstable();
+    assert_eq!(extracted_ids, expected);
+    a.finish(true).await.unwrap();
+}
+
+async fn seed_creation_filters(a: &Arc<PgRequestDb>, project_id: &str) -> Vec<i64> {
+    let mut expected = Vec::new();
+    for (index, metadata) in [
+        None,
+        Some(r#"{"created_by_ai":false,"link":{"url":"https://example.test"}}"#),
+        Some(r#"{"created_by_ai":true}"#),
+        Some(r#"{"created_by_ai":"true"}"#),
+        Some(r#"{"created_by_ai":1}"#),
+        Some(r#"{"created_by_ai":null}"#),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = Uuid::new_v4().to_string();
+        let inserted = a
+            .insert_note(&flicknote_core::backend::InsertNoteReq {
+                id: &id,
+                note_type: "normal",
+                status: "draft",
+                title: Some("Classification"),
+                content: Some("Classification"),
+                metadata,
+                project_id: Some(project_id),
+                now: "2026-09-24T00:00:00Z",
+            })
+            .await
+            .unwrap();
+        a.set_note_extractions(&id, "::topic", &["Classification".into()])
+            .await
+            .unwrap();
+        let service = NoteService::new(a.as_ref());
+        service.append(&id, " preserved").await.unwrap();
+        service.submit(&id).await.unwrap();
+        service.archive(&id).await.unwrap();
+        service.restore(&id).await.unwrap();
+        let stored = a.find_note(&id).await.unwrap().metadata;
+        assert_eq!(
+            stored.map(|v| serde_json::from_str::<serde_json::Value>(&v).unwrap()),
+            metadata.map(|v| serde_json::from_str::<serde_json::Value>(v).unwrap())
+        );
+        if index != 2 {
+            expected.push(inserted.short_id.unwrap());
+        }
+    }
+    expected
 }
 
 #[tokio::test]
@@ -530,6 +666,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     seed.finish(true).await.unwrap();
     let detail = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     assert_eq!(detail["content"], "中文 苹果");
+    assert_eq!(detail["metadata"]["created_by_ai"], true);
     assert_eq!(detail["draft"], false);
     assert_eq!(detail["extractions"].as_array().unwrap().len(), 2);
     tool_call(

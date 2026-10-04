@@ -18,7 +18,7 @@ fn add(content: &str) -> AppRequest {
         interpret_as_url: false,
         draft: false,
         topics: vec![],
-        created_by: None,
+        created_by_ai: false,
         created_at: None,
     })
 }
@@ -192,11 +192,9 @@ async fn isolated_host_real_ipc_mcp_watch_ownership_and_persistence() {
         detail["result"]["structuredContent"]["content"],
         "MCP synthetic"
     );
-    assert!(
-        detail["result"]["structuredContent"]["metadata"]["created_by"]
-            .as_str()
-            .unwrap()
-            .starts_with("mcp")
+    assert_eq!(
+        detail["result"]["structuredContent"]["metadata"]["created_by_ai"],
+        true
     );
     let AppResponse::NoteDetail(human) = client
         .app(AppRequest::NoteGet {
@@ -212,7 +210,7 @@ async fn isolated_host_real_ipc_mcp_watch_ownership_and_persistence() {
         human
             .metadata
             .as_ref()
-            .is_none_or(|m| m.get("created_by").is_none())
+            .is_none_or(|m| m.get("created_by_ai").is_none())
     );
     let archived = mcp.call("note_archive", json!({"id":id})).await;
     assert_eq!(archived["result"]["structuredContent"]["archived"], true);

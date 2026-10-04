@@ -195,6 +195,7 @@ async fn daemon_client_preserves_versioned_app_results_and_errors() {
             project: None,
             note_type: None,
             archived: false,
+            human: false,
         }))
         .await
         .unwrap();
@@ -322,6 +323,7 @@ async fn application_maps_unknown_envelope_to_protocol_mismatch() {
             project: None,
             note_type: None,
             archived: false,
+            human: false,
         }))
         .await
         .unwrap_err();
@@ -370,6 +372,7 @@ async fn malformed_transport_responses_are_classified_by_mutation_safety() {
                 project: None,
                 note_type: None,
                 archived: false,
+                human: false,
             }),
             "daemon_unavailable",
             true,
@@ -407,6 +410,7 @@ async fn unexpected_typed_responses_are_classified_by_mutation_safety() {
             project: None,
             note_type: None,
             archived: false,
+            human: false,
         }))
         .await
         .unwrap_err();

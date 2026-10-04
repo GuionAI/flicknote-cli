@@ -49,7 +49,7 @@ pub(crate) async fn run(daemon: &DaemonClient, args: &AddArgs) -> Result<(), Cli
             interpret_as_url: args.value.is_some(),
             draft: args.draft,
             topics: Vec::new(),
-            created_by: None,
+            created_by_ai: false,
             created_at: None,
         }))
         .await?;

@@ -20,7 +20,7 @@ pub(crate) struct FindArgs {
     /// Include notes created before this RFC3339 timestamp
     #[arg(long)]
     created_before: Option<String>,
-    /// Exclude notes created through MCP
+    /// Exclude notes with created_by_ai set to JSON boolean true
     #[arg(long)]
     human: bool,
     /// Search only archived notes

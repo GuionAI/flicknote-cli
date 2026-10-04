@@ -256,6 +256,15 @@ accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
 
+MCP creation sets `metadata.created_by_ai` to JSON boolean `true` regardless of
+client or session. Human CLI/GUI creation omits it. Human-only list, count and
+find exclude only boolean `true`; missing and `false` are human creation.
+Recall returns human-created candidates. The marker describes the creation
+channel, not content authorship; later edits, AI processing and lifecycle
+changes preserve it. `note_get` exposes stored metadata; `note_add` has no
+public marker parameter. Historical `created_by` strings have no runtime
+meaning and receive no automatic conversion.
+
 ### Private remote MCP
 
 `flicknote private-mcp` runs a separate foreground server against PostgreSQL.

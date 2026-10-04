@@ -343,8 +343,7 @@ pub struct NoteAddInput {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub topics: Vec<String>,
     #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub created_by: Option<String>,
+    pub created_by_ai: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
@@ -357,6 +356,8 @@ pub struct NoteCountInput {
     pub note_type: Option<String>,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub human: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

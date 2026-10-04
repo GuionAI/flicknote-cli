@@ -228,6 +228,16 @@ Text creation enters `ai_queued`; recognized URLs create link notes and enter
 Human CLI `flicknote add --draft` creates drafts; existing drafts remain readable
 and editable through MCP. Content and metadata edits keep
 the lifecycle state, and `note_submit` is the explicit draft transition.
+MCP creation persists `metadata.created_by_ai: true` independently of client
+or session, including link notes while preserving `link.url`. Human creation
+omits the marker. Local SQLite and PostgreSQL human filters exclude only JSON
+boolean true; missing and false remain included in list, count and find.
+Edits, lifecycle actions and AI processing preserve creation classification.
+The old `created_by` field is no longer read or written. Historical conversion
+is a separately authorized one-time operator action, with previewed owner/IDs,
+transactional guards and fresh verification; the server runs no backfill.
+Old installed writers can recreate obsolete markers until separately upgraded.
+
 Keyword find uses PGroonga with OR terms, active non-draft notes, project
 and creation-time and human filtering, coverage ranking, and segmented snippets. Extraction-only find can
 include archived notes; lexical terms cannot combine with archived or

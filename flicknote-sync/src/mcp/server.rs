@@ -18,8 +18,7 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::schemars::JsonSchema;
-use rmcp::service::RequestContext;
-use rmcp::{Json, RoleServer, ServerHandler, tool, tool_handler, tool_router};
+use rmcp::{Json, ServerHandler, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
@@ -210,23 +209,6 @@ fn structured<T>(result: Result<T, ServiceError>) -> Result<Json<T>, CallToolRes
     result.map(Json).map_err(|error| tool_error(&error))
 }
 
-fn mcp_created_by(context: &RequestContext<RoleServer>) -> String {
-    if context
-        .client_info()
-        .as_ref()
-        .map(|info| info.name.as_str())
-        != Some("codex-mcp-client")
-    {
-        return "mcp".to_string();
-    }
-    context
-        .meta
-        .get("sessionId")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|id| uuid::Uuid::parse_str(id).ok())
-        .map_or_else(|| "mcp:codex".to_string(), |id| format!("mcp:codex:{id}"))
-}
-
 #[tool_router(router = tool_router)]
 impl FlickNoteMcp {
     #[tool(
@@ -284,7 +266,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_recall",
-        description = "Recall up to five active notes whose full extracted topic or person, company, location, or product value appears literally in the prompt (multiword values are not split; values with an ASCII letter, digit, or underscore at an edge use ASCII token edges). This is read-only host context; use note_get with a returned ID to inspect a candidate.",
+        description = "Recall up to five active human-created notes whose full extracted topic or person, company, location, or product value appears literally in the prompt (multiword values are not split; values with an ASCII letter, digit, or underscore at an edge use ASCII token edges). This is read-only host context; use note_get with a returned ID to inspect a candidate.",
         annotations(read_only_hint = true)
     )]
     async fn note_recall(
@@ -303,7 +285,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_count",
-        description = "Count active or archived notes with optional project and type filters.",
+        description = "Count active or archived notes with optional project, type, and human filters.",
         annotations(read_only_hint = true)
     )]
     async fn note_count(
@@ -315,6 +297,7 @@ impl FlickNoteMcp {
                 project: params.project,
                 note_type: params.note_type.map(|value| value.as_str().to_string()),
                 archived: params.archived,
+                human: params.human,
             }))
             .await
             .map(|count| CountResult { count }),
@@ -448,7 +431,6 @@ impl FlickNoteMcp {
     async fn note_add(
         &self,
         Parameters(params): Parameters<NoteAddParams>,
-        context: RequestContext<RoleServer>,
     ) -> Result<Json<NoteCreateResult>, CallToolResult> {
         structured(
             self.call::<NoteCreateResult>(AppRequest::NoteAdd(NoteAddInput {
@@ -457,7 +439,7 @@ impl FlickNoteMcp {
                 interpret_as_url: true,
                 draft: false,
                 topics: Vec::new(),
-                created_by: Some(mcp_created_by(&context)),
+                created_by_ai: true,
                 created_at: None,
             }))
             .await,

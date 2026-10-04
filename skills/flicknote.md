@@ -14,6 +14,13 @@ source/open, and host-triggered recall remain local. Remote requests require
 one verified `flicknote:full` grant bound to the configured MCP resource.
 The user's identity comes from that grant, not a tool argument.
 
+MCP creation records `metadata.created_by_ai: true`; human creation omits it.
+Missing and false mean human creation. The marker describes the creation
+channel, not authorship, and later edits or AI processing preserve it.
+Use `human: true` with list, count or find to exclude only JSON boolean true;
+recall already selects human-created candidates. Read stored metadata with
+`note_get`; creation accepts no marker or client/session parameter.
+
 ## Identifiers
 
 Use the numeric short note ID returned by MCP. Do not substitute a UUID. Project

@@ -239,7 +239,7 @@ fn add(content: &str, topics: Vec<String>) -> AppRequest {
         interpret_as_url: false,
         draft: false,
         topics,
-        created_by: None,
+        created_by_ai: false,
         created_at: None,
     })
 }
@@ -330,8 +330,8 @@ async fn cached_host_production_creator_ipc_mcp_download_close_reopen_and_restar
         })
         .unwrap();
     assert_eq!(
-        serde_json::from_str::<Value>(&row).unwrap()["created_by"],
-        "mcp"
+        serde_json::from_str::<Value>(&row).unwrap()["created_by_ai"],
+        true
     );
     // Definite failure and production unknown/partial identity stay distinct.
     fake.mode.store(1, Ordering::SeqCst);

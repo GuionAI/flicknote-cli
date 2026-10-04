@@ -274,7 +274,7 @@ impl<'a> NoteService<'a> {
                     status: None,
                     created_after_micros: None,
                     created_before_micros: None,
-                    human: false,
+                    human: true,
                     archived: false,
                     shared: false,
                     limit: RECALL_MAX_CANDIDATES,
@@ -296,7 +296,7 @@ impl<'a> NoteService<'a> {
             status: None,
             created_after_micros: None,
             created_before_micros: None,
-            human: false,
+            human: input.human,
             archived: input.archived,
             shared: false,
             limit: u32::MAX,
@@ -335,9 +335,9 @@ impl<'a> NoteService<'a> {
                 status: NoteStatus::SourceQueued.as_str().to_string(),
                 title: None,
                 content: None,
-                metadata: Some(match input.created_by.as_deref() {
-                    Some(created_by) => serde_json::json!({ "link": { "url": link_url }, "created_by": created_by }),
-                    None => serde_json::json!({ "link": { "url": link_url } }),
+                metadata: Some(match input.created_by_ai {
+                    true => serde_json::json!({ "link": { "url": link_url }, "created_by_ai": true }),
+                    false => serde_json::json!({ "link": { "url": link_url } }),
                 }.to_string()),
                 project_id,
                 now,
@@ -362,8 +362,8 @@ impl<'a> NoteService<'a> {
                 title,
                 content: Some(content),
                 metadata: input
-                    .created_by
-                    .map(|created_by| serde_json::json!({ "created_by": created_by }).to_string()),
+                    .created_by_ai
+                    .then(|| serde_json::json!({ "created_by_ai": true }).to_string()),
                 project_id,
                 now,
                 topics: input.topics,
@@ -1759,6 +1759,7 @@ mod tests {
                 project: None,
                 note_type: None,
                 archived: false,
+                human: false,
             })
             .await
             .unwrap();
@@ -2072,7 +2073,7 @@ mod tests {
                     interpret_as_url: false,
                     draft: false,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
@@ -2111,7 +2112,7 @@ mod tests {
                     interpret_as_url: false,
                     draft: false,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
@@ -2147,7 +2148,7 @@ mod tests {
                     interpret_as_url: true,
                     draft: false,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
@@ -2160,6 +2161,7 @@ mod tests {
         assert_eq!(request.status, "ai_queued");
         assert_eq!(request.title.as_deref(), Some("Title"));
         assert_eq!(request.content.as_deref(), Some("Body"));
+        assert!(request.metadata.is_none());
         assert_eq!(created.title.as_deref(), Some("Title"));
     }
 
@@ -2180,7 +2182,7 @@ mod tests {
                     interpret_as_url: true,
                     draft: true,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
@@ -2215,7 +2217,7 @@ mod tests {
                     interpret_as_url: false,
                     draft: true,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
@@ -2243,7 +2245,7 @@ mod tests {
                     interpret_as_url: true,
                     draft: false,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )

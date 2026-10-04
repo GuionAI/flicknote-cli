@@ -21,7 +21,8 @@ note content or internal note UUIDs.
 --created-after is inclusive and --created-before is exclusive. Both accept
 RFC3339 timestamps. --project and --no-project cannot be combined.
 --status accepts draft, ai_queued, source_queued, or ready.
---human excludes notes with MCP created_by provenance; older unmarked notes are included.
+--human excludes only notes with metadata.created_by_ai set to JSON boolean true.
+Missing and false markers are included; later edits or AI processing preserve the marker.
 --shared lists active notes with an unexpired synchronized share. It cannot be
 combined with --archived. Share creation and revocation may appear after sync.
 

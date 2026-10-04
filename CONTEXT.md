@@ -97,9 +97,9 @@ _Avoid_: Offset, page number, opaque token
 ## Note provenance
 
 **MCP-created note**:
-A note created through the FlickNote MCP interface, regardless of who wrote its content. Its `created_by` provenance records the MCP origin and, when available, a Codex session.
+A note created through the FlickNote MCP interface, regardless of who wrote its content. Its `created_by_ai: true` metadata records the creation channel independently of client or session. Later edits and AI processing preserve this classification.
 _Avoid_: AI-authored note
 
 **Human-filtered note**:
-A note without MCP `created_by` provenance. This includes older notes whose creation channel was not recorded; it does not prove a person authored the content.
+A note whose `created_by_ai` metadata is absent or false. Human filters exclude only JSON boolean true, so other JSON values also remain included. This describes creation channel; it does not prove a person authored the content.
 _Avoid_: Human-authored note

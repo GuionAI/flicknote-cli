@@ -1181,7 +1181,7 @@ async fn mcp_note_list_pages_by_descending_short_id() {
 }
 
 #[tokio::test]
-async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
+async fn mcp_note_add_marks_ai_creation_and_human_list_excludes_it() {
     let session_id = "0199a467-5b0e-7000-8000-000000000001";
     for (content, expected_type) in [
         ("# Written by a person\n\nSaved by an agent", "normal"),
@@ -1202,8 +1202,8 @@ async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
             .call("note_get", serde_json::json!({ "id": id }))
             .await;
         assert_eq!(
-            detail["result"]["structuredContent"]["metadata"]["created_by"],
-            format!("mcp:codex:{session_id}")
+            detail["result"]["structuredContent"]["metadata"]["created_by_ai"],
+            true
         );
         assert_eq!(detail["result"]["structuredContent"]["type"], expected_type);
         assert_eq!(detail["result"]["structuredContent"]["draft"], false);
@@ -1226,6 +1226,30 @@ async fn mcp_note_add_records_codex_session_and_human_list_excludes_it() {
             .map(|note| note["id"].as_i64().unwrap())
             .collect();
         assert_eq!(human_ids, vec![43, 42]);
+        let count = harness
+            .call("note_count", serde_json::json!({"human":true}))
+            .await;
+        assert_eq!(count["result"]["structuredContent"]["count"], 2);
+        for (tool, arguments) in [
+            (
+                "note_write",
+                serde_json::json!({"id":id,"content":"Updated content"}),
+            ),
+            (
+                "note_modify",
+                serde_json::json!({"id":id,"title":"Updated title"}),
+            ),
+            ("note_archive", serde_json::json!({"id":id})),
+            ("note_restore", serde_json::json!({"id":id})),
+        ] {
+            let result = harness.call(tool, arguments).await;
+            assert_eq!(result["result"]["isError"], false);
+        }
+        let after = harness.call("note_get", serde_json::json!({"id":id})).await;
+        assert_eq!(
+            after["result"]["structuredContent"]["metadata"],
+            detail["result"]["structuredContent"]["metadata"]
+        );
     }
 }
 
@@ -1258,7 +1282,7 @@ async fn mcp_note_add_rejects_draft_before_insertion() {
 }
 
 #[tokio::test]
-async fn mcp_note_add_without_codex_identity_still_records_mcp_origin() {
+async fn mcp_note_add_without_codex_identity_marks_ai_creation() {
     let mut harness = McpHarness::start().await;
     let added = harness
         .call(
@@ -1273,8 +1297,8 @@ async fn mcp_note_add_without_codex_identity_still_records_mcp_origin() {
         .call("note_get", serde_json::json!({ "id": id }))
         .await;
     assert_eq!(
-        detail["result"]["structuredContent"]["metadata"]["created_by"],
-        "mcp"
+        detail["result"]["structuredContent"]["metadata"]["created_by_ai"],
+        true
     );
     let human = harness
         .call("note_list", serde_json::json!({ "human": true }))
@@ -1289,7 +1313,7 @@ async fn mcp_note_add_without_codex_identity_still_records_mcp_origin() {
 }
 
 #[tokio::test]
-async fn mcp_note_add_without_codex_session_records_client_type() {
+async fn mcp_note_add_without_codex_session_marks_ai_creation() {
     let mut harness = McpHarness::start_with_client("codex-mcp-client").await;
     let added = harness
         .call(
@@ -1304,8 +1328,8 @@ async fn mcp_note_add_without_codex_session_records_client_type() {
         .call("note_get", serde_json::json!({ "id": id }))
         .await;
     assert_eq!(
-        detail["result"]["structuredContent"]["metadata"]["created_by"],
-        "mcp:codex"
+        detail["result"]["structuredContent"]["metadata"]["created_by_ai"],
+        true
     );
 }
 
@@ -1393,7 +1417,7 @@ async fn seed_draft(harness: &McpHarness) -> i64 {
             interpret_as_url: true,
             draft: true,
             topics: Vec::new(),
-            created_by: None,
+            created_by_ai: false,
             created_at: None,
         }))
         .await

@@ -29,6 +29,7 @@ async fn count_notes(socket: PathBuf) -> Result<u64, ClientError> {
         project: None,
         note_type: None,
         archived: false,
+        human: false,
     })).await
 }
 ```

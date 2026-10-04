@@ -209,6 +209,9 @@ pub(super) struct NoteCountParams {
     pub note_type: Option<CountNoteType>,
     #[serde(default)]
     pub archived: bool,
+    /// Include only notes without created_by_ai set to JSON boolean true.
+    #[serde(default)]
+    pub human: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

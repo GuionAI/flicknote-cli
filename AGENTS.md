@@ -65,6 +65,15 @@ arguments are invalid input. Human CLI draft creation and shared application/IPC
 draft support remain available. Machine reads return stored note content. The
 synthesized editable document is reserved for the human `flicknote edit` workflow.
 
+MCP creation sets `metadata.created_by_ai` to JSON boolean `true` regardless of
+client or session. Human CLI/GUI creation omits it. Human-only list, count and
+find exclude only boolean `true`; missing and `false` are human creation.
+Recall returns human-created candidates. The marker describes the creation
+channel, not content authorship; later edits, AI processing and lifecycle
+changes preserve it. `note_get` exposes stored metadata; `note_add` has no
+public marker parameter. Historical `created_by` strings have no runtime
+meaning and receive no automatic conversion.
+
 Every MCP structured result must have an object root, and each advertised output
 schema must be precise and derived from its boundary DTO's serialized JSON
 contract: fields, requiredness, JSON types, value and structural constraints,

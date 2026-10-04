@@ -14,6 +14,9 @@ pub(crate) struct CountArgs {
     /// Count archived (deleted) notes instead of active
     #[arg(long)]
     archived: bool,
+    /// Exclude notes with created_by_ai set to JSON boolean true
+    #[arg(long)]
+    human: bool,
 }
 
 pub(crate) async fn run(daemon: &DaemonClient, args: &CountArgs) -> Result<(), CliError> {
@@ -23,6 +26,7 @@ pub(crate) async fn run(daemon: &DaemonClient, args: &CountArgs) -> Result<(), C
             project: project.clone(),
             note_type: args.r#type.clone(),
             archived: args.archived,
+            human: args.human,
         }))
         .await
     {

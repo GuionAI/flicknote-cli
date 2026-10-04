@@ -285,7 +285,7 @@ const SEARCH_QUERY: &str = r#"
                CASE WHEN substr(f.created_at, 20, 1) = '.'
                     THEN CAST(round(CAST(substr(f.created_at, 20) AS REAL) * 1000000) AS INTEGER)
                     ELSE 0 END < ?6)
-          AND (NOT ?7 OR json_extract(json_extract(n.data, '$.metadata'), '$.created_by') IS NULL)
+          AND (NOT ?7 OR json_type(json_extract(n.data, '$.metadata'), '$.created_by_ai') IS NOT 'true')
         ORDER BY coverage DESC, f.updated_at DESC, f.short_id DESC, f.rowid DESC
         LIMIT ?3
         "#;
@@ -605,7 +605,7 @@ mod tests {
         );
         writer
             .execute(
-                r#"UPDATE notes SET metadata='{"created_by":"mcp"}' WHERE id='first'"#,
+                r#"UPDATE notes SET metadata='{"created_by_ai":true}' WHERE id='first'"#,
                 [],
             )
             .unwrap();
@@ -625,6 +625,24 @@ mod tests {
         assert_eq!(hits.len(), 1);
         input.human = true;
         assert!(service.find(&input).await.unwrap().is_empty());
+        for metadata in [
+            Some(r#"{"created_by_ai":false}"#),
+            None,
+            Some(r#"{"created_by_ai":"true"}"#),
+            Some(r#"{"created_by_ai":1}"#),
+        ] {
+            service
+                .db
+                .writer()
+                .await
+                .unwrap()
+                .execute(
+                    "UPDATE notes SET metadata=? WHERE id='first'",
+                    params![metadata],
+                )
+                .unwrap();
+            assert_eq!(service.find(&input).await.unwrap().len(), 1);
+        }
         input.human = false;
         input.created_after = Some("2099-01-01T00:00:00Z".into());
         assert!(service.find(&input).await.unwrap().is_empty());

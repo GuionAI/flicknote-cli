@@ -288,7 +288,7 @@ impl NoteDb for PgRequestDb {
             .transpose()
             .map_err(pg_error)?;
         let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::text IS NULL OR status=$3) AND ($4::uuid IS NULL OR project_id=$4) AND (NOT $5 OR project_id IS NULL) AND (NOT $6 OR metadata->>'created_by' IS NULL) AND ($7::bigint IS NULL OR created_at >= TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND ($8::bigint IS NULL OR created_at < TIMESTAMPTZ 'epoch' + $8 * INTERVAL '1 microsecond') AND ($9::bigint IS NULL OR short_id < $9) ORDER BY short_id DESC LIMIT $10"
+            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::text IS NULL OR status=$3) AND ($4::uuid IS NULL OR project_id=$4) AND (NOT $5 OR project_id IS NULL) AND (NOT $6 OR metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) AND ($7::bigint IS NULL OR created_at >= TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND ($8::bigint IS NULL OR created_at < TIMESTAMPTZ 'epoch' + $8 * INTERVAL '1 microsecond') AND ($9::bigint IS NULL OR short_id < $9) ORDER BY short_id DESC LIMIT $10"
         );
         let limit = i64::from(f.limit);
         Ok(self
@@ -336,7 +336,7 @@ impl NoteDb for PgRequestDb {
         )?;
         let limit = i64::from(f.limit);
         let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.key=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->>'created_by' IS NULL) ORDER BY n.updated_at DESC LIMIT $5"
+            "SELECT {NOTE_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.key=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) ORDER BY n.updated_at DESC LIMIT $5"
         );
         Ok(self
             .query(
@@ -566,7 +566,7 @@ impl NoteDb for PgRequestDb {
             .map(Uuid::parse_str)
             .transpose()
             .map_err(pg_error)?;
-        let row = self.query_opt("SELECT count(*) FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::uuid IS NULL OR project_id=$3)", &[&f.archived,&f.note_type,&project]).await?.ok_or_else(|| pg_error("count returned no row"))?;
+        let row = self.query_opt("SELECT count(*) FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::uuid IS NULL OR project_id=$3) AND (NOT $4 OR metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb)", &[&f.archived,&f.note_type,&project,&f.human]).await?.ok_or_else(|| pg_error("count returned no row"))?;
         Ok(row.get::<_, i64>(0).try_into().map_err(pg_error)?)
     }
     async fn list_note_topics(
@@ -750,7 +750,7 @@ impl crate::search::NoteSearch for PgSearch {
         params.push(&before);
         params.push(&input.human);
         let sql = format!(
-            "SELECT n.id,n.short_id,n.type,n.title,n.summary,n.content,n.created_at,n.updated_at,n.project_id, (SELECT coalesce(sum(CASE WHEN strpos(lower(coalesce(n.title,'')),lower(t.term))>0 THEN 3 WHEN strpos(lower(coalesce(n.summary,'')),lower(t.term))>0 THEN 2 WHEN strpos(lower(coalesce(n.content,'')),lower(t.term))>0 THEN 1 ELSE 0 END),0) FROM unnest(${terms_arg}::text[]) AS t(term)) AS coverage FROM notes n WHERE n.user_id=auth.uid() AND n.deleted_at IS NULL AND n.status <> 'draft' AND (${project_arg}::uuid IS NULL OR n.project_id=${project_arg}) AND (${after_arg}::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + ${after_arg} * INTERVAL '1 microsecond') AND (${before_arg}::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + ${before_arg} * INTERVAL '1 microsecond') AND (NOT ${human_arg} OR n.metadata->>'created_by' IS NULL) AND ({}) ORDER BY coverage DESC,n.updated_at DESC,n.short_id DESC LIMIT ${limit_arg}",
+            "SELECT n.id,n.short_id,n.type,n.title,n.summary,n.content,n.created_at,n.updated_at,n.project_id, (SELECT coalesce(sum(CASE WHEN strpos(lower(coalesce(n.title,'')),lower(t.term))>0 THEN 3 WHEN strpos(lower(coalesce(n.summary,'')),lower(t.term))>0 THEN 2 WHEN strpos(lower(coalesce(n.content,'')),lower(t.term))>0 THEN 1 ELSE 0 END),0) FROM unnest(${terms_arg}::text[]) AS t(term)) AS coverage FROM notes n WHERE n.user_id=auth.uid() AND n.deleted_at IS NULL AND n.status <> 'draft' AND (${project_arg}::uuid IS NULL OR n.project_id=${project_arg}) AND (${after_arg}::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + ${after_arg} * INTERVAL '1 microsecond') AND (${before_arg}::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + ${before_arg} * INTERVAL '1 microsecond') AND (NOT ${human_arg} OR n.metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) AND ({}) ORDER BY coverage DESC,n.updated_at DESC,n.short_id DESC LIMIT ${limit_arg}",
             clauses.join(" OR ")
         );
         let rows = self
@@ -892,7 +892,7 @@ mod tests {
                     interpret_as_url: true,
                     draft: true,
                     topics: Vec::new(),
-                    created_by: None,
+                    created_by_ai: false,
                     created_at: None,
                 },
             )
