@@ -8,9 +8,9 @@ use thiserror::Error;
 pub(crate) const LOCK_FILE_NAME: &str = "daemon.lock";
 
 #[derive(Debug, Error)]
-pub(crate) enum OwnershipError {
+pub enum OwnershipError {
     #[error(
-        "FlickNote daemon already owns this data directory ({lock_path}); stop it with `flicknote daemon stop` before running the foreground daemon; lock diagnostics: {metadata}"
+        "FlickNote host already owns this data directory ({lock_path}); Quit its GUI or stop the owning daemon before restarting; lock diagnostics: {metadata}"
     )]
     AlreadyOwned {
         lock_path: PathBuf,
@@ -25,12 +25,19 @@ pub(crate) enum OwnershipError {
 /// The file remains on disk after the guard is dropped. Its contents are only
 /// diagnostic metadata; the open file descriptor is the ownership authority.
 #[derive(Debug)]
-pub(crate) struct DataDirectoryLock {
+pub struct DataDirectoryLock {
     _file: File,
+    directory: std::path::PathBuf,
 }
 
 impl DataDirectoryLock {
-    pub(crate) fn acquire(data_dir: &Path) -> Result<Self, OwnershipError> {
+    pub(crate) fn owns(&self, data_dir: &Path) -> bool {
+        data_dir
+            .canonicalize()
+            .is_ok_and(|path| path == self.directory)
+    }
+
+    pub fn acquire(data_dir: &Path) -> Result<Self, OwnershipError> {
         fs::create_dir_all(data_dir)?;
         let path = data_dir.join(LOCK_FILE_NAME);
         let mut file = OpenOptions::new()
@@ -58,7 +65,10 @@ impl DataDirectoryLock {
         writeln!(file, "started_at={}", unix_timestamp())?;
         file.flush()?;
 
-        Ok(Self { _file: file })
+        Ok(Self {
+            _file: file,
+            directory: data_dir.canonicalize()?,
+        })
     }
 }
 

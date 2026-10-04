@@ -13,6 +13,10 @@ gpui-kit = "=0.7.0"
 flicknote-spike = { path = "../flicknote-spike" }
 flicknote-sync = { path = "../flicknote-sync", features = ["experimental-spike"] }
 flicknote-client = { path = "../flicknote-client" }
+flicknote-core = { path = "../flicknote-core" }
+flicknote-auth = { path = "../flicknote-auth" }
+clap = { version = "4", features = ["derive"] }
+futures-lite = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 anyhow = "1"
 log = "0.4"
@@ -23,3 +27,5 @@ workspace = true
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 gpui-kit = { version = "=0.7.0", features = ["test-support"] }
 tempfile = "3"
+serde_json = { workspace = true }
+axum = "0.8"

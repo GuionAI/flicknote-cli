@@ -16,6 +16,9 @@ pub(crate) struct LoginArgs {
     /// Force re-authentication after removing the current daemon service and session
     #[arg(long)]
     force: bool,
+    /// Authenticate without installing, starting, stopping or removing services.
+    #[arg(long)]
+    pub(crate) auth_only: bool,
 }
 
 struct GoTrueAuthenticator;
@@ -86,6 +89,18 @@ async fn run_with_dependencies(
     lifecycle: &dyn DaemonLifecycle,
     authenticator: &dyn LoginAuthenticator,
 ) -> Result<(), CliError> {
+    if args.auth_only {
+        // Keep ownership for the entire login, including network/provider interaction.
+        let _ownership =
+            flicknote_sync::ownership::DataDirectoryLock::acquire(&config.paths.data_dir)
+                .map_err(|e| CliError::Other(e.to_string()))?;
+        if config.paths.session_file.exists() && !args.force {
+            return Err(CliError::Other("Already logged in; use --auth-only --force to replace the session after quitting the profile host".into()));
+        }
+        authenticator.authenticate(config, args).await?;
+        println!("Authenticated; no daemon services changed");
+        return Ok(());
+    }
     if config.paths.session_file.exists() && !args.force {
         return Err(CliError::Other(
             "Already logged in. Use `flicknote login --force` to re-authenticate.".into(),
@@ -183,6 +198,7 @@ mod tests {
             email: Some("person@example.com".to_string()),
             provider: None,
             force: true,
+            auth_only: false,
         }
     }
 
@@ -203,6 +219,46 @@ mod tests {
                 succeeds: authentication_succeeds,
             },
         )
+    }
+
+    #[tokio::test]
+    async fn auth_only_login_never_calls_services_and_owned_profile_preserves_session() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = config(directory.path());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (lifecycle, authenticator) = dependencies(&events, true, true, true);
+        let mut args = force_args();
+        args.auth_only = true;
+        std::fs::write(&config.paths.session_file, "old session").unwrap();
+        let owner =
+            flicknote_sync::ownership::DataDirectoryLock::acquire(directory.path()).unwrap();
+        assert!(
+            run_with_dependencies(&config, &args, &lifecycle, &authenticator)
+                .await
+                .is_err()
+        );
+        assert!(events.lock().unwrap().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&config.paths.session_file).unwrap(),
+            "old session"
+        );
+        drop(owner);
+        run_with_dependencies(&config, &args, &lifecycle, &authenticator)
+            .await
+            .unwrap();
+        assert_eq!(*events.lock().unwrap(), ["authenticate"]);
+        assert_eq!(
+            std::fs::read_to_string(&config.paths.session_file).unwrap(),
+            "new session"
+        );
+        events.lock().unwrap().clear();
+        args.force = false;
+        assert!(
+            run_with_dependencies(&config, &args, &lifecycle, &authenticator)
+                .await
+                .is_err()
+        );
+        assert!(events.lock().unwrap().is_empty());
     }
 
     #[tokio::test]

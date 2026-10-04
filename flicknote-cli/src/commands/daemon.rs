@@ -38,7 +38,14 @@ enum DaemonCommand {
     /// Show recent managed-daemon logs
     Logs(LogsArgs),
     /// Run the daemon synchronously in the foreground
-    Run,
+    Run(ForegroundArgs),
+}
+
+#[derive(Args)]
+struct ForegroundArgs {
+    /// Explicit loopback MCP port; 0 chooses an available port.
+    #[arg(long)]
+    mcp_port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -61,6 +68,15 @@ struct LogsArgs {
     follow: bool,
 }
 
+impl DaemonArgs {
+    pub(crate) fn is_foreground(&self) -> bool {
+        matches!(self.command, DaemonCommand::Run(_))
+    }
+    pub(crate) fn has_trial_port(&self) -> bool {
+        matches!(&self.command, DaemonCommand::Run(args) if args.mcp_port.is_some_and(|port| port != 37789))
+    }
+}
+
 pub(crate) async fn run(config: &Config, args: &DaemonArgs) -> Result<(), CliError> {
     match &args.command {
         DaemonCommand::Install => install(config).await,
@@ -70,7 +86,7 @@ pub(crate) async fn run(config: &Config, args: &DaemonArgs) -> Result<(), CliErr
         DaemonCommand::Restart => restart(config).await,
         DaemonCommand::Status(args) => status(config, args).await,
         DaemonCommand::Logs(args) => logs(config, args).await,
-        DaemonCommand::Run => run_foreground(config).await,
+        DaemonCommand::Run(args) => run_foreground(config, args.mcp_port).await,
     }
 }
 
@@ -157,10 +173,10 @@ async fn logs(config: &Config, args: &LogsArgs) -> Result<(), CliError> {
         .map_err(CliError::Other)
 }
 
-async fn run_foreground(config: &Config) -> Result<(), CliError> {
+async fn run_foreground(config: &Config, port: Option<u16>) -> Result<(), CliError> {
     let managed = std::env::var_os("FLICKNOTE_DAEMON_MANAGED").is_some();
     initialize_daemon_logging(config)?;
-    match flicknote_sync::run(config.clone()).await {
+    match flicknote_sync::run_with_port(config.clone(), port).await {
         Ok(()) => Ok(()),
         Err(error) if managed && error.is_permanent_startup() => {
             log::error!("Permanent daemon startup failure: {error}");

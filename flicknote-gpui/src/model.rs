@@ -13,6 +13,7 @@ pub(crate) struct Model {
     pub(crate) selected: Option<i64>,
     pub(crate) pending: Vec<Pending>,
     pub(crate) recovery: Vec<String>,
+    pub(crate) uncertain: Vec<(String, flicknote_client::WireError)>,
     next_token: u64,
 }
 impl Model {
@@ -63,6 +64,20 @@ impl Model {
             }
         }
     }
+    pub(crate) fn uncertain(&mut self, token: u64, error: flicknote_client::WireError) {
+        if let Some(index) = self.pending.iter().position(|p| p.token == token) {
+            let pending = self.pending.remove(index);
+            let text = pending.text.clone();
+            if let Some(id) = error.details.as_ref().and_then(|d| d["short_id"].as_i64()) {
+                self.pending.push(Pending {
+                    id: Some(id),
+                    ..pending
+                });
+                self.reconcile();
+            }
+            self.uncertain.push((text, error));
+        }
+    }
     fn reconcile(&mut self) {
         self.pending
             .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));
@@ -108,6 +123,29 @@ mod tests {
             assert!(model.pending.is_empty());
             model.snapshot(rows(&[7, 5]));
             assert_eq!(model.rows.len(), 2);
+        }
+    }
+    #[test]
+    fn uncertain_results_keep_identity_without_safe_resubmission_recovery() {
+        for (code, id) in [
+            ("note_create_unknown", None),
+            ("note_create_partial", Some(80)),
+        ] {
+            let mut model = Model::default();
+            let token = model.accept("original".into());
+            let error = flicknote_client::WireError {
+                code: code.into(),
+                message: "Do not create it again".into(),
+                retryable: false,
+                details: Some(serde_json::json!({"note_id":"stable-uuid","short_id":id})),
+            };
+            model.uncertain(token, error.clone());
+            assert!(model.recovery.is_empty());
+            assert_eq!(model.uncertain[0].1, error);
+            if id.is_some() {
+                model.snapshot(rows(&[80]));
+            }
+            assert!(model.pending.is_empty());
         }
     }
     #[test]

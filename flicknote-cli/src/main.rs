@@ -20,6 +20,9 @@ mod gateway;
 )]
 #[command(version)]
 struct Cli {
+    /// Explicit independent real-account trial profile root.
+    #[arg(long, global = true)]
+    profile: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -179,7 +182,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         .await
         .map_err(CliError::Other);
     }
-    let config = Config::load()?;
+    if cli.profile.is_some() {
+        match &cli.command {
+            Some(Commands::Login(args)) if !args.auth_only => return Err(CliError::Other("Trial profiles require login --auth-only; no managed services are changed".into())),
+            Some(Commands::Logout(_)) => return Err(CliError::Other("Trial profiles do not support managed logout; Quit the host and retain or remove only your independent trial profile".into())),
+            Some(Commands::Daemon(args)) if !args.is_foreground() => return Err(CliError::Other("Trial profiles support daemon run only; managed services are unavailable for --profile".into())),
+            Some(Commands::Daemon(args)) if !args.has_trial_port() => return Err(CliError::Other("Trial profiles require daemon run --mcp-port PORT (0 allocates a port; 37789 is reserved)".into())),
+            _ => {}
+        }
+    }
+    let config = match &cli.profile {
+        Some(root) => flicknote_core::profile::load(root).map_err(CliError::Other)?,
+        None => Config::load()?,
+    };
 
     // Commands that don't need a database connection or session
     if let Some(ref cmd) = cli.command {

@@ -7,6 +7,11 @@ referenced to the existing Swift desktop;
 installed by the release workflow. The production CLI/daemon and Swift desktop
 keep their existing behavior.
 
+This guide covers explicit synthetic `--root` mode. The independent real-account
+`--profile` mode and GUI email login are documented in
+[the real-account trial guide](real-account-gpui-trial.md); it reuses the production
+host rather than the synthetic fixture creator.
+
 ## Build and launch
 
 On Apple Silicon macOS, using the repository Rust toolchain:
@@ -219,7 +224,7 @@ compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
 
-This slice supplies no login, real cloud connectivity, functional projects/search/charts,
+Synthetic mode supplies no login, real cloud connectivity, functional projects/search/charts,
 Markdown parity, unsupported navigation/date shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The source layout targets Swift
@@ -330,3 +335,13 @@ and altered work, and do not imply author endorsement. Preserve these obligation
 and the upstream Apache-2.0 notices in any future distribution. Re-review license
 exceptions when versions change and before live-data use. This experiment does
 not distribute an installed desktop app.
+
+## Real-account experimental scope recheck (#3279)
+
+The exact pinned Kit/GPUI maintenance notices and license exceptions above were
+rechecked for independent-profile email login and real production local-host use.
+No version, exception, fork or vulnerability/soundness policy changed. Native Mac
+GUI reaches the existing exact exceptions except non-Mac rustls-pemfile; CLI,
+pure client and headless normal graphs remain free of them. The source-bound
+report records the graph and matching license hashes; the full routine deny check
+passes. This is experimental trial approval, not installed production takeover.

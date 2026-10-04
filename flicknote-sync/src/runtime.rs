@@ -147,104 +147,227 @@ impl DaemonRunError {
 /// The caller owns the process lifetime. This function never forks, detaches,
 /// creates a session, or redirects terminal output.
 pub async fn run(config: Config) -> Result<(), DaemonRunError> {
-    let startup_signals =
+    run_with_port(config, None).await
+}
+
+pub async fn run_with_port(config: Config, port: Option<u16>) -> Result<(), DaemonRunError> {
+    let signals =
         StartupSignals::register().map_err(|error| DaemonRunError::Startup(error.to_string()))?;
-    config
-        .validate()
-        .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
-    // Authentication is checked before the ownership lock, socket, and database
-    // so an unauthenticated invocation cannot create persistent daemon state.
-    flicknote_core::session::get_user_id(&config)
-        .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
-    if startup_signals.requested() {
-        return Ok(());
+    let host = match LocalHost::start(config, port, signals.receiver.clone()).await {
+        Ok(host) => host,
+        Err(_) if signals.requested() => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    host.run_until(
+        async {
+            signals.wait().await;
+            Ok(())
+        },
+        || {},
+    )
+    .await
+}
+
+/// The production local owner, shared by foreground daemon and embedded GUI.
+/// Endpoints and cached storage become available independently of cloud download.
+pub struct LocalHost {
+    pub app: Arc<Application>,
+    pub db: PowerSyncDatabase,
+    pub user_id: String,
+    pub socket: PathBuf,
+    pub mcp_port: u16,
+    actors: ActorHandles,
+    shutdown: watch::Sender<bool>,
+    db_path: PathBuf,
+    connection: tokio::task::AbortHandle,
+    _socket_guard: SocketGuard,
+    _ownership: DataDirectoryLock,
+}
+
+impl LocalHost {
+    pub async fn start(
+        config: Config,
+        port: Option<u16>,
+        cancel: watch::Receiver<bool>,
+    ) -> Result<Self, DaemonRunError> {
+        config
+            .validate()
+            .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?;
+        flicknote_core::session::get_user_id(&config)
+            .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?;
+        // Re-read identity under the lock: authentication-only login holds this same lock.
+        let ownership =
+            DataDirectoryLock::acquire(&config.paths.data_dir).map_err(|e| match e {
+                OwnershipError::AlreadyOwned { .. } => {
+                    DaemonRunError::OwnershipConflict(e.to_string())
+                }
+                OwnershipError::Io(_) => DaemonRunError::Startup(e.to_string()),
+            })?;
+        Self::start_owned(config, port, cancel, ownership).await
     }
 
-    let config = Arc::new(config);
-    let _ownership =
-        DataDirectoryLock::acquire(&config.paths.data_dir).map_err(|error| match error {
-            OwnershipError::AlreadyOwned { .. } => {
-                DaemonRunError::OwnershipConflict(error.to_string())
+    /// Start with the ownership already held during GUI authentication.
+    pub async fn start_owned(
+        config: Config,
+        port: Option<u16>,
+        mut cancel: watch::Receiver<bool>,
+        ownership: DataDirectoryLock,
+    ) -> Result<Self, DaemonRunError> {
+        if !ownership.owns(&config.paths.data_dir) {
+            return Err(DaemonRunError::OwnershipConflict(
+                "Ownership does not match selected data directory".into(),
+            ));
+        }
+        config
+            .validate()
+            .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?;
+        let user_id = flicknote_core::session::get_user_id(&config)
+            .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?;
+        if *cancel.borrow() {
+            return Err(DaemonRunError::Startup("Startup cancelled".into()));
+        }
+        let config = Arc::new(config);
+        let db =
+            open_powersync_database(&config).map_err(|e| DaemonRunError::Startup(e.to_string()))?;
+        let mut powersync = spawn_powersync_actors(&db);
+        let auth = Arc::new(GoTrueClient::new(
+            &config.supabase_url,
+            &config.supabase_anon_key,
+            &config.paths.session_file,
+        ));
+        let initialized = tokio::select! {
+            result = initialize_local(&db, &config, &auth, port) => result,
+            _ = cancel.changed() => Err(DaemonRunError::Startup("Startup cancelled".into())),
+            result = powersync.join_next() => Err(DaemonRunError::Startup(format!("PowerSync actor failed during startup: {result:?}"))),
+        };
+        let (app, socket_listener, socket_guard, mcp_listener) = match initialized {
+            Ok(local) => local,
+            Err(error) => {
+                shutdown_startup(&mut powersync, &db, config.paths.db_file.clone()).await;
+                return Err(error);
             }
-            OwnershipError::Io(_) => DaemonRunError::Startup(error.to_string()),
-        })?;
-    if startup_signals.requested() {
-        return Ok(());
-    }
-    let db = open_powersync_database(&config)
-        .map_err(|error| DaemonRunError::Startup(error.to_string()))?;
-    let mut powersync_tasks = spawn_powersync_actors(&db);
-
-    if startup_checkpoint(config.paths.db_file.clone(), &startup_signals).await {
-        shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
-        return Ok(());
-    }
-    // Force PowerSync's local initialization before advertising IPC readiness.
-    let reader = tokio::select! {
-        reader = db.reader() => reader
-            .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?,
-        _signal = startup_signals.wait() => {
-            log::info!("Shutdown signal received during daemon startup");
-            shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
-            return Ok(());
+        };
+        if *cancel.borrow() {
+            drop(socket_listener);
+            drop(socket_guard);
+            drop(mcp_listener);
+            shutdown_startup(&mut powersync, &db, config.paths.db_file.clone()).await;
+            return Err(DaemonRunError::Startup("Startup cancelled".into()));
         }
-    };
-    drop(reader);
-
-    let search = FtsSearchService::new(db.clone());
-    tokio::select! {
-        installed = search.prepare() => installed
-            .map_err(DaemonRunError::PermanentStartup)?,
-        _signal = startup_signals.wait() => {
-            shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
-            return Ok(());
-        }
-    }
-
-    let auth = Arc::new(GoTrueClient::new(
-        &config.supabase_url,
-        &config.supabase_anon_key,
-        &config.paths.session_file,
-    ));
-    let backend = open_local_backend(&db, &config)
-        .map_err(|error| DaemonRunError::PermanentStartup(error.to_string()))?;
-    let (socket_listener, _socket_guard) =
-        bind_socket(&config).map_err(|error| DaemonRunError::Startup(error.to_string()))?;
-    let mcp_listener = mcp::http::bind()
-        .await
-        .map_err(|error| DaemonRunError::Startup(format!("MCP endpoint: {error}")))?;
-    log::info!(
-        "FlickNote MCP listening on {}",
-        mcp_listener
+        let mcp_port = mcp_listener
             .local_addr()
-            .map_err(|error| DaemonRunError::Startup(error.to_string()))?
-    );
-
-    log::info!("FlickNote daemon initialized (pid {})", std::process::id());
-    tokio::select! {
-        _ = db.connect(SyncOptions::new(build_connector(&db, &auth, &config))) => {}
-        _signal = startup_signals.wait() => {
-            log::info!("Shutdown signal received during daemon startup");
-            shutdown_startup(&mut powersync_tasks, &db, config.paths.db_file.clone()).await;
-            return Ok(());
-        }
+            .map_err(|e| DaemonRunError::Startup(e.to_string()))?
+            .port();
+        let (shutdown, receiver) = watch::channel(false);
+        let socket = spawn_socket_server(socket_listener, app.clone(), &db, receiver.clone());
+        let mcp = tokio::spawn(mcp::http::serve(mcp_listener, app.clone(), receiver));
+        let connector = build_connector(&db, &auth, &config);
+        let connecting = db.clone();
+        let connection = powersync.spawn(async move {
+            connecting.connect(SyncOptions::new(connector)).await;
+            // connect installs PowerSync's connector; its long-lived actors are supervised above.
+            std::future::pending::<()>().await;
+        });
+        log::info!(
+            "FlickNote local host ready: IPC={} MCP=http://127.0.0.1:{mcp_port}/mcp; cloud connection runs in background",
+            ipc::socket_path(&config).display()
+        );
+        Ok(Self {
+            app,
+            db,
+            user_id,
+            socket: ipc::socket_path(&config),
+            mcp_port,
+            actors: ActorHandles {
+                checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
+                socket,
+                mcp,
+                powersync,
+            },
+            shutdown,
+            db_path: config.paths.db_file.clone(),
+            connection,
+            _socket_guard: socket_guard,
+            _ownership: ownership,
+        })
     }
-    log::info!("FlickNote daemon accepting local requests");
 
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let app = build_application(backend, &db, &auth, &config, search);
-    let socket = spawn_socket_server(socket_listener, Arc::clone(&app), &db, shutdown_rx.clone());
-    let mcp = tokio::spawn(mcp::http::serve(mcp_listener, app, shutdown_rx));
-    let mut actors = ActorHandles {
-        checkpoint: spawn_checkpoint_worker(config.paths.db_file.clone()),
-        socket,
-        mcp,
-        powersync: powersync_tasks,
-    };
+    pub async fn run_until<F: Future<Output = Result<(), String>>>(
+        mut self,
+        stop: F,
+        cancel_operations: impl FnOnce(),
+    ) -> Result<(), DaemonRunError> {
+        let result = wait_for_runtime_event(&mut self.actors, stop).await;
+        cancel_operations();
+        self.connection.abort();
+        shutdown_daemon(
+            &mut self.actors,
+            &self.db,
+            self.db_path.clone(),
+            &self.shutdown,
+        )
+        .await;
+        result.map_err(DaemonRunError::Runtime)
+    }
 
-    let result = wait_for_shutdown(&mut actors, &startup_signals).await;
-    shutdown_daemon(&mut actors, &db, config.paths.db_file.clone(), &shutdown_tx).await;
-    result.map_err(DaemonRunError::Runtime)
+    pub async fn shutdown(mut self) {
+        self.connection.abort();
+        shutdown_daemon(
+            &mut self.actors,
+            &self.db,
+            self.db_path.clone(),
+            &self.shutdown,
+        )
+        .await;
+    }
+}
+
+impl Drop for LocalHost {
+    fn drop(&mut self) {
+        self.shutdown.send_replace(true);
+        self.actors.socket.abort();
+        self.actors.mcp.abort();
+        self.actors.checkpoint.abort();
+        self.actors.powersync.abort_all();
+    }
+}
+
+async fn initialize_local(
+    db: &PowerSyncDatabase,
+    config: &Arc<Config>,
+    auth: &Arc<GoTrueClient>,
+    port: Option<u16>,
+) -> Result<
+    (
+        Arc<Application>,
+        UnixListener,
+        SocketGuard,
+        tokio::net::TcpListener,
+    ),
+    DaemonRunError,
+> {
+    // Reader initialization and search installation are local work only.
+    drop(
+        db.reader()
+            .await
+            .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?,
+    );
+    let search = FtsSearchService::new(db.clone());
+    search
+        .prepare()
+        .await
+        .map_err(DaemonRunError::PermanentStartup)?;
+    let backend = open_local_backend(db, config)
+        .map_err(|e| DaemonRunError::PermanentStartup(e.to_string()))?;
+    let app = build_application(backend, db, auth, config, search);
+    let (socket, guard) =
+        bind_socket(config).map_err(|e| DaemonRunError::Startup(e.to_string()))?;
+    let mcp = match port {
+        Some(port) => tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await,
+        None => mcp::http::bind().await,
+    }
+    .map_err(|e| DaemonRunError::Startup(format!("MCP endpoint: {e}")))?;
+    Ok((app, socket, guard, mcp))
 }
 
 pub(crate) fn spawn_powersync_actors(db: &PowerSyncDatabase) -> JoinSet<()> {
@@ -281,34 +404,6 @@ fn build_connector(
         powersync_url: config.powersync_url.clone(),
         supabase_url: config.supabase_url.clone(),
         supabase_anon_key: config.supabase_anon_key.clone(),
-    }
-}
-
-async fn startup_checkpoint(db_path: PathBuf, signals: &StartupSignals) -> bool {
-    log::info!("Running startup WAL checkpoint");
-    let task = match spawn_wal_checkpoint(db_path, "startup", WalCheckpointMode::Truncate, 1_000) {
-        Ok(task) => task,
-        Err(error) => {
-            log::warn!("Startup WAL checkpoint could not start: {error}");
-            return false;
-        }
-    };
-    tokio::pin!(task);
-    tokio::select! {
-        result = &mut task => {
-            if result.is_err() {
-                log::warn!("Startup WAL checkpoint worker ended before reporting completion");
-            }
-            false
-        }
-        _ = signals.wait() => {
-            log::info!("Shutdown signal received during startup WAL checkpoint");
-            true
-        }
-        _ = tokio::time::sleep(WAL_CHECKPOINT_TIMEOUT) => {
-            log::warn!("Startup WAL checkpoint exceeded its budget");
-            false
-        }
     }
 }
 
@@ -421,17 +516,6 @@ pub(crate) fn spawn_socket_server(
     tokio::spawn(async move {
         ipc::serve_app_until_with_provider(listener, app, info_provider, shutdown).await
     })
-}
-
-async fn wait_for_shutdown(
-    actors: &mut ActorHandles,
-    signals: &StartupSignals,
-) -> Result<(), String> {
-    wait_for_runtime_event(actors, async {
-        signals.wait().await;
-        Ok(())
-    })
-    .await
 }
 
 pub(crate) async fn wait_for_runtime_event<F>(
@@ -577,6 +661,7 @@ async fn shutdown_startup(actors: &mut JoinSet<()>, db: &PowerSyncDatabase, db_p
     )
     .await;
     actors.abort_all();
+    while actors.join_next().await.is_some() {}
     log::info!("Daemon startup shutdown coordinator finished");
 }
 
@@ -601,6 +686,7 @@ pub(crate) async fn shutdown_daemon(
     .await;
     if ipc_result.outcome == ShutdownStageOutcome::TimedOut {
         actors.socket.abort();
+        let _result = (&mut actors.socket).await;
     }
     let mcp_result = run_shutdown_stage("stop MCP", IPC_DRAIN_TIMEOUT, async {
         if actors.mcp.is_finished() {
@@ -614,6 +700,7 @@ pub(crate) async fn shutdown_daemon(
     .await;
     if mcp_result.outcome == ShutdownStageOutcome::TimedOut {
         actors.mcp.abort();
+        let _result = (&mut actors.mcp).await;
     }
 
     let operations = RuntimeShutdownOperations { db, db_path };
@@ -624,7 +711,11 @@ pub(crate) async fn shutdown_daemon(
     )
     .await;
     actors.powersync.abort_all();
-    actors.checkpoint.abort();
+    while actors.powersync.join_next().await.is_some() {}
+    if !actors.checkpoint.is_finished() {
+        actors.checkpoint.abort();
+        let _result = (&mut actors.checkpoint).await;
+    }
     log::info!("Daemon shutdown coordinator finished");
 }
 
@@ -737,3 +828,7 @@ mod tests {
         assert_eq!(error, "PowerSync actor exited unexpectedly");
     }
 }
+
+#[cfg(test)]
+#[path = "local_host_tests.rs"]
+mod local_host_tests;

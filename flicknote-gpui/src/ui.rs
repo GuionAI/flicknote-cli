@@ -2,7 +2,7 @@ use crate::model::Model;
 use crate::workspace::{MIN_HEIGHT, MIN_WIDTH, apply_theme};
 use flicknote_client::dto::NoteAddInput;
 use flicknote_client::{AppRequest, AppResponse};
-use flicknote_sync::{app::Application as NoteApplication, spike::today::TodayWatch};
+use flicknote_sync::{app::Application as NoteApplication, today::TodayWatch};
 use gpui_kit::{
     App, Bounds, Context, Entity, EntityInputHandler, KeyBinding, Menu, MenuItem, QuitMode, Role,
     Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
@@ -19,11 +19,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Services {
-    app: Arc<NoteApplication>,
-    db: flicknote_sync::spike::Database,
-    runtime: tokio::runtime::Handle,
-    operations: Mutex<Vec<tokio::task::AbortHandle>>,
+pub(super) struct Services {
+    pub(super) app: Arc<NoteApplication>,
+    pub(super) db: flicknote_sync::PowerSyncDatabase,
+    pub(super) runtime: tokio::runtime::Handle,
+    pub(super) operations: Mutex<Vec<tokio::task::AbortHandle>>,
+    pub(super) user_id: String,
+    pub(super) real_account: bool,
 }
 impl Services {
     fn track<T>(&self, job: &tokio::task::JoinHandle<T>) {
@@ -76,6 +78,10 @@ struct Today {
     enter_composing: bool,
     error: Option<String>,
     watch_error: Option<String>,
+    sync_message: Option<String>,
+    first_synced: bool,
+    projects: Arc<Vec<flicknote_sync::today::ProjectContext>>,
+    status_task: Option<Task<()>>,
     archive_busy: bool,
     archived: Vec<i64>,
     watch: Option<TodayWatch>,
@@ -127,6 +133,10 @@ impl Today {
             enter_composing: false,
             error: None,
             watch_error: None,
+            sync_message: None,
+            first_synced: false,
+            projects: Arc::default(),
+            status_task: None,
             archive_busy: false,
             archived: vec![],
             watch: None,
@@ -141,7 +151,7 @@ impl Today {
         this._subscriptions
             .push(window.observe_window_visibility(move |visibility, _, cx| {
                 let _updated = weak.update(cx, |this, _| {
-                    log::info!("spike native visibility={}", visibility.is_visible());
+                    log::info!("trial native visibility={}", visibility.is_visible());
                     this.visible = visibility.is_visible();
                 });
             }));
@@ -168,6 +178,7 @@ impl Today {
                 }
             }
         }));
+        this.subscribe_status(window, cx);
         this
     }
 
@@ -175,7 +186,8 @@ impl Today {
         self.watch_task.take();
         self.watch.take();
         let _entered = self.services.runtime.enter();
-        let watcher = TodayWatch::start(self.services.db.clone());
+        let watcher =
+            TodayWatch::start_for_user(self.services.db.clone(), self.services.user_id.clone());
         let mut receiver = watcher.receiver.clone();
         self.watch = Some(watcher);
         self.watch_task = Some(cx.spawn_in(window, async move |entity, cx| {
@@ -200,6 +212,7 @@ impl Today {
                                                 .collect(),
                                         )
                                     };
+                                    this.projects = snapshot.projects;
                                     this.model.snapshot(rows);
                                     this.refresh_detail(window, cx);
                                     this.watch_error = None;
@@ -209,6 +222,58 @@ impl Today {
                                         Some(format!("Could not load Today: {error}"))
                                 }
                             }
+                            cx.notify();
+                        })
+                        .is_err()
+                {
+                    break;
+                }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn subscribe_status(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.services.real_account {
+            return;
+        }
+        let db = self.services.db.clone();
+        let (sender, mut receiver) = tokio::sync::watch::channel(None);
+        let job = self.services.runtime.spawn(async move {
+            use futures_lite::StreamExt;
+            let stream = db.watch_status();
+            futures_lite::pin!(stream);
+            while let Some(status) = stream.next().await {
+                let synced = status.streams().any(|s| s.subscription.has_synced());
+                let message = if status.download_error().is_some() || status.upload_error().is_some() {
+                    Some("Sync unavailable. Cached notes remain available; new notes need a connection.".to_string())
+                } else if status.is_connecting() || status.is_downloading() {
+                    Some("Syncing…".to_string())
+                } else if !status.is_connected() {
+                    Some("Offline. Showing cached notes.".to_string())
+                } else { None };
+                sender.send_replace(Some((synced, message)));
+                if sender.is_closed() { break; }
+            }
+        });
+        // Dropping the window receiver ends this observer even while sync is quiet.
+        let abort = job.abort_handle();
+        self.status_task = Some(cx.spawn_in(window, async move |entity, cx| {
+            struct AbortOnDrop(tokio::task::AbortHandle);
+            impl Drop for AbortOnDrop {
+                fn drop(&mut self) {
+                    self.0.abort();
+                }
+            }
+            let _guard = AbortOnDrop(abort);
+            loop {
+                if let Some((synced, message)) = receiver.borrow_and_update().clone()
+                    && entity
+                        .update_in(cx, |this, _, cx| {
+                            this.first_synced |= synced;
+                            this.sync_message = message;
                             cx.notify();
                         })
                         .is_err()
@@ -257,7 +322,21 @@ impl Today {
             let result = match job.await {
                 Ok(Ok(AppResponse::NoteCreate(note))) => Ok(note.id),
                 Ok(Ok(_)) => Err("Unexpected create response".into()),
-                Ok(Err(error)) => Err(error.message),
+                Ok(Err(error)) => {
+                    if matches!(
+                        error.code.as_str(),
+                        "note_create_unknown" | "note_create_partial"
+                    ) {
+                        let _result = entity.update_in(cx, |this, _, cx| {
+                            this.model.uncertain(token, error.clone());
+                            this.error =
+                                Some(format!("{} Do not submit this note again.", error.message));
+                            cx.notify();
+                        });
+                        return;
+                    }
+                    Err(error.message)
+                }
                 Err(error) => Err(error.to_string()),
             };
             let _result = entity.update_in(cx, |this, window, cx| {
@@ -380,7 +459,7 @@ impl Today {
 impl Drop for Today {
     fn drop(&mut self) {
         log::info!(
-            "spike window visible_renders={} max_visible_main_tick_ms={:.3}",
+            "trial window visible_renders={} max_visible_main_tick_ms={:.3}",
             self.frames,
             self.max_main_tick_ms
         );
@@ -390,10 +469,16 @@ impl Drop for Today {
 #[path = "presentation.rs"]
 mod presentation;
 
-type HostState = tokio::sync::watch::Receiver<Option<Result<Arc<Services>, String>>>;
+#[derive(Clone)]
+pub(super) enum WorkspaceState {
+    Login(crate::login::LoginHandle),
+    Ready(Arc<Services>),
+}
+type HostState = tokio::sync::watch::Receiver<Option<Result<WorkspaceState, String>>>;
 struct Shell {
     _appearance: Subscription,
     content: Option<Entity<Today>>,
+    login: Option<Entity<crate::login::LoginPane>>,
     error: Option<String>,
     _startup: Task<()>,
 }
@@ -415,14 +500,25 @@ impl Shell {
                 if let Some(result) = result {
                     let _updated = entity.update_in(cx, |this, window, cx| {
                         match result {
-                            Ok(services) => {
+                            Ok(WorkspaceState::Ready(services)) => {
+                                this.login = None;
                                 this.content = Some(cx.new(|cx| Today::new(services, window, cx)))
                             }
-                            Err(error) => this.error = Some(error),
+                            Ok(WorkspaceState::Login(handle)) => {
+                                this.content = None;
+                                this.login =
+                                    Some(cx.new(|cx| {
+                                        crate::login::LoginPane::new(handle, window, cx)
+                                    }));
+                            }
+                            Err(error) => {
+                                this.content = None;
+                                this.login = None;
+                                this.error = Some(error);
+                            }
                         }
                         cx.notify();
                     });
-                    break;
                 }
                 if state.changed().await.is_err() {
                     break;
@@ -431,6 +527,7 @@ impl Shell {
         });
         Self {
             content: None,
+            login: None,
             error: None,
             _startup: task,
             _appearance: appearance,
@@ -442,11 +539,12 @@ impl Render for Shell {
         div()
             .size_full()
             .children(self.content.clone())
-            .when(self.content.is_none(), |d| {
+            .children(self.login.clone())
+            .when(self.content.is_none() && self.login.is_none(), |d| {
                 d.p_4().child(
                     self.error
                         .clone()
-                        .unwrap_or_else(|| "Opening synthetic workspace…".into()),
+                        .unwrap_or_else(|| "Opening workspace…".into()),
                 )
             })
     }
@@ -479,7 +577,7 @@ fn open(state: HostState, system: std::rc::Rc<std::cell::Cell<bool>>, cx: &mut A
     let options = WindowOptions {
         window_min_size: Some(size(px(MIN_WIDTH), px(MIN_HEIGHT))),
         titlebar: Some(TitlebarOptions {
-            title: Some("FlickNote — Synthetic Spike".into()),
+            title: Some("FlickNote — Independent Trial".into()),
             ..Default::default()
         }),
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
@@ -498,35 +596,52 @@ fn open(state: HostState, system: std::rc::Rc<std::cell::Cell<bool>>, cx: &mut A
 }
 
 pub(crate) fn run() -> anyhow::Result<()> {
-    let options = flicknote_spike::Options::parse();
+    let options = crate::launch::Options::parse();
     let runtime = tokio::runtime::Runtime::new()?;
     let handle = runtime.handle().clone();
     let (ready, state) = tokio::sync::watch::channel(None);
-    let (quit, receiver) = tokio::sync::oneshot::channel();
+    let (quit, mut receiver) = tokio::sync::watch::channel(false);
     let task = runtime.spawn(async move {
-        let host = match options.start().await {
+        let login_state = ready.clone();
+        let host = match options
+            .start(receiver.clone(), move |handle| {
+                login_state.send_replace(Some(Ok(WorkspaceState::Login(handle))));
+            })
+            .await
+        {
             Ok(host) => host,
+            Err(_) if *receiver.borrow() => return Ok(()),
             Err(error) => {
                 ready.send_replace(Some(Err(error.to_string())));
                 return Err(error.to_string());
             }
         };
-        ready.send_replace(Some(Ok(Arc::new(Services {
-            app: host.app.clone(),
-            db: host.db.clone(),
-            runtime: handle,
-            operations: Mutex::new(vec![]),
-        }))));
+        ready.send_replace(Some(Ok(WorkspaceState::Ready(Arc::new(
+            host.services(handle),
+        )))));
         host.burst(options.burst_batches).await?;
         let app_state = ready.borrow().clone();
-        host.run_until(async {
-            let result = receiver.await.map_err(|e| e.to_string());
-            if let Some(Ok(services)) = app_state {
+        host.run_until(
+            async {
+                if !*receiver.borrow() {
+                    let _changed = receiver.changed().await;
+                }
+                Ok(())
+            },
+            || {
+                if let Some(Ok(WorkspaceState::Ready(services))) = app_state {
+                    services.cancel_operations();
+                }
+            },
+        )
+        .await
+        .map_err(|error| {
+            if let Some(Ok(WorkspaceState::Ready(services))) = ready.borrow().clone() {
                 services.cancel_operations();
             }
-            result
+            ready.send_replace(Some(Err(format!("Workspace stopped: {error}"))));
+            error
         })
-        .await
     });
     let application = gpui_kit::application()
         .with_assets(crate::assets::TodayAssets)
@@ -560,13 +675,13 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 MenuItem::action("Appearance: Light", LightTheme),
                 MenuItem::action("Appearance: Dark", DarkTheme),
                 MenuItem::separator(),
-                MenuItem::action("Quit FlickNote Spike", Quit),
+                MenuItem::action("Quit FlickNote Trial", Quit),
             ],
         }]);
         let mut quit = Some(quit);
         cx.on_app_quit(move |_| {
             if let Some(quit) = quit.take() {
-                let _result = quit.send(());
+                quit.send_replace(true);
             }
             async {}
         })

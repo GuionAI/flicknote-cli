@@ -276,3 +276,105 @@ fn codex_hook_install_command_parses_and_scope_flags_conflict() {
         .is_err()
     );
 }
+
+#[tokio::test]
+async fn trial_service_commands_reject_before_creating_profile_or_changing_session() {
+    let owned = tempfile::tempdir().unwrap();
+    let root = owned.path().join("trial");
+    for args in [
+        vec!["login", "--force"],
+        vec!["logout", "--force"],
+        vec!["daemon", "install"],
+        vec!["daemon", "uninstall"],
+        vec!["daemon", "start"],
+        vec!["daemon", "stop"],
+        vec!["daemon", "restart"],
+        vec!["daemon", "status"],
+        vec!["daemon", "logs"],
+        vec!["daemon", "run"],
+        vec!["daemon", "run", "--mcp-port", "37789"],
+    ] {
+        let mut argv = vec!["flicknote", "--profile", root.to_str().unwrap()];
+        argv.extend(args);
+        let cli = Cli::try_parse_from(argv).unwrap();
+        assert!(
+            super::run(cli)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Trial profiles")
+        );
+        assert!(!root.exists());
+    }
+    let config = flicknote_core::profile::load(&root).unwrap();
+    std::fs::write(&config.paths.session_file, "test-owned session").unwrap();
+    let cli = Cli::try_parse_from([
+        "flicknote",
+        "--profile",
+        root.to_str().unwrap(),
+        "logout",
+        "--force",
+    ])
+    .unwrap();
+    assert!(super::run(cli).await.is_err());
+    assert_eq!(
+        std::fs::read_to_string(config.paths.session_file).unwrap(),
+        "test-owned session"
+    );
+}
+
+#[tokio::test]
+async fn trial_data_dispatch_uses_only_selected_unix_endpoint() {
+    use flicknote_client::{AppRequest, AppResponse, DaemonRequest, DaemonResponse};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let owned = tempfile::tempdir().unwrap();
+    let config = flicknote_core::profile::load(owned.path()).unwrap();
+    let listener =
+        tokio::net::UnixListener::bind(config.paths.data_dir.join("daemon.sock")).unwrap();
+    let task = tokio::spawn(async move {
+        for health in [true, false] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            stream.read_to_end(&mut bytes).await.unwrap();
+            let request: DaemonRequest = serde_json::from_slice(&bytes).unwrap();
+            let response = if health {
+                assert!(matches!(request, DaemonRequest::Health { .. }));
+                DaemonResponse::ServerInfo(flicknote_sync::ipc::server_info())
+            } else {
+                assert!(
+                    matches!(request, DaemonRequest::App { request, .. } if matches!(*request, AppRequest::NoteList(_)))
+                );
+                DaemonResponse::App(Box::new(AppResponse::NoteListItems(vec![])))
+            };
+            stream
+                .write_all(&serde_json::to_vec(&response).unwrap())
+                .await
+                .unwrap();
+        }
+    });
+    let cli = Cli::try_parse_from([
+        "flicknote",
+        "--profile",
+        owned.path().to_str().unwrap(),
+        "list",
+        "--json",
+    ])
+    .unwrap();
+    super::run(cli).await.unwrap();
+    task.await.unwrap();
+    assert!(!config.paths.session_file.exists());
+    assert!(!config.paths.db_file.exists());
+    let foreground = Cli::try_parse_from([
+        "flicknote",
+        "--profile",
+        owned.path().to_str().unwrap(),
+        "daemon",
+        "run",
+        "--mcp-port",
+        "0",
+    ])
+    .unwrap();
+    assert!(
+        matches!(foreground.command, Some(super::Commands::Daemon(args)) if args.is_foreground())
+    );
+}

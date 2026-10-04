@@ -2319,11 +2319,17 @@ name = "flicknote-gpui"
 version = "1.13.3"
 dependencies = [
  "anyhow",
+ "axum",
+ "clap",
+ "flicknote-auth",
  "flicknote-client",
+ "flicknote-core",
  "flicknote-spike",
  "flicknote-sync",
+ "futures-lite",
  "gpui-kit",
  "log",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

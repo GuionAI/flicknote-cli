@@ -418,6 +418,28 @@ See [the spike guide](docs/embedded-gpui-spike.md) for safety, CLI connection,
 fixture limits, build checks and the distinction between automated and native
 validation. This package is not included in release distribution.
 
+## Experimental real-account Today
+
+On Apple Silicon macOS, the same experimental GUI can open an explicit independent
+real-account profile with English email-code login:
+
+```bash
+cargo build --locked -p flicknote-gpui -p flicknote-spike -p flicknote-cli
+FLICKNOTE_ENV=prod target/debug/flicknote-gpui --profile /tmp/flicknote-real-account-trial --mcp-port 0
+```
+
+A usable stored session skips login. The GUI and foreground daemon reuse the
+production local host; cached Today and local Unix IPC/loopback MCP are ready
+before the first download. Close keeps the host running; Command-1 reopens Today,
+and Command-Q quits. Existing CLI `login --auth-only` remains a service-free
+operator alternative. Never copy live sessions/data or run two profile owners.
+
+See [the real-account operator guide](docs/real-account-gpui-trial.md) for profile
+safety, GUI email setup, CLI/headless endpoints, sync/offline limits and uncertain
+creation recovery. Private remote PostgreSQL MCP remains separate and unchanged.
+This is an opt-in cloud trial, not an installed desktop replacement; manual cloud
+and native OS validation are unperformed, and Linux/distribution remain deferred.
+
 ## License
 
 MIT

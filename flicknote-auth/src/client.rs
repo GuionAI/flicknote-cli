@@ -123,8 +123,6 @@ impl GoTrueClient {
             .send()
             .await?;
 
-        cleanup_pkce_verifier(&self.session_file);
-
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
             return Err(AuthError::Api(format!("Verify failed: {body}")));
@@ -132,6 +130,7 @@ impl GoTrueClient {
 
         let session: AuthSession = resp.json().await?;
         self.persist_session(&session)?;
+        cleanup_pkce_verifier(&self.session_file);
         Ok(session)
     }
 

@@ -15,7 +15,7 @@ pub const PROJECTS: [(&str, &str, &str); 3] = [
     ("fixture-work", "Workspace", "F59E0B"),
 ];
 
-pub(super) const USER: &str = "embedded-gpui-synthetic-user";
+pub const USER: &str = "embedded-gpui-synthetic-user";
 
 pub(super) struct FixtureCreator {
     pub db: PowerSyncDatabase,

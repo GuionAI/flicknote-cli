@@ -136,6 +136,24 @@ follow the visual verification workflow in `docs/embedded-gpui-spike.md`: record
 native synthetic screenshots and source/artifact hashes separately from rendered
 bounds tests; missing native pixels leave visual acceptance unverified.
 
+For the independent real-account experimental mode, read
+`docs/real-account-gpui-trial.md`. GUI email OTP and `login --auth-only` share
+profile-scoped GoTrue/session behavior; acquire ownership before auth effects.
+Use explicit absolute `--profile` plus `--mcp-port` (0 allocates; 37789 is reserved).
+Only auth-only login, foreground daemon run and data commands use trial profiles;
+service-coupled commands reject before side effects. Private remote MCP stays
+config-independent and separate. Never use live email/cloud/session/service state
+for verification or claim rendered tests establish native/cloud behavior.
+
+Check the production host with `cargo test --locked -p flicknote-sync
+--all-features runtime::local_host_tests -- --nocapture`, GUI/auth integration with
+`cargo test --locked -p flicknote-gpui`, and CLI profile dispatch with
+`cargo test --locked -p flicknote-cli`. Run the full routine and locked Mac
+CLI/GUI/headless builds on final amended source. Keep versioned source/hash-bound
+trial artifacts in ignored `.scratch`; use a new profile and preserve prior
+artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
+or native CUA gate is required for #3279.
+
 ## Git Hooks (lefthook)
 
 This repo uses lefthook for git hooks. Install once with `lefthook install` (or `just setup`).

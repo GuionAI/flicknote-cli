@@ -4,7 +4,7 @@ mod connector;
 pub mod fts_search;
 pub mod ipc;
 pub mod mcp;
-mod ownership;
+pub mod ownership;
 pub mod pg;
 pub mod private_mcp;
 mod project_assignment_events;
@@ -15,7 +15,9 @@ pub mod search;
 mod storage_maintenance;
 mod upload;
 
-pub use runtime::{DaemonRunError, run};
+pub use powersync::PowerSyncDatabase;
+pub use runtime::{DaemonRunError, LocalHost, run, run_with_port};
+pub mod today;
 
 #[cfg(test)]
 mod test_support;

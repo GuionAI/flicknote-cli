@@ -56,6 +56,14 @@ impl Config {
             .map(|d| PathBuf::from(d).join("flicknote"))
             .unwrap_or_else(|_| home.join(".local/share/flicknote"));
 
+        Self::load_from_dirs(config_dir, data_dir)
+    }
+
+    /// Load only the selected config and data directories.
+    pub fn load_from_dirs(
+        config_dir: PathBuf,
+        data_dir: PathBuf,
+    ) -> Result<Self, crate::error::CliError> {
         fs::create_dir_all(&config_dir)?;
         fs::create_dir_all(&data_dir)?;
 

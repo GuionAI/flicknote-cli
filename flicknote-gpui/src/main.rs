@@ -1,6 +1,10 @@
 #[cfg(target_os = "macos")]
 mod assets;
 #[cfg(target_os = "macos")]
+mod launch;
+#[cfg(target_os = "macos")]
+mod login;
+#[cfg(target_os = "macos")]
 mod model;
 #[cfg(target_os = "macos")]
 mod ui;

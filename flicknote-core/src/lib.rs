@@ -12,3 +12,5 @@ pub mod types;
 pub const TOPIC_EXTRACTION_KEY: &str = "::topic";
 pub const ENTITY_EXTRACTION_KEYS: &[&str] = &["::person", "::company", "::location", "::product"];
 pub const REMOTE_COMMITTED_INSERT_METADATA: &str = r#"{"flicknote":"remote_committed_insert_v1"}"#;
+
+pub mod profile;

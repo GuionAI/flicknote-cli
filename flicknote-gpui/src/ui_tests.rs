@@ -34,6 +34,8 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
     });
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -372,6 +374,8 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
     });
     cx.update(gpui_kit::init);
     for width in [980., 760.] {
@@ -474,6 +478,8 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
     });
     cx.update(gpui_kit::init);
     for (width, height) in [(980., 720.), (1440., 900.), (760., 560.)] {
@@ -666,6 +672,8 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
         db: host.db.clone(),
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
     });
     cx.update(|cx| {
         gpui_kit::init(cx);
@@ -840,4 +848,165 @@ fn assert_workspace_theme_roles(mode: gpui_kit::component::ThemeMode, cx: &App) 
     assert_eq!(theme.button_hover, colors.accent);
     assert_eq!(theme.button_active, colors.selection);
     assert_eq!(theme.button_foreground, colors.foreground);
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)]
+fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut TestAppContext) {
+    use axum::{Json, Router, routing::post};
+    use serde_json::{Value, json};
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let listener = runtime
+        .block_on(tokio::net::TcpListener::bind((
+            std::net::Ipv4Addr::LOCALHOST,
+            0,
+        )))
+        .unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = runtime.spawn(async move {
+        let router = Router::new()
+            .route(
+                "/rest/v1/notes",
+                post(|Json(mut note): Json<Value>| async move {
+                    note["short_id"] = json!(80);
+                    note["is_flagged"] = json!(false);
+                    note["summary"] = Value::Null;
+                    note["source"] = Value::Null;
+                    note["deleted_at"] = Value::Null;
+                    Json(json!([note]))
+                }),
+            )
+            .fallback(|| async { axum::http::StatusCode::SERVICE_UNAVAILABLE });
+        axum::serve(listener, router).await.unwrap();
+    });
+    let mut config = flicknote_core::profile::load(root.path()).unwrap();
+    config.supabase_url.clone_from(&origin);
+    config.supabase_anon_key = "test-key".into();
+    config.powersync_url.clone_from(&origin);
+    config.api_url.clone_from(&origin);
+    config.gateway_url = origin;
+    flicknote_auth::session::save_session(
+        &config.paths.session_file,
+        &flicknote_auth::client::AuthSession {
+            access_token: "test-access".into(),
+            refresh_token: "test-refresh".into(),
+            expires_at: Some(0),
+            user: flicknote_auth::client::AuthUser {
+                id: "real-test-account".into(),
+                email: None,
+            },
+        },
+    )
+    .unwrap();
+    let session_file = config.paths.session_file.clone();
+    let (_cancel, receiver) = tokio::sync::watch::channel(false);
+    let host = runtime
+        .block_on(flicknote_sync::LocalHost::start(config, Some(0), receiver))
+        .unwrap();
+    let services = Arc::new(Services {
+        app: host.app.clone(),
+        db: host.db.clone(),
+        runtime: runtime.handle().clone(),
+        operations: Mutex::default(),
+        user_id: host.user_id.clone(),
+        real_account: true,
+    });
+    cx.update(gpui_kit::init);
+    let view = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Today::new(services.clone(), window, cx))
+        })
+        .unwrap()
+        .1
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .watch
+                .as_ref()
+                .is_some_and(|w| w.receiver.borrow().is_some())
+        })
+    });
+    cx.update(|cx| {
+        assert!(view.read(cx).model.rows.is_empty());
+        assert!(view.read(cx).projects.is_empty());
+        assert!(!view.read(cx).first_synced);
+    });
+    // The fake refresh returns503: connector's "Auth error" is not proof of bad credentials.
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .sync_message
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Sync unavailable."))
+        })
+    });
+    cx.update(|cx| {
+        assert_eq!(
+            view.read(cx).sync_message.as_deref(),
+            Some("Sync unavailable. Cached notes remain available; new notes need a connection.")
+        )
+    });
+    // Restore this test-owned session's expiry without changing its account identity.
+    let mut session = flicknote_auth::session::load_session(&session_file).unwrap();
+    session.expires_at = Some(u64::MAX);
+    flicknote_auth::session::save_session(&session_file, &session).unwrap();
+    let window = cx.update(|cx| cx.windows()[0]);
+    cx.update(|cx| {
+        cx.update_window(window, |_, window, cx| {
+            view.update(cx, |this, cx| {
+                this.composer.update(cx, |input, cx| {
+                    input.set_value("真实账户 capture", window, cx)
+                });
+                this.submit(window, cx);
+                assert!(this.composer.read(cx).value().is_empty());
+            })
+        })
+        .unwrap()
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx).model.rows.len() == 1 && view.read(cx).model.pending.is_empty()
+        })
+    });
+    cx.update(|cx| {
+        let row = &view.read(cx).model.rows[0];
+        assert_eq!(row.id, 80);
+        assert_eq!(row.content, "真实账户 capture");
+    });
+    cx.update(|cx| {
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .unwrap()
+    });
+    drop(view);
+    let client = flicknote_client::DaemonClient::new(&host.socket);
+    assert!(runtime.block_on(client.health()).is_ok());
+    runtime
+        .block_on(client.app(AppRequest::NoteWrite {
+            id: "80".into(),
+            content: "Updated while closed".into(),
+        }))
+        .unwrap();
+    let reopened = cx.update(|cx| {
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Today::new(services.clone(), window, cx))
+        })
+        .unwrap()
+        .1
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            reopened
+                .read(cx)
+                .model
+                .rows
+                .first()
+                .is_some_and(|r| r.content == "Updated while closed")
+        })
+    });
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+    server.abort();
 }

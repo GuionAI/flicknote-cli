@@ -69,10 +69,10 @@ fn rail_slot(child: impl IntoElement) -> impl IntoElement {
         .justify_center()
         .child(child)
 }
-fn rail_label(title: &'static str) -> impl IntoElement {
+fn rail_label(title: &str) -> impl IntoElement {
     div()
         .id(gpui_kit::SharedString::from(format!("rail-label-{title}")))
-        .child(title)
+        .child(title.to_owned())
         .test_support()
 }
 fn landmark(title: &'static str, name: IconName, p: ColorTokens) -> impl IntoElement {
@@ -167,21 +167,21 @@ impl Today {
                             .text_color(p.muted_foreground)
                             .child("PROJECTS"),
                     )
-                    .children(
-                        flicknote_sync::spike::PROJECTS
-                            .iter()
-                            .map(|(_, name, color)| {
-                                div()
-                                    .h(px(36.))
-                                    .px(px(13.))
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(10.))
-                                    .text_color(p.secondary_foreground)
-                                    .child(rail_slot(dot(color, 8., p.secondary_foreground)))
-                                    .child(rail_label(name))
-                            }),
-                    )
+                    .children(self.projects.iter().map(|project| {
+                        div()
+                            .h(px(36.))
+                            .px(px(13.))
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .text_color(p.secondary_foreground)
+                            .child(rail_slot(dot(
+                                project.color.as_deref().unwrap_or(""),
+                                8.,
+                                p.secondary_foreground,
+                            )))
+                            .child(rail_label(&project.name))
+                    }))
                     .child(
                         div()
                             .mt(px(20.))
@@ -236,11 +236,22 @@ impl Today {
                             {
                                 "Loading Today…"
                             } else {
-                                "No notes today"
+                                if self.services.real_account && !self.first_synced {
+                                    "Waiting for the first sync…"
+                                } else {
+                                    "No notes today"
+                                }
                             },
                         )
                 }),
             )
+            .children(self.sync_message.clone().map(|message| {
+                div()
+                    .px(px(8.))
+                    .text_size(px(12.))
+                    .text_color(p.secondary_foreground)
+                    .child(message)
+            }))
             .children(self.watch_error.clone().map(|error| {
                 div()
                     .p_2()
@@ -404,6 +415,26 @@ impl Today {
                     .text_size(px(12.))
                     .text_color(p.secondary_foreground)
                     .child(error)
+            }))
+            .children(self.model.uncertain.last().map(|(text, error)| {
+                let id = error
+                    .details
+                    .as_ref()
+                    .and_then(|d| d["note_id"].as_str())
+                    .unwrap_or("unavailable");
+                let text = text.clone();
+                div()
+                    .text_size(px(12.))
+                    .text_color(p.secondary_foreground)
+                    .child(format!("Creation reference: {id}. Do not submit it again."))
+                    .child(
+                        Button::new("copy-uncertain")
+                            .label("Copy captured text")
+                            .ghost()
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
+                            }),
+                    )
             }))
             .children((!self.model.recovery.is_empty()).then(|| {
                 Button::new("recover")
