@@ -17,8 +17,15 @@ Daemon-backed note management CLI with local-first sync and an explicit private 
 
 ## Build
 
-Requires Rust 2024 edition (nightly or recent stable with edition support) and
-[`just`](https://github.com/casey/just).
+Requires rustup and [`just`](https://github.com/casey/just). The exact Rust
+version, components and targets are declared in `rust-toolchain.toml`; local
+Cargo commands, routine CI and release compilation use that file. Run
+`rustup show active-toolchain` from the checkout to install or verify it.
+
+To upgrade Rust, change the channel in `rust-toolchain.toml`, run the full
+routine suite and regenerate/check the release workflow using the procedure
+below. Do not add a separate compiler version to CI or dist configuration.
+A pin change can download the selected toolchain if it is not installed.
 
 ```bash
 # Build all crates

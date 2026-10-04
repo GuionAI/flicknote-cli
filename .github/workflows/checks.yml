@@ -24,9 +24,8 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y clang libclang-dev cmake pkg-config libssl-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
       - uses: taiki-e/install-action@cargo-deny
       - uses: actions/cache@v5
         with:

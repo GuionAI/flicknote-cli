@@ -114,6 +114,14 @@ optimization is daemon-side and requires the updated daemon to be running.
 
 ## Build & Test
 
+`rust-toolchain.toml` is the single source for the exact Rust channel, components
+and targets. Local Cargo commands, routine CI and release compilation select it
+through rustup; Nix also reads it. Do not override it with floating stable or a
+second version in CI/dist configuration. For a compiler upgrade, edit the file,
+run the full routine suite, and regenerate/check the release workflow with the
+documented generator. `rustup show active-toolchain` installs/verifies the
+repository selection; an absent toolchain may require a download.
+
 ```bash
 cargo build                # build all crates
 cargo test                 # run all tests

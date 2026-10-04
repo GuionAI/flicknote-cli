@@ -4,6 +4,7 @@
 from pathlib import Path
 import re
 import unittest
+import tomllib
 
 import yaml
 
@@ -37,6 +38,33 @@ class ReleaseContract(unittest.TestCase):
                     if step.get('uses', '').startswith('actions/checkout@'):
                         if 'repository' not in step.get('with', {}):
                             self.assertEqual(step['with']['ref'], '${{ github.sha }}')
+
+    def test_repository_toolchain_selection(self):
+        toolchain = tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']
+        self.assertRegex(toolchain['channel'], r'^\d+\.\d+\.\d+$')
+        self.assertEqual(toolchain['profile'], 'minimal')
+        self.assertEqual(toolchain['components'], ['clippy', 'rustfmt'])
+        self.assertEqual(toolchain['targets'], ['x86_64-unknown-linux-musl'])
+        for workflow, job_name in (('checks.yml', 'check'),
+                                   ('release.yml', 'build-local-artifacts')):
+            job = load(workflow)['jobs'][job_name]
+            self.assertNotIn('RUSTUP_TOOLCHAIN', job.get('env', {}))
+            steps = job['steps']
+            selection = [i for i, step in enumerate(steps)
+                         if step.get('run') == 'rustup show active-toolchain']
+            self.assertEqual(len(selection), 1)
+            self.assertNotIn('if', steps[selection[0]])
+            self.assertTrue(any(step.get('uses', '').startswith('actions/checkout@')
+                                for step in steps[:selection[0]]))
+            build = next(i for i, step in enumerate(steps)
+                         if 'dist build ' in step.get('run', '')
+                         or 'bash scripts/check-routine.sh' in step.get('run', ''))
+            self.assertLess(selection[0], build)
+            for step in steps:
+                self.assertNotIn('RUSTUP_TOOLCHAIN', step.get('env', {}))
+                self.assertFalse(step.get('uses', '').startswith('dtolnay/rust-toolchain@'))
+                if 'sh.rustup.rs' in step.get('run', ''):
+                    self.assertIn('--default-toolchain none', step['run'])
 
     def test_fail_closed_publication(self):
         jobs = load('release.yml')['jobs']

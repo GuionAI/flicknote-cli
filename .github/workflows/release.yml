@@ -133,9 +133,11 @@ jobs:
         if: ${{ matrix.container }}
         run: |
           if ! command -v cargo > /dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain none -y
             echo "$HOME/.cargo/bin" >> $GITHUB_PATH
           fi
+      - name: Install repository Rust toolchain
+        run: rustup show active-toolchain
       - name: Install dist
         run: ${{ matrix.install_dist.run }}
       # Get the dist-manifest

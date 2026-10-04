@@ -30,6 +30,14 @@ def gate(text):
     text = replace_once(text, "if: ${{ always() && needs.plan.result == 'success'",
                         "if: ${{ always() && needs.custom-checks.result == 'success'"
                         " && needs.plan.result == 'success'")
+    # Bootstrap rustup without a floating compiler; repository selection installs
+    # the pinned channel, components and targets before any local artifact build.
+    text = replace_once(text, 'sh -s -- -y\n',
+                        'sh -s -- --default-toolchain none -y\n')
+    text = replace_once(text, '      - name: Install dist\n        run: ${{ matrix.install_dist.run }}\n',
+                        '      - name: Install repository Rust toolchain\n'
+                        '        run: rustup show active-toolchain\n'
+                        '      - name: Install dist\n        run: ${{ matrix.install_dist.run }}\n')
     # All source jobs use the event's immutable commit, as does the check hook.
     text = text.replace('          submodules: recursive\n',
                         '          submodules: recursive\n          ref: ${{ github.sha }}\n')
