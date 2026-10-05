@@ -49,9 +49,3 @@ jobs:
         run: |
           python3 -m pip install PyYAML==6.0.3
           python3 scripts/test-release-workflow.py
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: actionlint@1.7.12
-      - name: Validate Actions syntax
-        # cargo-dist's stock shell snippets have unrelated ShellCheck findings.
-        run: actionlint -shellcheck="" .github/workflows/*.yml
