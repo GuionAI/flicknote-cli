@@ -607,7 +607,7 @@ async fn desktop_previews_watch_thresholds_titles_and_canonical_content() {
             observed.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
             (100..108).rev().chain([3]).collect::<Vec<_>>()
         );
-        for (index, (content, _, preview, kind)) in cases.iter().enumerate() {
+        for (index, (content, title, preview, kind)) in cases.iter().enumerate() {
             let row = observed
                 .rows
                 .iter()
@@ -616,6 +616,9 @@ async fn desktop_previews_watch_thresholds_titles_and_canonical_content() {
             assert_eq!(&row.content, content);
             assert_eq!(&row.preview, preview);
             assert_eq!(&row.note_type, kind);
+            assert_eq!(row.title.as_deref(), *title);
+            assert_eq!(row.project_id.as_deref(), Some(project));
+            assert_eq!(row.project_name.as_deref(), Some("Current"));
             assert_eq!(row.uuid, format!("preview-{index}"));
         }
     }
@@ -645,9 +648,90 @@ async fn desktop_previews_watch_thresholds_titles_and_canonical_content() {
             .await;
             let row = observed.rows.iter().find(|r| r.id == 100).unwrap();
             assert_eq!(row.content, content);
+            assert_eq!(row.title.as_deref(), title);
             assert_eq!(row.uuid, "preview-0");
             assert_eq!(observed.rows.len(), cases.len() + 1);
         }
+    }
+    drop(home);
+    drop(all);
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn detail_metadata_watch_resolves_archived_projects_without_cross_owner_labels() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
+    let mut home = TodayWatch::start_for_user(host.db.clone(), host.user_id.clone());
+    let mut all = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+    );
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET name='Archived known',is_archived=1 WHERE id=?",
+                [project],
+            )
+            .unwrap();
+        writer
+            .execute("UPDATE notes SET title='Real title' WHERE id='a'", [])
+            .unwrap();
+    }
+    for watch in [&mut home, &mut all] {
+        let s = snapshot(watch, |s| {
+            s.rows[0].title.as_deref() == Some("Real title") && s.projects.is_empty()
+        })
+        .await;
+        let row = &s.rows[0];
+        assert_eq!(row.id, 3);
+        assert_eq!(row.uuid, "a");
+        assert_eq!(row.content, "Cached body");
+        assert_eq!(row.project_id.as_deref(), Some(project));
+        assert_eq!(row.project_name.as_deref(), Some("Archived known"));
+        assert_eq!(row.project_color.as_deref(), Some("123456"));
+    }
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE projects SET name='Renamed archived',color='abcdef' WHERE id=?",
+            [project],
+        )
+        .unwrap();
+    for watch in [&mut home, &mut all] {
+        let s = snapshot(watch, |s| {
+            s.rows[0].project_name.as_deref() == Some("Renamed archived")
+        })
+        .await;
+        assert_eq!(s.rows[0].project_color.as_deref(), Some("abcdef"));
+        assert_eq!(s.rows[0].content, "Cached body");
+    }
+    // Assignment to a foreign or dangling UUID never borrows another account's label.
+    for assignment in ["22222222-2222-4222-8222-222222222222", "missing"] {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET project_id=?,title=NULL WHERE id='a'",
+                [assignment],
+            )
+            .unwrap();
+        let s = snapshot(&mut home, |s| {
+            s.rows[0].title.is_none() && s.rows[0].project_name.is_none()
+        })
+        .await;
+        assert!(s.rows[0].project_id.is_none());
+        assert!(s.rows[0].project_color.is_none());
+        assert_eq!(s.rows[0].content, "Cached body");
+        snapshot(&mut all, |s| s.rows.is_empty()).await;
     }
     drop(home);
     drop(all);

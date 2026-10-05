@@ -4,7 +4,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::ColorTokens;
 use gpui_kit::base::{Disableable, TestSupportExt};
 use gpui_kit::component::{
-    Icon,
+    Icon, Sizable,
     button::{Button, ButtonVariants},
     progress::Progress,
 };
@@ -104,6 +104,8 @@ impl Today {
                 .update(cx, |input, cx| input.focus(window, cx));
         }
         self.detail_open = false;
+        self.detail = None;
+        gpui_kit::base::TextSelection::clear(window, cx);
         cx.notify();
     }
     fn render_home(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -432,6 +434,13 @@ impl Today {
         width: f32,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let reading = self.detail.as_ref().expect("open detail state");
+        let row = self
+            .model
+            .rows
+            .iter()
+            .find(|row| row.uuid == reading.uuid)
+            .expect("selected watched note");
         let disabled = self.archive_busy || !self.composer.read(cx).value().is_empty();
         div()
             .id("detail-surface")
@@ -459,6 +468,14 @@ impl Today {
                     .px(px(12.))
                     .test_support()
                     .child(
+                        div()
+                            .id("detail-id")
+                            .flex_1()
+                            .text_color(p.muted_foreground)
+                            .child(format!("#{}", row.id))
+                            .test_support(),
+                    )
+                    .child(
                         Button::new("copy-detail")
                             .icon(IconName::Copy)
                             .ghost()
@@ -466,7 +483,7 @@ impl Today {
                             .tooltip("Copy note")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
-                                    this.detail.read(cx).value().to_string(),
+                                    this.detail.as_ref().expect("open detail").source.clone(),
                                 ));
                             })),
                     )
@@ -490,18 +507,7 @@ impl Today {
                             ),
                     ),
             )
-            .child(
-                div().flex_1().min_h_0().p(px(16.)).child(
-                    Textarea::new(&self.detail)
-                        .accessibility_id("detail")
-                        .aria_label("Note detail")
-                        .readonly(true)
-                        .appearance(false)
-                        .bordered(false)
-                        .text_size(px(15.))
-                        .h_full(),
-                ),
-            )
+            .child(render_reading(reading, row, p, cx))
             .test_support()
     }
     fn render_composer(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
@@ -729,5 +735,206 @@ impl Render for Today {
                     ),
             )
             .child(crate::native_input::install(self.composer.clone()))
+    }
+}
+
+fn render_reading(
+    reading: &Reading,
+    row: &flicknote_sync::today::TodayRow,
+    p: ColorTokens,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    div()
+        .id(("detail-reading", reading.state.entity_id()))
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .overflow_y_scroll()
+        .track_scroll(&reading.scroll)
+        .p(px(16.))
+        .text_size(px(15.))
+        .children(
+            row.title
+                .as_ref()
+                .filter(|title| !title.trim().is_empty())
+                .map(|title| {
+                    div()
+                        .id("detail-title")
+                        .w_full()
+                        .min_w_0()
+                        .mb(px(8.))
+                        .text_size(px(20.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(title.clone())
+                        .test_support()
+                }),
+        )
+        .children(row.project_name.as_ref().map(|name| {
+            div()
+                .id("detail-project")
+                .flex()
+                .items_start()
+                .gap(px(8.))
+                .mb(px(16.))
+                .text_color(p.secondary_foreground)
+                .child(div().pt(px(7.)).child(dot(
+                    row.project_color.as_deref().unwrap_or(""),
+                    5.,
+                    p.secondary_foreground,
+                )))
+                .child(div().flex_1().min_w_0().child(name.clone()))
+                .test_support()
+        }))
+        .child(reader(&reading.state, cx))
+        .test_support()
+}
+
+/// Base uses the component-installed theme defaults and Root's existing selection layer.
+/// The facade omits the image resolver; use its public Base implementation directly.
+fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoElement {
+    let theme = Theme::global(cx);
+    let mut table = gpui_kit::StyleRefinement::default();
+    table.overflow.x = Some(gpui_kit::Overflow::Scroll);
+    let mut code = gpui_kit::StyleRefinement::default();
+    code.padding.top = Some(px(36.).into());
+    let style = gpui_kit::base::TextViewStyle::from_theme(&gpui_kit::base::Theme::global(cx))
+        .with_foreground(theme.foreground)
+        .with_muted_foreground(theme.muted_foreground)
+        .with_link(theme.link)
+        .with_selection(theme.selection)
+        .with_code_background(theme.muted)
+        .with_border(theme.border)
+        .with_table(table)
+        .with_code_block(code)
+        .with_dark(theme.is_dark());
+    let selection = state.clone();
+    div()
+        .w_full()
+        .min_w_0()
+        .capture_action(move |_: &gpui_kit::base::input::Copy, _, cx| {
+            let text = selection.read(cx).selected_text();
+            if text.is_empty() {
+                cx.propagate();
+                return;
+            }
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            cx.stop_propagation();
+        })
+        .child(
+            gpui_kit::base::TextView::new(state)
+                .style(style)
+                .selectable(true)
+                .selection_format(gpui_kit::base::SelectionFormat::Plain)
+                .image_source(suppressed_image)
+                .code_block_actions(|block, _, _| {
+                    let code = block.code();
+                    let start = block.span.map_or(0, |span| span.start);
+                    // Kit scopes this action's element ID to its containing code block.
+                    Button::new(gpui_kit::SharedString::from(format!("copy-code-{start}")))
+                        .small()
+                        .icon(IconName::Copy)
+                        .ghost()
+                        .accessibility_label("Copy code block")
+                        .tooltip("Copy code block")
+                        .on_click(move |_, _, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                        })
+                })
+                .on_link_click(|url, _, _, cx| activate_link(url, |url| cx.open_url(url)))
+                .w_full()
+                .min_w_0(),
+        )
+}
+
+fn suppressed_image(_: &gpui_kit::SharedUri) -> gpui_kit::ImageSource {
+    // A failed custom source is authoritative, including for intrinsic measurement.
+    // It cannot fall back to a document URI, embedded data, or filesystem path.
+    gpui_kit::ImageSource::Custom(Arc::new(|_, _| {
+        Some(Err(gpui_kit::ImageCacheError::Other(Arc::new(
+            anyhow::anyhow!("Images are deferred"),
+        ))))
+    }))
+}
+
+fn activate_link(url: &str, open: impl FnOnce(&str)) {
+    if let Some((scheme, address)) = url.split_once(':')
+        && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        && address
+            .strip_prefix("//")
+            .is_some_and(|rest| !rest.is_empty() && !rest.starts_with(['/', '?', '#']))
+        && !url.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        open(url);
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+    use gpui_kit::test::TestWindowExt;
+
+    #[gpui_kit::test]
+    fn document_resources_have_no_implicit_effects(cx: &mut gpui_kit::TestAppContext) {
+        cx.executor().allow_parking();
+        cx.update(gpui_kit::init);
+        let mut opened = Vec::new();
+        for url in ["https://example.invalid/page", "HTTP://example.invalid"] {
+            activate_link(url, |url| opened.push(url.to_owned()));
+        }
+        assert_eq!(opened.len(), 2);
+        for url in [
+            "file:///tmp/owned",
+            "data:image/png;base64,bad",
+            "javascript:alert(1)",
+            "mailto:test@example.invalid",
+            "custom://host",
+            "//example.invalid",
+            "https:",
+            "https:///path",
+            " https://example.invalid",
+            "https://example.invalid\n",
+        ] {
+            activate_link(url, |_| panic!("rejected URL must not open"));
+        }
+        // Invoke the actual authoritative resolver, including embedded data and file forms.
+        struct Resources {
+            state: Entity<gpui_kit::base::TextViewState>,
+        }
+        impl Render for Resources {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(300.)).child(reader(&self.state, cx))
+            }
+        }
+        let (window, view) = cx.update(|cx| gpui_kit::open_window(Default::default(), cx, |_, cx| {
+            cx.new(|cx| Resources { state: cx.new(|cx| gpui_kit::base::TextViewState::markdown("Owned resources\n\n![remote](https://example.invalid/a.png)\n\n![local](file:///tmp/owned-image)\n\n![data](data:image/png;base64,bad)", cx)) })
+        }).unwrap());
+        super::super::tests::settle(cx, |cx| {
+            cx.update(|cx| {
+                view.read(cx)
+                    .state
+                    .read(cx)
+                    .rendered_text()
+                    .as_str()
+                    .contains("Owned resources")
+            })
+        });
+        cx.update_window(window, |_, window, cx| {
+            for uri in [
+                "https://example.invalid/a.png",
+                "http://example.invalid/b.png",
+                "file:///tmp/owned-image",
+                "/tmp/owned-image",
+                "data:image/png;base64,bad",
+            ] {
+                let gpui_kit::ImageSource::Custom(load) = suppressed_image(&uri.into()) else {
+                    panic!("resource source would permit I/O")
+                };
+                assert!(load(window, cx).unwrap().is_err());
+            }
+            window.render_frame(cx);
+            assert!(view.read(cx).state.read(cx).bounds().size.width > px(0.));
+            window.remove_window();
+        })
+        .unwrap();
     }
 }

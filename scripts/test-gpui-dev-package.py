@@ -84,6 +84,15 @@ class DevPackage(unittest.TestCase):
             self.assertIsNone(rebuilt["profile_absent_at_packaging"])
             self.assertEqual(rebuilt["profile_reuse_from"], str(output / "SOURCE.json"))
             self.assertEqual(marker.read_bytes(), b"preserve synthetic session")
+            with patch.object(Path, "resolve", untouched_resolve), patch.object(Path, "stat", untouched_stat), patch.object(Path, "open", untouched_open):
+                reader_artifact = package.package(Path(output_root) / "dev-reader", profile, binaries, output / "SOURCE.json", spec=3348)
+            self.assertEqual(reader_artifact["spec"], 3348)
+            self.assertEqual(reader_artifact["profile_reuse_from"], str(output / "SOURCE.json"))
+            self.assertIsNone(reader_artifact["profile_absent_at_packaging"])
+            self.assertEqual(marker.read_bytes(), b"preserve synthetic session")
+            for path, digest in reader_artifact["sha256"].items():
+                self.assertEqual(package.digest(Path(output_root) / "dev-reader" / path), digest)
+
             launched = json.loads(subprocess.check_output([reused / "FlickNote Dev.app/Contents/MacOS/launch"], env=poisoned, text=True))
             self.assertEqual(launched["args"], ["--profile", str(profile), "--mcp-port", "0"])
             self.assertEqual(launched["environment"], json.loads(subprocess.check_output([app / "Contents/MacOS/launch"], env=poisoned, text=True))["environment"])

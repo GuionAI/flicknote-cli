@@ -138,11 +138,11 @@ trial/spike/test packages explicitly use dev; prod is reserved for formal
 releases. For a dev trial package, build clean committed source, use
 `scripts/package-gpui-dev.py` with a new versioned `.scratch` output and a new
 absent short absolute independent dev profile. For user-authorized #3326 visual
-rebuilds and #3341 preview-parity trials only, `--reuse-profile-from` may bind
-the same dev profile to its original #3326 DEV `SOURCE.json`; packaging must
+rebuilds, #3341 preview-parity and #3348 Markdown-reader trials only,
+`--reuse-profile-from` may bind the same dev profile to its original #3326 DEV `SOURCE.json`; packaging must
 not stat, resolve, read or mutate that profile.
-#3341 packaging uses `--spec 3341` for current delivery metadata while retaining
-the original #3326 DEV-v1 manifest as reuse provenance.
+#3341/#3348 packaging uses its matching `--spec` for current delivery metadata
+while retaining the original #3326 DEV-v1 manifest as reuse provenance.
 Use a new artifact version and ask the user to quit the old app before launch.
 Verify its source/hash manifest,
 effective public dev endpoints and owned matching-length Unix socket bind.
@@ -167,7 +167,11 @@ GPUI-free dependencies and record unperformed native evidence explicitly. The
 ordinary routine suite remains required. For experimental presentation changes,
 follow the visual verification workflow in `docs/embedded-gpui-spike.md`: record
 native synthetic screenshots and source/artifact hashes separately from rendered
-bounds tests; missing native pixels leave visual acceptance unverified.
+bounds tests; missing native pixels leave visual acceptance unverified. For
+#3348, owned LocalHost/rendered reader/resource/package tests and exact-source
+routine/builds are the automated gate; no native launch, CUA or manual matrix is
+required. Keep the reader boundary and native/cloud limits in
+`docs/embedded-gpui-spike.md#markdown-detail-reader-3348`.
 
 For the independent real-account experimental mode, read
 `docs/real-account-gpui-trial.md`. GUI email OTP and `login --auth-only` share
@@ -184,7 +188,7 @@ Check the production host with `cargo test --locked -p flicknote-sync
 `cargo test --locked -p flicknote-cli`. Run the full routine and locked Mac
 CLI/GUI builds on final amended source. Keep versioned source/hash-bound
 trial artifacts in ignored `.scratch`; use a new profile except the explicit
-#3326/#3341 reuse contract above, and preserve prior
+#3326/#3341/#3348 reuse contract above, and preserve prior
 artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
 or native CUA/cloud gate is required for #3279/#3290. Home/current Today and
 project-All are the implemented destinations; global capture stays unassigned.

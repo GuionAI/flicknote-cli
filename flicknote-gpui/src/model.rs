@@ -152,6 +152,9 @@ mod tests {
                     uuid: format!("uuid-{id}"),
                     preview: format!("Note {id}"),
                     content: format!("Content {id}"),
+                    title: None,
+                    project_id: None,
+                    project_name: None,
                     note_type: "normal".into(),
                     project_color: None,
                 })

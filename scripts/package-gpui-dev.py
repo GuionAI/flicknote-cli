@@ -41,8 +41,8 @@ def verify_socket_length(profile):
 
 
 def package(output, profile, binaries, reuse_profile_from=None, spec=3326):
-    if spec not in (3326, 3341):
-        raise ValueError("dev packaging supports only #3326 and #3341")
+    if spec not in (3326, 3341, 3348):
+        raise ValueError("dev packaging supports only #3326, #3341 and #3348")
     if not profile.is_absolute() or ".." in profile.parts:
         raise ValueError("profile must be a canonical absolute path")
     if reuse_profile_from is not None:
@@ -115,7 +115,11 @@ def package(output, profile, binaries, reuse_profile_from=None, spec=3326):
         "Use this profile only with dev. Preserve previous apps/profiles/services; never copy sessions.\n"
         "Capture stays global/unassigned. Home is current Today; projects show All active notes, capped at 10k.\n"
         "Persisted previews: <=512 raw UTF-8 bytes use folded content; longer uses title or Untitled note.\n"
-        "Line edges are trimmed, blank lines omitted, internal spacing retained; pending uses content. Detail stays canonical.\n"
+        "Line edges are trimmed, blank lines omitted, internal spacing retained; pending uses content.\n"
+        "Readonly Markdown detail shows short ID, real title and known project; missing metadata is omitted.\n"
+        "Toolbar Copy keeps exact canonical source; selected text Cmd-C copies exact plain rendered text including code whitespace.\n"
+        "Each code block has a top-right Copy button for its exact payload without fences/language.\n"
+        "Only explicit http/https links open; image loading, formula/Mermaid rendering and editing are deferred.\n"
         "Cmd1 Home; Cmd2..9 first eight projects; OptionUp/Down empty/unmarked only, without wrap.\n"
         "Visible Kit first-sync bar weights notes to 90%; unknown totals are indeterminate; all active defaults complete then hide.\n"
         "Empty/unmarked composer gives bindings first refusal; draft/marked retains Kit IME routing.\n"
@@ -130,8 +134,8 @@ if __name__ == "__main__":
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--binaries", type=Path, default=ROOT / "target/debug")
     parser.add_argument("--reuse-profile-from", type=Path,
-                        help="Explicit #3326/#3341 rebuild using the original #3326 DEV SOURCE.json; requires user authorization")
-    parser.add_argument("--spec", type=int, choices=[3326, 3341], default=3326,
+                        help="Explicit #3326/#3341/#3348 rebuild using the original #3326 DEV SOURCE.json; requires user authorization")
+    parser.add_argument("--spec", type=int, choices=[3326, 3341, 3348], default=3326,
                         help="Current delivery spec recorded in the source manifest")
     args = parser.parse_args()
     print(json.dumps(package(args.output, args.profile, args.binaries, args.reuse_profile_from, args.spec), indent=2))

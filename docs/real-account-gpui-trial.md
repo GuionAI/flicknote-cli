@@ -57,8 +57,26 @@ original source manifest, matching profile string and dev public endpoints.
 `profile_absent_at_packaging` is null for reuse rather than claiming absence.
 The user must quit the old app before opt-in launch; the Worker packages only.
 Original apps, profiles and evidence remain intact. Reuse is limited to #3326
-and #3341, requires explicit user authorization, and implies no native/cloud
+and #3341/#3348, requires explicit user authorization, and implies no native/cloud
 verification or production adoption.
+
+For the authorized #3348 Markdown reader trial, use a new artifact version and
+the same original provenance/profile argument:
+
+```bash
+python3 scripts/package-gpui-dev.py \
+  --spec 3348 \
+  --output .scratch/markdown-detail-reader/dev-v1-3348 \
+  --profile /private/tmp/fn-dev-3326-v1 \
+  --reuse-profile-from .scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json
+```
+
+Build from clean committed source first. Preserve earlier artifacts and use a new
+version if that output exists. Packaging treats the profile as a lexical argument
+and accesses only the original manifest. **Quit the old app first**, then use the
+new artifact's `RUN.md` launcher for separate opt-in use. Its `SOURCE.json` records
+the exact source commit/tree and hashes; verify `SHA256SUMS` from the artifact
+before launch. The Worker does not launch, stop, inspect or reset that profile.
 
 The generated `RUN.md` gives the separate
 opt-in launch; its wrapper sets `FLICKNOTE_ENV=dev` and pins all effective dev
@@ -183,6 +201,17 @@ to both Home and project-All: <=512 raw UTF-8 bytes show folded content; longer
 notes show nullable title or exact `Untitled note`. Empty titles remain empty;
 internal spacing is preserved. Pending previews use content until reconciliation,
 and canonical detail/copy, row geometry and selection remain intact.
+
+Spec #3348 adds real title, known project (including archived assignments) and
+short ID to readonly Markdown detail. Missing metadata is silently omitted.
+Toolbar Copy preserves exact stored Markdown; selected text Cmd-C copies exact
+plain rendered text, including code whitespace. Each code block's top-right Copy
+button copies its whole payload without fences or language. Only explicitly
+activated http/https links open; images do not
+fetch network/file/data resources. Formula/Mermaid rendering and editing remain
+deferred. See [the reader contract](embedded-gpui-spike.md#markdown-detail-reader-3348)
+for scroll, identity, focus and verification limits. Preview/list behavior stays
+as specified above.
 
 Cmd1 selects Home; Cmd2..9 select the first eight projects in displayed order,
 allowing a draft but blocking marked composition. Missing numbers do nothing.

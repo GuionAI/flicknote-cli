@@ -100,7 +100,8 @@ newline. Marked composition text cannot submit. Pending rows are non-interactive
 and reconcile by persisted ID whether watch or acknowledgement arrives first.
 A failed capture restores text only into an empty, noncomposing composer;
 otherwise a recovery action retains it without replacing new typing. The detail
-is selectable, copyable plain canonical text. Selection does not retarget editor
+renders readonly Markdown with plain text selection; toolbar Copy retains canonical
+source. Selection does not retarget editor
 focus. A confirmed row opens or replaces detail; Close, Escape or exposed canvas
 dismisses it while preserving selection and composer text. Escape consumed by
 marked composition or the input's own transient surface does not close detail.
@@ -169,8 +170,9 @@ feedback scrolls within 120 points; pending/status/watch errors within 128 point
 The virtual list contains only real notes: no floating clearance or blank tail.
 The reading pane uses 48% of the width after the rail, bounded to 272–420 points,
 and fills the window height independently of composer growth. Its 44-point
-Copy/Archive/Close toolbar stays reachable at 760×560. It never covers the list
-or dock. Detail remains plain selectable canonical text, at 15 points. Closing,
+short-ID/Copy/Archive/Close toolbar stays reachable at 760×560. It never covers the list
+or dock. Detail renders readonly Markdown, at 15 points, with metadata and body
+sharing the reading scroll below the fixed toolbar. Closing,
 Escape and exposed-canvas dismissal retain the existing focus/selection guards.
 
 Choose System, Light or Dark from Appearance. The one minimal Kit mapping uses
@@ -211,10 +213,54 @@ interaction contracts, not aesthetic acceptance or native pixels. The new visual
 direction awaits personal DEV trial acceptance before merge.
 
 The synthetic boundary is identified in the window title and these operator docs.
-Plain text rather than Markdown and creation rather than append are intentional
-limits. Lucide vector icons are optical equivalents, not SF Symbols replicas.
+Readonly Markdown and creation rather than append are intentional limits.
+Lucide vector icons are optical equivalents, not SF Symbols replicas.
 The app packages its screen icons explicitly alongside Kit’s default component
 assets; icon names alone do not register the full catalog.
+
+## Markdown detail reader (#3348)
+
+The fixed toolbar shows the selected note's numeric short ID on the left and
+Copy, Archive and Close on the right. Real titles wrap above an understated
+project dot/name; both share the body scroll. Missing/whitespace-only titles and
+unknown/unassigned projects are omitted. No content-derived title is invented.
+Known archived projects still label assigned notes; they remain absent from the
+rail. This comes from the same bounded owner-scoped watch JOIN, with no per-note
+fetch or reliance on active project context.
+
+Pinned Kit 0.7 Base TextView renders headings, emphasis, quotes, lists, tables,
+fenced code and links in the existing Light/Dark roles. Wide tables scroll
+horizontally within the pane; code wraps within the available width. Empty bodies
+retain metadata and reachable toolbar actions. Toolbar Copy copies exact stored
+Markdown, without a metadata prefix. Selecting rendered text and Cmd-C copies
+exact plain selected text, including code indentation and trailing whitespace;
+Markdown soft line breaks can become spaces. Each code block has a compact,
+always-visible Copy button at top-right. It copies that block's entire code payload,
+including whitespace and newlines, without Markdown fences or the language label.
+These block actions remain separate from selection copy and whole-note toolbar Copy.
+The pane is readonly and never writes rendering output back to a note.
+
+Only explicit activation of an http/https link can open the system browser.
+Other schemes are silently rejected. Document image loading is suppressed for
+network URLs, local files and data URLs through an authoritative public resolver;
+Kit's unavailable-image fallback is used. Canonical Copy preserves image source.
+Formula syntax remains literal and Mermaid remains fenced code. Image loading,
+formula/Mermaid renderers, rich HTML/JS and Markdown editing are deferred.
+
+Only an open detail owns a document state. Metadata-only changes retain its
+revision, logical selection and scroll; a new note identity resets selection and
+scroll to the beginning and isolates old asynchronous parse results. Closing
+releases reading state; reopening reads current watched content. Option-J/K
+follows the open detail. Close, Escape, canvas, Home and final-row removal restore
+composer focus even from text or toolbar buttons. Surviving watch changes do not
+steal focus. Existing draft/IME/archive/close-reopen guards remain as documented.
+
+Owned LocalHost/rendered tests cover watched metadata, actual Markdown
+selection/Cmd-C versus canonical Copy, both themes, minimum/normal viewports,
+wide tables, identity changes, resource policy and a representative long document.
+Their bounds, callback and timing evidence is separate from native pixels, OS
+keyboard/IME candidate windows and cloud behavior; those remain unverified for
+this source. No native launch or manual matrix is required for this slice.
 
 ## Verification and limits
 
@@ -246,7 +292,7 @@ install a cross-toolchain to verify this spike. Upstream build and API evidence 
 in the local implementation report.
 
 Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
-Markdown parity, unsupported navigation/date shortcuts, voice/global
+editing, formula/Mermaid rendering, unsupported navigation/date shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
 acceptance belongs to its historical source; it does not accept this new direction.

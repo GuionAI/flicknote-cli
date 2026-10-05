@@ -113,16 +113,16 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     let detail = cx.update(|cx| {
         assert_eq!(view.read(cx).model.selected, Some(6));
 
-        view.read(cx).detail.clone()
+        view.read(cx).detail.as_ref().unwrap().state.clone()
     });
     assert_live_preview_updates(cx, &runtime, &host, window, &view);
     cx.update_window(window.into(), |_, window, cx| {
-        detail.update(cx, |input, cx| input.focus(window, cx));
+        window.focus(&detail.read(cx).focus_handle().clone(), cx);
         window.press("cmd-a", cx);
         window.press("cmd-c", cx);
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
-            "中文\nsecond line"
+            "中文 second line\n"
         );
         composer.update(cx, |input, cx| input.set_value("unsubmitted", window, cx));
         view.update(cx, |this, cx| this.archive(window, cx));
@@ -161,7 +161,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         window.click_at(("note", 4_u64), point(px(4.), px(16.)), cx);
         assert_eq!(view.read(cx).model.selected, Some(4));
         assert_eq!(
-            view.read(cx).detail.read(cx).value(),
+            view.read(cx).detail.as_ref().unwrap().source.as_str(),
             view.read(cx)
                 .model
                 .rows
@@ -222,7 +222,8 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     });
     cx.update_window(window.into(), |_, window, cx| {
         view.update(cx, |this, cx| this.select(ids[0], window, cx));
-        detail.update(cx, |input, cx| input.focus(window, cx));
+        let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
+        window.focus(&detail.read(cx).focus_handle().clone(), cx);
         window.render_frame(cx);
     })
     .unwrap();
@@ -237,7 +238,16 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     settle(cx, |cx| cx.update(|cx| view.read(cx).model.rows.len() == 1));
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert!(detail.read(cx).focus_handle(cx).is_focused(window));
+        assert!(
+            view.read(cx)
+                .detail
+                .as_ref()
+                .unwrap()
+                .state
+                .read(cx)
+                .focus_handle()
+                .is_focused(window)
+        );
     })
     .unwrap();
     runtime
@@ -266,7 +276,8 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     cx.update_window(window.into(), |_, window, cx| {
         let id = view.read(cx).model.rows[0].id;
         view.update(cx, |this, cx| this.select(id, window, cx));
-        detail.update(cx, |input, cx| input.focus(window, cx));
+        let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
+        window.focus(&detail.read(cx).focus_handle().clone(), cx);
         window.render_frame(cx);
         tab_to_detail_button("archive", window, cx);
         window.press("enter", cx);
@@ -297,7 +308,6 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
 
 fn assert_detail_dismissal_focus(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
     let composer = view.read(cx).composer.clone();
-    let detail = view.read(cx).detail.clone();
     for dismissal in [
         "button-close",
         "copy-escape",
@@ -308,10 +318,11 @@ fn assert_detail_dismissal_focus(window: &mut Window, cx: &mut App, view: &Entit
         "home",
     ] {
         view.update(cx, |this, cx| this.select(5, window, cx));
+        let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
         composer.update(cx, |input, cx| input.set_value("preserved", window, cx));
-        detail.update(cx, |input, cx| input.focus(window, cx));
+        window.focus(&detail.read(cx).focus_handle().clone(), cx);
         window.render_frame(cx);
-        assert!(detail.read(cx).focus_handle(cx).is_focused(window));
+        assert!(detail.read(cx).focus_handle().is_focused(window));
         match dismissal {
             "button-close" => {
                 tab_to_detail_button("close-detail", window, cx);
@@ -419,6 +430,9 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                             uuid: format!("layout-{index}"),
                             preview: content.clone(),
                             content,
+                            title: None,
+                            project_id: None,
+                            project_name: None,
                             note_type: "normal".into(),
                             project_color: Some("05C7F7".into()),
                         })
@@ -730,8 +744,8 @@ fn assert_readable_rail_roles(colors: gpui_kit::base::ColorTokens) {
 
 fn assert_detail_independent_of_composer(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
     let composer = view.read(cx).composer.clone();
-    let detail = view.read(cx).detail.clone();
-    detail.update(cx, |input, cx| input.focus(window, cx));
+    let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
+    window.focus(&detail.read(cx).focus_handle().clone(), cx);
     window.render_frame(cx);
     assert!(!composer.read(cx).focus_handle(cx).is_focused(window));
     assert_neutral_composer_divider(window, Theme::global(cx).border);
@@ -976,7 +990,7 @@ fn assert_navigation_shortcuts(window: &mut Window, cx: &mut App, view: &Entity<
     window.press("alt-j", cx);
     assert_eq!(view.read(cx).model.selected, Some(79));
     assert_eq!(
-        view.read(cx).detail.read(cx).value().as_ref(),
+        view.read(cx).detail.as_ref().unwrap().source.as_str(),
         view.read(cx).model.rows[1].content
     );
     assert!(composer.read(cx).focus_handle(cx).is_focused(window));
@@ -992,16 +1006,18 @@ fn assert_navigation_shortcuts(window: &mut Window, cx: &mut App, view: &Entity<
     assert!(row.origin.y >= window.find("today-notes").bounds().origin.y);
     assert!(composer.read(cx).focus_handle(cx).is_focused(window));
     view.update(cx, |this, cx| this.open_selected(window, cx));
-    let detail = view.read(cx).detail.clone();
-    detail.update(cx, |input, cx| input.focus(window, cx));
+    let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
+    window.focus(&detail.read(cx).focus_handle().clone(), cx);
     window.press("alt-k", cx);
     assert_eq!(view.read(cx).model.selected, Some(2));
-    assert!(detail.read(cx).focus_handle(cx).is_focused(window));
+    let detail = view.read(cx).detail.as_ref().unwrap().state.clone();
+    window.render_frame(cx);
+    assert!(detail.read(cx).focus_handle().is_focused(window));
     window.press("cmd-a", cx);
     window.press("cmd-c", cx);
     assert_eq!(
         cx.read_from_clipboard().unwrap().text().unwrap(),
-        detail.read(cx).value().as_ref()
+        detail.read(cx).selected_text()
     );
     window.press("alt-j", cx);
     assert_eq!(view.read(cx).model.selected, Some(1));
@@ -1568,7 +1584,7 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
             }
             this.select(500, window, cx);
             assert_eq!(
-                this.detail.read(cx).value().as_ref(),
+                this.detail.as_ref().unwrap().source.as_str(),
                 "Historical canonical"
             );
             this.change_destination(Destination::Home, window, cx);
@@ -1870,7 +1886,10 @@ fn assert_live_preview_updates(
             assert_eq!(window.find(("note", 6_u64)).bounds().size.height, px(32.));
             assert_eq!(view.read(cx).model.selected, Some(6));
             assert_eq!(view.read(cx).model.rows[0].id, 6);
-            assert_eq!(view.read(cx).detail.read(cx).value().as_ref(), content);
+            assert_eq!(
+                view.read(cx).detail.as_ref().unwrap().source.as_str(),
+                content
+            );
             assert!(
                 view.read(cx)
                     .composer
@@ -1907,7 +1926,10 @@ fn assert_project_note_navigation(window: &mut Window, cx: &mut App, view: &Enti
         .find(|row| row.id == second)
         .unwrap()
         .content;
-    assert_eq!(view.read(cx).detail.read(cx).value().as_ref(), content);
+    assert_eq!(
+        view.read(cx).detail.as_ref().unwrap().source.as_str(),
+        content
+    );
     window.press("alt-k->˚", cx);
     assert_eq!(view.read(cx).model.selected, Some(ids[0]));
     window.press("alt-k->˚", cx);

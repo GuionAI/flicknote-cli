@@ -104,13 +104,23 @@ fn install_today_keys(cx: &mut App) {
     ]);
 }
 
+/// Only the open note owns a parser and reading position. New identity drops old parse work.
+struct Reading {
+    uuid: String,
+    title: Option<String>,
+    project_name: Option<String>,
+    source: String,
+    state: Entity<gpui_kit::base::TextViewState>,
+    scroll: gpui_kit::ScrollHandle,
+}
+
 struct Today {
     services: Arc<Services>,
     destination: Destination,
     loaded: bool,
     model: Model,
     composer: Entity<TextareaState>,
-    detail: Entity<TextareaState>,
+    detail: Option<Reading>,
     detail_open: bool,
     list_scroll: gpui_kit::UniformListScrollHandle,
     escape_composing: bool,
@@ -147,7 +157,6 @@ impl Today {
             input.set_value(text, window, cx);
             input.set_selected_range(caret, cx);
         });
-        let detail = cx.new(|cx| TextareaState::new(window, cx).rows(12));
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
             if matches!(
                 event,
@@ -182,7 +191,7 @@ impl Today {
             },
             services,
             composer,
-            detail,
+            detail: None,
             detail_open: false,
             list_scroll: gpui_kit::UniformListScrollHandle::new(),
             escape_composing: false,
@@ -544,16 +553,52 @@ impl Today {
         if self.detail_open && self.model.selected.is_none() {
             self.close_detail(window, cx);
         }
-        let text = self
+        if !self.detail_open {
+            return;
+        }
+        let Some(row) = self
             .model
             .selected
             .and_then(|id| self.model.rows.iter().find(|r| r.id == id))
-            .map(|r| r.content.clone())
-            .unwrap_or_default();
-        if self.detail.read(cx).value().as_ref() != text {
-            self.detail
-                .update(cx, |input, cx| input.set_value(text, window, cx));
+        else {
+            self.close_detail(window, cx);
+            return;
+        };
+        if let Some(reading) = &mut self.detail
+            && reading.uuid == row.uuid
+        {
+            if reading.source != row.content {
+                reading
+                    .state
+                    .update(cx, |state, cx| state.set_text(&row.content, cx));
+                reading.source.clone_from(&row.content);
+            } else if reading.title != row.title || reading.project_name != row.project_name {
+                // Header reflow changes body geometry, not document revision.
+                reading
+                    .state
+                    .update(cx, gpui_kit::base::TextViewState::invalidate_inline_layout);
+            }
+            reading.title.clone_from(&row.title);
+            reading.project_name.clone_from(&row.project_name);
+            return;
         }
+        let was_focused = self
+            .detail
+            .as_ref()
+            .is_some_and(|r| r.state.read(cx).focus_handle().is_focused(window));
+        gpui_kit::base::TextSelection::clear(window, cx);
+        let state = cx.new(|cx| gpui_kit::base::TextViewState::markdown(&row.content, cx));
+        if was_focused {
+            window.focus(&state.read(cx).focus_handle().clone(), cx);
+        }
+        self.detail = Some(Reading {
+            uuid: row.uuid.clone(),
+            title: row.title.clone(),
+            project_name: row.project_name.clone(),
+            source: row.content.clone(),
+            state,
+            scroll: gpui_kit::ScrollHandle::new(),
+        });
     }
 
     fn select(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -884,6 +929,10 @@ pub(crate) fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 #[path = "ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "markdown_tests.rs"]
+mod markdown_tests;
 
 #[cfg(test)]
 #[path = "sync_progress_tests.rs"]

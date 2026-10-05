@@ -415,7 +415,7 @@ uses `flicknote daemon run`; it does not use synthetic fixtures.
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
 application operations and the existing local MCP/IPC servers. It loads no login
 or cloud session. The GUI presents a continuous workbench with a compact rail, full-width note
-rows, a docked create-only composer and an optional right plain-text reading pane.
+rows, a docked create-only composer and an optional right readonly Markdown reading pane.
 Use the FlickNote application menu for System, Light or Dark appearance with
 independently authored Light/Dark workbench roles adapted through existing Kit. The
 minimum window size is 760×560 points. Home and active projects are working
@@ -424,7 +424,7 @@ and project dots. Detail fills a separate 272–420-point reading pane without c
 Option-J/K select next/previous confirmed notes without wrapping and preserve
 editor focus; empty Return opens selected detail, and Option-A archives with
 the existing input guard. Unsubmitted/marked input blocks note-selection shortcuts.
-Append, Markdown, unsupported navigation shortcuts, global trigger,
+Append, Markdown editing, formula/Mermaid rendering, unsupported navigation shortcuts, global trigger,
 voice and full Swift desktop parity remain deferred. Home watches current Today;
 projects watch All active project notes across dates, capped at 10,000. Cmd1 selects
 Home; Cmd2..9 select the first eight active projects in displayed rail order,
@@ -467,13 +467,22 @@ identify the source, environment, binary hashes and profile. Follow that package
 instructions for a separate opt-in email/cloud launch. Choose a fresh version
 and profile if either example already exists; preserve earlier artifacts.
 
-For an explicitly authorized #3341 rebuild, reuse the original #3326 DEV-v1
-manifest with `--spec 3341` and `--reuse-profile-from` pointing to
+For an explicitly authorized #3341/#3348 rebuild, reuse the original #3326 DEV-v1
+manifest with `--spec 3341` or `--spec 3348` and `--reuse-profile-from` pointing to
 `.scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json`, the same profile argument,
-and a new versioned output such as `.scratch/desktop-note-preview-parity/dev-v1-3341`.
+and a new versioned output such as `.scratch/markdown-detail-reader/dev-v1-3348`.
 Packaging validates provenance without accessing the profile. Quit the old app
 before launching the new one; retain both artifacts. See the operator guide for
 the complete command and opt-in boundary.
+
+Readonly detail shows short ID, wrapping real title and known project, including
+archived assignments omitted from the rail. Missing metadata stays hidden.
+Metadata and Markdown share the reading scroll below a fixed toolbar. Toolbar
+Copy preserves exact canonical Markdown; selected-text Cmd-C copies exact plain
+rendered text, retaining code indentation and trailing whitespace. Each code block
+has a top-right Copy button for its whole payload, excluding fences and language.
+Explicit http/https links can open the browser; images never load
+network, local files or data URLs. See [the reader contract](docs/embedded-gpui-spike.md#markdown-detail-reader-3348).
 
 Home/current Today and project-All use the production local host's watched local
 cache with Unix IPC and loopback MCP ready before the first download. Project

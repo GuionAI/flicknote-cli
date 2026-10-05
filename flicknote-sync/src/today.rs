@@ -12,6 +12,9 @@ pub struct TodayRow {
     pub uuid: String,
     pub preview: String,
     pub content: String,
+    pub title: Option<String>,
+    pub project_id: Option<String>,
+    pub project_name: Option<String>,
     pub note_type: String,
     pub project_color: Option<String>,
 }
@@ -122,7 +125,7 @@ impl TodayWatch {
                     Destination::Project(_) => "n.project_id = ?4",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
                     Destination::Home => String::new(),
@@ -148,6 +151,9 @@ impl TodayWatch {
                                 uuid: r.get(1)?,
                                 preview,
                                 content,
+                                title,
+                                project_id: r.get(7)?,
+                                project_name: r.get(8)?,
                                 note_type: r.get(3)?,
                                 project_color: r.get(4)?,
                             });
