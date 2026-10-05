@@ -40,6 +40,26 @@ it does not inspect, copy, reset or migrate profile data. The default still
 requires a fresh profile. **Quit the old app before launching the new build**;
 existing profile ownership rejects concurrent instances. Preserve both artifacts.
 
+Spec #3341 uses the same explicitly authorized original #3326 DEV-v1 reuse
+provenance, with the new delivery spec recorded truthfully:
+
+```bash
+python3 scripts/package-gpui-dev.py \
+  --spec 3341 \
+  --output .scratch/desktop-note-preview-parity/dev-v1-3341 \
+  --profile /private/tmp/fn-dev-3326-v1 \
+  --reuse-profile-from .scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json
+```
+
+Use a new output version if that artifact already exists. Reuse packaging never
+stats, resolves, reads or mutates the actual profile; it validates only the
+original source manifest, matching profile string and dev public endpoints.
+`profile_absent_at_packaging` is null for reuse rather than claiming absence.
+The user must quit the old app before opt-in launch; the Worker packages only.
+Original apps, profiles and evidence remain intact. Reuse is limited to #3326
+and #3341, requires explicit user authorization, and implies no native/cloud
+verification or production adoption.
+
 The generated `RUN.md` gives the separate
 opt-in launch; its wrapper sets `FLICKNOTE_ENV=dev` and pins all effective dev
 endpoints even with inherited overrides. `SOURCE.json` and `SHA256SUMS` bind the
@@ -157,6 +177,12 @@ notes across dates, descending short ID and bounded at 10,000. Archived projects
 leave the rail, and the selected missing/archived project falls back Home.
 Each switch drops the previous query/list/detail/selection, focuses the same Kit
 composer and preserves draft, caret and undo. No fixture identity/creator is injected.
+
+Spec #3341 applies the [desktop preview policy](embedded-gpui-spike.md#fixture-and-interaction-contracts)
+to both Home and project-All: <=512 raw UTF-8 bytes show folded content; longer
+notes show nullable title or exact `Untitled note`. Empty titles remain empty;
+internal spacing is preserved. Pending previews use content until reconciliation,
+and canonical detail/copy, row geometry and selection remain intact.
 
 Cmd1 selects Home; Cmd2..9 select the first eight projects in displayed order,
 allowing a draft but blocking marked composition. Missing numbers do nothing.

@@ -16,6 +16,25 @@ pub struct TodayRow {
     pub project_color: Option<String>,
 }
 
+/// Match desktop line folding while preserving spaces/tabs inside each line.
+pub fn fold_preview(text: &str) -> String {
+    text.split([
+        '\n', '\r', '\u{000b}', '\u{000c}', '\u{0085}', '\u{2028}', '\u{2029}',
+    ])
+    .map(str::trim)
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn persisted_preview(content: &str, title: Option<&str>) -> String {
+    fold_preview(if content.len() <= 512 {
+        content
+    } else {
+        title.unwrap_or("Untitled note")
+    })
+}
+
 pub fn bounds<T: TimeZone>(now: &DateTime<T>) -> Result<(DateTime<Utc>, DateTime<Utc>), String> {
     let four = NaiveTime::from_hms_opt(4, 0, 0).expect("valid time");
     let day = if now.time() < four {
@@ -103,7 +122,7 @@ impl TodayWatch {
                     Destination::Project(_) => "n.project_id = ?4",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
                     Destination::Home => String::new(),
@@ -122,7 +141,8 @@ impl TodayWatch {
                     while let Some(r) = results.next()? {
                         if let Some(id) = r.get::<_, Option<i64>>(0)? {
                             let content: String = r.get(2)?;
-                            let preview = content.split_whitespace().collect::<Vec<_>>().join(" ");
+                            let title: Option<String> = r.get(6)?;
+                            let preview = persisted_preview(&content, title.as_deref());
                             rows.push(TodayRow {
                                 id,
                                 uuid: r.get(1)?,

@@ -62,19 +62,25 @@ class DevPackage(unittest.TestCase):
                 package.package(Path(output_root) / "dev-v2", profile, binaries)
             marker = profile / "owned-session-fixture"
             marker.write_bytes(b"preserve synthetic session")
-            original_resolve, original_exists = Path.resolve, Path.exists
+            original_resolve, original_stat, original_open = Path.resolve, Path.stat, Path.open
 
             def untouched_resolve(path, *args, **kwargs):
                 self.assertNotEqual(path, profile, "reuse must not resolve the profile")
                 return original_resolve(path, *args, **kwargs)
 
-            def untouched_exists(path):
+            def untouched_stat(path, *args, **kwargs):
                 self.assertNotEqual(path, profile, "reuse must not stat the profile")
-                return original_exists(path)
+                return original_stat(path, *args, **kwargs)
+
+            def untouched_open(path, *args, **kwargs):
+                self.assertFalse(path == profile or path.is_relative_to(profile), "reuse must not read/write profile data")
+                return original_open(path, *args, **kwargs)
 
             reused = Path(output_root) / "dev-v2"
-            with patch.object(Path, "resolve", untouched_resolve), patch.object(Path, "exists", untouched_exists):
-                rebuilt = package.package(reused, profile, binaries, output / "SOURCE.json")
+            with patch.object(Path, "resolve", untouched_resolve), patch.object(Path, "stat", untouched_stat), patch.object(Path, "open", untouched_open):
+                rebuilt = package.package(reused, profile, binaries, output / "SOURCE.json", spec=3341)
+            self.assertEqual(rebuilt["spec"], 3341)
+            self.assertIn("Quit the old app", (reused / "RUN.md").read_text())
             self.assertIsNone(rebuilt["profile_absent_at_packaging"])
             self.assertEqual(rebuilt["profile_reuse_from"], str(output / "SOURCE.json"))
             self.assertEqual(marker.read_bytes(), b"preserve synthetic session")
@@ -83,11 +89,11 @@ class DevPackage(unittest.TestCase):
             self.assertEqual(launched["environment"], json.loads(subprocess.check_output([app / "Contents/MacOS/launch"], env=poisoned, text=True))["environment"])
             for path, digest in rebuilt["sha256"].items():
                 self.assertEqual(package.digest(reused / path), digest)
-            for changes in [{"profile": str(owned / "fn-dev-other")}, {"environment": "prod"}, {"public_endpoints": {}}, {"profile_absent_at_packaging": None}]:
+            for changes in [{"spec": 3341}, {"spec": 0}, {"profile": str(owned / "fn-dev-other")}, {"environment": "prod"}, {"public_endpoints": {}}, {"profile_absent_at_packaging": None}]:
                 invalid = output / "invalid.json"
                 invalid.write_text(json.dumps({**manifest, **changes}))
                 with self.assertRaises(ValueError):
-                    package.package(Path(output_root) / "dev-v3", profile, binaries, invalid)
+                    package.package(Path(output_root) / "dev-v3", profile, binaries, invalid, spec=3341)
 
 
 if __name__ == "__main__":

@@ -70,8 +70,8 @@ rows per batch at 20 ms intervals (maximum 100 batches). These are local synthet
 sync-style updates, not a replacement cloud server.
 
 Today spans the local calendar from 04:00 through next-day 04:00, including DST
-length changes. The watched projection includes canonical content and collapsed
-single-line previews, ordered by real short ID descending, capped at 10,000.
+length changes. The watched projection includes canonical content, nullable title
+and single-line previews, ordered by real short ID descending, capped at 10,000.
 The same bounded watched query resolves note type and project color, including
 project-color updates. The small synthetic project set is Ideas, Reading and
 Workspace. Fixtures include short, long, multiline, Chinese and URL content.
@@ -80,6 +80,20 @@ and pending rows fill the list viewport, independently of preview length; select
 and hover backgrounds and confirmed-row hit targets span that same width. One watched
 query publishes immutable latest snapshots; no per-row fetch or polling is used.
 Its next calendar boundary replaces the query. Closing Today cancels that watch.
+
+Spec #3341 matches the Swift desktop preview policy in Home and project-All.
+Persisted content of **512 raw UTF-8 bytes or fewer** shows content; longer
+content shows the authoritative nullable title, with **Untitled note** only
+when the title is null. Empty content and explicitly empty titles stay empty.
+All note types follow the same threshold, measured before folding. Newline
+characters split lines; each line's edges are trimmed, empty lines omitted,
+and the rest joined with one space. Internal spaces and tabs remain intact.
+Titles use the same folding to keep rows single-line. Pending capture always
+shows folded content until its persisted watch row reconciles. Content/title
+updates refresh previews through the existing bounded account-scoped watch on
+the host runtime; stable IDs, ordering, membership and selection remain intact.
+Rows remain full-width, 32 points high and truncated. Detail and Copy retain
+full canonical content, including its original whitespace and newlines.
 
 Return accepts capture and clears input immediately; Shift-Return inserts a
 newline. Marked composition text cannot submit. Pending rows are non-interactive

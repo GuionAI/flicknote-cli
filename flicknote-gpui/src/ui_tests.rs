@@ -115,6 +115,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
 
         view.read(cx).detail.clone()
     });
+    assert_live_preview_updates(cx, &runtime, &host, window, &view);
     cx.update_window(window.into(), |_, window, cx| {
         detail.update(cx, |input, cx| input.focus(window, cx));
         window.press("cmd-a", cx);
@@ -423,7 +424,8 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                         })
                         .collect(),
                 ));
-                this.model.accept("Pending preview ".repeat(100));
+                this.model
+                    .accept("  Pending  preview\tkept\n\n next line  ".repeat(100));
                 cx.notify();
             })
         });
@@ -451,15 +453,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
             }
             view.update(cx, |this, cx| this.close_detail(window, cx));
             window.render_frame(cx);
-            let pending = window.find(("pending", 1_u64)).bounds();
-            assert_eq!(pending.size.width, viewport.size.width);
-            assert_eq!(pending.size.height, px(32.));
-            window.click_at(
-                ("pending", 1_u64),
-                point(pending.size.width - px(2.), px(16.)),
-                cx,
-            );
-            assert_eq!(view.read(cx).model.selected, Some(2));
+            assert_pending_preview_layout(window, cx, &view, viewport.size.width);
             window.remove_window();
         })
         .unwrap();
@@ -1807,6 +1801,88 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
     })
     .unwrap();
     runtime.block_on(host.shutdown());
+}
+
+fn assert_pending_preview_layout(
+    window: &mut Window,
+    cx: &mut App,
+    view: &Entity<Today>,
+    width: gpui_kit::Pixels,
+) {
+    let pending = window.find(("pending", 1_u64)).bounds();
+    let pending_preview = flicknote_sync::today::fold_preview(
+        &"  Pending  preview\tkept\n\n next line  ".repeat(100),
+    );
+    assert_eq!(
+        window
+            .within(("pending", 1_u64))
+            .find("note-preview")
+            .label(),
+        Some(pending_preview.as_str()),
+    );
+    assert_eq!(pending.size.width, width);
+    assert_eq!(pending.size.height, px(32.));
+    window.click_at(
+        ("pending", 1_u64),
+        point(pending.size.width - px(2.), px(16.)),
+        cx,
+    );
+    assert_eq!(view.read(cx).model.selected, Some(2));
+}
+
+fn assert_live_preview_updates(
+    cx: &mut TestAppContext,
+    runtime: &tokio::runtime::Runtime,
+    host: &flicknote_sync::spike::SpikeHost,
+    window: gpui_kit::WindowHandle<gpui_kit::base::Root>,
+    view: &Entity<Today>,
+) {
+    let original = "中文\nsecond line";
+    let long = "Canonical  body\n".repeat(40);
+    for (content, title, expected) in [
+        (
+            long.as_str(),
+            Some("  Processed  title\n second\tpart  "),
+            "Processed  title second\tpart",
+        ),
+        (long.as_str(), Some(""), ""),
+        (long.as_str(), None, "Untitled note"),
+        (original, Some("ignored"), "中文 second line"),
+    ] {
+        runtime.block_on(async {
+            host.db
+                .writer()
+                .await
+                .unwrap()
+                .execute(
+                    "UPDATE notes SET content=?,title=? WHERE short_id=6",
+                    [Some(content), title],
+                )
+                .unwrap();
+        });
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).model.rows[0].preview == expected)
+        });
+        cx.update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let row = window.within(("note", 6_u64));
+            assert_eq!(row.find("note-preview").label(), Some(expected));
+            assert_eq!(window.find(("note", 6_u64)).bounds().size.height, px(32.));
+            assert_eq!(view.read(cx).model.selected, Some(6));
+            assert_eq!(view.read(cx).model.rows[0].id, 6);
+            assert_eq!(view.read(cx).detail.read(cx).value().as_ref(), content);
+            assert!(
+                view.read(cx)
+                    .composer
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+            window.click("copy-detail", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), content);
+        })
+        .unwrap();
+    }
 }
 
 fn assert_project_note_navigation(window: &mut Window, cx: &mut App, view: &Entity<Today>) {

@@ -434,6 +434,11 @@ host alive; ordinary reopen keeps the last available destination and draft/caret
 Capture results arriving while closed retain recovery or canonical identity and
 do-not-submit-again guidance. Cmd1 opens Home, and CmdQ stops the host.
 Capture always creates an unassigned new note.
+Home/project-All previews match the Swift desktop: <=512 raw UTF-8 bytes show
+folded content; longer notes show nullable title or `Untitled note`. Empty titles
+stay empty. Folding trims line edges and omits blank lines while retaining
+internal spacing. Pending capture shows folded content until reconciliation;
+32-point rows and canonical detail/copy remain unchanged.
 The operator output gives the isolated socket and loopback MCP endpoint.
 The installed daemon and desktop remain separate.
 
@@ -461,6 +466,14 @@ local MCP port 0. `SOURCE.json`, `SHA256SUMS`, a matching CLI companion and `RUN
 identify the source, environment, binary hashes and profile. Follow that package's
 instructions for a separate opt-in email/cloud launch. Choose a fresh version
 and profile if either example already exists; preserve earlier artifacts.
+
+For an explicitly authorized #3341 rebuild, reuse the original #3326 DEV-v1
+manifest with `--spec 3341` and `--reuse-profile-from` pointing to
+`.scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json`, the same profile argument,
+and a new versioned output such as `.scratch/desktop-note-preview-parity/dev-v1-3341`.
+Packaging validates provenance without accessing the profile. Quit the old app
+before launching the new one; retain both artifacts. See the operator guide for
+the complete command and opt-in boundary.
 
 Home/current Today and project-All use the production local host's watched local
 cache with Unix IPC and loopback MCP ready before the first download. Project

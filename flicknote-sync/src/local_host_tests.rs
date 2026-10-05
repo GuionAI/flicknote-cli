@@ -572,3 +572,85 @@ async fn project_all_and_home_watch_account_membership_and_archival() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn desktop_previews_watch_thresholds_titles_and_canonical_content() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
+    let cases = [
+        ("x".repeat(512), Some("ignored"), "x".repeat(512), "normal"),
+        ("x".repeat(513), Some("  Long  title\tkept\n next  "), "Long  title\tkept next".into(), "link"),
+        ("界".repeat(170) + "ab", Some("ignored"), "界".repeat(170) + "ab", "meeting"),
+        ("界".repeat(171), None, "Untitled note".into(), "file"),
+        ("x".repeat(513), Some(""), String::new(), "flash"),
+        (String::new(), Some("ignored"), String::new(), "normal"),
+        (" \t first  two\twords \r\n\n second\u{000b}third\u{000c}fourth\u{0085}fifth\u{2028}sixth\u{2029}last  ".into(), None, "first  two\twords second third fourth fifth sixth last".into(), "normal"),
+        (" ".repeat(513), Some("byte count before folding"), "byte count before folding".into(), "normal"),
+    ];
+    {
+        let writer = host.db.writer().await.unwrap();
+        for (index, (content, title, _, kind)) in cases.iter().enumerate() {
+            writer.execute("INSERT INTO notes(id,user_id,short_id,project_id,created_at,content,title,type) VALUES(?,'account-a',?,?,?, ?,?,?)", rusqlite::params![format!("preview-{index}"), 100 + index as i64, project, chrono::Utc::now().to_rfc3339(), content, title, kind]).unwrap();
+        }
+    }
+    let mut home = TodayWatch::start_for_user(host.db.clone(), host.user_id.clone());
+    let mut all = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+    );
+    for watch in [&mut home, &mut all] {
+        let observed = snapshot(watch, |s| s.rows.len() == cases.len() + 1).await;
+        assert_eq!(
+            observed.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            (100..108).rev().chain([3]).collect::<Vec<_>>()
+        );
+        for (index, (content, _, preview, kind)) in cases.iter().enumerate() {
+            let row = observed
+                .rows
+                .iter()
+                .find(|r| r.id == 100 + index as i64)
+                .unwrap();
+            assert_eq!(&row.content, content);
+            assert_eq!(&row.preview, preview);
+            assert_eq!(&row.note_type, kind);
+            assert_eq!(row.uuid, format!("preview-{index}"));
+        }
+    }
+    for (content, title, preview) in [
+        ("x".repeat(513), Some("processed title"), "processed title"),
+        ("x".repeat(513), Some("retitled"), "retitled"),
+        ("x".repeat(513), None, "Untitled note"),
+        (
+            " short  body\n second\tpart ".into(),
+            Some("ignored"),
+            "short  body second\tpart",
+        ),
+    ] {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET content=?,title=? WHERE id='preview-0'",
+                rusqlite::params![content, title],
+            )
+            .unwrap();
+        for watch in [&mut home, &mut all] {
+            let observed = snapshot(watch, |s| {
+                s.rows.iter().any(|r| r.id == 100 && r.preview == preview)
+            })
+            .await;
+            let row = observed.rows.iter().find(|r| r.id == 100).unwrap();
+            assert_eq!(row.content, content);
+            assert_eq!(row.uuid, "preview-0");
+            assert_eq!(observed.rows.len(), cases.len() + 1);
+        }
+    }
+    drop(home);
+    drop(all);
+    host.shutdown().await;
+    server.abort();
+}

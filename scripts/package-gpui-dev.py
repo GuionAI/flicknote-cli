@@ -40,7 +40,9 @@ def verify_socket_length(profile):
     return length
 
 
-def package(output, profile, binaries, reuse_profile_from=None):
+def package(output, profile, binaries, reuse_profile_from=None, spec=3326):
+    if spec not in (3326, 3341):
+        raise ValueError("dev packaging supports only #3326 and #3341")
     if not profile.is_absolute() or ".." in profile.parts:
         raise ValueError("profile must be a canonical absolute path")
     if reuse_profile_from is not None:
@@ -87,7 +89,7 @@ def package(output, profile, binaries, reuse_profile_from=None):
         plistlib.dump({"CFBundleExecutable": "launch", "CFBundleIdentifier": bundle_id,
                       "CFBundleName": "FlickNote Dev", "CFBundlePackageType": "APPL",
                       "CFBundleVersion": commit[:12], "NSHighResolutionCapable": True}, file)
-    manifest = {"spec": 3326, "environment": "dev", "source_commit": commit,
+    manifest = {"spec": spec, "environment": "dev", "source_commit": commit,
                 "source_tree": tree, "bundle_id": bundle_id, "profile": str(profile),
                 "profile_absent_at_packaging": None if reuse_profile_from else True,
                 "profile_reuse_from": str(reuse_profile_from) if reuse_profile_from else None,
@@ -112,6 +114,8 @@ def package(output, profile, binaries, reuse_profile_from=None):
         "Email login and cloud operations require your own opt-in; the Worker never launched this app.\n"
         "Use this profile only with dev. Preserve previous apps/profiles/services; never copy sessions.\n"
         "Capture stays global/unassigned. Home is current Today; projects show All active notes, capped at 10k.\n"
+        "Persisted previews: <=512 raw UTF-8 bytes use folded content; longer uses title or Untitled note.\n"
+        "Line edges are trimmed, blank lines omitted, internal spacing retained; pending uses content. Detail stays canonical.\n"
         "Cmd1 Home; Cmd2..9 first eight projects; OptionUp/Down empty/unmarked only, without wrap.\n"
         "Visible Kit first-sync bar weights notes to 90%; unknown totals are indeterminate; all active defaults complete then hide.\n"
         "Empty/unmarked composer gives bindings first refusal; draft/marked retains Kit IME routing.\n"
@@ -126,6 +130,8 @@ if __name__ == "__main__":
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--binaries", type=Path, default=ROOT / "target/debug")
     parser.add_argument("--reuse-profile-from", type=Path,
-                        help="Explicit #3326 visual rebuild using the original DEV SOURCE.json; requires user authorization")
+                        help="Explicit #3326/#3341 rebuild using the original #3326 DEV SOURCE.json; requires user authorization")
+    parser.add_argument("--spec", type=int, choices=[3326, 3341], default=3326,
+                        help="Current delivery spec recorded in the source manifest")
     args = parser.parse_args()
-    print(json.dumps(package(args.output, args.profile, args.binaries, args.reuse_profile_from), indent=2))
+    print(json.dumps(package(args.output, args.profile, args.binaries, args.reuse_profile_from, args.spec), indent=2))

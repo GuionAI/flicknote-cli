@@ -50,7 +50,16 @@ fn preview(text: &str, note_type: &str, color: Option<&str>, p: ColorTokens) -> 
                 .child(icon(name, p.foreground, 12.))
                 .test_support(),
         )
-        .child(div().flex_1().min_w_0().truncate().child(text.to_owned()))
+        .child(
+            div()
+                .id("note-preview")
+                .aria_label(text.to_owned())
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(text.to_owned())
+                .test_support(),
+        )
         .children(color.map(|color| {
             div()
                 .id("project-dot")
@@ -330,11 +339,7 @@ impl Today {
                             .h(px(32.))
                             .flex_shrink_0()
                             .child(preview(
-                                &pending
-                                    .text
-                                    .split_whitespace()
-                                    .collect::<Vec<_>>()
-                                    .join(" "),
+                                &flicknote_sync::today::fold_preview(&pending.text),
                                 "normal",
                                 None,
                                 p,
