@@ -2230,7 +2230,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-auth"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "base64 0.22.1",
  "rand 0.9.4",
@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-cli"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-client"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -2290,7 +2290,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-core"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "async-trait",
  "cc",
@@ -2316,7 +2316,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-gpui"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -2336,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "flicknote-sync"
-version = "1.14.2"
+version = "1.14.3"
 dependencies = [
  "async-trait",
  "axum",
