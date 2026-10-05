@@ -414,13 +414,13 @@ uses `flicknote daemon run`; it does not use synthetic fixtures.
 
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
 application operations and the existing local MCP/IPC servers. It loads no login
-or cloud session. The GUI presents a source-referenced Today workspace with a
-quiet rail, compact rows, a bottom create-only composer and a dismissible plain-text detail overlay.
+or cloud session. The GUI presents a continuous workbench with a compact rail, full-width note
+rows, a docked create-only composer and an optional right plain-text reading pane.
 Use the FlickNote application menu for System, Light or Dark appearance with
-the approved desktop surface hierarchy and iOS text/caret colors adapted through Kit. The
+independently authored Light/Dark workbench roles adapted through existing Kit. The
 minimum window size is 760×560 points. Home and active projects are working
 destinations; search, Shared, Archive browsing and Charts remain inactive rail landmarks with aligned packaged Lucide icons
-and project dots. Detail expands above the current composer, up to 520 points wide.
+and project dots. Detail fills a separate 272–420-point reading pane without covering the list or composer.
 Option-J/K select next/previous confirmed notes without wrapping and preserve
 editor focus; empty Return opens selected detail, and Option-A archives with
 the existing input guard. Unsubmitted/marked input blocks note-selection shortcuts.
@@ -451,8 +451,8 @@ from committed source and package a new version with a new absent short profile:
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-cli
 python3 scripts/package-gpui-dev.py \
-  --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
-  --profile /private/tmp/fn-dev-3296-v3
+  --output .scratch/gpui-workbench-redesign/dev-v1-3326 \
+  --profile /private/tmp/fn-dev-3326-v1
 ```
 
 Packaging does not launch the app or create the intended profile. The launcher
@@ -471,7 +471,7 @@ not remaining unique notes. Unknown totals stay indeterminate; offline/errors
 keep honest cached-data status. Cached first-sync completion skips the indicator.
 The empty, unmarked composer offers Option-J/K to workspace bindings before an
 active Chinese IME; draft/marked input retains Kit IME routing and native editing.
-Text highlighting keeps Kit’s dedicated input-selection role; neutral workspace
+Text highlighting keeps Kit’s dedicated input-selection role; workbench
 row selection is separate. Capture remains global/unassigned even inside a project, with no offline queue or automatic
 retry of unknown/partial creation. Close keeps the owner alive; Quit releases it.
 

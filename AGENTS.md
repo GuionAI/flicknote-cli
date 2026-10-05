@@ -137,7 +137,11 @@ Read `docs/embedded-gpui-spike.md` before running the experiment. All local
 trial/spike/test packages explicitly use dev; prod is reserved for formal
 releases. For a dev trial package, build clean committed source, use
 `scripts/package-gpui-dev.py` with a new versioned `.scratch` output and a new
-absent short absolute independent dev profile. Verify its source/hash manifest,
+absent short absolute independent dev profile. For user-authorized #3326 visual
+rebuilds only, `--reuse-profile-from` may bind the same dev profile to its original
+#3326 DEV `SOURCE.json`; packaging must not inspect or mutate that profile.
+Use a new artifact version and ask the user to quit the old app before launch.
+Verify its source/hash manifest,
 effective public dev endpoints and owned matching-length Unix socket bind.
 Preserve existing apps/profiles/sessions and services, including historical prod
 trials; never repoint or copy them. Packaging authorizes no real email/cloud or
@@ -176,13 +180,14 @@ Check the production host with `cargo test --locked -p flicknote-sync
 `cargo test --locked -p flicknote-gpui`, and CLI profile dispatch with
 `cargo test --locked -p flicknote-cli`. Run the full routine and locked Mac
 CLI/GUI builds on final amended source. Keep versioned source/hash-bound
-trial artifacts in ignored `.scratch`; use a new profile and preserve prior
+trial artifacts in ignored `.scratch`; use a new profile except the explicit
+#3326 visual rebuild contract above, and preserve prior
 artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
 or native CUA/cloud gate is required for #3279/#3290. Home/current Today and
 project-All are the implemented destinations; global capture stays unassigned.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts. Keep source,
-rendered and native/cloud evidence separate. For #3290, send IMPL_COMPLETE with
-final SHA/PR/report, then wait for explicit user signal before opening review.
+rendered and native/cloud evidence separate. For #3326, send IMPL_COMPLETE with
+final SHA/PR/report; Orc starts independent review automatically. Merge waits for user DEV trial direction acceptance.
 
 ## Git Hooks (lefthook)
 
@@ -219,7 +224,9 @@ lefthook run pre-push    # run pre-push hooks
 ## CI and releases
 
 GitHub `.github/workflows/checks.yml` runs the routine suite daily at 03:17 UTC,
-on manual dispatch, and as the exact-source release gate. PRs and main pushes
+on manual dispatch, and as the exact-source release gate. The check job selects
+latest Python 3.14 patch through setup-python before Python/pip or routine steps;
+use `python3 -m pip` with that interpreter. PRs and main pushes
 have no remote routine quality checks. Run `bash scripts/check-routine.sh` for
 the same formatting, locked all-feature workspace tests, locked all-target
 Clippy, dependency policy and release-script fixtures locally. Existing Git

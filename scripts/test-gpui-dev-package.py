@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("package", Path(__file__).with_name("package-gpui-dev.py"))
@@ -40,7 +41,7 @@ class DevPackage(unittest.TestCase):
             self.assertEqual(metadata["CFBundleIdentifier"], manifest["bundle_id"])
             self.assertEqual(metadata["CFBundleExecutable"], "launch")
             self.assertEqual(manifest["environment"], "dev")
-            self.assertEqual(manifest["spec"], 3296)
+            self.assertEqual(manifest["spec"], 3326)
             self.assertEqual(manifest["profile"], str(profile))
             self.assertEqual(manifest["socket_bytes"], len(os.fsencode(profile / "data/flicknote/daemon.sock")))
             for path, digest in manifest["sha256"].items():
@@ -59,6 +60,34 @@ class DevPackage(unittest.TestCase):
             profile.mkdir()
             with self.assertRaises(ValueError):
                 package.package(Path(output_root) / "dev-v2", profile, binaries)
+            marker = profile / "owned-session-fixture"
+            marker.write_bytes(b"preserve synthetic session")
+            original_resolve, original_exists = Path.resolve, Path.exists
+
+            def untouched_resolve(path, *args, **kwargs):
+                self.assertNotEqual(path, profile, "reuse must not resolve the profile")
+                return original_resolve(path, *args, **kwargs)
+
+            def untouched_exists(path):
+                self.assertNotEqual(path, profile, "reuse must not stat the profile")
+                return original_exists(path)
+
+            reused = Path(output_root) / "dev-v2"
+            with patch.object(Path, "resolve", untouched_resolve), patch.object(Path, "exists", untouched_exists):
+                rebuilt = package.package(reused, profile, binaries, output / "SOURCE.json")
+            self.assertIsNone(rebuilt["profile_absent_at_packaging"])
+            self.assertEqual(rebuilt["profile_reuse_from"], str(output / "SOURCE.json"))
+            self.assertEqual(marker.read_bytes(), b"preserve synthetic session")
+            launched = json.loads(subprocess.check_output([reused / "FlickNote Dev.app/Contents/MacOS/launch"], env=poisoned, text=True))
+            self.assertEqual(launched["args"], ["--profile", str(profile), "--mcp-port", "0"])
+            self.assertEqual(launched["environment"], json.loads(subprocess.check_output([app / "Contents/MacOS/launch"], env=poisoned, text=True))["environment"])
+            for path, digest in rebuilt["sha256"].items():
+                self.assertEqual(package.digest(reused / path), digest)
+            for changes in [{"profile": str(owned / "fn-dev-other")}, {"environment": "prod"}, {"public_endpoints": {}}, {"profile_absent_at_packaging": None}]:
+                invalid = output / "invalid.json"
+                invalid.write_text(json.dumps({**manifest, **changes}))
+                with self.assertRaises(ValueError):
+                    package.package(Path(output_root) / "dev-v3", profile, binaries, invalid)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 use super::*;
-use crate::workspace::COMPOSER_CLEARANCE;
+use crate::workspace::{HEADER_HEIGHT, RAIL_WIDTH, reading_width};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::ColorTokens;
 use gpui_kit::base::{Disableable, TestSupportExt};
@@ -78,8 +78,8 @@ fn rail_label(title: &str) -> impl IntoElement {
 }
 fn landmark(title: &'static str, name: IconName, p: ColorTokens) -> impl IntoElement {
     div()
-        .h(px(36.))
-        .px(px(13.))
+        .h(px(32.))
+        .px(px(12.))
         .flex()
         .items_center()
         .gap(px(10.))
@@ -100,14 +100,20 @@ impl Today {
     fn render_home(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("home")
+            .test_support()
             .role(Role::Button)
             .aria_label("Home")
             .aria_selected(self.destination == Destination::Home)
-            .h(px(36.))
-            .px(px(13.))
-            .rounded(px(9.))
+            .h(px(32.))
+            .px(px(12.))
             .when(self.destination == Destination::Home, |d| d.bg(p.selection))
-            .hover(|d| d.bg(p.accent))
+            .hover(|d| {
+                d.bg(if self.destination == Destination::Home {
+                    p.selection
+                } else {
+                    p.accent
+                })
+            })
             .flex()
             .items_center()
             .gap(px(10.))
@@ -142,11 +148,10 @@ impl Today {
             .role(Role::Button)
             .aria_label(project.name.clone())
             .aria_selected(selected)
-            .rounded(px(9.))
             .when(selected, |d| d.bg(p.selection))
-            .hover(|d| d.bg(p.accent))
-            .h(px(36.))
-            .px(px(13.))
+            .hover(|d| d.bg(if selected { p.selection } else { p.accent }))
+            .h(px(32.))
+            .px(px(12.))
             .flex()
             .items_center()
             .gap(px(10.))
@@ -160,7 +165,13 @@ impl Today {
                 8.,
                 p.secondary_foreground,
             )))
-            .child(div().flex_1().child(rail_label(&project.name)))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(rail_label(&project.name)),
+            )
             .children((index < 8).then(|| {
                 div()
                     .text_size(px(12.))
@@ -176,53 +187,52 @@ impl Today {
     fn render_rail(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("navigation-rail")
-            .w(px(252.))
+            .w(px(RAIL_WIDTH))
             .h_full()
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .rounded(px(16.))
-            .border_1()
+            .border_r_1()
             .border_color(p.border)
             .bg(p.secondary)
             .text_size(px(14.))
             .child(
                 div()
-                    .mx(px(14.))
-                    .mt(px(20.))
-                    .mb(px(14.))
-                    .px(px(10.))
-                    .py(px(8.))
-                    .rounded(px(9.))
-                    .bg(p.muted)
+                    .id("workspace-heading")
+                    .test_support()
+                    .h(px(HEADER_HEIGHT))
+                    .flex_shrink_0()
+                    .px(px(12.))
+                    .border_b_1()
+                    .border_color(p.border)
                     .flex()
-                    .gap(px(8.))
+                    .gap(px(10.))
                     .items_center()
-                    .text_size(px(15.))
-                    .text_color(p.muted_foreground)
-                    .child(icon(IconName::Search, p.muted_foreground, 15.))
-                    .child("Search notes"),
+                    .text_color(p.secondary_foreground)
+                    .child("Workspace"),
             )
             .child(
                 div()
                     .id("rail-destinations")
-                    .mx(px(10.))
+                    .test_support()
+                    .bg(p.secondary)
+                    .pb(px(8.))
                     .min_h_0()
                     .flex_1()
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(3.))
+                    .gap(px(0.))
                     .child(self.render_home(p, cx))
                     .child(
                         div()
-                            .px(px(13.))
-                            .mt(px(18.))
+                            .px(px(12.))
+                            .mt(px(12.))
                             .mb(px(5.))
-                            .text_size(px(10.))
+                            .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(p.muted_foreground)
-                            .child("PROJECTS"),
+                            .child("Projects"),
                     )
                     .children(
                         self.projects
@@ -232,7 +242,7 @@ impl Today {
                     )
                     .child(
                         div()
-                            .mt(px(20.))
+                            .mt(px(12.))
                             .child(landmark("Shared", IconName::Link, p)),
                     )
                     .child(landmark("Archive", IconName::Archive, p))
@@ -240,7 +250,7 @@ impl Today {
             )
             .test_support()
     }
-    fn render_sync_progress(&self) -> Option<impl IntoElement> {
+    fn render_sync_progress(&self, p: ColorTokens) -> Option<impl IntoElement> {
         self.sync_progress.map(|progress| {
             let bar = match progress {
                 crate::sync_progress::Progress::Indeterminate => {
@@ -255,12 +265,15 @@ impl Today {
                 .test_support()
                 .px(px(8.))
                 .py(px(4.))
-                .child(bar.accessibility_label("First sync progress"))
+                .child(
+                    bar.color(p.primary)
+                        .h(px(4.))
+                        .accessibility_label("First sync progress"),
+                )
         })
     }
 
     fn render_list(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
-        let capture = self.model.capture();
         div()
             .id("today-notes")
             .role(Role::ListBox)
@@ -270,9 +283,38 @@ impl Today {
                 "Project All notes"
             })
             .w_full()
-            .h_full()
+            .flex_1()
             .min_w_0()
             .min_h_0()
+            .flex()
+            .flex_col()
+            .child(self.render_list_status(p, cx))
+            .child(
+                uniform_list(
+                    "today-list",
+                    self.model.rows.len(),
+                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
+                        range
+                            .map(|index| this.render_row(index, p, cx))
+                            .collect::<Vec<_>>()
+                    }),
+                )
+                .track_scroll(&self.list_scroll)
+                .w_full()
+                .flex_1()
+                .min_h_0(),
+            )
+            .test_support()
+    }
+    fn render_list_status(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
+        let capture = self.model.capture();
+        div()
+            .id("list-status")
+            .test_support()
+            .w_full()
+            .max_h(px(128.))
+            .flex_shrink_0()
+            .overflow_y_scroll()
             .flex()
             .flex_col()
             .children(
@@ -322,7 +364,7 @@ impl Today {
                         })
                 }),
             )
-            .children(self.render_sync_progress())
+            .children(self.render_sync_progress(p))
             .children(self.sync_message.clone().map(|message| {
                 div()
                     .px(px(8.))
@@ -333,7 +375,7 @@ impl Today {
             .children(self.watch_error.clone().map(|error| {
                 div()
                     .p_2()
-                    .text_color(p.secondary_foreground)
+                    .text_color(p.destructive)
                     .text_size(px(12.))
                     .child(error)
                     .child(
@@ -342,21 +384,6 @@ impl Today {
                         ),
                     )
             }))
-            .child(
-                uniform_list(
-                    "today-list",
-                    self.model.rows.len() + (COMPOSER_CLEARANCE / 32.).ceil() as usize,
-                    cx.processor(move |this, range: std::ops::Range<usize>, _, cx| {
-                        range
-                            .map(|index| this.render_row(index, p, cx))
-                            .collect::<Vec<_>>()
-                    }),
-                )
-                .track_scroll(&self.list_scroll)
-                .w_full()
-                .h_full(),
-            )
-            .test_support()
     }
     fn render_row(
         &self,
@@ -364,10 +391,7 @@ impl Today {
         p: ColorTokens,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        // Fixed-height blank tail makes the final note reachable above the composer.
-        let Some(row) = self.model.rows.get(index) else {
-            return div().h(px(32.)).w_full().into_any_element();
-        };
+        let row = &self.model.rows[index];
         let id = row.id;
         div()
             .id(("note", id as u64))
@@ -376,9 +400,14 @@ impl Today {
             .aria_label(format!("Note {id}: {}", row.preview))
             .h(px(32.))
             .w_full()
-            .rounded(px(6.))
             .when(self.model.selected == Some(id), |row| row.bg(p.selection))
-            .hover(|row| row.bg(p.accent))
+            .hover(|row| {
+                row.bg(if self.model.selected == Some(id) {
+                    p.selection
+                } else {
+                    p.accent
+                })
+            })
             .child(preview(
                 &row.preview,
                 &row.note_type,
@@ -404,11 +433,10 @@ impl Today {
             .w(px(width))
             .h_full()
             .min_h_0()
-            .rounded(px(16.))
-            .border_1()
+            .flex_shrink_0()
+            .border_l_1()
             .border_color(p.border)
             .bg(p.surface)
-            .shadow_xs()
             .flex()
             .flex_col()
             .on_click(|_, _, cx| cx.stop_propagation())
@@ -417,8 +445,14 @@ impl Today {
                     .flex()
                     .justify_end()
                     .items_center()
-                    .gap(px(12.))
-                    .p(px(12.))
+                    .id("detail-toolbar")
+                    .h(px(HEADER_HEIGHT))
+                    .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(p.border)
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .test_support()
                     .child(
                         Button::new("copy-detail")
                             .icon(IconName::Copy)
@@ -452,14 +486,14 @@ impl Today {
                     ),
             )
             .child(
-                div().flex_1().min_h_0().px(px(20.)).pb(px(20.)).child(
+                div().flex_1().min_h_0().p(px(16.)).child(
                     Textarea::new(&self.detail)
                         .accessibility_id("detail")
                         .aria_label("Note detail")
                         .readonly(true)
                         .appearance(false)
                         .bordered(false)
-                        .text_size(px(14.))
+                        .text_size(px(15.))
                         .h_full(),
                 ),
             )
@@ -470,13 +504,11 @@ impl Today {
         div()
             .id("composer-surface")
             .w_full()
-            .max_w(px(620.))
-            .p(px(16.))
-            .rounded(px(18.))
-            .border_1()
+            .flex_shrink_0()
+            .p(px(12.))
+            .border_t_1()
             .border_color(p.border)
             .bg(p.surface)
-            .shadow_xs()
             .flex()
             .flex_col()
             .gap(px(8.))
@@ -487,65 +519,85 @@ impl Today {
                     .aria_label("New note")
                     .appearance(false)
                     .bordered(false)
-                    .text_size(px(17.)),
+                    .text_size(px(15.)),
             )
-            .children(self.error.clone().map(|error| {
+            .child(
                 div()
-                    .text_size(px(12.))
-                    .text_color(p.secondary_foreground)
-                    .child(error)
-            }))
-            .children(capture.uncertain.last().map(|(text, error)| {
-                let id = error
-                    .details
-                    .as_ref()
-                    .and_then(|d| d["note_id"].as_str())
-                    .unwrap_or("unavailable");
-                let text = text.clone();
-                div()
-                    .text_size(px(12.))
-                    .text_color(p.secondary_foreground)
-                    .child(format!("Creation reference: {id}. Do not submit it again."))
-                    .child(
-                        Button::new("copy-uncertain")
-                            .label("Copy captured text")
-                            .ghost()
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(text.clone()))
-                            }),
-                    )
-            }))
-            .children((!capture.recovery.is_empty()).then(|| {
-                Button::new("recover")
-                    .label("Recover unsaved text")
-                    .ghost()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if this.composer.read(cx).value().is_empty()
-                            && !this.composing(window, cx)
-                            && let Some(text) = this.model.capture().recovery.pop()
-                        {
-                            this.composer
-                                .update(cx, |input, cx| input.set_value(text, window, cx));
-                            this.error = None;
-                            cx.notify();
-                        }
+                    .id("capture-feedback")
+                    .test_support()
+                    .max_h(px(120.))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .children(self.error.clone().map(|error| {
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(12.))
+                            .text_color(p.destructive)
+                            .child(error)
                     }))
-            }))
+                    .children(capture.uncertain.last().map(|(text, error)| {
+                        let id = error
+                            .details
+                            .as_ref()
+                            .and_then(|d| d["note_id"].as_str())
+                            .unwrap_or("unavailable");
+                        let text = text.clone();
+                        div()
+                            .flex_shrink_0()
+                            .text_size(px(12.))
+                            .text_color(p.secondary_foreground)
+                            .child(format!("Creation reference: {id}. Do not submit it again."))
+                            .child(
+                                Button::new("copy-uncertain")
+                                    .label("Copy captured text")
+                                    .ghost()
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            text.clone(),
+                                        ))
+                                    }),
+                            )
+                    }))
+                    .children((!capture.recovery.is_empty()).then(|| {
+                        Button::new("recover")
+                            .flex_shrink_0()
+                            .label("Recover unsaved text")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.composer.read(cx).value().is_empty()
+                                    && !this.composing(window, cx)
+                                    && let Some(text) = this.model.capture().recovery.pop()
+                                {
+                                    this.composer
+                                        .update(cx, |input, cx| input.set_value(text, window, cx));
+                                    this.error = None;
+                                    cx.notify();
+                                }
+                            }))
+                    })),
+            )
             .test_support()
     }
     fn render_canvas(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
+            .id("center-pane")
             .flex_1()
             .min_w_0()
             .h_full()
             .flex()
             .flex_col()
-            .pt(px(6.))
-            .gap(px(12.))
             .child(
                 div()
-                    .px(px(16.))
-                    .text_size(px(23.))
+                    .id("destination-header")
+                    .h(px(HEADER_HEIGHT))
+                    .flex_shrink_0()
+                    .px(px(12.))
+                    .border_b_1()
+                    .border_color(p.border)
+                    .flex()
+                    .items_center()
+                    .text_size(px(14.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(match &self.destination {
                         Destination::Home => "Today".to_string(),
@@ -556,54 +608,21 @@ impl Today {
                                 .find(|p| &p.id == id)
                                 .map_or("Project", |p| p.name.as_str())
                         ),
-                    }),
+                    })
+                    .test_support(),
             )
             .child(
                 div()
                     .id("main-canvas")
-                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .px(px(16.))
+                    .flex()
+                    .flex_col()
                     .child(self.render_list(p, cx))
                     .test_support(),
             )
-    }
-    fn render_floating_surfaces(
-        &self,
-        p: ColorTokens,
-        detail_width: f32,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        div()
-            .absolute()
-            .inset_0()
-            // Header and its gutter remain clear of the floating reading surface.
-            .pt(px(84.))
-            .pb(px(28.))
-            .flex()
-            .flex_col()
-            .gap(px(16.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .pr(px(48.))
-                    .flex()
-                    .justify_end()
-                    .children(
-                        (self.detail_open && self.model.selected.is_some())
-                            .then(|| self.render_detail(p, detail_width, cx)),
-                    ),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .px(px(22.))
-                    .flex()
-                    .justify_center()
-                    .child(self.render_composer(p, cx)),
-            )
+            .child(self.render_composer(p, cx))
+            .test_support()
     }
 }
 impl Render for Today {
@@ -623,8 +642,7 @@ impl Render for Today {
             ..theme.color_tokens()
         };
         let viewport = window.viewport_size();
-        // Keep at least 32pt of row content exposed at the minimum window width.
-        let detail_width = 520_f32.min(f32::from(viewport.width) - 394.);
+        let detail_width = reading_width(f32::from(viewport.width));
         div()
             .id("workspace")
             .key_context(navigation_context)
@@ -698,14 +716,13 @@ impl Render for Today {
                 div()
                     .size_full()
                     .flex()
-                    .gap(px(24.))
-                    .pl(px(22.))
-                    .pr(px(32.))
-                    .py(px(22.))
                     .child(self.render_rail(p, cx))
-                    .child(self.render_canvas(p, cx)),
+                    .child(self.render_canvas(p, cx))
+                    .children(
+                        (self.detail_open && self.model.selected.is_some())
+                            .then(|| self.render_detail(p, detail_width, cx)),
+                    ),
             )
-            .child(self.render_floating_surfaces(p, detail_width, cx))
             .child(crate::native_input::install(self.composer.clone()))
     }
 }

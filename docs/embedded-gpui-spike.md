@@ -133,87 +133,68 @@ uses `flicknote daemon run`, as documented in [the daemon guide](daemon.md);
 synthetic mode requires the macOS GUI. GUI database/runtime operations run on Tokio;
 the native event loop receives snapshots and operation completions.
 
-## Today presentation
+## Continuous workbench presentation (#3326)
 
-The layout is sourced from the read-only Swift desktop checkout at
-`65c4b6380d1c9b2087205fc0d09ed06c34b513fd`: `FlickNotePanelController`
-(workspace, rail, header, composer and detail), `FlickNoteTimelineView`,
-`FlickNoteWorkspaceTheme` and `FlickNoteSourceToggleStyle`.
+The earlier Swift-referenced floating shell and v4 palette were manually accepted
+for #3258. Spec #3326 intentionally supersedes that visual direction with a
+continuous Zed-inspired workbench for a new DEV trial. It independently uses the
+existing Kit adapter, Lucide assets and project colors; no Zed UI/theme source,
+GPL components, fonts or assets are imported. No Penpot design exists.
 
-The rail is 252 points wide with 22-point outer insets; the main pane starts
-after a 24-point gap. Today uses a 23-point semibold header and full-width
-32-point rows with 14-point previews, packaged vector type glyphs and trailing
-project dots. Pending captures have the same appearance without status labels
-or spinners and remain nonselectable. Search, Shared, Archive browsing and Charts are static inactive landmarks excluded from keyboard
-focus. Inactive destination labels use Kit’s secondary foreground; Home uses
-foreground. Every destination reserves the same 17-point icon/dot slot and 10-point gap,
-so text aligns regardless of symbol size. Unsupported filter, day-navigation,
-microphone, project-add, sharing and title-edit actions are omitted.
+The 196-point rail, flexible center and optional right reading pane share thin
+separators without outer card gutters or shadows. Aligned 17-point icon/dot slots
+keep navigation text edges consistent. Home and project-All remain the working
+destinations; the rail starts with an honest Workspace heading. Shared, Archive
+browsing and Charts remain inert. The 44-point center header uses restrained
+14-point type. Stable-ID virtualized rows
+remain full-width and 32 points high, with 14-point previews.
 
-The bottom composer is centered across the whole canvas, at most 620 points wide,
-with 16-point padding, an 18-point radius, 17-point text and a 28-point bottom
-inset. Kit's textarea grows from one to six wrapped lines, then scrolls internally.
-A fixed blank timeline tail lets the final row scroll above the largest composer
-without a geometry feedback loop. Read/copy detail is a bounded right overlay
-with an approved 520-point maximum width, 16-point radius and right inset.
-Its reading area fills the height above the current composer, including feedback,
-with a 16-point gap. It narrows within the main pane and leaves row content
-exposed at the native minimum window size of 760×560 points. These width/height
-adaptations reflect the manual feedback on spec #3258. This is a desktop slice;
-there is no phone layout contract.
+The composer is a full-width bottom dock **inside the center's flex layout**,
+with 15-point Kit input, one-to-six-line growth and internal scrolling. Capture
+feedback scrolls within 120 points; pending/status/watch errors within 128 points.
+The virtual list contains only real notes: no floating clearance or blank tail.
+The reading pane uses 48% of the width after the rail, bounded to 272–420 points,
+and fills the window height independently of composer growth. Its 44-point
+Copy/Archive/Close toolbar stays reachable at 760×560. It never covers the list
+or dock. Detail remains plain selectable canonical text, at 15 points. Closing,
+Escape and exposed-canvas dismissal retain the existing focus/selection guards.
 
-Choose Appearance: System, Light or Dark from the FlickNote application menu.
-Selection is session-local, including across close/reopen; System follows native
-appearance changes while a window is open. It changes this app only.
+Choose System, Light or Dark from Appearance. The one minimal Kit mapping uses
+these independently authored roles; system sans-serif retains Chinese fallback.
 
-Text and caret colors follow the active iOS universal Light/Dark assets in read-only registered
-`fn-ios` at `300261c7467827208dfd71f7af0eb6615d9935cb`:
-`Shared/Theme/Color+Theme.swift` and
-`Resources/Assets.xcassets/ThemeColor`. The user approved this after trying Kit’s
-default colors; it supersedes both the original Swift desktop palette and the
-intermediate default-Kit decision. Following the rejected v3 Light screenshot,
-the user approved distinct desktop surface roles instead of the shared iOS
-surface/label fills. One local adapter maps these roles into the existing Kit
-theme; presentation still reads Kit semantic tokens.
-Mac/watch asset overrides are excluded. Fixture project dots retain stored colors.
-
-| iOS universal asset | Light / Dark | Kit roles |
+| Role | Light / Dark | Kit use |
 | --- | --- | --- |
-| theme-background | FFFFFF / 0D0D0D | background |
-| font-primary | 171717 / EDEDED | foreground, surface/accent/button foreground, glyphs |
-| font-secondary | 525252 / A6A6A6 | secondary foreground/inactive destinations |
-| font-tertiary | 737373 / 808080 | muted foreground/search/headings |
-| theme-primary | 2E2E2E / C6C6C6 | primary |
-| font-on-primary | E2E2E2 / 222222 | primary foreground |
-| theme-cursor | 05C7F7 / 05C7F7 | caret and focus ring |
+| Canvas | FAFAFC / 252830 | background |
+| Rail | ECEEF2 / 20232A | secondary |
+| Read/capture/input surface | FFFFFF / 282C34 | popover/surface, neutral button |
+| Main text | 242831 / E3E6EC | foreground |
+| Secondary text | 505766 / AAB2C0 | secondary foreground |
+| Quiet text | 606878 / A0A9B8 | muted foreground |
+| Hover | E4E8EF / 303641 | accent/muted/button hover |
+| Selected row/destination | D6E3F5 / 384963 | list_active/button active |
+| Divider | D6DAE2 / 3B414D | border/input |
+| Accent/focus | 2864B4 / 80ADFA | primary/caret/ring/progress |
+| Failure | A12D35 / F4A0A5 | destructive text |
 
-| Approved desktop role | Light / Dark | Kit roles |
+Kit's dedicated input-selection role and alpha remain distinct from row selection.
+Controls use small 4-point corners; panes and rows are square. The capture divider
+remains neutral in both focus states; Kit caret/selection provide local input
+focus affordances. Hovered rows differ from selected rows, and keyboard actions
+remain immediate. Login uses the same typography, text/error roles and fine border.
+
+| Before | After | Why |
 | --- | --- | --- |
-| Quiet rail | FAFAFA / 141414 | secondary |
-| Elevated composer/detail | FFFFFF / 1C1C1C | popover/surface, neutral button |
-| Hover / muted search landmark | F5F5F5 / 202020 | accent, muted, neutral button hover |
-| List-row selection | EBEBEB / 2B2B2B | list_active, neutral button active |
-| Subtle edge | E8E8E8 / 303030 | border, input |
+| Floating rounded rail, composer and detail | Continuous rail/center/read panes | Task regions define hierarchy |
+| Centered capture overlays the canvas | Dock below the center list | Last row and capture remain accessible together |
+| Blank virtual list tail | Exact real row count | Scrolling ends at real content |
+| Reading height follows composer | Full-height right reading pane | Long capture and recovery do not steal reading space |
+| Large heading and repeated card outlines | Compact header and thin dividers | Daily keyboard work stays quiet and immediate |
 
-Text selection retains Kit’s dedicated `selection` role and intended alpha,
-separate from the neutral list-row fill.
-
-These are product-authored starting values, not exact Radix tokens. The role
-separation follows [Radix's use cases](https://www.radix-ui.com/colors/docs/palette-composition/understanding-the-scale)
-and [Spectrum's background layers](https://spectrum.adobe.com/foundations/color/background-layers).
-Only composer/detail use GPUI's restrained `shadow_xs` (5% black, 1pt offset,
-2pt blur); Dark separation comes primarily from the lighter fill and border.
-Appearance-free textareas expose their enclosing elevated background. Search
-stays inactive and uses a weaker fill than selected Home. Keyboard actions
-remain immediate, without animation. The user manually accepted the v4 visual
-direction with “可，先这样吧。” No v4 screenshots or explicit native shortcut/IME
-results were supplied; neither the v3 image nor this acceptance proves every state.
-
-Kit retains structural radii, typography machinery, shadows, motion, scrollbars
-and unused specialized component colors (e.g. warning/destructive). Today keeps
-the approved explicit layout/type sizes. No XCAsset runtime parser, generator,
-extra accent palette, customization framework or dependency was introduced.
-Inline Apple semantic accent is unnecessary for plain text.
+The design applies frontend-design's brief-first structural critique and Emil's
+cohesion and immediate keyboard feedback principles to native GPUI. Web CSS motion
+recipes are not applied mechanically. Rendered bounds/roles establish layout and
+interaction contracts, not aesthetic acceptance or native pixels. The new visual
+direction awaits personal DEV trial acceptance before merge.
 
 The synthetic boundary is identified in the window title and these operator docs.
 Plain text rather than Markdown and creation rather than append are intentional
@@ -253,10 +234,8 @@ in the local implementation report.
 Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
 Markdown parity, unsupported navigation/date shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
-production takeover or GUI/headless handoff. The source layout targets Swift
-fidelity for the supported Today slice;
-the user accepted the current v4 direction and chose to proceed without the
-exhaustive screenshot matrix as a further gate for this slice.
+production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
+acceptance belongs to its historical source; it does not accept this new direction.
 Native/automated results and outstanding evidence must be reported
 separately; build success alone does not establish responsiveness.
 

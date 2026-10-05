@@ -2,8 +2,10 @@
 
 Specs #3279 and #3290 provide an experimental macOS Home/project-All window over
 the production local host, with English email-code login. It is separate from installed FlickNote
-services and is not part of release distribution. The accepted Today appearance,
-32-point rows, 520-point detail, composer and local keyboard behavior remain.
+services and is not part of release distribution. Spec #3326 replaces the earlier floating appearance with a continuous workbench:
+196-point rail, full-width 32-point rows, a center capture dock and optional
+272–420-point right reading pane. Local keyboard and host behavior remain. See
+[the design rationale and roles](embedded-gpui-spike.md#continuous-workbench-presentation-3326).
 
 All local trial/spike/test packages use **dev**. **Prod is reserved for formal
 release artifacts.** Preserve historical prod apps/profiles, their sessions and
@@ -17,12 +19,28 @@ Use Apple Silicon macOS and the repository toolchain:
 cargo build --locked -p flicknote-gpui -p flicknote-cli
 # From clean committed source, choose a NEW absent short independent profile:
 python3 scripts/package-gpui-dev.py \
-  --output .scratch/gpui-sync-progress-option-navigation/dev-v3-3296 \
-  --profile /private/tmp/fn-dev-3296-v3
+  --output .scratch/gpui-workbench-redesign/dev-v1-3326 \
+  --profile /private/tmp/fn-dev-3326-v1
 ```
 
 Packaging creates no profile and launches nothing. Choose another unique version
-and profile if either example exists. The generated `RUN.md` gives the separate
+and profile if either example exists. For a user-authorized #3326 visual rebuild,
+retain the original DEV-v1 profile without resyncing by supplying its original
+manifest explicitly:
+
+```bash
+python3 scripts/package-gpui-dev.py \
+  --output .scratch/gpui-workbench-redesign/dev-v2-3326 \
+  --profile /private/tmp/fn-dev-3326-v1 \
+  --reuse-profile-from .scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json
+```
+
+Reuse validates the original #3326 dev manifest and matching profile argument;
+it does not inspect, copy, reset or migrate profile data. The default still
+requires a fresh profile. **Quit the old app before launching the new build**;
+existing profile ownership rejects concurrent instances. Preserve both artifacts.
+
+The generated `RUN.md` gives the separate
 opt-in launch; its wrapper sets `FLICKNOTE_ENV=dev` and pins all effective dev
 endpoints even with inherited overrides. `SOURCE.json` and `SHA256SUMS` bind the
 source commit/tree, bundle ID, profile, CLI companion and app files. Packaging
@@ -66,7 +84,7 @@ assume all inherited `FLICKNOTE_*` endpoint/key overrides have been cleared;
 the new profile's defaults then resolve to dev. Never use an old prod profile:
 
 ```bash
-PROFILE=/private/tmp/fn-dev-3296-v3
+PROFILE=/private/tmp/fn-dev-3326-v1
 ```
 
 ```bash
@@ -151,7 +169,7 @@ reach navigation before AppKit inserts a symbol. Unmatched initial letters still
 fall through to the native IME; drafts and marked input keep IME-first priority.
 Kit continues to own text, selection, undo, composition and candidate geometry.
 Text highlighting retains Kit’s dedicated input-selection color and intended
-alpha in Light/Dark; neutral workspace row selection uses a separate list role.
+alpha in Light/Dark; workbench row selection uses a separate list role.
 Shared/Archive/Charts remain unavailable. Project Week,
 date navigation, workspace search, settings, global shortcuts and keypad Enter
 are deferred; see [the source shortcuts audit](shortcuts-audit.md).
@@ -226,5 +244,7 @@ remain unverified;
 these tests do not establish OS candidate windows or pixels. No repeated manual
 matrix, CUA, cloud or stress gate is required.
 Run the full routine and locked Mac CLI/GUI builds on final source;
-keep source-bound package evidence in ignored `.scratch`. Implementation completion
-waits for the user's explicit signal before review begins; it does not deploy.
+keep source-bound package evidence in ignored `.scratch`. Orc starts independent
+review after implementation completion. This visual trial
+waits for the user to try and accept its direction before merge; review does not
+deploy or authorize production adoption.

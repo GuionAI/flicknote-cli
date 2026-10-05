@@ -132,3 +132,13 @@ role/alpha, and verify composed selected-area color distinction and text readabi
 The old neutral override fails the regression. Public standard test windows cannot
 capture pixels (`no HeadlessRenderer configured`); that limitation is recorded,
 not an extra gate. Corrected native selection appearance awaits personal user trial.
+
+## Workbench presentation trial (#3326)
+
+The continuous rail/list/dock/right-reading layout retains the audited bindings,
+IME priority adapter, draft/marked guards and detail-focus recovery. The same Kit
+input selection remains separate from row selection in both themes. No shortcut,
+preview parity or destination scope expands. Owned rendered tests cover 980×720
+and 760×560 detail open/closed, final-row/full-width/action reachability and
+composer growth without reading-pane overlap. Native pixels/IME/cloud and personal
+aesthetic acceptance are separate evidence, unperformed by this implementation.

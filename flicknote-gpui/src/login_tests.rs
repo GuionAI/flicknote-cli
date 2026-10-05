@@ -331,3 +331,66 @@ fn email_code_profile_host_and_cancelled_window(cx: &mut TestAppContext) {
     assert_eq!(sends.load(Ordering::SeqCst), 6);
     server.abort();
 }
+
+/// Inert local request channel: layout checks cannot send an email or open a host.
+#[gpui_kit::test]
+fn login_workbench_themes_and_error_actions_are_reachable(cx: &mut TestAppContext) {
+    use gpui_kit::component::ThemeMode;
+    use gpui_kit::{Bounds, WindowBounds, point, px, size};
+    cx.update(gpui_kit::init);
+    let (sender, _requests) = mpsc::channel(1);
+    let (window, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(0.), px(0.)),
+                    size: size(px(760.), px(560.)),
+                })),
+                ..Default::default()
+            },
+            cx,
+            |window, cx| cx.new(|cx| LoginPane::new(LoginHandle(sender), window, cx)),
+        )
+        .unwrap()
+    });
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        cx.update_window(window, |_, window, cx| {
+            crate::workspace::apply_theme(mode, cx);
+            for code_sent in [false, true] {
+                view.update(cx, |this, cx| {
+                    this.code_sent = code_sent;
+                    this.error = Some("Synthetic sign-in failure. Try again.".into());
+                    this.email.update(cx, |input, cx| {
+                        input.set_value("owned@example.test", window, cx)
+                    });
+                    cx.notify();
+                });
+                window.render_frame(cx);
+                let form = window.find("login-form").bounds();
+                let outer = window.find("login-workspace").bounds();
+                assert_eq!(form.size.width, px(360.));
+                assert!(form.origin.x >= outer.origin.x && form.right() <= outer.right());
+                assert!(form.origin.y >= outer.origin.y && form.bottom() <= outer.bottom());
+                let actions: &[&str] = if code_sent {
+                    &["verify-code", "resend-code", "change-email"]
+                } else {
+                    &["send-code"]
+                };
+                for id in actions {
+                    let button = window.find(*id).bounds();
+                    assert!(button.origin.x >= form.origin.x && button.right() <= form.right());
+                    assert!(button.origin.y >= form.origin.y && button.bottom() <= form.bottom());
+                }
+                assert!(window.find("login-error").bounds().size.height > px(0.));
+                assert_eq!(Theme::global(cx).is_dark(), mode.is_dark());
+                assert_eq!(
+                    Theme::global(cx).semantic_tokens(),
+                    gpui_kit::base::Theme::global(cx).tokens
+                );
+            }
+        })
+        .unwrap();
+    }
+    cx.update_window(window, |_, window, _| window.remove_window())
+        .unwrap();
+}

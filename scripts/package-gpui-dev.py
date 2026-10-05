@@ -40,12 +40,25 @@ def verify_socket_length(profile):
     return length
 
 
-def package(output, profile, binaries):
-    if not profile.is_absolute() or profile.resolve() != profile or profile.exists():
+def package(output, profile, binaries, reuse_profile_from=None):
+    if not profile.is_absolute() or ".." in profile.parts:
+        raise ValueError("profile must be a canonical absolute path")
+    if reuse_profile_from is not None:
+        reuse_profile_from = reuse_profile_from.resolve()
+        if not reuse_profile_from.is_relative_to(ROOT / ".scratch"):
+            raise ValueError("reuse requires an existing scratch DEV artifact manifest")
+        previous = json.loads(reuse_profile_from.read_text())
+        if (previous.get("spec") != 3326 or previous.get("environment") != "dev"
+                or previous.get("profile") != str(profile)
+                or previous.get("profile_absent_at_packaging") is not True
+                or previous.get("public_endpoints") != ENDPOINTS):
+            raise ValueError("reuse requires the matching original #3326 DEV profile manifest")
+        # Do not stat, resolve, read or mutate the user's existing profile.
+    elif profile.resolve() != profile or profile.exists():
         raise ValueError("profile must be a NEW absent canonical absolute path")
-    # Short /tmp names keep this package independent and within macOS socket limits.
+    # Short dev names stay within macOS socket limits.
     if not profile.is_relative_to(Path("/private/tmp")) or not profile.name.startswith("fn-dev-"):
-        raise ValueError("profile must be a new short /private/tmp/.../fn-dev-* path")
+        raise ValueError("profile must be a short /private/tmp/.../fn-dev-* path")
     output = output.resolve()
     if not output.is_relative_to(ROOT / ".scratch") or output.exists():
         raise ValueError("output must be a NEW versioned directory inside .scratch")
@@ -74,9 +87,11 @@ def package(output, profile, binaries):
         plistlib.dump({"CFBundleExecutable": "launch", "CFBundleIdentifier": bundle_id,
                       "CFBundleName": "FlickNote Dev", "CFBundlePackageType": "APPL",
                       "CFBundleVersion": commit[:12], "NSHighResolutionCapable": True}, file)
-    manifest = {"spec": 3296, "environment": "dev", "source_commit": commit,
+    manifest = {"spec": 3326, "environment": "dev", "source_commit": commit,
                 "source_tree": tree, "bundle_id": bundle_id, "profile": str(profile),
-                "profile_absent_at_packaging": True, "socket_bytes": socket_bytes,
+                "profile_absent_at_packaging": None if reuse_profile_from else True,
+                "profile_reuse_from": str(reuse_profile_from) if reuse_profile_from else None,
+                "socket_bytes": socket_bytes,
                 "mcp_port": 0, "public_endpoints": ENDPOINTS,
                 "sha256": {str(p.relative_to(output)): digest(p) for p in sorted(app.rglob("*")) if p.is_file()}}
     (output / "SOURCE.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -86,7 +101,10 @@ def package(output, profile, binaries):
     run.chmod(0o755)
     (output / "RUN.md").write_text(
         f"# Dev trial #{manifest['spec']}\n\nSource `{commit}`; bundle `{bundle_id}`.\n"
-        f"New independent profile `{profile}` (absent at packaging). Environment **dev**.\n"
+        + (f"Reuses approved dev profile `{profile}` from `{reuse_profile_from}`.\n"
+         "Quit the old app before launch; concurrent ownership is rejected.\n"
+         if reuse_profile_from else f"New independent profile `{profile}` (absent at packaging).\n")
+        + "Environment **dev**.\n" +
         f"Socket path {socket_bytes} bytes; an equal-length test-owned AF_UNIX bind passed.\n"
         "Local MCP allocates a loopback port; read the actual IPC/MCP endpoints at startup.\n"
         "The package includes a source-matched CLI companion in Contents/MacOS/flicknote.\n"
@@ -107,5 +125,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--binaries", type=Path, default=ROOT / "target/debug")
+    parser.add_argument("--reuse-profile-from", type=Path,
+                        help="Explicit #3326 visual rebuild using the original DEV SOURCE.json; requires user authorization")
     args = parser.parse_args()
-    print(json.dumps(package(args.output, args.profile, args.binaries), indent=2))
+    print(json.dumps(package(args.output, args.profile, args.binaries, args.reuse_profile_from), indent=2))

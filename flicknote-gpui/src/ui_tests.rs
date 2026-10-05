@@ -432,6 +432,8 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
             let viewport = window.find("today-notes").bounds();
             assert!(viewport.size.width <= px(width - 32.));
             for id in [1_u64, 2] {
+                view.update(cx, |this, cx| this.close_detail(window, cx));
+                window.render_frame(cx);
                 let bounds = window.find(("note", id)).bounds();
                 assert_eq!(bounds.size.width, viewport.size.width);
                 assert_eq!(bounds.size.height, px(32.));
@@ -439,14 +441,12 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                 let row = window.within(("note", id));
                 assert_eq!(row.find("type-glyph").bounds().size.width, px(17.));
                 assert_eq!(row.find("project-dot").bounds().size, size(px(5.), px(5.)));
-                view.update(cx, |this, cx| this.close_detail(window, cx));
-                window.render_frame(cx);
                 // Click beyond short text at the viewport's right edge.
                 window.click_at(("note", id), point(bounds.size.width - px(2.), px(16.)), cx);
                 assert_eq!(window.find(("note", id)).selected(), Some(true));
                 assert_eq!(
                     window.find(("note", id)).bounds().size.width,
-                    viewport.size.width
+                    window.find("today-notes").bounds().size.width
                 );
             }
             view.update(cx, |this, cx| this.close_detail(window, cx));
@@ -519,14 +519,21 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update_window(window.into(), |_, window, cx| {
                 apply_theme(mode, cx);
+                view.read(cx)
+                    .list_scroll
+                    .scroll_to_item(0, gpui_kit::ScrollStrategy::Top);
                 window.render_frame(cx);
                 let composer = view.read(cx).composer.clone();
                 let closed = window.find("composer-surface").bounds();
-                assert_eq!(closed.size.width, px(620.));
-                assert_eq!(closed.origin.x + closed.size.width / 2., px(width / 2.));
-                assert_eq!(closed.bottom(), px(height - 28.));
-                assert_eq!(window.find("navigation-rail").bounds().size.width, px(252.));
+                let center = assert_closed_workbench(window, closed, width, height);
                 assert_rail_alignment(window);
+                let colors = Theme::global(cx).color_tokens();
+                assert_painted_fill(
+                    window,
+                    window.find("rail-destinations").bounds(),
+                    colors.secondary,
+                );
+                assert_neutral_composer_divider(window, colors.border);
                 assert!(window.try_find("detail-surface").is_none());
                 assert_eq!(Theme::global(cx).is_dark(), mode == ThemeMode::Dark);
                 assert_eq!(
@@ -535,6 +542,15 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
                 );
                 assert_readable_rail_roles(Theme::global(cx).color_tokens());
                 assert_workspace_theme_roles(mode, cx);
+                window.hover(("note", 80_u64), cx);
+                window.render_frame(cx);
+                assert_painted_fill(
+                    window,
+                    window.find(("note", 80_u64)).bounds(),
+                    Theme::global(cx).accent,
+                );
+                window.hover("destination-header", cx);
+                window.render_frame(cx);
                 composer.update(cx, |input, cx| {
                     input.set_value("First line\n第二行\nThird line", window, cx)
                 });
@@ -552,25 +568,20 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
                     bounded.size.height <= px(210.),
                     "six-line cap keeps composer bounded: {bounded:?}"
                 );
-                assert_eq!(bounded.bottom(), px(height - 28.));
+                assert_eq!(bounded.bottom(), px(height));
                 assert!(composer.read(cx).focus_handle(cx).is_focused(window));
-                // A scrollable tail provides reachability above the bounded composer.
+                // The exact note list ends immediately above the dock, without filler rows.
                 view.read(cx).list_scroll.scroll_to_bottom();
                 window.render_frame(cx);
                 let final_row = window.find(("note", 1_u64)).bounds();
-                assert!(
-                    final_row.bottom() <= bounded.origin.y,
-                    "last note must clear composer"
-                );
+                assert_eq!(final_row.bottom(), bounded.origin.y);
+                assert_eq!(final_row.size.height, px(32.));
+                assert_eq!(final_row.size.width, center.size.width);
                 window.click_at(("note", 1_u64), point(px(4.), px(16.)), cx);
                 window.render_frame(cx);
-                let detail = window.find("detail-surface").bounds();
-                let main = window.find("main-canvas").bounds();
-                assert_eq!(detail.right(), main.right() - px(16.));
-                assert_eq!(detail.size.width, px(520_f32.min(width - 394.)));
-                assert!(detail.origin.x >= main.origin.x + px(48.));
-                assert_eq!(detail.bottom(), bounded.origin.y - px(16.));
-                assert_detail_tracks_composer(window, cx, &view);
+                assert_open_workbench(window, cx, &view, width, height);
+                assert_detail_independent_of_composer(window, cx, &view);
+                assert_bounded_workbench_feedback(window, cx, &view);
                 window.click("archive", cx);
                 assert!(!view.read(cx).archive_busy);
                 assert_eq!(view.read(cx).model.rows.len(), 80);
@@ -600,6 +611,88 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         });
     }
     runtime.block_on(host.shutdown());
+}
+
+fn assert_closed_workbench(
+    window: &Window,
+    closed: Bounds<gpui_kit::Pixels>,
+    width: f32,
+    height: f32,
+) -> Bounds<gpui_kit::Pixels> {
+    let center = window.find("center-pane").bounds();
+    let rail = window.find("navigation-rail").bounds();
+    assert_eq!(
+        window.find("workspace-heading").bounds().bottom(),
+        window.find("home").bounds().origin.y
+    );
+    assert_eq!(closed.size.width, center.size.width);
+    assert_eq!(closed.origin.x, rail.right());
+    assert_eq!(center.right(), px(width));
+    assert_eq!(closed.bottom(), px(height));
+    assert_eq!(rail.size.width, px(crate::workspace::RAIL_WIDTH));
+    assert_eq!(rail.size.height, px(height));
+    assert_eq!(
+        window.find("destination-header").bounds().size.height,
+        px(44.)
+    );
+    center
+}
+
+fn assert_open_workbench(
+    window: &mut Window,
+    cx: &mut App,
+    view: &Entity<Today>,
+    width: f32,
+    height: f32,
+) {
+    let detail = window.find("detail-surface").bounds();
+    let main = window.find("main-canvas").bounds();
+    let dock = window.find("composer-surface").bounds();
+    assert_eq!(detail.right(), px(width));
+    assert_eq!(
+        detail.size.width,
+        px(crate::workspace::reading_width(width))
+    );
+    assert_eq!(detail.origin.x, main.right());
+    assert_eq!(detail.origin.x, dock.right());
+    assert_eq!(detail.bottom(), px(height));
+    assert_eq!(detail.origin.y, px(0.));
+    assert!(main.size.width >= px(272.));
+    assert!(main.size.height >= px(200.));
+    assert_eq!(dock.size.width, main.size.width);
+    view.read(cx).list_scroll.scroll_to_bottom();
+    window.render_frame(cx);
+    let selected = window.find(("note", 1_u64)).bounds();
+    assert_eq!(selected.size.width, main.size.width);
+    assert_eq!(selected.bottom(), dock.origin.y);
+    window.hover(("note", 1_u64), cx);
+    window.render_frame(cx);
+    assert_painted_fill(window, selected, Theme::global(cx).list_active);
+}
+
+fn assert_neutral_composer_divider(window: &Window, color: gpui_kit::Hsla) {
+    let bounds = window
+        .find("composer-surface")
+        .bounds()
+        .scale(window.scale_factor());
+    let mut found = false;
+    for quad in window.painted_quads() {
+        if quad.bounds == bounds && quad.border_widths.top > px(0.).scale(window.scale_factor()) {
+            assert_eq!(quad.border_color, color);
+            found = true;
+        }
+    }
+    assert!(found);
+}
+
+fn assert_painted_fill(window: &Window, bounds: Bounds<gpui_kit::Pixels>, color: gpui_kit::Hsla) {
+    let bounds = bounds.scale(window.scale_factor());
+    assert!(
+        window.painted_quads().iter().any(|quad| {
+            quad.bounds == bounds && quad.background == gpui_kit::solid_background(color)
+        }),
+        "expected semantic fill across the complete row"
+    );
 }
 
 fn assert_rail_alignment(window: &Window) {
@@ -641,26 +734,38 @@ fn assert_readable_rail_roles(colors: gpui_kit::base::ColorTokens) {
     }
 }
 
-fn assert_detail_tracks_composer(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
+fn assert_detail_independent_of_composer(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
     let composer = view.read(cx).composer.clone();
+    let detail = view.read(cx).detail.clone();
+    detail.update(cx, |input, cx| input.focus(window, cx));
+    window.render_frame(cx);
+    assert!(!composer.read(cx).focus_handle(cx).is_focused(window));
+    assert_neutral_composer_divider(window, Theme::global(cx).border);
+    composer.update(cx, |input, cx| input.focus(window, cx));
+    window.render_frame(cx);
+    assert!(composer.read(cx).focus_handle(cx).is_focused(window));
+    assert_neutral_composer_divider(window, Theme::global(cx).border);
     let long_detail = window.find("detail-surface").bounds();
     composer.update(cx, |input, cx| input.set_value("short", window, cx));
     window.render_frame(cx);
     window.render_frame(cx);
     let short_composer = window.find("composer-surface").bounds();
     let short_detail = window.find("detail-surface").bounds();
-    assert_eq!(short_detail.bottom(), short_composer.origin.y - px(16.));
-    assert!(short_detail.size.height > long_detail.size.height);
+    assert_eq!(short_detail, long_detail);
+    assert_eq!(short_detail.origin.x, short_composer.right());
     view.update(cx, |this, _| this.error = Some("Synthetic failure".into()));
     window.render_frame(cx);
     let feedback_composer = window.find("composer-surface").bounds();
     let feedback_detail = window.find("detail-surface").bounds();
     assert!(feedback_composer.size.height > short_composer.size.height);
-    assert_eq!(
-        feedback_detail.bottom(),
-        feedback_composer.origin.y - px(16.)
-    );
-    assert!(feedback_detail.size.height < short_detail.size.height);
+    assert_eq!(feedback_detail, short_detail);
+    assert_eq!(feedback_detail.origin.x, feedback_composer.right());
+    for id in ["copy-detail", "archive", "close-detail"] {
+        let action = window.find(id).bounds();
+        assert!(action.origin.x >= feedback_detail.origin.x);
+        assert!(action.right() <= feedback_detail.right());
+        assert!(action.bottom() <= feedback_detail.bottom());
+    }
     view.update(cx, |this, _| this.error = None);
     composer.update(cx, |input, cx| {
         input.set_value("A long line that wraps ".repeat(100), window, cx)
@@ -953,28 +1058,85 @@ fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity
     });
 }
 
+/// Synthetic recovery/status stress at the same viewport/theme; no network effects.
+fn assert_bounded_workbench_feedback(window: &mut Window, cx: &mut App, view: &Entity<Today>) {
+    let composer = view.read(cx).composer.clone();
+    let detail = window.find("detail-surface").bounds();
+    view.update(cx, |this, cx| {
+        this.error = Some("Synthetic capture failure\n".repeat(40));
+        this.watch_error = Some("Synthetic watch failure".into());
+        this.sync_progress = Some(crate::sync_progress::Progress::Percent(90));
+        this.sync_message = Some("90% — Finishing sync…".into());
+        let mut capture = this.model.capture();
+        capture.recovery.push("Retained recovery".into());
+        capture.uncertain.push((
+            "Retained uncertain".into(),
+            flicknote_client::WireError {
+                code: "note_create_unknown".into(),
+                message: "Synthetic unknown".into(),
+                details: Some(serde_json::json!({"note_id": "owned-canonical-reference"})),
+                retryable: false,
+            },
+        ));
+        cx.notify();
+    });
+    window.render_frame(cx);
+    window.render_frame(cx);
+    let dock = window.find("composer-surface").bounds();
+    let feedback = window.find("capture-feedback").bounds();
+    let list = window.find("main-canvas").bounds();
+    assert!(feedback.size.height <= px(120.));
+    assert!(list.size.height >= px(150.));
+    assert_eq!(list.bottom(), dock.origin.y);
+    assert_eq!(dock.right(), detail.origin.x);
+    assert_eq!(detail, window.find("detail-surface").bounds());
+    assert!(window.find("list-status").bounds().size.height <= px(128.));
+    assert!(window.find("first-sync-progress").bounds().size.height > px(0.));
+    // Stabilized flex geometry must not feed scroll position back into sizing.
+    view.read(cx).list_scroll.scroll_to_bottom();
+    window.render_frame(cx);
+    let last = window.find(("note", 1_u64)).bounds();
+    assert_eq!(last.bottom(), dock.origin.y);
+    window.render_frame(cx);
+    assert_eq!(last, window.find(("note", 1_u64)).bounds());
+    assert_eq!(dock, window.find("composer-surface").bounds());
+    assert!(composer.read(cx).focus_handle(cx).is_focused(window));
+    view.update(cx, |this, cx| {
+        this.error = None;
+        this.watch_error = None;
+        this.sync_progress = None;
+        this.sync_message = None;
+        this.model.capture().recovery.clear();
+        this.model.capture().uncertain.clear();
+        cx.notify();
+    });
+    window.render_frame(cx);
+}
+
 fn assert_workspace_theme_roles(mode: gpui_kit::component::ThemeMode, cx: &App) {
     let theme = Theme::global(cx);
     let pair = |light, dark| gpui_kit::rgb(if mode.is_dark() { dark } else { light }).into();
     let colors = theme.color_tokens();
-    assert_eq!(colors.background, pair(0xffffff, 0x0d0d0d));
-    assert_eq!(colors.secondary, pair(0xfafafa, 0x141414));
-    assert_eq!(colors.surface, pair(0xffffff, 0x1c1c1c));
-    assert_eq!(colors.accent, pair(0xf5f5f5, 0x202020));
+    assert_eq!(colors.background, pair(0xfafafc, 0x252830));
+    assert_eq!(colors.secondary, pair(0xeceef2, 0x20232a));
+    assert_eq!(colors.surface, pair(0xffffff, 0x282c34));
+    assert_eq!(colors.accent, pair(0xe4e8ef, 0x303641));
     assert_eq!(colors.muted, colors.accent);
-    assert_eq!(theme.list_active, pair(0xebebeb, 0x2b2b2b));
-    assert_eq!(colors.border, pair(0xe8e8e8, 0x303030));
+    assert_eq!(theme.list_active, pair(0xd6e3f5, 0x384963));
+    assert_eq!(colors.border, pair(0xd6dae2, 0x3b414d));
     assert_ne!(colors.secondary, colors.surface);
     assert_ne!(colors.muted, colors.selection);
     assert_ne!(colors.accent, colors.selection);
-    assert_eq!(colors.foreground, pair(0x171717, 0xededed));
-    assert_eq!(colors.secondary_foreground, pair(0x525252, 0xa6a6a6));
-    assert_eq!(colors.muted_foreground, pair(0x737373, 0x808080));
-    assert_eq!(colors.primary, pair(0x2e2e2e, 0xc6c6c6));
-    assert_eq!(colors.primary_foreground, pair(0xe2e2e2, 0x222222));
-    assert_eq!(theme.caret, gpui_kit::rgb(0x05c7f7).into());
+    assert_eq!(colors.foreground, pair(0x242831, 0xe3e6ec));
+    assert_eq!(colors.secondary_foreground, pair(0x505766, 0xaab2c0));
+    assert_eq!(colors.muted_foreground, pair(0x606878, 0xa0a9b8));
+    assert_eq!(colors.primary, pair(0x2864b4, 0x80adfa));
+    assert_eq!(colors.primary_foreground, pair(0xffffff, 0x20232a));
+    assert_eq!(theme.caret, colors.primary);
     assert_eq!(colors.ring, theme.caret);
     assert_eq!(colors.input, colors.border);
+    assert_eq!(theme.radius, px(4.));
+    assert_eq!(colors.destructive, pair(0xa12d35, 0xf4a0a5));
     assert_eq!(theme.button, colors.surface);
     assert_eq!(theme.button_hover, colors.accent);
     assert_eq!(theme.button_active, theme.list_active);

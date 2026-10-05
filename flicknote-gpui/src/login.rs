@@ -1,7 +1,7 @@
 //! Window-scoped email/code requests under the startup owner's profile lock.
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::config::Config;
-use gpui_kit::base::Disableable;
+use gpui_kit::base::{Disableable, TestSupportExt};
 use gpui_kit::component::{
     Theme,
     button::{Button, ButtonVariants},
@@ -165,20 +165,33 @@ impl Render for LoginPane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = Theme::global(cx).color_tokens();
         div()
+            .id("login-workspace")
+            .test_support()
             .size_full()
             .bg(p.background)
             .text_color(p.foreground)
+            .font_family(".SystemUIFont")
+            .text_size(px(14.))
             .flex()
             .items_center()
             .justify_center()
             .child(
                 div()
+                    .id("login-form")
+                    .test_support()
                     .w(px(360.))
+                    .p(px(20.))
+                    .border_l_1()
+                    .border_color(p.border)
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(div().text_size(px(23.)).child("Sign in to FlickNote"))
-                    .child("Use your email in this independent trial profile.")
+                    .child(div().text_size(px(16.)).child("Sign in to FlickNote"))
+                    .child(
+                        div()
+                            .text_color(p.secondary_foreground)
+                            .child("Use your email to sign in."),
+                    )
                     .when(!self.code_sent, |d| {
                         d.child(Input::new(&self.email).disabled(self.busy)).child(
                             Button::new("send-code")
@@ -230,8 +243,10 @@ impl Render for LoginPane {
                     })
                     .children(self.error.clone().map(|error| {
                         div()
+                            .id("login-error")
+                            .test_support()
                             .text_size(px(12.))
-                            .text_color(p.secondary_foreground)
+                            .text_color(p.destructive)
                             .child(error)
                     })),
             )

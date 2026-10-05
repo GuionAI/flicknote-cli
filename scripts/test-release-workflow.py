@@ -39,6 +39,28 @@ class ReleaseContract(unittest.TestCase):
                         if 'repository' not in step.get('with', {}):
                             self.assertEqual(step['with']['ref'], '${{ github.sha }}')
 
+    def test_check_python_selection(self):
+        steps = load('checks.yml')['jobs']['check']['steps']
+        setup = [i for i, step in enumerate(steps)
+                 if step.get('uses', '').startswith('actions/setup-python@')]
+        self.assertEqual(len(setup), 1)
+        selected = steps[setup[0]]
+        self.assertEqual(selected['uses'], 'actions/setup-python@v7')
+        self.assertEqual(selected['with']['python-version'], '3.14')
+        self.assertEqual(selected['with']['check-latest'], 'true')
+        self.assertNotIn('if', selected)
+        self.assertNotEqual(selected.get('with', {}).get('update-environment'), 'false')
+        consumers = [i for i, step in enumerate(steps)
+                     if re.search(r'\b(?:python3?|pip3?)\b', step.get('run', ''))
+                     or 'bash scripts/check-routine.sh' in step.get('run', '')]
+        self.assertTrue(consumers)
+        for index in consumers:
+            self.assertLess(setup[0], index)
+            self.assertNotIn('PATH', steps[index].get('env', {}))
+            self.assertNotRegex(steps[index]['run'], r'(?:^|\n)\s*pip3?\s')
+        self.assertTrue(any('python3 -m pip install ' in steps[i]['run']
+                            for i in consumers))
+
     def test_repository_toolchain_selection(self):
         toolchain = tomllib.loads((ROOT / 'rust-toolchain.toml').read_text())['toolchain']
         self.assertRegex(toolchain['channel'], r'^\d+\.\d+\.\d+$')
