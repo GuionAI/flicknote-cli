@@ -232,6 +232,20 @@ Lucide vector icons are optical equivalents, not SF Symbols replicas.
 The app packages its screen icons explicitly alongside Kit’s default component
 assets; icon names alone do not register the full catalog.
 
+## Only mine source projection (#3389)
+
+The right header's accessible **Only mine** control filters existing Home/Today and
+project-All using the JSON creation-channel predicate before their 10,000-note
+limit. It defaults off, persists per account in separate `gui-source.json`, and
+leaves rail/context, direct-ID operations and Jev eligibility unchanged. Source
+changes retain draft/caret, pending capture/append and surviving reader/selection;
+hidden detail closes without opening a neighbor. Modal/marked input keeps priority.
+Only JSON boolean `created_by_ai:true` is excluded; all other JSON values remain.
+Owned tests inject temporary preference paths; synthetic mode uses its owned root.
+See [the current operator contract](normal-gui-host.md#workspace-source-choice-3389)
+for storage failure/retry, initial projection and supported destinations. Rendered
+Light/Dark minimum bounds and simulated activation do not establish native pixels.
+
 ## Markdown detail reader (#3348)
 
 The fixed toolbar shows the selected note's numeric short ID on the left and

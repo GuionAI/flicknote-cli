@@ -141,6 +141,51 @@ fn spawn(
         error,
     )
 }
+async fn assert_hidden_mcp_routed(
+    host: &crate::spike::SpikeHost,
+    human: &mut crate::today::TodayWatch,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if human
+                .receiver
+                .borrow_and_update()
+                .as_ref()
+                .is_some_and(|s| s.as_ref().is_ok_and(|s| s.rows.len() == 18))
+            {
+                break;
+            }
+            human.receiver.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !human
+            .receiver
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .rows
+            .iter()
+            .any(|r| r.id == 19)
+    );
+    let metadata: String = host
+        .db
+        .writer()
+        .await
+        .unwrap()
+        .query_row("SELECT metadata FROM notes WHERE short_id=19", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&metadata).unwrap()["created_by_ai"],
+        true
+    );
+}
 #[tokio::test]
 async fn real_compact_choice_batches_drain_and_watch_membership() {
     let root = tempfile::tempdir().unwrap();
@@ -178,6 +223,13 @@ async fn real_compact_choice_batches_drain_and_watch_membership() {
         host.db.clone(),
         crate::spike::USER.into(),
         crate::today::Destination::Project(pid.clone()),
+        false,
+    );
+    let mut human = crate::today::TodayWatch::start_destination(
+        host.db.clone(),
+        crate::spike::USER.into(),
+        crate::today::Destination::Project(pid.clone()),
+        true,
     );
     let p = Arc::new(Provider::default());
     let (endpoint, server) = server(p.clone()).await;
@@ -190,6 +242,7 @@ async fn real_compact_choice_batches_drain_and_watch_membership() {
     })
     .await
     .unwrap();
+    assert_hidden_mcp_routed(&host, &mut human).await;
     let requests = p.requests.lock().unwrap().clone();
     assert_eq!(requests.len(), 3);
     assert!(

@@ -13,7 +13,7 @@ use flicknote_auth::{
     client::{AuthSession, AuthUser},
     session::save_session,
 };
-use flicknote_client::{AppRequest, DaemonClient, dto::NoteAddInput};
+use flicknote_client::{AppRequest, AppResponse, DaemonClient, dto::NoteAddInput};
 use futures_lite::{StreamExt, stream};
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -502,6 +502,7 @@ async fn project_all_and_home_watch_account_membership_and_archival() {
         host.db.clone(),
         host.user_id.clone(),
         Destination::Project(project.into()),
+        false,
     );
     snapshot(&mut home, |s| s.rows.len() == 1).await;
     {
@@ -600,6 +601,7 @@ async fn desktop_previews_watch_thresholds_titles_and_canonical_content() {
         host.db.clone(),
         host.user_id.clone(),
         Destination::Project(project.into()),
+        false,
     );
     for watch in [&mut home, &mut all] {
         let observed = snapshot(watch, |s| s.rows.len() == cases.len() + 1).await;
@@ -670,6 +672,7 @@ async fn detail_metadata_watch_resolves_archived_projects_without_cross_owner_la
         host.db.clone(),
         host.user_id.clone(),
         Destination::Project(project.into()),
+        false,
     );
     {
         let writer = host.db.writer().await.unwrap();
@@ -735,6 +738,152 @@ async fn detail_metadata_watch_resolves_archived_projects_without_cross_owner_la
     }
     drop(home);
     drop(all);
+    host.shutdown().await;
+    server.abort();
+}
+
+async fn seed_source_matrix(host: &LocalHost, project: &str) {
+    let cases = [
+        None,
+        Some("{}"),
+        Some("null"),
+        Some("[]"),
+        Some("true"),
+        Some(r#"{"created_by_ai":null}"#),
+        Some(r#"{"created_by_ai":false}"#),
+        Some(r#"{"created_by_ai":"true"}"#),
+        Some(r#"{"created_by_ai":1}"#),
+        Some(r#"{"created_by_ai":[],"created_by":"ai"}"#),
+        Some(r#"{"created_by_ai":true}"#),
+    ];
+    {
+        let mut writer = host.db.writer().await.unwrap();
+        let tx = writer.transaction().unwrap();
+        tx.execute(
+            "UPDATE projects SET metadata='{\"summary\":\"Keep context\"}' WHERE id=?",
+            [project],
+        )
+        .unwrap();
+        for (index, metadata) in cases.iter().enumerate() {
+            tx.execute("INSERT INTO notes(id,user_id,short_id,project_id,created_at,content,metadata,status) VALUES(?,'account-a',?,?,?,'Canonical human body',?,'ready')", rusqlite::params![format!("source-{index}"), 100 + index as i64,project,chrono::Utc::now().to_rfc3339(),metadata]).unwrap();
+        }
+        for (id, owner, deleted, date) in [
+            (
+                "foreign-source",
+                "account-b",
+                None,
+                chrono::Utc::now().to_rfc3339(),
+            ),
+            (
+                "deleted-source",
+                "account-a",
+                Some("2026-01-01"),
+                chrono::Utc::now().to_rfc3339(),
+            ),
+            (
+                "old-source",
+                "account-a",
+                None,
+                "2020-01-01T12:00:00Z".into(),
+            ),
+        ] {
+            tx.execute("INSERT INTO notes(id,user_id,short_id,project_id,created_at,deleted_at,metadata) VALUES(?,?,900,?,?,?,NULL)", rusqlite::params![id,owner,project,date,deleted]).unwrap();
+        }
+        // More than LIMIT newer MCP notes must not crowd out the lower-ID humans.
+        for index in 0..=crate::today::LIMIT {
+            tx.execute("INSERT INTO notes(id,user_id,short_id,project_id,created_at,content,metadata,type,status,is_flagged) VALUES(?,'account-a',?,?,?,'MCP body','{\"created_by_ai\":true}','normal','ready',0)",rusqlite::params![format!("mcp-{index}"),1000+index as i64,project,chrono::Utc::now().to_rfc3339()]).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn human_scope_marker_matrix_before_limit_and_direct_access() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
+    seed_source_matrix(&host, project).await;
+    let mut home = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Home,
+        true,
+    );
+    let mut all = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+        true,
+    );
+    let day = snapshot(&mut home, |s| s.rows.len() == 11).await;
+    let history = snapshot(&mut all, |s| s.rows.len() == 12).await;
+    assert_eq!(
+        day.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+        (100..110).rev().chain([3]).collect::<Vec<_>>()
+    );
+    assert_eq!(history.rows[0].uuid, "old-source");
+    assert_eq!(day.projects.len(), 1);
+    assert_eq!(day.projects[0].id, project);
+    assert_eq!(day.projects[0].summary.as_deref(), Some("Keep context"));
+    let mut unfiltered = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Home,
+        false,
+    );
+    let full = snapshot(&mut unfiltered, |s| s.rows.len() == crate::today::LIMIT).await;
+    assert_eq!(full.projects[0].name, day.projects[0].name);
+    // Both machine boundaries still resolve the hidden explicit ID.
+    let direct = DaemonClient::new(&host.socket)
+        .app(AppRequest::NoteGet {
+            id: "1000".into(),
+            archived: false,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(direct, AppResponse::NoteDetail(_)));
+    let response = mcp(host.mcp_port, "note_get", json!({"id":1000})).await;
+    assert!(!response["result"]["isError"].as_bool().unwrap_or(false));
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='{\"created_by_ai\":true}' WHERE id='source-0'",
+            [],
+        )
+        .unwrap();
+    snapshot(&mut home, |s| {
+        s.rows.len() == 10 && !s.rows.iter().any(|r| r.uuid == "source-0")
+    })
+    .await;
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='{\"created_by_ai\":false}' WHERE id='source-10'",
+            [],
+        )
+        .unwrap();
+    snapshot(&mut all, |s| {
+        s.rows.len() == 12 && s.rows.iter().any(|r| r.uuid == "source-10")
+    })
+    .await;
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='{\"created_by_ai\":true}' WHERE user_id='account-a'",
+            [],
+        )
+        .unwrap();
+    let empty = snapshot(&mut all, |s| s.rows.is_empty()).await;
+    assert_eq!(empty.projects[0].id, project);
+    assert_eq!(empty.projects[0].summary, day.projects[0].summary);
+    drop((home, all, unfiltered));
     host.shutdown().await;
     server.abort();
 }

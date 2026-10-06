@@ -86,6 +86,17 @@ watch is authoritative. The masked organization key field uses Kit's single-line
 input and no composer native adapter. See [organization](automatic-organization.md)
 for configuration and retained host behavior. No general Settings shortcut is added.
 
+## Only mine header control (#3389)
+
+Tab focuses **Only mine**; Space/Return activates its accessible pressed state.
+It has no new global or workspace shortcut. Activation preserves ordinary composer
+draft/caret and accepted capture/append work; modal editors and marked composition
+block it. Its account-scoped default-off choice persists across Home/project-All,
+window close/reopen and restart. It excludes only JSON boolean `created_by_ai:true`
+before the bounded watch LIMIT. Rail/context and explicit-ID operations stay
+unfiltered; Jev includes hidden eligible notes. Unsupported destinations remain
+deferred. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
+
 ## Chinese input-source Option routing (#3296)
 
 The user’s owned five-note diagnostic established **English source: navigation

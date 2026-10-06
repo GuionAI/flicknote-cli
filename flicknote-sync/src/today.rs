@@ -99,12 +99,14 @@ impl TodayWatch {
         Self::start_for_user(db, crate::spike::USER.to_string())
     }
     pub fn start_for_user(db: PowerSyncDatabase, user_id: String) -> Self {
-        Self::start_destination(db, user_id, Destination::Home)
+        Self::start_destination(db, user_id, Destination::Home, false)
     }
+    /// Creation-channel predicate belongs to the bounded SQL projection, never direct access.
     pub fn start_destination(
         db: PowerSyncDatabase,
         user_id: String,
         destination: Destination,
+        human_only: bool,
     ) -> Self {
         let (sender, receiver) = watch::channel(None);
         let task = tokio::spawn(async move {
@@ -126,7 +128,7 @@ impl TodayWatch {
                     Destination::Project(_) => "n.project_id = ?4",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
                     Destination::Home => String::new(),
@@ -137,6 +139,7 @@ impl TodayWatch {
                     start.to_rfc3339(),
                     end.to_rfc3339(),
                     project_id,
+                    if human_only { "1" } else { "0" }.to_string(),
                 ];
                 let stream = db.watch_statement(sql, params, |stmt, params| {
                     let mut rows = Vec::new();

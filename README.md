@@ -507,7 +507,13 @@ post-first-start, unassigned ready notes from compact project/note summaries,
 with bounded content fallback, manual precedence and finite retries. Closing the
 window retains routing; Quit cancels it. Configuration, privacy/provider cost,
 cutoff and recovery are documented in [automatic organization](docs/automatic-organization.md).
-Headless organization and the Human-created view filter remain deferred.
+**Only mine** in the right workspace header defaults off and applies to Home/Today
+and project-All. It excludes only `metadata.created_by_ai` JSON boolean `true`
+before the watched 10,000-note limit; missing, false and other JSON values remain.
+The account-scoped choice persists across destination/window changes and restart.
+It describes creation channel, not authorship. Explicit-ID CLI/MCP/IPC access and
+background Jev eligibility remain independent. Shared/Archive/Charts/search/date
+surfaces and headless organization remain deferred.
 
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)

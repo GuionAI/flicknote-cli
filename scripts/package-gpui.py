@@ -32,26 +32,30 @@ def package(output, binaries):
         plistlib.dump({'CFBundleExecutable': 'flicknote-gpui', 'CFBundleIdentifier': bundle_id,
                       'CFBundleName': 'FlickNote', 'CFBundlePackageType': 'APPL',
                       'CFBundleVersion': commit[:12], 'NSHighResolutionCapable': True}, file)
-    manifest = {'spec': 3384, 'mode': 'normal', 'source_commit': commit, 'source_tree': tree,
+    manifest = {'spec': 3389, 'mode': 'normal', 'source_commit': commit, 'source_tree': tree,
                 'bundle_id': bundle_id, 'configuration': 'Config::load',
                 'sha256': {str(p.relative_to(output)): digest(p)
                            for p in sorted(app.rglob('*')) if p.is_file()}}
     (output / 'SOURCE.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (output / 'SHA256SUMS').write_text(''.join(f'{h}  {p}\n' for p, h in manifest['sha256'].items()))
     (output / 'RUN.md').write_text(
-        f'# Normal FlickNote GUI #3384\n\nSource `{commit}`; tree `{tree}`.\n'
+        f'# Normal FlickNote GUI #3389\n\nSource `{commit}`; tree `{tree}`.\n'
         'Verify `shasum -a 256 -c SHA256SUMS` from this directory.\n'
         'The app directly runs its GUI binary without a CLI dependency or endpoint/profile flags.\n'
         'It uses the existing normal config/session/data, daemon.sock and default MCP37789.\n'
         'Saved config and FLICKNOTE_* overrides retain shared daemon semantics; missing endpoint fields\n'
         'use FLICKNOTE_ENV, default dev. FLICKNOTE_MCP_PORT remains available to operators.\n'
-        'After acceptance, quit the old GUI trial, then use the installed CLI to run\n'
+        'Keep this artifact unlaunched until separate user direction for manual cutover.\n'
+        'After acceptance and explicit launch direction, quit the old GUI trial, then use the installed CLI to run\n'
         '`flicknote daemon uninstall` and `flicknote daemon stop` before manual launch with\n'
         '`open "FlickNote.app"`. Check `flicknote daemon status` and the original MCP client.\n'
         'No automatic takeover occurs. Close retains the host; Command-Q releases it.\n'
         'Boot-at-login registration, signing and updater are deferred.\n'
         'Packaging performs no launch/install/service/login/cloud operations. Preserve old apps/profiles.\n'
         'Normal native launch, input/pixels, live cutover and cloud verification remain unperformed.\n'
+        'Only mine in the right header defaults off and persists per account across Home/Today and project-All.\n'
+        'It excludes only JSON boolean created_by_ai:true before the bounded watch limit; direct-ID access and Jev stay unfiltered.\n'
+        'Storage failure retains session scope and offers Not saved / retry; no Swift preferences are imported.\n'
         'Configure through FlickNote > Automatic organization: save a masked OpenRouter key in the new account-scoped GUI Keychain service.\n'
         'The first-start cutoff persists even without a key; enabling can catch up post-cutoff ready notes.\n'
         'Provider descriptions are private data sent to a paid provider; Disable/Remove cancels routing.\n'

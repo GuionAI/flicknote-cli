@@ -27,6 +27,7 @@ fn real_project_editor_watch_clear_cancel_validation_and_input_isolation(cx: &mu
         capture: Arc::default(),
         draft: Mutex::default(),
         organization: Mutex::default(),
+        source: crate::source::Control::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
     });
     cx.update(|cx| {

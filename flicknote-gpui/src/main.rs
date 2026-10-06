@@ -15,6 +15,8 @@ mod organization;
 #[cfg(all(test, target_os = "macos"))]
 mod selection_tests;
 #[cfg(target_os = "macos")]
+mod source;
+#[cfg(target_os = "macos")]
 mod sync_progress;
 #[cfg(target_os = "macos")]
 mod ui;

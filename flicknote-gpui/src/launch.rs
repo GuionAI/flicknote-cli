@@ -119,7 +119,7 @@ impl Host {
                 false,
             ),
         };
-        let services = super::ui::Services {
+        let mut services = super::ui::Services {
             app,
             db,
             user_id,
@@ -131,8 +131,14 @@ impl Host {
             capture: std::sync::Arc::default(),
             draft: std::sync::Mutex::default(),
             organization: std::sync::Mutex::default(),
+            source: crate::source::Control::default(),
             capture_changed: tokio::sync::watch::channel(()).0,
         };
+        let root = match self {
+            Self::Real(host) => host.socket.parent().expect("host data directory"),
+            Self::Synthetic(host) => host.socket.parent().expect("synthetic data directory"),
+        };
+        services.source = crate::source::Control::start(&services, root.join("gui-source.json"));
         if let Self::Real(host) = self {
             let control = crate::organization::start(
                 &services,

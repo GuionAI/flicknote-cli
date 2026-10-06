@@ -34,6 +34,7 @@ pub(super) struct Services {
     pub(super) capture: Arc<Mutex<Capture>>,
     pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
     pub(super) organization: Mutex<Option<crate::organization::Control>>,
+    pub(super) source: crate::source::Control,
     pub(super) capture_changed: tokio::sync::watch::Sender<()>,
 }
 impl Services {
@@ -130,6 +131,9 @@ struct Today {
     organization_task: Option<Task<()>>,
     services: Arc<Services>,
     destination: Destination,
+    source: crate::source::State,
+    source_task: Option<Task<()>>,
+    watch_epoch: u64,
     loaded: bool,
     model: Model,
     composer: Entity<TextareaState>,
@@ -200,6 +204,9 @@ impl Today {
             pending_project: None,
             organization_task: None,
             destination,
+            source: services.source.state(),
+            source_task: None,
+            watch_epoch: 0,
             loaded: false,
             model: Model {
                 capture: services.capture.clone(),
@@ -239,7 +246,7 @@ impl Today {
                 });
             }));
         this.subscribe_capture(window, cx);
-        this.subscribe(window, cx);
+        this.observe_source(window, cx);
         this.observe_main_loop(window, cx);
         this.subscribe_status(window, cx);
         this.observe_organization(window, cx);
@@ -297,7 +304,62 @@ impl Today {
         }));
     }
 
+    fn observe_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.source.ready {
+            self.subscribe(window, cx);
+        }
+        let mut receiver = self.services.source.subscribe();
+        self.source_task = Some(cx.spawn_in(window, async move |entity, cx| {
+            loop {
+                let state = receiver.borrow_and_update().clone();
+                if entity
+                    .update_in(cx, |this, window, cx| {
+                        this.apply_source(state, window, cx);
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn apply_source(
+        &mut self,
+        state: crate::source::State,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if state.generation < self.source.generation {
+            return;
+        }
+        let replace =
+            state.ready && (!self.source.ready || state.human_only != self.source.human_only);
+        self.source = state;
+        if replace {
+            self.subscribe(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn toggle_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editor.is_some() || self.composing(window, cx) || !self.source.ready {
+            return;
+        }
+        self.services.source.choose(!self.source.human_only);
+        self.apply_source(self.services.source.state(), window, cx);
+    }
+
     fn subscribe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.source.ready {
+            return;
+        }
+        self.watch_epoch += 1;
+        let epoch = self.watch_epoch;
+        let human_only = self.source.human_only;
         self.watch_task.take();
         self.watch.take();
         let _entered = self.services.runtime.enter();
@@ -306,69 +368,94 @@ impl Today {
             self.services.db.clone(),
             self.services.user_id.clone(),
             destination.clone(),
+            human_only,
         );
         let mut receiver = watcher.receiver.clone();
         self.watch = Some(watcher);
-        self.watch_task =
-            Some(cx.spawn_in(window, async move |entity, cx| {
-                loop {
-                    let snapshot = receiver.borrow_and_update().clone();
-                    if let Some(result) = snapshot
-                        && entity
-                            .update_in(cx, |this, window, cx| {
-                                if this.destination != destination {
-                                    return;
-                                }
-                                match result {
-                                    Ok(snapshot) => {
-                                        this.archived
-                                            .retain(|id| snapshot.rows.iter().any(|r| r.id == *id));
-                                        let rows = if this.archived.is_empty() {
-                                            snapshot.rows.clone()
-                                        } else {
-                                            Arc::new(
-                                                snapshot
-                                                    .rows
-                                                    .iter()
-                                                    .filter(|r| !this.archived.contains(&r.id))
-                                                    .cloned()
-                                                    .collect(),
-                                            )
-                                        };
-                                        this.projects = snapshot.projects;
-                                        if this.pending_project.as_ref().is_some_and(|id| {
-                                            this.projects.iter().any(|p| &p.id == id)
-                                        }) {
-                                            this.select_created(window, cx);
-                                            return;
-                                        }
-                                        if let Destination::Project(id) = &this.destination
-                                            && !this.projects.iter().any(|p| &p.id == id)
-                                        {
-                                            this.set_destination(Destination::Home, window, cx);
-                                            return;
-                                        }
-                                        this.loaded = true;
-                                        this.model.snapshot(rows);
-                                        this.refresh_detail(window, cx);
-                                        this.watch_error = None;
-                                    }
-                                    Err(error) => {
-                                        this.watch_error =
-                                            Some(format!("Could not load notes: {error}"))
-                                    }
-                                }
-                                cx.notify();
-                            })
-                            .is_err()
-                    {
-                        break;
-                    }
-                    if receiver.changed().await.is_err() {
-                        break;
-                    }
+        self.watch_task = Some(cx.spawn_in(window, async move |entity, cx| {
+            loop {
+                let snapshot = receiver.borrow_and_update().clone();
+                if let Some(result) = snapshot
+                    && entity
+                        .update_in(cx, |this, window, cx| {
+                            this.receive_snapshot(
+                                &(destination.clone(), human_only, epoch),
+                                result,
+                                window,
+                                cx,
+                            );
+                        })
+                        .is_err()
+                {
+                    break;
                 }
-            }));
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn receive_snapshot(
+        &mut self,
+        scope: &(Destination, bool, u64),
+        result: Result<flicknote_sync::today::Snapshot, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.destination != scope.0
+            || self.source.human_only != scope.1
+            || self.watch_epoch != scope.2
+        {
+            return;
+        }
+        match result {
+            Ok(snapshot) => {
+                self.archived
+                    .retain(|id| snapshot.rows.iter().any(|r| r.id == *id));
+                let rows = if self.archived.is_empty() {
+                    snapshot.rows.clone()
+                } else {
+                    Arc::new(
+                        snapshot
+                            .rows
+                            .iter()
+                            .filter(|r| !self.archived.contains(&r.id))
+                            .cloned()
+                            .collect(),
+                    )
+                };
+                self.projects = snapshot.projects;
+                if self
+                    .pending_project
+                    .as_ref()
+                    .is_some_and(|id| self.projects.iter().any(|p| &p.id == id))
+                {
+                    self.select_created(window, cx);
+                    return;
+                }
+                if let Destination::Project(id) = &self.destination
+                    && !self.projects.iter().any(|p| &p.id == id)
+                {
+                    self.set_destination(Destination::Home, window, cx);
+                    return;
+                }
+                self.loaded = true;
+                if scope.1
+                    && self
+                        .detail
+                        .as_ref()
+                        .is_some_and(|detail| !rows.iter().any(|row| row.uuid == detail.uuid))
+                {
+                    self.close_detail(window, cx);
+                }
+                self.model.snapshot(rows);
+                self.refresh_detail(window, cx);
+                self.watch_error = None;
+            }
+            Err(error) => self.watch_error = Some(format!("Could not load notes: {error}")),
+        }
+        cx.notify();
     }
 
     fn change_destination(
@@ -1136,3 +1223,7 @@ mod project_editor;
 #[cfg(test)]
 #[path = "project_editor_tests.rs"]
 mod project_editor_tests;
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod source_tests;

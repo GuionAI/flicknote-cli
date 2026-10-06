@@ -164,6 +164,38 @@ structured identity, known canonical detail and **do not submit again** guidance
 check the identified note after sync/recovery before considering another create.
 Pending/watch acknowledgement reconciles by persisted ID in either order.
 
+## Workspace source choice (#3389)
+
+**Only mine** sits on the right of the existing header. Its pressed state applies
+across Home/current Today and project-All, defaults off, and survives destination
+changes, window close/reopen and normal restart. Click it or use Tab then Space/Return.
+Only `metadata.created_by_ai` JSON boolean `true` is excluded. Missing metadata/key,
+null, false, numbers, strings and other JSON types remain visible; legacy `created_by`
+strings, note type, current AI status and later processing/edits do not define source.
+GUI-created pending and confirmed notes remain included.
+
+The owner/destination/source predicate precedes ordering and the 10,000-note SQL
+limit. The active project rail and summaries stay available even with no matching
+notes. Today retains its 04:00 bounds and fixed 32-point preview rows. Switching
+source preserves ordinary composer text/caret, pending capture/append and a still
+visible selection/reader. If detail disappears, it closes with existing focus
+recovery and neighbor selection; another detail never opens automatically. Project
+and organization editors and marked composition block activation.
+
+The process owns the choice. `gui-source.json` beside `daemon.sock` stores only
+account identifiers and booleans with private permissions, separately from
+organization cutoff/enabled state and Keychain. Loading and saving run off the UI
+thread after directory ownership; IPC/MCP/auth/sync readiness does not wait.
+The loaded scope precedes the first note projection. A storage error retains the
+session choice, shows **Not saved** beside the control, and offers retry after fixing
+storage access. Rapid choices and late watch/save completions cannot restore an
+older projection or overwrite a newer choice. No Swift preferences are imported.
+
+This is a list projection, not access control. Explicit-ID Application, CLI IPC
+and MCP operations remain unfiltered without warning. Background Jev continues
+across all eligible creation channels, including hidden MCP notes. No direct-ID GUI,
+Shared/Archive/Charts browser, search or date surface is added.
+
 ## Projects and automatic organization (#3384)
 
 The rail's Add project control creates by name through Application. A project's
@@ -191,7 +223,7 @@ fresh watch, including changes made while closed. Draft text/caret, capture and 
 state remain process-local across close/reopen. Completions arriving while closed
 retain definite-failure recovery or unknown/partial identity and guidance; reopening
 never resubmits them. Append work also completes while closed; reopening observes
-its original note through a fresh watch and retains recovery without retargeting. These values are not persisted to disk or across Quit.
+its original note through a fresh watch and retains recovery without retargeting. Draft/capture/append values are not persisted to disk or across Quit. Only mine is persisted separately as described above.
 Command-1 opens Home while closed and selects Home while open; number bindings
 do not navigate login. Command-Q explicitly quits: owned operations and actors
 cancel, servers stop, sync disconnects, the database checkpoints and socket/lock

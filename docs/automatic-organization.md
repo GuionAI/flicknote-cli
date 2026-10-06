@@ -50,7 +50,9 @@ current owner, an active ready note, no project assignment, and
 `metadata.project_routing.routed` other than JSON boolean true. Draft, processing,
 archived, foreign and previously routed notes stay outside the classifier.
 A post-cutoff note still processing becomes eligible when it reaches ready.
-All creation channels participate. Blank summary and blank content defer the
+All creation channels participate, including MCP-created notes hidden by the workspace
+**Only mine** filter. That separate account-scoped list choice never changes Jev
+credentials, cutoff, eligibility or routing. Blank summary and blank content defer the
 note until meaningful input appears. With no active projects, no request is made.
 
 ## Compact input and provider costs

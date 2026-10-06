@@ -2,7 +2,7 @@ use super::*;
 use crate::workspace::{HEADER_HEIGHT, RAIL_WIDTH, reading_width};
 use gpui_kit::assets::IconName;
 use gpui_kit::base::ColorTokens;
-use gpui_kit::base::{Disableable, TestSupportExt};
+use gpui_kit::base::{Disableable, Selectable, TestSupportExt};
 use gpui_kit::component::{
     Icon, Sizable,
     button::{Button, ButtonVariants},
@@ -99,7 +99,7 @@ fn landmark(title: &'static str, name: IconName, p: ColorTokens) -> impl IntoEle
 
 impl Today {
     pub(super) fn close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.detail_open {
+        if self.detail_open && self.editor.is_none() {
             self.composer
                 .update(cx, |input, cx| input.focus(window, cx));
         }
@@ -110,6 +110,43 @@ impl Today {
         self.detail = None;
         gpui_kit::base::TextSelection::clear(window, cx);
         cx.notify();
+    }
+    fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("source-control")
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(4.))
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                Button::new("only-mine")
+                    .label("Only mine")
+                    .accessibility_label("Only mine")
+                    .ghost()
+                    .small()
+                    .selected(self.source.human_only)
+                    .toggled(self.source.human_only)
+                    .disabled(!self.source.ready || self.editor.is_some())
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.toggle_source(window, cx);
+                    })),
+            )
+            .children(self.source.error.as_ref().map(|error| {
+                Button::new("retry-source")
+                    .label("Not saved")
+                    .text_color(Theme::global(cx).danger)
+                    .icon(IconName::RefreshCw)
+                    .ghost()
+                    .small()
+                    .accessibility_label("Retry saving Only mine")
+                    .tooltip(error.clone())
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.services.source.choose(this.source.human_only);
+                    }))
+            }))
     }
     fn render_home(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
@@ -639,16 +676,23 @@ impl Today {
                     .items_center()
                     .text_size(px(14.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(match &self.destination {
-                        Destination::Home => "Today".to_string(),
-                        Destination::Project(id) => format!(
-                            "{} — All",
-                            self.projects
-                                .iter()
-                                .find(|p| &p.id == id)
-                                .map_or("Project", |p| p.name.as_str())
-                        ),
-                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(match &self.destination {
+                                Destination::Home => "Today".to_string(),
+                                Destination::Project(id) => format!(
+                                    "{} — All",
+                                    self.projects
+                                        .iter()
+                                        .find(|p| &p.id == id)
+                                        .map_or("Project", |p| p.name.as_str())
+                                ),
+                            }),
+                    )
+                    .child(self.render_source(cx))
                     .test_support(),
             )
             .child(
