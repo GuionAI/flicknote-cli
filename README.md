@@ -391,7 +391,7 @@ Rust workspace with 5 production crates and 1 experimental package:
 | `flicknote-core` | library | Database, config, shared services, storage types, schema, and DTO conversions |
 | `flicknote-auth` | library | Supabase auth (OTP + OAuth2/PKCE) |
 | `flicknote-sync` | library | Application RPC host, backend ownership, and PowerSync implementation |
-| `flicknote-gpui` | macOS binary | Experimental embedded host with watched Today and native input |
+| `flicknote-gpui` | macOS binary | macOS GUI host with watched Today and native input |
 
 Rust clients can call the daemon directly with an explicit socket path through
 [`flicknote-client`](flicknote-client/README.md), without linking database, sync,
@@ -446,34 +446,30 @@ See [the spike guide](docs/embedded-gpui-spike.md) for safety, CLI connection,
 fixture limits, build checks and the distinction between automated and native
 validation. This package is not included in release distribution.
 
-## Experimental dev-account workspace
+## Normal macOS GUI host
 
-All local trial/spike/test packages use **dev**; **prod is reserved for formal
-releases**. Never repoint a historical prod profile, copy its tokens/database,
-or replace a running trial or installed service. On Apple Silicon macOS, build
-from committed source and package a new version with a new absent short profile:
+The GUI shares the existing daemon's normal config, session, data directory,
+Unix socket and MCP endpoint (`http://127.0.0.1:37789/mcp`). Start without flags:
 
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-cli
-python3 scripts/package-gpui-dev.py \
-  --output .scratch/gpui-workbench-redesign/dev-v1-3326 \
-  --profile /private/tmp/fn-dev-3326-v1
+# From clean committed source, package into a NEW output without launching:
+python3 scripts/package-gpui.py --output .scratch/normal-gui-host/normal-v1-3374
 ```
 
-Packaging does not launch the app or create the intended profile. The launcher
-pins dev public endpoints, overrides inherited endpoint settings, and allocates
-local MCP port 0. `SOURCE.json`, `SHA256SUMS`, a matching CLI companion and `RUN.md`
-identify the source, environment, binary hashes and profile. Follow that package's
-instructions for a separate opt-in email/cloud launch. Choose a fresh version
-and profile if either example already exists; preserve earlier artifacts.
+The package directly runs the GUI binary and needs no CLI companion or wrapper.
+`SOURCE.json` and `SHA256SUMS` identify exact source/tree and app hashes; `RUN.md`
+gives manual launch/cutover instructions. It preserves normal config resolution:
+explicit endpoint environment values override saved config, saved nonempty fields
+remain, and missing fields use shared `FLICKNOTE_ENV` defaults (dev when unset).
+`FLICKNOTE_MCP_PORT` remains the normal port override. No GUI environment selector
+is added. A usable stored session skips email login; ownership is acquired before
+authentication or session effects. A competing host rejects startup clearly.
 
-For an explicitly authorized #3341/#3348 rebuild, reuse the original #3326 DEV-v1
-manifest with `--spec 3341` or `--spec 3348` and `--reuse-profile-from` pointing to
-`.scratch/gpui-workbench-redesign/dev-v1-3326/SOURCE.json`, the same profile argument,
-and a new versioned output such as `.scratch/markdown-detail-reader/dev-v1-3348`.
-Packaging validates provenance without accessing the profile. Quit the old app
-before launching the new one; retain both artifacts. See the operator guide for
-the complete command and opt-in boundary.
+After acceptance, manually quit the old GUI trial and stop/uninstall the managed
+daemon before launching the normal app. See [the operator guide](docs/normal-gui-host.md)
+for commands and rollback. Packaging changes no services or installed binaries,
+launches nothing and leaves historical apps/profiles/reports intact.
 
 Readonly detail shows short ID, wrapping real title and known project, including
 archived assignments omitted from the rail. Missing metadata stays hidden.
@@ -497,10 +493,10 @@ Text highlighting keeps Kit’s dedicated input-selection role; workbench
 row selection is separate. Capture remains global/unassigned even inside a project, with no offline queue or automatic
 retry of unknown/partial creation. Close keeps the owner alive; Quit releases it.
 
-See [the dev-account operator guide](docs/real-account-gpui-trial.md) for login,
-profile/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)
+See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
+config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)
 for implemented, partial and deferred desktop mappings. Private remote PostgreSQL
-MCP stays separate. Native OS input/pixels and real dev cloud acceptance are
+MCP stays separate. Native OS input/pixels and real cloud acceptance are
 unperformed; rendered tests and builds establish separate evidence. Linux and
 installed distribution remain deferred.
 

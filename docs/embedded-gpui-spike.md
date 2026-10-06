@@ -8,15 +8,13 @@ macOS GPUI `--root` path, reusing `flicknote-sync::spike::SpikeHost`. GPUI is no
 distributed or installed by the release workflow. The production CLI/daemon
 and Swift desktop keep their existing behavior.
 
-This guide covers explicit synthetic `--root` mode. The independent real-account
-`--profile` mode and GUI email login are documented in
-[the real-account trial guide](real-account-gpui-trial.md); it reuses the production
-host rather than the synthetic fixture creator.
-
-All subsequent local trial/spike/test packages explicitly use **dev**; prod is
-reserved for formal releases. New real-account dev trials use a new absent short
-profile and versioned artifact; preserve historical prod apps/profiles/services.
-See [the dev trial packaging instructions](real-account-gpui-trial.md).
+This guide covers explicit synthetic `--root` mode. Normal no-argument GUI
+launch, existing config/session, email login and source-bound packaging are
+covered by [the normal GUI operator guide](normal-gui-host.md).
+#3374 supersedes the earlier GUI-only independent DEV trial packaging policy;
+shared backend environments and CLI profile support remain unchanged. Preserve
+historical physical apps/profiles/reports. Synthetic verification uses only owned
+roots and port0, never normal state or endpoints.
 
 ## Build and launch
 
@@ -210,7 +208,7 @@ The design applies frontend-design's brief-first structural critique and Emil's
 cohesion and immediate keyboard feedback principles to native GPUI. Web CSS motion
 recipes are not applied mechanically. Rendered bounds/roles establish layout and
 interaction contracts, not aesthetic acceptance or native pixels. The new visual
-direction awaits personal DEV trial acceptance before merge.
+direction was accepted in the original DEV trial; #3374 uses automatic independent review.
 
 The synthetic boundary is identified in the window title and these operator docs.
 Readonly Markdown and creation rather than append are intentional limits.

@@ -25,15 +25,11 @@ fn settle(cx: &mut TestAppContext, predicate: impl Fn(&mut TestAppContext) -> bo
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }
-fn options(root: &std::path::Path) -> crate::launch::Options {
-    crate::launch::Options::try_parse_from([
-        "trial",
-        "--profile",
-        root.to_str().unwrap(),
-        "--mcp-port",
-        "0",
-    ])
-    .unwrap()
+fn options() -> crate::launch::Options {
+    crate::launch::Options::try_parse_from(["flicknote-gpui"]).unwrap()
+}
+fn config(root: &std::path::Path) -> flicknote_core::config::Config {
+    flicknote_core::config::Config::load_from_dirs(root.join("config"), root.join("data")).unwrap()
 }
 fn start(
     runtime: &tokio::runtime::Runtime,
@@ -46,10 +42,11 @@ fn start(
     let (quit, receiver) = watch::channel(false);
     let (login, pane) = oneshot::channel();
     let (host, result) = oneshot::channel();
-    let options = options(root);
+    let options = options();
+    let config = config(root);
     runtime.spawn(async move {
         let result = options
-            .start(receiver, move |handle| {
+            .start_normal(config, Some(0), receiver, move |handle| {
                 assert!(login.send(handle).is_ok());
             })
             .await;
@@ -59,8 +56,8 @@ fn start(
 }
 
 #[gpui_kit::test]
-#[allow(clippy::too_many_lines)] // One owned HTTP/profile/window verifies the complete login and cancellation sequence.
-fn email_code_profile_host_and_cancelled_window(cx: &mut TestAppContext) {
+#[allow(clippy::too_many_lines)] // One owned HTTP/config/window verifies the complete login and cancellation sequence.
+fn email_code_normal_host_and_cancelled_window(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let root = tempfile::tempdir().unwrap();
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -102,14 +99,15 @@ fn email_code_profile_host_and_cancelled_window(cx: &mut TestAppContext) {
     let server = runtime.spawn(async move {
         axum::serve(listener, router).await.unwrap();
     });
-    let config = flicknote_core::profile::load(root.path()).unwrap();
+    let config = config(root.path());
     std::fs::write(&config.paths.config_file, serde_json::to_vec(&json!({"supabaseUrl":origin,"supabaseAnonKey":"owned-key","powersyncUrl":origin,"apiUrl":origin,"gatewayUrl":origin})).unwrap()).unwrap();
     let (quit, pane, host) = start(&runtime, root.path());
     let handle = runtime.block_on(pane).unwrap();
     // Ownership precedes all GoTrue effects, including the PKCE/session write.
     let (_other_quit, other) = watch::channel(false);
-    let conflict = runtime
-        .block_on(options(root.path()).start(other, |_| panic!("competing owner showed login")));
+    let conflict = runtime.block_on(options().start_normal(config.clone(), Some(0), other, |_| {
+        panic!("competing owner showed login")
+    }));
     assert!(conflict.is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 0);
     assert!(!config.paths.session_file.exists());
@@ -242,7 +240,9 @@ fn email_code_profile_host_and_cancelled_window(cx: &mut TestAppContext) {
     let (_cancel, receiver) = watch::channel(false);
     let reopened = runtime
         .block_on(
-            options(root.path()).start(receiver, |_| panic!("usable session did not skip login")),
+            options().start_normal(config.clone(), Some(0), receiver, |_| {
+                panic!("usable session did not skip login")
+            }),
         )
         .unwrap();
     let crate::launch::Host::Real(reopened) = reopened else {

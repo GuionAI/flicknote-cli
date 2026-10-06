@@ -1,25 +1,22 @@
-//! Explicit launch modes; real mode never initializes synthetic storage.
+//! Normal shared host or explicit owned synthetic storage.
 use clap::Parser;
 use flicknote_sync::{LocalHost, spike::SpikeHost};
 use std::{path::PathBuf, time::Duration};
 
 #[derive(Parser)]
-#[command(about = "Experimental FlickNote Today — explicit independent profile")]
+#[command(about = "FlickNote workspace and local application host")]
 pub(crate) struct Options {
-    /// Independent real-account profile; sign in with email in the GUI or use login --auth-only.
-    #[arg(long, required_unless_present = "root", conflicts_with = "root")]
-    profile: Option<PathBuf>,
     /// Independent synthetic fixture root (no account or cloud connection).
-    #[arg(long, required_unless_present = "profile")]
-    root: Option<PathBuf>,
-    /// Local loopback MCP port; 0 allocates an available port. Default daemon port is rejected.
     #[arg(long)]
-    mcp_port: u16,
-    #[arg(long, default_value_t = 30, conflicts_with = "profile")]
+    root: Option<PathBuf>,
+    /// Synthetic loopback MCP port; 0 allocates. Normal mode uses FLICKNOTE_MCP_PORT.
+    #[arg(long, requires = "root")]
+    mcp_port: Option<u16>,
+    #[arg(long, default_value_t = 30, requires = "root")]
     seed: u32,
-    #[arg(long, default_value_t = 0, conflicts_with = "profile")]
+    #[arg(long, default_value_t = 0, requires = "root")]
     delay_ms: u64,
-    #[arg(long, default_value_t = 0, conflicts_with = "profile")]
+    #[arg(long, default_value_t = 0, requires = "root")]
     pub(crate) burst_batches: u32,
 }
 
@@ -36,27 +33,38 @@ impl Options {
         cancel: tokio::sync::watch::Receiver<bool>,
         show_login: impl FnOnce(crate::login::LoginHandle) + Send,
     ) -> Result<Host, String> {
-        if self.mcp_port == 37789 {
-            return Err("Choose a trial MCP port other than 37789".into());
+        if self.root.is_some() {
+            return self.start_synthetic().await.map(Host::Synthetic);
         }
-        if let Some(root) = &self.profile {
-            let config = flicknote_core::profile::load(root)?;
-            let ownership =
-                flicknote_sync::ownership::DataDirectoryLock::acquire(&config.paths.data_dir)
-                    .map_err(|e| e.to_string())?;
-            let session = flicknote_auth::session::load_session(&config.paths.session_file).ok();
-            if !session.is_some_and(|s| {
-                !s.user.id.is_empty() && !s.access_token.is_empty() && !s.refresh_token.is_empty()
-            }) {
-                crate::login::authenticate(&config, cancel.clone(), show_login).await?;
-            }
-            let host = LocalHost::start_owned(config, Some(self.mcp_port), cancel, ownership)
-                .await
-                .map_err(|e| e.to_string())?;
-            endpoints("REAL ACCOUNT TRIAL", &host.socket, host.mcp_port);
-            return Ok(Host::Real(host));
+        let config = flicknote_core::config::Config::load().map_err(|e| e.to_string())?;
+        self.start_normal(config, None, cancel, show_login).await
+    }
+
+    pub(crate) async fn start_normal(
+        &self,
+        config: flicknote_core::config::Config,
+        port: Option<u16>,
+        cancel: tokio::sync::watch::Receiver<bool>,
+        show_login: impl FnOnce(crate::login::LoginHandle) + Send,
+    ) -> Result<Host, String> {
+        let ownership = flicknote_sync::ownership::DataDirectoryLock::acquire(
+            &config.paths.data_dir,
+        )
+        .map_err(|e| {
+            format!("Cannot start FlickNote: {e}. Quit the current host before starting this app.")
+        })?;
+        initialize_logging(&config.paths.log_file)?;
+        let session = flicknote_auth::session::load_session(&config.paths.session_file).ok();
+        if !session.is_some_and(|s| {
+            !s.user.id.is_empty() && !s.access_token.is_empty() && !s.refresh_token.is_empty()
+        }) {
+            crate::login::authenticate(&config, cancel.clone(), show_login).await?;
         }
-        self.start_synthetic().await.map(Host::Synthetic)
+        let host = LocalHost::start_owned(config, port, cancel, ownership)
+            .await
+            .map_err(|e| e.to_string())?;
+        endpoints("FlickNote", &host.socket, host.mcp_port);
+        Ok(Host::Real(host))
     }
 
     async fn start_synthetic(&self) -> Result<SpikeHost, String> {
@@ -65,26 +73,36 @@ impl Options {
         }
         let host = SpikeHost::start(
             self.root.as_deref().ok_or("Explicit root required")?,
-            self.mcp_port,
+            self.mcp_port
+                .ok_or("Synthetic mode requires --mcp-port (use 0 for an owned listener)")?,
             self.seed,
             Duration::from_millis(self.delay_ms),
         )
         .await?;
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(host.log_path())
-            .map_err(|e| e.to_string())?;
-        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-            .target(env_logger::Target::Pipe(Box::new(file)))
-            .try_init()
-            .map_err(|e| e.to_string())?;
+        initialize_logging(&host.log_path())?;
         endpoints("SYNTHETIC SPIKE ONLY", &host.socket, host.mcp_port);
         Ok(host)
     }
 }
+fn initialize_logging(path: &std::path::Path) -> Result<(), String> {
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| e.to_string())?;
+    // A test process may already have its logger; each real app initializes once.
+    let _initialized =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .target(env_logger::Target::Pipe(Box::new(file)))
+            .try_init();
+    Ok(())
+}
 #[allow(clippy::print_stderr)]
 fn endpoints(label: &str, socket: &std::path::Path, port: u16) {
+    log::info!(
+        "{label}: IPC={} MCP=http://127.0.0.1:{port}/mcp",
+        socket.display()
+    );
     eprintln!(
         "{label}\nIPC={}\nMCP=http://127.0.0.1:{port}/mcp",
         socket.display()
@@ -160,9 +178,8 @@ mod tests {
         let root = parent.path().join("fixture");
         for (delay_ms, burst_batches) in [(10_001, 0), (0, 101)] {
             let options = Options {
-                profile: None,
                 root: Some(root.clone()),
-                mcp_port: 0,
+                mcp_port: Some(0),
                 seed: 5,
                 delay_ms,
                 burst_batches,
@@ -249,46 +266,21 @@ mod tests {
     }
 
     #[test]
-    fn real_and_synthetic_modes_require_explicit_separate_roots_and_ports() {
+    fn normal_defaults_and_explicit_synthetic_options() {
+        assert!(Options::try_parse_from(["flicknote-gpui"]).is_ok());
         assert!(
-            Options::try_parse_from(["trial", "--profile", "/tmp/owned", "--mcp-port", "0"])
+            Options::try_parse_from(["flicknote-gpui", "--root", "/tmp/owned", "--mcp-port", "0"])
                 .is_ok()
         );
-        assert!(
-            Options::try_parse_from([
-                "trial",
-                "--root",
-                "/tmp/owned",
-                "--mcp-port",
-                "0",
-                "--seed",
-                "5"
-            ])
-            .is_ok()
-        );
-        for arguments in [
-            vec!["trial", "--mcp-port", "0"],
-            vec!["trial", "--profile", "/tmp/owned"],
-            vec![
-                "trial",
-                "--profile",
-                "/tmp/owned",
-                "--root",
-                "/tmp/other",
-                "--mcp-port",
-                "0",
-            ],
-            vec![
-                "trial",
-                "--profile",
-                "/tmp/owned",
-                "--mcp-port",
-                "0",
-                "--seed",
-                "5",
-            ],
+        for args in [
+            vec!["flicknote-gpui", "--mcp-port", "0"],
+            vec!["flicknote-gpui", "--seed", "5"],
         ] {
-            assert!(Options::try_parse_from(arguments).is_err());
+            assert!(Options::try_parse_from(args).is_err());
         }
     }
 }
+
+#[cfg(test)]
+#[path = "normal_host_tests.rs"]
+mod normal_host_tests;

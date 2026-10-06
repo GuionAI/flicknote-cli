@@ -103,3 +103,16 @@ _Avoid_: AI-authored note
 **Human-filtered note**:
 A note whose `created_by_ai` metadata is absent or false. Human filters exclude only JSON boolean true, so other JSON values also remain included. This describes creation channel; it does not prove a person authored the content.
 _Avoid_: Human-authored note
+
+## Local application hosting
+
+**Normal GUI host**:
+The macOS workspace process owning the existing normal config/session/data,
+PowerSync, Unix IPC and local MCP. It shares daemon config resolution and single
+directory ownership; closing its window retains the host, explicit Quit ends it.
+_Avoid_: Independent DEV profile, daemon client, automatic takeover
+
+**Synthetic GUI mode**:
+Explicit `--root` launch using fixture-owned storage and synthetic creation,
+without normal configuration, sessions or cloud operations.
+_Avoid_: Normal account, shared daemon directory

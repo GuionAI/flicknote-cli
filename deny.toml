@@ -18,7 +18,7 @@ allow = [
 ]
 # Rechecked for the experimental independent real-account GPUI trial (#3279).
 # Exact unchanged versions/attribution: docs/embedded-gpui-spike.md and
-# docs/real-account-gpui-trial.md; no installed production takeover approval.
+# docs/normal-gui-host.md; no installed production takeover approval.
 exceptions = [
     { name = "enum-iterator", version = "=2.3.0", allow = ["0BSD"] },
     { name = "enum-iterator-derive", version = "=1.5.0", allow = ["0BSD"] },

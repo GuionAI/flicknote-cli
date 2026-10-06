@@ -1,4 +1,4 @@
-//! Window-scoped email/code requests under the startup owner's profile lock.
+//! Window-scoped email/code requests under the startup owner's directory lock.
 use flicknote_auth::client::GoTrueClient;
 use flicknote_core::config::Config;
 use gpui_kit::base::{Disableable, TestSupportExt};
@@ -130,7 +130,7 @@ impl LoginPane {
             })
             .is_err()
         {
-            self.error = Some("Sign-in is unavailable. Quit and reopen this profile.".into());
+            self.error = Some("Sign-in is unavailable. Quit and reopen FlickNote.".into());
             cx.notify();
             return;
         }
@@ -151,7 +151,7 @@ impl LoginPane {
                     }
                     Ok(Err(error)) => this.error = Some(error),
                     Err(_) => {
-                        this.error = Some("Sign-in cancelled. Quit and reopen this profile.".into())
+                        this.error = Some("Sign-in cancelled. Quit and reopen FlickNote.".into())
                     }
                     Ok(Ok(())) => {}
                 }

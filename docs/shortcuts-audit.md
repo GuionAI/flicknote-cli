@@ -64,8 +64,8 @@ recovery or unknown/partial identity and guidance. Cmd1 selects Home.
 Capture is always a new unassigned note (`project=None`). Pending/unknown/partial
 identity survives navigation/close/reopen, with no unmatched optimistic project rows.
 
-All local trial/spike/test packages use dev; prod is reserved for formal releases.
-Follow [the dev-account operator guide](real-account-gpui-trial.md) for new-profile,
+Normal GUI packaging reuses existing config/session/endpoints; synthetic tests use owned roots and port0.
+Follow [the normal GUI operator guide](normal-gui-host.md) for existing-config,
 source/hash-bound packaging and opt-in launch. This audit authorizes no account,
 service, installed-app, release or deployment change.
 

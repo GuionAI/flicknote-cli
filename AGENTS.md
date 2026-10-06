@@ -131,70 +131,43 @@ cargo fmt --all --check    # format check
 
 Or use the justfile: `just build`, `just test`, `just check`, `just install`
 
-## Experimental spike checks and safety
+## GUI host and synthetic verification
 
-Read `docs/embedded-gpui-spike.md` before running the experiment. All local
-trial/spike/test packages explicitly use dev; prod is reserved for formal
-releases. For a dev trial package, build clean committed source, use
-`scripts/package-gpui-dev.py` with a new versioned `.scratch` output and a new
-absent short absolute independent dev profile. For user-authorized #3326 visual
-rebuilds, #3341 preview-parity and #3348 Markdown-reader trials only,
-`--reuse-profile-from` may bind the same dev profile to its original #3326 DEV `SOURCE.json`; packaging must
-not stat, resolve, read or mutate that profile.
-#3341/#3348 packaging uses its matching `--spec` for current delivery metadata
-while retaining the original #3326 DEV-v1 manifest as reuse provenance.
-Use a new artifact version and ask the user to quit the old app before launch.
-Verify its source/hash manifest,
-effective public dev endpoints and owned matching-length Unix socket bind.
-Preserve existing apps/profiles/sessions and services, including historical prod
-trials; never repoint or copy them. Packaging authorizes no real email/cloud or
-native app launch. Read `docs/real-account-gpui-trial.md` before opt-in launch.
-Use only explicit spike-owned independent roots and synthetic fixtures. Never copy live notes,
-databases or auth sessions, install spike binaries/services, change MCP
-registrations, or stop the production daemon/desktop for spike verification.
-The injected creator is experimental; production creation remains remote-backed.
+Read `docs/normal-gui-host.md` before normal GUI packaging, launch or manual
+cutover. Normal GUI reuses `Config::load()`, the existing session/data/socket,
+LocalHost ownership and default MCP37789 with `FLICKNOTE_MCP_PORT` overrides.
+Shared saved configuration and backend environment defaults remain unchanged.
+Acquire directory ownership before GUI authentication/session effects; an
+incumbent rejects startup without takeover. Window close retains the host;
+explicit Quit shuts down and releases it. Remote private MCP remains separate.
 
-Build with `cargo build --locked -p flicknote-cli -p flicknote-gpui` on macOS.
-Synthetic launch uses GPUI’s explicit `--root` mode and `flicknote-sync::spike::SpikeHost`;
-normal headless operation uses `flicknote daemon run`.
-Check host behavior with `cargo test --locked -p flicknote-sync --features
-experimental-spike --test spike -- --nocapture` and native test-window behavior
-with `cargo test --locked -p flicknote-gpui`. Native OS IME and visible input/
-scroll/lifecycle checks need a real foreground window; simulated tests and
-compilation do not establish them. Build acceptance is macOS Apple Silicon;
-Linux/musl compilation and runtime validation are deferred. Preserve headless
-GPUI-free dependencies and record unperformed native evidence explicitly. The
-ordinary routine suite remains required. For experimental presentation changes,
-follow the visual verification workflow in `docs/embedded-gpui-spike.md`: record
-native synthetic screenshots and source/artifact hashes separately from rendered
-bounds tests; missing native pixels leave visual acceptance unverified. For
-#3348, owned LocalHost/rendered reader/resource/package tests and exact-source
-routine/builds are the automated gate; no native launch, CUA or manual matrix is
-required. Keep the reader boundary and native/cloud limits in
-`docs/embedded-gpui-spike.md#markdown-detail-reader-3348`.
+Build clean committed source with `cargo build --locked -p flicknote-cli -p
+flicknote-gpui` on Apple Silicon macOS. Package GUI only with
+`scripts/package-gpui.py` in a NEW versioned ignored `.scratch` output; verify
+source/tree/hash evidence. Preserve existing apps/profiles/reports. Packaging
+performs no launch, installation, service changes or real-account operations.
+Manual normal cutover requires separate user direction; shared CLI `--profile`
+auth-only/headless support remains available and unchanged.
 
-For the independent real-account experimental mode, read
-`docs/real-account-gpui-trial.md`. GUI email OTP and `login --auth-only` share
-profile-scoped GoTrue/session behavior; acquire ownership before auth effects.
-Use explicit absolute `--profile` plus `--mcp-port` (0 allocates; 37789 is reserved).
-Only auth-only login, foreground daemon run and data commands use trial profiles;
-service-coupled commands reject before side effects. Private remote MCP stays
-config-independent and separate. Never use live email/cloud/session/service state
-for verification or claim rendered tests establish native/cloud behavior.
+Tests own temporary config/data/session roots, local fake HTTP and port0
+listeners. Never use normal live state, bind37789, stop an incumbent daemon,
+change installed binaries/services/MCP registrations or contact cloud accounts
+for verification. Read `docs/embedded-gpui-spike.md` for explicit synthetic
+`--root` mode; it never loads normal config/session and requires an owned port0.
+The injected creator remains synthetic; normal creation is remote-backed.
 
-Check the production host with `cargo test --locked -p flicknote-sync
---all-features runtime::local_host_tests -- --nocapture`, GUI/auth integration with
-`cargo test --locked -p flicknote-gpui`, and CLI profile dispatch with
-`cargo test --locked -p flicknote-cli`. Run the full routine and locked Mac
-CLI/GUI builds on final amended source. Keep versioned source/hash-bound
-trial artifacts in ignored `.scratch`; use a new profile except the explicit
-#3326/#3341/#3348 reuse contract above, and preserve prior
-artifacts unless the user explicitly authorizes cleanup. No extra manual matrix
-or native CUA/cloud gate is required for #3279/#3290. Home/current Today and
-project-All are the implemented destinations; global capture stays unassigned.
-See `docs/shortcuts-audit.md` before extending desktop shortcuts. Keep source,
-rendered and native/cloud evidence separate. For #3326, send IMPL_COMPLETE with
-final SHA/PR/report; Orc starts independent review automatically. Merge waits for user DEV trial direction acceptance.
+Run `cargo test --locked -p flicknote-sync --all-features
+runtime::local_host_tests -- --nocapture`, `cargo test --locked -p flicknote-gpui`
+and CLI tests for relevant changes. Complete the full routine and locked Mac
+CLI/GUI build on final clean committed source. Native input/IME/pixels and live
+cloud/cutover evidence remain separate from rendered tests/builds. Linux GUI,
+login-item registration, signing/updater and automatic handoff are deferred.
+For visual changes follow the native synthetic screenshot workflow in the spike
+guide; missing native pixels leave visual acceptance unverified. #3374 requires
+owned automated host/login/lifecycle/package evidence, no native launch or new
+manual matrix. Send IMPL_COMPLETE with final SHA/PR/absolute scratch report;
+Orc starts independent review and governs merge without another user review gate.
+See `docs/shortcuts-audit.md` before extending desktop shortcuts.
 
 ## Git Hooks (lefthook)
 
