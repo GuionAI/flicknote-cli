@@ -17,6 +17,8 @@ mod upload;
 
 pub use powersync::PowerSyncDatabase;
 pub use runtime::{DaemonRunError, LocalHost, run, run_with_port};
+#[cfg(feature = "experimental-spike")]
+pub mod organization;
 pub mod today;
 
 #[cfg(test)]

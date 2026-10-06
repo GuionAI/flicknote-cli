@@ -168,6 +168,10 @@ owned automated host/login/lifecycle/package evidence, no native launch or new
 manual matrix. Send IMPL_COMPLETE with final SHA/PR/absolute scratch report;
 Orc starts independent review and governs merge without another user review gate.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts.
+Read `docs/automatic-organization.md` before changing GUI project editors,
+organization eligibility/retries, cutoff preferences or credential handling.
+Organization starts only in the normal GUI host; tests inject fake secrets/provider
+HTTP and own preference roots. Never exercise the real Keychain adapter in tests.
 
 ## Git Hooks (lefthook)
 

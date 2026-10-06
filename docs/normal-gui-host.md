@@ -164,6 +164,25 @@ structured identity, known canonical detail and **do not submit again** guidance
 check the identified note after sync/recovery before considering another create.
 Pending/watch acknowledgement reconciles by persisted ID in either order.
 
+## Projects and automatic organization (#3384)
+
+The rail's Add project control creates by name through Application. A project's
+summary appears above its All list; Edit offers multiline Save/Cancel and
+Cmd-Return. Editors retain failure text, own native input and block workspace
+navigation/capture. Project creation selects the canonical watched UUID while
+preserving the note draft/caret. Long summary display scrolls within a bounded area.
+
+The application menu's Automatic organization control offers masked Save/Replace,
+Remove and enable/disable, with its own error feedback. Normal GUI startup starts
+an independent host-owned organization coordinator after publishing cached readiness.
+It records a per-account first-start cutoff even without a key, uses a new
+account-scoped Keychain service and compact OpenRouter Decisions Choice requests,
+and survives window close. No old Swift credentials/preferences are imported.
+Eligibility, privacy/cost, bounded retries, cancellation/manual precedence,
+non-secret preference location and configuration steps are authoritative in
+[automatic organization](automatic-organization.md). Headless routing is deferred;
+private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
+
 ## Close, reopen and Quit
 
 Closing Today cancels only its watch/input work; IPC, local MCP and sync continue.

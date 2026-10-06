@@ -89,6 +89,36 @@ impl<'a> NoteService<'a> {
         &self,
         input: Vec<NoteRouteProjectInput>,
     ) -> Result<NoteRouteProjectResult, ServiceError> {
+        let (updates, events) = self.prepare_project_routes(input).await?;
+        self.db.route_notes_to_projects(&updates).await?;
+        self.try_append_assignment_events(&events).await;
+        Ok(NoteRouteProjectResult {
+            routed: updates.len(),
+        })
+    }
+
+    /// Local-only precondition; no shared database trait or wire contract is extended.
+    #[cfg(feature = "powersync")]
+    pub async fn route_project_locally_guarded(
+        &self,
+        input: Vec<NoteRouteProjectInput>,
+        local: &crate::backend::LocalPowerSyncBackend,
+        check: impl FnOnce(&rusqlite::Connection) -> Result<bool, crate::error::CliError> + Send,
+    ) -> Result<bool, ServiceError> {
+        let (updates, events) = self.prepare_project_routes(input).await?;
+        let applied = local
+            .route_notes_to_projects_guarded(&updates, check)
+            .await?;
+        if applied {
+            self.try_append_assignment_events(&events).await;
+        }
+        Ok(applied)
+    }
+
+    async fn prepare_project_routes(
+        &self,
+        input: Vec<NoteRouteProjectInput>,
+    ) -> Result<(Vec<RouteProjectUpdate>, Vec<ProjectAssignmentEvent>), ServiceError> {
         if input.is_empty() {
             return Err(ServiceError::InvalidArgument(
                 "routing batch must not be empty".to_string(),
@@ -141,11 +171,7 @@ impl<'a> NoteService<'a> {
                 created_at: chrono::Utc::now().to_rfc3339(),
             });
         }
-        self.db.route_notes_to_projects(&updates).await?;
-        self.try_append_assignment_events(&events).await;
-        Ok(NoteRouteProjectResult {
-            routed: updates.len(),
-        })
+        Ok((updates, events))
     }
 
     pub async fn list(&self, input: NoteListInput) -> Result<Vec<NoteListItem>, ServiceError> {

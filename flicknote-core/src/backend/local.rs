@@ -29,6 +29,108 @@ impl LocalPowerSyncBackend {
         &self.db
     }
 
+    /// Check local classification inputs under the same writer/transaction as routing.
+    pub async fn route_notes_to_projects_guarded(
+        &self,
+        updates: &[RouteProjectUpdate],
+        check: impl FnOnce(&Connection) -> Result<bool, CliError> + Send,
+    ) -> Result<bool, CliError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        if !check(&tx)? {
+            return Ok(false);
+        }
+        for update in updates {
+            if let Some(project_id) = update.project_id.as_deref() {
+                let project_exists = tx
+                    .query_row(
+                        "SELECT 1 FROM projects WHERE user_id = ? AND id = ? \
+                         AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
+                        params![self.user_id, project_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !project_exists {
+                    return Err(CliError::Other(format!("Project not found: {project_id}")));
+                }
+            }
+
+            let row = tx
+                .query_row(
+                    "SELECT id, status, project_id, metadata FROM notes WHERE user_id = ? \
+                     AND short_id = ? AND deleted_at IS NULL LIMIT 1",
+                    params![self.user_id, update.note_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| CliError::NoteNotFound {
+                    id: update.note_id.to_string(),
+                })?;
+            let (note_id, status, project_id, metadata) = row;
+            if status != NoteStatus::Ready.as_str() {
+                return Err(CliError::Other(format!(
+                    "Note {} is not ready",
+                    update.note_id
+                )));
+            }
+            if project_id.is_some() {
+                return Err(CliError::Other(format!(
+                    "Note {} already has a project",
+                    update.note_id
+                )));
+            }
+            let mut metadata = metadata
+                .as_deref()
+                .map(serde_json::from_str::<serde_json::Value>)
+                .transpose()?
+                .unwrap_or_else(|| serde_json::json!({}));
+            let object = metadata.as_object_mut().ok_or_else(|| {
+                CliError::Other(format!(
+                    "Note {} metadata must be a JSON object",
+                    update.note_id
+                ))
+            })?;
+            if object
+                .get("project_routing")
+                .and_then(|value| value.get("routed"))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true)
+            {
+                return Err(CliError::Other(format!(
+                    "Note {} is already routed",
+                    update.note_id
+                )));
+            }
+            let probability: serde_json::Value = serde_json::from_str(&update.probability_json)?;
+            object.insert(
+                "project_routing".to_string(),
+                serde_json::json!({"routed": true, "probability": probability}),
+            );
+            tx.execute(
+                "UPDATE notes SET project_id = ?, metadata = ?, updated_at = ? \
+                 WHERE user_id = ? AND id = ?",
+                params![
+                    update.project_id,
+                    serde_json::to_string(&metadata)?,
+                    now,
+                    self.user_id,
+                    note_id
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
     /// Read the synchronized canonical share row without changing local state.
     pub async fn current_note_share(&self, id: &str) -> Result<Option<NoteShare>, CliError> {
         let reader = self.db.reader().await?;
@@ -653,97 +755,9 @@ impl NoteDb for LocalPowerSyncBackend {
         &self,
         updates: &[RouteProjectUpdate],
     ) -> Result<(), CliError> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut writer = self.db.writer().await?;
-        let tx = writer.transaction()?;
-        for update in updates {
-            if let Some(project_id) = update.project_id.as_deref() {
-                let project_exists = tx
-                    .query_row(
-                        "SELECT 1 FROM projects WHERE user_id = ? AND id = ? \
-                         AND (is_archived = 0 OR is_archived IS NULL) LIMIT 1",
-                        params![self.user_id, project_id],
-                        |_| Ok(()),
-                    )
-                    .optional()?
-                    .is_some();
-                if !project_exists {
-                    return Err(CliError::Other(format!("Project not found: {project_id}")));
-                }
-            }
-
-            let row = tx
-                .query_row(
-                    "SELECT id, status, project_id, metadata FROM notes WHERE user_id = ? \
-                     AND short_id = ? AND deleted_at IS NULL LIMIT 1",
-                    params![self.user_id, update.note_id],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<String>>(2)?,
-                            row.get::<_, Option<String>>(3)?,
-                        ))
-                    },
-                )
-                .optional()?
-                .ok_or_else(|| CliError::NoteNotFound {
-                    id: update.note_id.to_string(),
-                })?;
-            let (note_id, status, project_id, metadata) = row;
-            if status != NoteStatus::Ready.as_str() {
-                return Err(CliError::Other(format!(
-                    "Note {} is not ready",
-                    update.note_id
-                )));
-            }
-            if project_id.is_some() {
-                return Err(CliError::Other(format!(
-                    "Note {} already has a project",
-                    update.note_id
-                )));
-            }
-            let mut metadata = metadata
-                .as_deref()
-                .map(serde_json::from_str::<serde_json::Value>)
-                .transpose()?
-                .unwrap_or_else(|| serde_json::json!({}));
-            let object = metadata.as_object_mut().ok_or_else(|| {
-                CliError::Other(format!(
-                    "Note {} metadata must be a JSON object",
-                    update.note_id
-                ))
-            })?;
-            if object
-                .get("project_routing")
-                .and_then(|value| value.get("routed"))
-                .and_then(serde_json::Value::as_bool)
-                == Some(true)
-            {
-                return Err(CliError::Other(format!(
-                    "Note {} is already routed",
-                    update.note_id
-                )));
-            }
-            let probability: serde_json::Value = serde_json::from_str(&update.probability_json)?;
-            object.insert(
-                "project_routing".to_string(),
-                serde_json::json!({"routed": true, "probability": probability}),
-            );
-            tx.execute(
-                "UPDATE notes SET project_id = ?, metadata = ?, updated_at = ? \
-                 WHERE user_id = ? AND id = ?",
-                params![
-                    update.project_id,
-                    serde_json::to_string(&metadata)?,
-                    now,
-                    self.user_id,
-                    note_id
-                ],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.route_notes_to_projects_guarded(updates, |_| Ok(true))
+            .await
+            .map(|_| ())
     }
 
     async fn submit_draft(&self, id: &str) -> Result<bool, CliError> {

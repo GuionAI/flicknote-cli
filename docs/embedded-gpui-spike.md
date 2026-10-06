@@ -131,6 +131,13 @@ the old list/detail/selection and watch; capture stays global/unassigned with
 pending/recovery/unknown identity retained. Unmatched captures stay out of project
 lists. See [the shortcuts audit](shortcuts-audit.md) for deferred mappings.
 
+Project Add and summary editors use the same Kit controls in owned rendered
+tests. Their Return, Cmd-Return, Escape and composition contract is documented in
+[the shortcuts audit](shortcuts-audit.md). Automatic organization and its credential
+control run only in the normal GUI host; synthetic `--root` never accesses
+Keychain or starts the provider actor. Tests inject fake stores and port0 HTTP
+separately; see [automatic organization](automatic-organization.md).
+
 The composer creates an unassigned note with detail closed and appends to the
 confirmed open detail with it open (#3378). The `Append to #ID` placeholder reflects
 the next target; each accepted UUID/text stays fixed through navigation/close/reopen.
@@ -303,7 +310,7 @@ install a cross-toolchain to verify this spike. Upstream build and API evidence 
 in the local implementation report.
 
 Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
-editing, formula/Mermaid rendering, unsupported navigation/date shortcuts, voice/global
+note editing, formula/Mermaid rendering, unsupported navigation/date shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
 acceptance belongs to its historical source; it does not accept this new direction.

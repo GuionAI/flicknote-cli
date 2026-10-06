@@ -500,6 +500,15 @@ canonical stored Markdown. Failures retain submitted text without replacing new 
 a possible-after-write error requires checking the target before resubmitting. No offline
 queue or automatic mutation retry is added. Close keeps the owner alive; Quit releases it.
 
+Add projects from the rail and edit their summaries above the project All list.
+The application menu's **Automatic organization…** control stores an account-scoped
+OpenRouter key in a new GUI Keychain service. The background GUI host routes
+post-first-start, unassigned ready notes from compact project/note summaries,
+with bounded content fallback, manual precedence and finite retries. Closing the
+window retains routing; Quit cancels it. Configuration, privacy/provider cost,
+cutoff and recovery are documented in [automatic organization](docs/automatic-organization.md).
+Headless organization and the Human-created view filter remain deferred.
+
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)
 for implemented, partial and deferred desktop mappings. Private remote PostgreSQL

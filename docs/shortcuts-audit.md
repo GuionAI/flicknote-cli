@@ -34,6 +34,7 @@ surface or native acceptance.
 | Escape | Close detail → exit search/focus composer → dismiss workspace, according to current state | Partial: close detail and restore composer; retain marked/transient-input handling; no workspace search/dismiss stack |
 | CmdA/C/V/X | Native select-all/copy/paste/cut in the owning text editor | Retained Kit native editing; these are not missing workspace actions |
 | CmdZ / CmdShiftZ | Native undo/redo | Retained Kit native editing; navigation retains the same composer/undo state |
+| CmdReturn | Save project summary while editing | Implemented #3384: save without adding a newline; marked input retains Kit priority |
 | CmdQ | Quit application | Implemented: explicit host shutdown; window close keeps host alive |
 | CmdComma | Settings | Deferred: no GPUI settings surface |
 | Global Fn / configured trigger | Desktop global workspace trigger | Deferred: no GPUI global hook/trigger |
@@ -71,6 +72,19 @@ Normal GUI packaging reuses existing config/session/endpoints; synthetic tests u
 Follow [the normal GUI operator guide](normal-gui-host.md) for existing-config,
 source/hash-bound packaging and opt-in launch. This audit authorizes no account,
 service, installed-app, release or deployment change.
+
+## Project and organization editors (#3384)
+
+Add project and summary Edit use focused Kit inputs. Workspace number/Option,
+note capture and detail actions stay inactive under the modal editor. Return
+saves a project name; in the summary it inserts a newline, while Cmd-Return saves
+without inserting one. Marked input keeps composition priority. Escape cancels
+only after input transient/composition handling; Cancel leaves stored data intact.
+Saving disables duplicate submissions and dismissal until completion; errors
+retain editable text. Summary completion is bound to its editor/UUID, while
+watch is authoritative. The masked organization key field uses Kit's single-line
+input and no composer native adapter. See [organization](automatic-organization.md)
+for configuration and retained host behavior. No general Settings shortcut is added.
 
 ## Chinese input-source Option routing (#3296)
 

@@ -3,7 +3,10 @@ use super::tests::settle;
 use super::*;
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 
-fn fixture(runtime: &tokio::runtime::Runtime, root: &std::path::Path) -> flicknote_sync::LocalHost {
+pub(super) fn fixture(
+    runtime: &tokio::runtime::Runtime,
+    root: &std::path::Path,
+) -> flicknote_sync::LocalHost {
     let listener = runtime
         .block_on(tokio::net::TcpListener::bind((
             std::net::Ipv4Addr::LOCALHOST,
@@ -49,7 +52,10 @@ fn fixture(runtime: &tokio::runtime::Runtime, root: &std::path::Path) -> flickno
     });
     host
 }
-fn services(host: &flicknote_sync::LocalHost, runtime: &tokio::runtime::Runtime) -> Arc<Services> {
+pub(super) fn services(
+    host: &flicknote_sync::LocalHost,
+    runtime: &tokio::runtime::Runtime,
+) -> Arc<Services> {
     Arc::new(Services {
         app: host.app.clone(),
         db: host.db.clone(),
@@ -61,10 +67,11 @@ fn services(host: &flicknote_sync::LocalHost, runtime: &tokio::runtime::Runtime)
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
     })
 }
-fn open(
+pub(super) fn open(
     cx: &mut TestAppContext,
     services: Arc<Services>,
 ) -> (gpui_kit::WindowHandle<gpui_kit::base::Root>, Entity<Today>) {

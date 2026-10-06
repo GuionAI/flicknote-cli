@@ -2320,6 +2320,7 @@ version = "1.14.3"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "clap",
  "env_logger",
  "flicknote-auth",
@@ -2329,6 +2330,8 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "log",
+ "security-framework",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

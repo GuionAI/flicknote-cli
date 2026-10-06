@@ -43,7 +43,7 @@ class NormalPackage(unittest.TestCase):
             metadata = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
             self.assertEqual(metadata['CFBundleIdentifier'], manifest['bundle_id'])
             self.assertEqual(manifest['mode'], 'normal')
-            self.assertEqual(manifest['spec'], 3374)
+            self.assertEqual(manifest['spec'], 3384)
             for expression, field in [('HEAD', 'source_commit'), ('HEAD^{tree}', 'source_tree')]:
                 self.assertEqual(manifest[field], subprocess.check_output(['git', 'rev-parse', expression], cwd=owned, text=True).strip())
             for path, hash_value in manifest['sha256'].items():

@@ -248,6 +248,16 @@ impl Today {
                             .text_color(p.muted_foreground)
                             .child("Projects"),
                     )
+                    .child(
+                        Button::new("add-project")
+                            .label("Add project")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.edit(project_editor::Kind::Add, window, cx);
+                            })),
+                    )
                     .children(
                         self.projects
                             .iter()
@@ -648,6 +658,7 @@ impl Today {
                     .min_h_0()
                     .flex()
                     .flex_col()
+                    .children(self.render_summary(cx))
                     .child(self.render_list(p, cx))
                     .test_support(),
             )
@@ -655,27 +666,16 @@ impl Today {
             .test_support()
     }
 }
-impl Render for Today {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.visible && window.is_visible() {
-            self.frames += 1;
-        }
-        self.visible = window.is_visible();
-        let navigation_context = if self.shortcuts_blocked(window, cx) {
-            "Today"
-        } else {
-            "Today destination_navigation"
-        };
-        let theme = Theme::global(cx);
-        let p = ColorTokens {
-            selection: theme.list_active,
-            ..theme.color_tokens()
-        };
-        let viewport = window.viewport_size();
-        let detail_width = reading_width(f32::from(viewport.width));
+impl Today {
+    fn workspace_actions(
+        &self,
+        navigation_context: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
         div()
             .id("workspace")
             .key_context(navigation_context)
+            .on_action(cx.listener(|this, _: &SaveEditor, window, cx| this.save_editor(window, cx)))
             .on_action(
                 cx.listener(|this, _: &Project2, window, cx| this.select_number(2, window, cx)),
             )
@@ -713,27 +713,73 @@ impl Render for Today {
                 cx.listener(|this, _: &PreviousNote, window, cx| this.navigate(false, window, cx)),
             )
             .on_action(cx.listener(|this, _: &ArchiveNote, window, cx| this.archive(window, cx)))
+    }
+}
+impl Render for Today {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.visible && window.is_visible() {
+            self.frames += 1;
+        }
+        self.visible = window.is_visible();
+        let navigation_context = if self.editor.is_some() {
+            "WorkspaceEditor"
+        } else if self.shortcuts_blocked(window, cx) {
+            "Today"
+        } else {
+            "Today destination_navigation"
+        };
+        let theme = Theme::global(cx);
+        let p = ColorTokens {
+            selection: theme.list_active,
+            ..theme.color_tokens()
+        };
+        let viewport = window.viewport_size();
+        let detail_width = reading_width(f32::from(viewport.width));
+        self.workspace_actions(navigation_context, cx)
             .relative()
             .size_full()
             .bg(p.background)
             .text_color(p.foreground)
             .font_family(".SystemUIFont")
-            .capture_action(
-                cx.listener(|this, _: &gpui_kit::base::input::Enter, window, cx| {
-                    this.enter_composing = this.composing(window, cx);
+            .capture_action(cx.listener(
+                |this, action: &gpui_kit::base::input::Enter, window, cx| {
+                    this.enter_composing = if this.editor.is_some() {
+                        this.editor_composing(window, cx)
+                    } else {
+                        this.composing(window, cx)
+                    };
+                    if action.secondary
+                        && !action.shift
+                        && !this.enter_composing
+                        && this
+                            .editor
+                            .as_ref()
+                            .is_some_and(|e| matches!(e.kind, project_editor::Kind::Summary(_)))
+                    {
+                        this.save_editor(window, cx);
+                        return;
+                    }
                     cx.propagate();
-                }),
-            )
+                },
+            ))
             .capture_action(
                 cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
-                    this.escape_composing = this.composing(window, cx);
+                    this.escape_composing = if this.editor.is_some() {
+                        this.editor_composing(window, cx)
+                    } else {
+                        this.composing(window, cx)
+                    };
                     cx.propagate();
                 }),
             )
             .on_action(
                 cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
                     if !this.escape_composing {
-                        this.close_detail(window, cx);
+                        if this.editor.is_some() {
+                            this.cancel_editor(window, cx);
+                        } else {
+                            this.close_detail(window, cx);
+                        }
                     }
                     this.escape_composing = false;
                 }),
@@ -753,7 +799,10 @@ impl Render for Today {
                             .then(|| self.render_detail(p, detail_width, cx)),
                     ),
             )
-            .child(crate::native_input::install(self.composer.clone()))
+            .when(self.editor.is_none(), |d| {
+                d.child(crate::native_input::install(self.composer.clone()))
+            })
+            .children(self.render_editor(cx))
     }
 }
 

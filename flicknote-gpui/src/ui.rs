@@ -33,15 +33,16 @@ pub(super) struct Services {
     pub(super) destination: Mutex<Destination>,
     pub(super) capture: Arc<Mutex<Capture>>,
     pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
+    pub(super) organization: Mutex<Option<crate::organization::Control>>,
     pub(super) capture_changed: tokio::sync::watch::Sender<()>,
 }
 impl Services {
-    fn track<T>(&self, job: &tokio::task::JoinHandle<T>) {
+    pub(crate) fn track<T>(&self, job: &tokio::task::JoinHandle<T>) {
         let mut operations = self.operations.lock().expect("operation registry");
         operations.retain(|h| !h.is_finished());
         operations.push(job.abort_handle());
     }
-    fn cancel_operations(&self) {
+    pub(crate) fn cancel_operations(&self) {
         for operation in self
             .operations
             .lock()
@@ -72,12 +73,20 @@ actions!(
         Project8,
         Project9,
         NextDestination,
-        PreviousDestination
+        PreviousDestination,
+        SaveEditor,
+        AutomaticOrganization
     ]
 );
 
 fn install_today_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-enter", SaveEditor, Some("WorkspaceEditor")),
+        KeyBinding::new(
+            "escape",
+            gpui_kit::base::input::Escape,
+            Some("WorkspaceEditor"),
+        ),
         KeyBinding::new("cmd-1", Reopen, Some("Today")),
         KeyBinding::new("cmd-2", Project2, Some("Today")),
         KeyBinding::new("cmd-3", Project3, Some("Today")),
@@ -116,6 +125,9 @@ struct Reading {
 }
 
 struct Today {
+    editor: Option<project_editor::Editor>,
+    pending_project: Option<String>,
+    organization_task: Option<Task<()>>,
     services: Arc<Services>,
     destination: Destination,
     loaded: bool,
@@ -184,6 +196,9 @@ impl Today {
             .expect("window destination")
             .clone();
         let mut this = Self {
+            editor: None,
+            pending_project: None,
+            organization_task: None,
             destination,
             loaded: false,
             model: Model {
@@ -227,6 +242,7 @@ impl Today {
         this.subscribe(window, cx);
         this.observe_main_loop(window, cx);
         this.subscribe_status(window, cx);
+        this.observe_organization(window, cx);
         this
     }
 
@@ -255,6 +271,32 @@ impl Today {
         }));
     }
 
+    fn observe_organization(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(control) = self
+            .services
+            .organization
+            .lock()
+            .expect("organization control")
+            .clone()
+        else {
+            return;
+        };
+        self.organization_task = Some(cx.spawn_in(window, async move |entity, cx| {
+            let mut state = control.state;
+            let mut error = control.routing_error;
+            let mut opened=control.opened.subscribe();
+            loop {
+                let requested=*opened.borrow_and_update();
+                if entity.update_in(cx,|this,window,cx| {
+                    if requested {this.edit(project_editor::Kind::Organization,window,cx);}
+                    cx.notify();
+                }).is_err(){break;}
+                if requested {control.opened.send_replace(false);}
+                tokio::select! {r=state.changed()=>if r.is_err(){break;}, r=error.changed()=>if r.is_err(){break;},r=opened.changed()=>if r.is_err(){break;}}
+            }
+        }));
+    }
+
     fn subscribe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.watch_task.take();
         self.watch.take();
@@ -267,59 +309,66 @@ impl Today {
         );
         let mut receiver = watcher.receiver.clone();
         self.watch = Some(watcher);
-        self.watch_task = Some(cx.spawn_in(window, async move |entity, cx| {
-            loop {
-                let snapshot = receiver.borrow_and_update().clone();
-                if let Some(result) = snapshot
-                    && entity
-                        .update_in(cx, |this, window, cx| {
-                            if this.destination != destination {
-                                return;
-                            }
-                            match result {
-                                Ok(snapshot) => {
-                                    this.archived
-                                        .retain(|id| snapshot.rows.iter().any(|r| r.id == *id));
-                                    let rows = if this.archived.is_empty() {
-                                        snapshot.rows.clone()
-                                    } else {
-                                        Arc::new(
-                                            snapshot
-                                                .rows
-                                                .iter()
-                                                .filter(|r| !this.archived.contains(&r.id))
-                                                .cloned()
-                                                .collect(),
-                                        )
-                                    };
-                                    this.projects = snapshot.projects;
-                                    if let Destination::Project(id) = &this.destination
-                                        && !this.projects.iter().any(|p| &p.id == id)
-                                    {
-                                        this.set_destination(Destination::Home, window, cx);
-                                        return;
+        self.watch_task =
+            Some(cx.spawn_in(window, async move |entity, cx| {
+                loop {
+                    let snapshot = receiver.borrow_and_update().clone();
+                    if let Some(result) = snapshot
+                        && entity
+                            .update_in(cx, |this, window, cx| {
+                                if this.destination != destination {
+                                    return;
+                                }
+                                match result {
+                                    Ok(snapshot) => {
+                                        this.archived
+                                            .retain(|id| snapshot.rows.iter().any(|r| r.id == *id));
+                                        let rows = if this.archived.is_empty() {
+                                            snapshot.rows.clone()
+                                        } else {
+                                            Arc::new(
+                                                snapshot
+                                                    .rows
+                                                    .iter()
+                                                    .filter(|r| !this.archived.contains(&r.id))
+                                                    .cloned()
+                                                    .collect(),
+                                            )
+                                        };
+                                        this.projects = snapshot.projects;
+                                        if this.pending_project.as_ref().is_some_and(|id| {
+                                            this.projects.iter().any(|p| &p.id == id)
+                                        }) {
+                                            this.select_created(window, cx);
+                                            return;
+                                        }
+                                        if let Destination::Project(id) = &this.destination
+                                            && !this.projects.iter().any(|p| &p.id == id)
+                                        {
+                                            this.set_destination(Destination::Home, window, cx);
+                                            return;
+                                        }
+                                        this.loaded = true;
+                                        this.model.snapshot(rows);
+                                        this.refresh_detail(window, cx);
+                                        this.watch_error = None;
                                     }
-                                    this.loaded = true;
-                                    this.model.snapshot(rows);
-                                    this.refresh_detail(window, cx);
-                                    this.watch_error = None;
+                                    Err(error) => {
+                                        this.watch_error =
+                                            Some(format!("Could not load notes: {error}"))
+                                    }
                                 }
-                                Err(error) => {
-                                    this.watch_error =
-                                        Some(format!("Could not load notes: {error}"))
-                                }
-                            }
-                            cx.notify();
-                        })
-                        .is_err()
-                {
-                    break;
+                                cx.notify();
+                            })
+                            .is_err()
+                    {
+                        break;
+                    }
+                    if receiver.changed().await.is_err() {
+                        break;
+                    }
                 }
-                if receiver.changed().await.is_err() {
-                    break;
-                }
-            }
-        }));
+            }));
     }
 
     fn change_destination(
@@ -328,7 +377,7 @@ impl Today {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.composing(window, cx) {
+        if self.editor.is_some() || self.composing(window, cx) {
             return;
         }
         self.set_destination(destination, window, cx);
@@ -380,8 +429,10 @@ impl Today {
             return;
         }
         self.close_detail(window, cx);
-        self.composer
-            .update(cx, |input, cx| input.focus(window, cx));
+        if self.editor.is_none() {
+            self.composer
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         if destination == self.destination {
             return;
         }
@@ -721,7 +772,9 @@ impl Today {
     }
 
     fn shortcuts_blocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        !self.composer.read(cx).value().is_empty() || self.composing(window, cx)
+        self.editor.is_some()
+            || !self.composer.read(cx).value().is_empty()
+            || self.composing(window, cx)
     }
 
     fn open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -935,6 +988,53 @@ fn open(state: HostState, system: std::rc::Rc<std::cell::Cell<bool>>, cx: &mut A
     }
 }
 
+fn install_workspace_menu(
+    state: &HostState,
+    system: &std::rc::Rc<std::cell::Cell<bool>>,
+    cx: &mut App,
+) {
+    cx.on_action(|_: &Quit, cx| cx.quit());
+    let reopen = state.clone();
+    let reopen_system = system.clone();
+    cx.on_action(move |_: &Reopen, cx| {
+        if let Some(Ok(WorkspaceState::Ready(services))) = reopen.borrow().as_ref() {
+            *services.destination.lock().expect("window destination") = Destination::Home;
+        }
+        open(reopen.clone(), reopen_system.clone(), cx);
+    });
+    let organization_state = state.clone();
+    let organization_system = system.clone();
+    cx.on_action(move |_: &AutomaticOrganization, cx| {
+        if let Some(Ok(WorkspaceState::Ready(services))) = organization_state.borrow().as_ref()
+            && let Some(control) = services
+                .organization
+                .lock()
+                .expect("organization control")
+                .as_ref()
+        {
+            control.opened.send_replace(true);
+            open(organization_state.clone(), organization_system.clone(), cx);
+        }
+    });
+    cx.set_menus(vec![Menu {
+        name: "FlickNote".into(),
+        disabled: false,
+        items: vec![
+            MenuItem::action("Open Today", Reopen),
+            MenuItem::action("Automatic organization…", AutomaticOrganization),
+            MenuItem::action("Next note", NextNote),
+            MenuItem::action("Previous note", PreviousNote),
+            MenuItem::action("Archive selected note", ArchiveNote),
+            MenuItem::separator(),
+            MenuItem::action("Appearance: System", SystemTheme),
+            MenuItem::action("Appearance: Light", LightTheme),
+            MenuItem::action("Appearance: Dark", DarkTheme),
+            MenuItem::separator(),
+            MenuItem::action("Quit FlickNote Trial", Quit),
+        ],
+    }]);
+}
+
 pub(crate) fn run() -> anyhow::Result<()> {
     let options = crate::launch::Options::parse();
     let runtime = tokio::runtime::Runtime::new()?;
@@ -998,31 +1098,7 @@ pub(crate) fn run() -> anyhow::Result<()> {
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-1", Reopen, None),
         ]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        let reopen = state.clone();
-        let reopen_system = system.clone();
-        cx.on_action(move |_: &Reopen, cx| {
-            if let Some(Ok(WorkspaceState::Ready(services))) = reopen.borrow().as_ref() {
-                *services.destination.lock().expect("window destination") = Destination::Home;
-            }
-            open(reopen.clone(), reopen_system.clone(), cx);
-        });
-        cx.set_menus(vec![Menu {
-            name: "FlickNote".into(),
-            disabled: false,
-            items: vec![
-                MenuItem::action("Open Today", Reopen),
-                MenuItem::action("Next note", NextNote),
-                MenuItem::action("Previous note", PreviousNote),
-                MenuItem::action("Archive selected note", ArchiveNote),
-                MenuItem::separator(),
-                MenuItem::action("Appearance: System", SystemTheme),
-                MenuItem::action("Appearance: Light", LightTheme),
-                MenuItem::action("Appearance: Dark", DarkTheme),
-                MenuItem::separator(),
-                MenuItem::action("Quit FlickNote Trial", Quit),
-            ],
-        }]);
+        install_workspace_menu(&state, &system, cx);
         let mut quit = Some(quit);
         cx.on_app_quit(move |_| {
             if let Some(quit) = quit.take() {
@@ -1053,3 +1129,10 @@ mod sync_progress_tests;
 #[cfg(test)]
 #[path = "append_tests.rs"]
 mod append_tests;
+
+#[path = "project_editor.rs"]
+mod project_editor;
+
+#[cfg(test)]
+#[path = "project_editor_tests.rs"]
+mod project_editor_tests;

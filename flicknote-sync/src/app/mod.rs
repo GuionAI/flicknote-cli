@@ -69,6 +69,20 @@ impl Application {
         self.handle_inner(request).await
     }
 
+    #[cfg(feature = "experimental-spike")]
+    pub(crate) async fn route_project_locally_guarded(
+        &self,
+        input: Vec<flicknote_client::dto::NoteRouteProjectInput>,
+        local: &flicknote_core::backend::LocalPowerSyncBackend,
+        check: impl FnOnce(&rusqlite::Connection) -> Result<bool, flicknote_core::error::CliError>
+        + Send,
+    ) -> Result<bool, WireError> {
+        self.notes()
+            .route_project_locally_guarded(input, local, check)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn handle_inner(&self, request: AppRequest) -> Result<AppResponse, WireError> {
         match request.kind() {
             AppRequestKind::NoteRead => note::handle_read(self, request).await,

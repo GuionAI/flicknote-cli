@@ -10,6 +10,8 @@ mod login;
 mod model;
 #[cfg(target_os = "macos")]
 mod native_input;
+#[cfg(target_os = "macos")]
+mod organization;
 #[cfg(all(test, target_os = "macos"))]
 mod selection_tests;
 #[cfg(target_os = "macos")]

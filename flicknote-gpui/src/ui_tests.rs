@@ -15,6 +15,26 @@ pub(super) fn settle(cx: &mut TestAppContext, predicate: impl Fn(&mut TestAppCon
     }
 }
 
+fn synthetic_services(
+    host: &flicknote_sync::spike::SpikeHost,
+    runtime: &tokio::runtime::Runtime,
+) -> Arc<Services> {
+    Arc::new(Services {
+        app: host.app.clone(),
+        db: host.db.clone(),
+        runtime: runtime.handle().clone(),
+        operations: Mutex::new(vec![]),
+        destination: Mutex::default(),
+        capture: Arc::default(),
+        draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
+        capture_changed: tokio::sync::watch::channel(()).0,
+        user_id: flicknote_sync::spike::USER.into(),
+        real_account: false,
+        first_sync: std::sync::Mutex::default(),
+    })
+}
+
 #[gpui_kit::test]
 #[allow(clippy::too_many_lines)] // One real test window preserves focus/state across the interaction sequence.
 fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestAppContext) {
@@ -37,6 +57,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
@@ -394,6 +415,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
@@ -499,6 +521,7 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
@@ -795,19 +818,7 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
             Duration::from_millis(100),
         ))
         .unwrap();
-    let services = Arc::new(Services {
-        app: host.app.clone(),
-        db: host.db.clone(),
-        runtime: runtime.handle().clone(),
-        operations: Mutex::new(vec![]),
-        destination: Mutex::default(),
-        capture: Arc::default(),
-        draft: std::sync::Mutex::default(),
-        capture_changed: tokio::sync::watch::channel(()).0,
-        user_id: flicknote_sync::spike::USER.into(),
-        real_account: false,
-        first_sync: std::sync::Mutex::default(),
-    });
+    let services = synthetic_services(&host, &runtime);
     cx.update(|cx| {
         gpui_kit::init(cx);
         install_today_keys(cx);
@@ -1253,6 +1264,7 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: host.user_id.clone(),
         real_account: true,
@@ -1485,6 +1497,7 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,
@@ -1688,6 +1701,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         destination: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
+        organization: Mutex::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
         user_id: flicknote_sync::spike::USER.into(),
         real_account: false,

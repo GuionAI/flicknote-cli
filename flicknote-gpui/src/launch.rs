@@ -119,7 +119,7 @@ impl Host {
                 false,
             ),
         };
-        super::ui::Services {
+        let services = super::ui::Services {
             app,
             db,
             user_id,
@@ -130,8 +130,17 @@ impl Host {
             destination: std::sync::Mutex::default(),
             capture: std::sync::Arc::default(),
             draft: std::sync::Mutex::default(),
+            organization: std::sync::Mutex::default(),
             capture_changed: tokio::sync::watch::channel(()).0,
+        };
+        if let Self::Real(host) = self {
+            let control = crate::organization::start(
+                &services,
+                host.socket.parent().expect("host data directory"),
+            );
+            *services.organization.lock().expect("organization control") = Some(control);
         }
+        services
     }
     pub(crate) async fn burst(&self, count: u32) -> Result<(), String> {
         if let Self::Synthetic(host) = self {
