@@ -245,6 +245,97 @@ fn add(content: &str, topics: Vec<String>) -> AppRequest {
 }
 
 #[tokio::test]
+async fn cached_host_search_ipc_mcp_and_recall_survive_physical_replacement() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        for content in ["oldword", "latestword 中文"] {
+            writer.execute(
+                "INSERT OR REPLACE INTO ps_data__notes(id, data) SELECT id, json_set(data, '$.content', ?1) FROM ps_data__notes WHERE id='a'",
+                [content],
+            ).unwrap();
+        }
+        // FTS internal identity is deliberately distinct from backing identity.
+        writer
+            .execute("UPDATE note_search_fts SET rowid=10001 WHERE uuid='a'", [])
+            .unwrap();
+        writer.execute("INSERT INTO note_extractions (id,note_id,user_id,key,value) VALUES('extraction','a','account-a','::topic','Replacement topic')", []).unwrap();
+    }
+    let client = DaemonClient::new(&host.socket);
+    let input = flicknote_client::dto::NoteFindInput {
+        keywords: vec!["latestword".into()],
+        extractions: vec![],
+        project: Some("Current".into()),
+        created_after: None,
+        created_before: None,
+        human: true,
+        archived: false,
+        limit: 1,
+    };
+    let AppResponse::SearchHits(hits) = client.app(AppRequest::NoteFind(input)).await.unwrap()
+    else {
+        panic!("expected search hits");
+    };
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].short_id, Some(3));
+    assert_eq!(hits[0].note_type, "link");
+    assert_eq!(hits[0].content_bytes, "latestword 中文".len() as u64);
+    assert!(hits[0].snippet.segments.iter().any(|s| s.highlighted));
+    let found = mcp(
+        host.mcp_port,
+        "note_find",
+        json!({"keywords":["latestword"],"project":"Current","human":true,"limit":1}),
+    )
+    .await;
+    let mcp_hits = &found["result"]["structuredContent"]["hits"];
+    assert_eq!(mcp_hits, &serde_json::to_value(hits).unwrap());
+    let old = mcp(host.mcp_port, "note_find", json!({"keywords":["oldword"]})).await;
+    assert_eq!(old["result"]["structuredContent"]["hits"], json!([]));
+    let AppResponse::NoteRecall(candidates) = client
+        .app(AppRequest::NoteRecall {
+            prompt: "Replacement topic".into(),
+            project: Some("Current".into()),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected recall candidates");
+    };
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].id, 3);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='{\"created_by_ai\":true}' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    let hidden = mcp(
+        host.mcp_port,
+        "note_find",
+        json!({"keywords":["latestword"],"human":true}),
+    )
+    .await;
+    assert_eq!(hidden["result"]["structuredContent"]["hits"], json!([]));
+    let AppResponse::NoteRecall(candidates) = client
+        .app(AppRequest::NoteRecall {
+            prompt: "Replacement topic".into(),
+            project: None,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected recall candidates");
+    };
+    assert!(candidates.is_empty());
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn cached_host_production_creator_ipc_mcp_download_close_reopen_and_restart() {
     let (_root, config, fake, mut streams, server) = fixture().await;

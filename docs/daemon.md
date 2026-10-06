@@ -73,6 +73,15 @@ search archived notes; use extraction-only search for archived filtering.
 The local FTS projection carries an explicit `FTS_SCHEMA_VERSION`. Startup
 discards and rebuilds it when the version differs or a required maintenance
 trigger is missing, even if the index and source have equal row counts.
+Version 2 keys trigger cleanup and canonical search joins by stable note UUID,
+not the PowerSync backing rowid. Downloaded replacements remove all previous
+entries for that UUID, including when the replacement is archived. FTS retains
+its own integer rowid for snippet addressing. The upgrade replaces triggers and
+fills the disposable index atomically without changing canonical notes.
+Healthy preparation retains integrity and active-row-count checks but does not
+run an opportunistic fill scan; filling occurs only on installation or recovery.
+Repeated prepare/reopen reuses the healthy projection. GUI and headless local
+startup continue to await preparation before publishing IPC/MCP readiness.
 
 ## Authentication symmetry
 

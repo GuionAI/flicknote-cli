@@ -9,7 +9,7 @@ use rusqlite::{Connection, Result, params};
 use flicknote_client::dto::{NoteFindInput, SearchHit, SearchSnippet, SnippetSegment};
 
 const BACKING_TABLE: &str = "ps_data__notes";
-pub const FTS_SCHEMA_VERSION: i64 = 1;
+pub const FTS_SCHEMA_VERSION: i64 = 2;
 
 /// Install an FTS index and triggers on the pinned PowerSync backing table.
 /// Reopening an already indexed database leaves existing rows intact.
@@ -23,7 +23,17 @@ pub fn install(connection: &Connection) -> Result<()> {
         return Err(rusqlite::Error::InvalidQuery);
     }
     let transaction = connection.unchecked_transaction()?;
-    transaction.execute_batch(
+    install_schema(&transaction)?;
+    transaction.commit()
+}
+
+fn install_schema(connection: &Connection) -> Result<()> {
+    let index_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='note_search_fts')",
+        [],
+        |row| row.get(0),
+    )?;
+    connection.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS note_search_meta (
             id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -36,22 +46,25 @@ pub fn install(connection: &Connection) -> Result<()> {
             tokenize='better_trigram', detail=full
         );
         CREATE TRIGGER IF NOT EXISTS note_search_insert AFTER INSERT ON ps_data__notes
-        WHEN json_extract(new.data, '$.deleted_at') IS NULL
         BEGIN
+            -- REPLACE may omit the implicit DELETE trigger. UUID is durable;
+            -- the backing rowid can change on every downloaded replacement.
+            DELETE FROM note_search_fts WHERE uuid=new.id;
             INSERT INTO note_search_fts
-                (rowid, uuid, short_id, project_id, created_at, updated_at, title, summary, content)
-            VALUES (new.rowid, new.id,
+                (uuid, short_id, project_id, created_at, updated_at, title, summary, content)
+            SELECT new.id,
                 json_extract(new.data, '$.short_id'), json_extract(new.data, '$.project_id'),
                 json_extract(new.data, '$.created_at'), json_extract(new.data, '$.updated_at'),
                 json_extract(new.data, '$.title'), json_extract(new.data, '$.summary'),
-                json_extract(new.data, '$.content'));
+                json_extract(new.data, '$.content')
+            WHERE json_extract(new.data, '$.deleted_at') IS NULL;
         END;
         CREATE TRIGGER IF NOT EXISTS note_search_update AFTER UPDATE ON ps_data__notes
         BEGIN
-            DELETE FROM note_search_fts WHERE rowid=old.rowid;
+            DELETE FROM note_search_fts WHERE uuid=old.id;
             INSERT INTO note_search_fts
-                (rowid, uuid, short_id, project_id, created_at, updated_at, title, summary, content)
-            SELECT new.rowid, new.id,
+                (uuid, short_id, project_id, created_at, updated_at, title, summary, content)
+            SELECT new.id,
                 json_extract(new.data, '$.short_id'), json_extract(new.data, '$.project_id'),
                 json_extract(new.data, '$.created_at'), json_extract(new.data, '$.updated_at'),
                 json_extract(new.data, '$.title'), json_extract(new.data, '$.summary'),
@@ -60,25 +73,18 @@ pub fn install(connection: &Connection) -> Result<()> {
         END;
         CREATE TRIGGER IF NOT EXISTS note_search_delete AFTER DELETE ON ps_data__notes
         BEGIN
-            DELETE FROM note_search_fts WHERE rowid=old.rowid;
+            DELETE FROM note_search_fts WHERE uuid=old.id;
         END;
-        INSERT INTO note_search_fts
-            (rowid, uuid, short_id, project_id, created_at, updated_at, title, summary, content)
-        SELECT n.rowid, n.id,
-            json_extract(n.data, '$.short_id'), json_extract(n.data, '$.project_id'),
-            json_extract(n.data, '$.created_at'), json_extract(n.data, '$.updated_at'),
-            json_extract(n.data, '$.title'), json_extract(n.data, '$.summary'),
-            json_extract(n.data, '$.content')
-        FROM ps_data__notes n
-        WHERE json_extract(n.data, '$.deleted_at') IS NULL
-          AND NOT EXISTS (SELECT 1 FROM note_search_fts f WHERE f.rowid=n.rowid);
         "#,
     )?;
-    transaction.execute(
+    if !index_exists {
+        fill(connection)?;
+    }
+    connection.execute(
         "INSERT OR IGNORE INTO note_search_meta (id, schema_version) VALUES (1, ?1)",
         [FTS_SCHEMA_VERSION],
     )?;
-    transaction.commit()
+    Ok(())
 }
 
 fn reset_schema(connection: &Connection) -> Result<()> {
@@ -90,18 +96,24 @@ fn reset_schema(connection: &Connection) -> Result<()> {
          DROP TABLE IF EXISTS note_search_fts; \
          DROP TABLE IF EXISTS note_search_meta;",
     )?;
+    install_schema(&transaction)?;
     transaction.commit()
 }
 
 /// Recover a missing or damaged disposable FTS index from canonical rows.
 pub fn rebuild(connection: &Connection) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
-    transaction.execute_batch(
+    transaction.execute("DELETE FROM note_search_fts", [])?;
+    fill(&transaction)?;
+    transaction.commit()
+}
+
+fn fill(connection: &Connection) -> Result<()> {
+    connection.execute_batch(
         r#"
-        DELETE FROM note_search_fts;
         INSERT INTO note_search_fts
-            (rowid, uuid, short_id, project_id, created_at, updated_at, title, summary, content)
-        SELECT n.rowid, n.id,
+            (uuid, short_id, project_id, created_at, updated_at, title, summary, content)
+        SELECT n.id,
             json_extract(n.data, '$.short_id'), json_extract(n.data, '$.project_id'),
             json_extract(n.data, '$.created_at'), json_extract(n.data, '$.updated_at'),
             json_extract(n.data, '$.title'), json_extract(n.data, '$.summary'),
@@ -109,8 +121,7 @@ pub fn rebuild(connection: &Connection) -> Result<()> {
         FROM ps_data__notes n
         WHERE json_extract(n.data, '$.deleted_at') IS NULL;
         "#,
-    )?;
-    transaction.commit()
+    )
 }
 
 fn parse_snippet(value: &str) -> SearchSnippet {
@@ -271,7 +282,7 @@ const SEARCH_QUERY: &str = r#"
                 ELSE 0 END), 0)
              FROM json_each(?2) t) AS coverage
         FROM note_search_fts f
-        JOIN ps_data__notes n ON n.rowid = f.rowid
+        JOIN ps_data__notes n ON n.id = f.uuid
         WHERE note_search_fts MATCH ?1
           AND json_extract(n.data, '$.status') IS NOT 'draft'
           AND (?4 IS NULL OR f.project_id IN (SELECT id FROM projects WHERE name=?4))
@@ -430,7 +441,8 @@ impl FtsSearchService {
             );
             reset_schema(&writer).map_err(|error| error.to_string())?;
         }
-        install(&writer).map_err(|error| error.to_string())?;
+        // Healthy startup verifies integrity/counts without a canonical fill
+        // scan. Installation and recovery fill under the writer lease.
         let source_count: i64 = writer
             .query_row(
                 "SELECT count(*) FROM ps_data__notes WHERE json_extract(data, '$.deleted_at') IS NULL",
@@ -1132,6 +1144,399 @@ mod tests {
         .await
         .unwrap();
         drop(tasks);
+    }
+
+    fn index_rows(connection: &Connection) -> Vec<(i64, String, Option<String>)> {
+        connection
+            .prepare("SELECT rowid, uuid, content FROM note_search_fts ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    #[expect(clippy::print_stderr, reason = "owned diagnostic RED/GREEN evidence")]
+    async fn repeated_download_replacements_reuse_index_on_prepare() {
+        PowerSyncEnvironment::powersync_auto_extension().unwrap();
+        flicknote_core::sqlite_extension::register_better_trigram().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let service = Arc::new(MockSyncService::new());
+        let pool = ConnectionPool::open(directory.path().join("sync.db")).unwrap();
+        let environment = PowerSyncEnvironment::custom(
+            Arc::clone(&service).client(),
+            pool,
+            PowerSyncEnvironment::tokio_timer(),
+        );
+        let db = PowerSyncDatabase::new(environment, app_schema());
+        let search_service = FtsSearchService::new(db.clone());
+        search_service.prepare().await.unwrap();
+        let tasks = db.async_tasks().spawn_with(tokio::spawn);
+        db.connect(SyncOptions::new(TestConnector)).await;
+        let request = tokio::time::timeout(Duration::from_secs(5), service.next_request())
+            .await
+            .unwrap();
+        let mut physical_ids = Vec::new();
+        for (id, content) in [(1, "oldword"), (2, "newword"), (3, "latestword")] {
+            let data = serde_json::json!({"short_id":9,"type":"normal","status":"ready",
+                "title":"Downloaded note","content":content})
+            .to_string();
+            send_checkpoint(&request, id).await;
+            send_op(&request, id, "PUT", Some(&data)).await;
+            send_complete(&request, id).await;
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    let reader = db.reader().await.unwrap();
+                    let applied: Option<i64> = reader.query_row(
+                        "SELECT rowid FROM ps_data__notes WHERE id='remote-note' AND json_extract(data, '$.content')=?1",
+                        [content], |row| row.get(0)).ok();
+                    if let Some(rowid) = applied {
+                        physical_ids.push(rowid);
+                        break;
+                    }
+                    drop(reader);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.unwrap();
+        }
+        db.writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE note_search_fts SET rowid=10001 WHERE uuid='remote-note'",
+                [],
+            )
+            .unwrap();
+        let before = {
+            let reader = db.reader().await.unwrap();
+            let recursive: i64 = reader
+                .query_row("PRAGMA recursive_triggers", [], |row| row.get(0))
+                .unwrap();
+            let rows = index_rows(&reader);
+            eprintln!(
+                "PowerSync recursive_triggers={recursive}; source rowids={physical_ids:?}; index={rows:?}"
+            );
+            rows
+        };
+        search_service.prepare().await.unwrap();
+        let reader = db.reader().await.unwrap();
+        let after = index_rows(&reader);
+        eprintln!("index after prepare={after:?}");
+        assert_eq!(
+            before, after,
+            "unchanged canonical data must not rebuild on prepare"
+        );
+        assert_eq!(before.len(), 1, "one indexed entry per stable UUID");
+        assert!(physical_ids.windows(2).all(|ids| ids[0] != ids[1]));
+        assert_eq!(
+            search(&reader, &["latestword".into()], None, 10).unwrap()[0].short_id,
+            Some(9)
+        );
+        assert!(
+            search(&reader, &["oldword".into(), "newword".into()], None, 10)
+                .unwrap()
+                .is_empty()
+        );
+        drop(reader);
+        db.disconnect().await;
+        drop(tasks);
+        drop(search_service);
+        drop(db);
+        let reopened = test_powersync_db_at(directory.path().join("sync.db"), app_schema());
+        let search_service = FtsSearchService::new(reopened.clone());
+        for _ in 0..2 {
+            search_service.prepare().await.unwrap();
+            assert_eq!(index_rows(&reopened.reader().await.unwrap()), before);
+        }
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::print_stderr,
+        reason = "owned preparation measurement without a timing threshold"
+    )]
+    async fn cached_preparation_reuses_large_index_with_measurement() {
+        let (_directory, db) = test_powersync_db().await;
+        let service = FtsSearchService::new(db.clone());
+        service.prepare().await.unwrap();
+        {
+            let writer = db.writer().await.unwrap();
+            let transaction = writer.unchecked_transaction().unwrap();
+            for id in 0..3159 {
+                transaction.execute(
+                    "INSERT INTO notes (id, short_id, type, status, title, content) VALUES (?1, ?2, 'normal', 'ready', 'Owned cached note', ?3)",
+                    params![format!("cached-{id}"), id, "synthetic cached searchable content 中文 ".repeat(40)],
+                ).unwrap();
+            }
+            transaction.commit().unwrap();
+        }
+        let retained = {
+            let writer = db.writer().await.unwrap();
+            writer
+                .execute("UPDATE note_search_fts SET rowid=rowid+10000", [])
+                .unwrap();
+            index_rows(&writer)
+        };
+        for _ in 0..5 {
+            let began = std::time::Instant::now();
+            service.prepare().await.unwrap();
+            eprintln!(
+                "MEASURE owned_cached_prepare_3159_ms={:.3}",
+                began.elapsed().as_secs_f64() * 1000.0
+            );
+            assert_eq!(index_rows(&db.reader().await.unwrap()), retained);
+        }
+    }
+
+    fn replace_note(connection: &Connection, id: &str, content: &str, archived: bool) {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO ps_data__notes(id, data) VALUES(?1, ?2)",
+                params![
+                    id,
+                    serde_json::json!({"short_id":9,"type":"normal","status":"ready",
+                "content":content,"deleted_at":if archived { Some("2026-10-06") } else { None }})
+                    .to_string()
+                ],
+            )
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn archived_replacement_restore_update_and_delete_use_uuid() {
+        let (_directory, db) = test_powersync_db().await;
+        let service = FtsSearchService::new(db.clone());
+        service.prepare().await.unwrap();
+        let writer = db.writer().await.unwrap();
+        replace_note(&writer, "same", "oldword", false);
+        replace_note(&writer, "same", "archivedword", true);
+        assert!(index_rows(&writer).is_empty());
+        writer
+            .execute("DELETE FROM ps_data__notes WHERE id='same'", [])
+            .unwrap();
+        // The removed maximum physical rowid is reused for a different UUID.
+        // Stale same-count entries must not masquerade as that other note.
+        replace_note(&writer, "other", "otherword", false);
+        assert!(
+            search(&writer, &["oldword".into()], None, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            search(&writer, &["otherword".into()], None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        replace_note(&writer, "same", "restoredword", false);
+        writer
+            .execute(
+                "UPDATE note_search_fts SET rowid=10001 WHERE uuid='same'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(
+            search(&writer, &["restoredword".into()], None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        writer
+            .execute("UPDATE notes SET content='updatedword' WHERE id='same'", [])
+            .unwrap();
+        assert!(
+            search(&writer, &["restoredword".into()], None, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            search(&writer, &["updatedword".into()], None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        writer
+            .execute(
+                "UPDATE notes SET deleted_at='2026-10-06' WHERE id='same'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(index_rows(&writer).len(), 1);
+        writer
+            .execute("UPDATE notes SET deleted_at=NULL WHERE id='same'", [])
+            .unwrap();
+        writer
+            .execute("DELETE FROM ps_data__notes WHERE id='same'", [])
+            .unwrap();
+        assert!(
+            search(&writer, &["updatedword".into()], None, 10)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(index_rows(&writer).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn deployed_v1_duplicates_and_same_count_staleness_repair_once() {
+        for archived in [false, true] {
+            let (directory, db) = test_powersync_db().await;
+            let service = FtsSearchService::new(db.clone());
+            let canonical = {
+                let writer = db.writer().await.unwrap();
+                writer
+                    .execute_batch(include_str!("../tests/fixtures/fts_v1.sql"))
+                    .unwrap();
+                replace_note(&writer, "same", "oldword", false);
+                replace_note(&writer, "same", "newword", archived);
+                if archived {
+                    // One active source and one orphan index entry: counts alone
+                    // cannot detect this deployed stale projection.
+                    replace_note(&writer, "other", "otherword", false);
+                    // Model an incomplete disposable index with offsetting
+                    // missing/extra entries and healthy internal FTS structure.
+                    writer
+                        .execute("DELETE FROM note_search_fts WHERE uuid='other'", [])
+                        .unwrap();
+                    assert_eq!(index_rows(&writer).len(), 1);
+                    let active: i64 = writer
+                        .query_row(
+                            "SELECT count(*) FROM notes WHERE deleted_at IS NULL",
+                            [],
+                            |r| r.get(0),
+                        )
+                        .unwrap();
+                    assert_eq!(active, 1);
+                } else {
+                    assert_eq!(index_rows(&writer).len(), 2);
+                }
+                canonical_rows(&writer)
+            };
+            service.prepare().await.unwrap();
+            let repaired = {
+                let writer = db.writer().await.unwrap();
+                assert_eq!(canonical_rows(&writer), canonical);
+                let version: i64 = writer
+                    .query_row("SELECT schema_version FROM note_search_meta", [], |r| {
+                        r.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(version, FTS_SCHEMA_VERSION);
+                assert_eq!(index_rows(&writer).len(), 1);
+                assert!(
+                    search(&writer, &["oldword".into()], None, 10)
+                        .unwrap()
+                        .is_empty()
+                );
+                let latest = if archived { "otherword" } else { "newword" };
+                assert_eq!(
+                    search(&writer, &[latest.into()], None, 10).unwrap().len(),
+                    1
+                );
+                writer
+                    .execute("UPDATE note_search_fts SET rowid=10001", [])
+                    .unwrap();
+                index_rows(&writer)
+            };
+            service.prepare().await.unwrap();
+            assert_eq!(index_rows(&db.reader().await.unwrap()), repaired);
+            drop(service);
+            drop(db);
+            let reopened = test_powersync_db_at(directory.path().join("test.db"), app_schema());
+            let service = FtsSearchService::new(reopened.clone());
+            service.prepare().await.unwrap();
+            assert_eq!(index_rows(&reopened.reader().await.unwrap()), repaired);
+        }
+    }
+
+    fn canonical_rows(connection: &Connection) -> Vec<(String, String)> {
+        connection
+            .prepare("SELECT id, data FROM ps_data__notes ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_>>()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn corrupt_index_recovers_from_unchanged_canonical_rows() {
+        let (_directory, db) = test_powersync_db().await;
+        let service = FtsSearchService::new(db.clone());
+        service.prepare().await.unwrap();
+        let canonical = {
+            let writer = db.writer().await.unwrap();
+            replace_note(&writer, "same", "recoverword", false);
+            writer
+                .execute(
+                    "UPDATE note_search_fts_data SET block=x'00' WHERE id=10",
+                    [],
+                )
+                .unwrap();
+            assert!(
+                writer
+                    .execute(
+                        "INSERT INTO note_search_fts(note_search_fts) VALUES('integrity-check')",
+                        []
+                    )
+                    .is_err()
+            );
+            canonical_rows(&writer)
+        };
+        service.prepare().await.unwrap();
+        let reader = db.reader().await.unwrap();
+        assert_eq!(canonical_rows(&reader), canonical);
+        assert_eq!(
+            search(&reader, &["recoverword".into()], None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_schema_replacement_rolls_back_disposable_index() {
+        let (_directory, db) = test_powersync_db().await;
+        let service = FtsSearchService::new(db.clone());
+        service.prepare().await.unwrap();
+        let before = {
+            let writer = db.writer().await.unwrap();
+            replace_note(&writer, "same", "retainedword", false);
+            writer
+                .execute("UPDATE note_search_meta SET schema_version=1", [])
+                .unwrap();
+            // A missing backing-table contract makes installation fail after
+            // reset. The old projection/version must survive that failure.
+            writer
+                .execute_batch("ALTER TABLE ps_data__notes RENAME TO owned_unavailable_notes")
+                .unwrap();
+            index_rows(&writer)
+        };
+        assert!(service.prepare().await.is_err());
+        let writer = db.writer().await.unwrap();
+        assert_eq!(index_rows(&writer), before);
+        let version: i64 = writer
+            .query_row("SELECT schema_version FROM note_search_meta", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 1);
+        writer
+            .execute_batch("ALTER TABLE owned_unavailable_notes RENAME TO ps_data__notes")
+            .unwrap();
+        drop(writer);
+        service.prepare().await.unwrap();
+        assert_eq!(
+            search(
+                &db.reader().await.unwrap(),
+                &["retainedword".into()],
+                None,
+                10
+            )
+            .unwrap()
+            .len(),
+            1
+        );
     }
 
     mod mock_sync {
