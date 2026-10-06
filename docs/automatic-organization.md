@@ -1,6 +1,6 @@
 # Automatic organization in the macOS GUI
 
-The normal GUI host offers **Add project** in the rail. Create a project by
+The normal GUI host offers **Add project** through the Plus icon beside **Projects** in the rail. Create a project by
 name, then use **Edit** above its All list to maintain its summary. Names are
 trimmed and must be nonempty and unique. Summary Save preserves the entered
 text; a whitespace-only value clears the summary. Cancel preserves the stored
@@ -55,6 +55,44 @@ All creation channels participate, including MCP-created notes hidden by the wor
 credentials, cutoff, eligibility or routing. Blank summary and blank content defer the
 note until meaningful input appears. With no active projects, no request is made.
 
+## Catch up recent notes (#3398)
+
+In the same Automatic organization control, choose **3 days** or **7 days** under
+**Catch up**. These are local 04:00 workdays including the current workday, with
+calendar/DST boundaries. After 04:00 on October 6, three days starts October 4
+at 04:00; seven days starts September 30 at 04:00. Before 04:00, the preceding
+calendar date is still the current workday. The preview counts eligible notes
+in the local cache and sends no provider request.
+
+**Start** requires enabled organization with a saved key. It freezes the end
+at Start and leaves the regular first-start cutoff unchanged. There is no total
+note cap: the selected range drains through sequential batches of at most eight
+notes and 64KiB. Regular post-cutoff work has priority in the same singleflight
+coordinator. While Catch up runs, every provider batch start, including retries,
+is at least ten seconds after the previous shared batch start. Outside Catch up,
+regular organization retains its existing scheduling.
+
+The same owner/ready/active/unassigned/unrouted/meaningful-input rules apply to
+both creation channels. A previous `none` decision is already processed. Only mine
+never limits organization. Notes becoming locally eligible inside the frozen
+range may join a running catch-up; notes created after Start belong to regular
+work. Completion means the currently eligible local range has drained, and does
+not promise that remote or still-processing notes are accounted for forever.
+
+The control shows initial eligible count, canonically processed decisions,
+remaining notes, failures and skips. Provider answers alone are not successes:
+only successful guarded Application writes count. Manual assignment, archive and
+input changes keep their existing atomic precedence. Unchanged failures keep the
+three-attempt budget; auth/credit failures pause. Exhausted groups do not block
+independent groups, and an **Unfinished** result retains remaining failures.
+Correct the error and start again; a rerun naturally skips completed decisions.
+
+**Stop**, disabling organization, changing/removing the key or explicit Quit
+cancels the old generation and preserves successful writes. Duplicate Start
+cannot create a second run. Window/editor close keeps it running; reopening shows
+the same process-owned progress and retained result. Quit does not persist or
+resume a manual job. The run adds no queue, cutoff reset or routed-marker reset.
+
 ## Compact input and provider costs
 
 Requests go to OpenRouter's fixed Decisions endpoint with
@@ -96,11 +134,11 @@ assignment, archival, nonready state and
 inactive/foreign projects. Manual assignment takes precedence. Routed notes
 are never reclassified automatically after later edits.
 
-Unchanged failed batches receive at most three automatic attempts, with
-increasing delays of two then four seconds. Exhausted batches pause until
-meaningful input/project context or configuration changes. Unrelated watch
-emissions do not reset their budgets. Auth/credit failures (401/402/403) pause
-until credential/configuration changes. Inspect the control, correct the key,
+Unchanged note input and project context receive at most three automatic attempts,
+with increasing delays of two then four seconds. Exhausted notes pause until
+meaningful input/project context or configuration changes. Unrelated priority
+arrivals, removals and batch regrouping do not reset their budgets. Auth/credit
+failures (401/402/403) pause until credential/configuration changes. Inspect the control, correct the key,
 credits or summaries and save/enable again. No malformed/partial decision is
 applied, and failures do not invent a project or success.
 

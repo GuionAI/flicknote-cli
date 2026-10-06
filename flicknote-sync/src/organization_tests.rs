@@ -115,6 +115,7 @@ fn credentials() -> (watch::Sender<Credential>, watch::Receiver<Credential>) {
     watch::channel(Credential {
         key: Some("fixture-secret".into()),
         generation: 1,
+        catch_up: None,
     })
 }
 fn spawn(
@@ -132,8 +133,11 @@ fn spawn(
                 app,
                 crate::spike::USER.into(),
                 "2026-10-01T00:00:00Z".into(),
-                credential,
-                status,
+                RoutingControl {
+                    credential,
+                    status,
+                    catch_up: watch::channel(CatchProgress::default()).0,
+                },
                 (&endpoint, Duration::from_millis(10)),
             )
             .await;
@@ -321,6 +325,7 @@ async fn invalid_answer_budget_unrelated_emission_auth_pause_and_none() {
     key.send_replace(Credential {
         key: Some("fixture-secret".into()),
         generation: 2,
+        catch_up: None,
     });
     until(|| {
         p.requests.lock().unwrap().len() == 4
@@ -342,6 +347,7 @@ async fn invalid_answer_budget_unrelated_emission_auth_pause_and_none() {
     key.send_replace(Credential {
         key: Some("fixture-secret".into()),
         generation: 3,
+        catch_up: None,
     });
     tokio::time::timeout(Duration::from_secs(5), async {
         while count(&host).await != 1 {
@@ -364,58 +370,85 @@ async fn invalid_answer_budget_unrelated_emission_auth_pause_and_none() {
 }
 #[tokio::test]
 async fn delayed_response_manual_archive_key_and_quit_guards() {
-    for race in ["manual", "project", "content", "key", "quit"] {
-        let root = tempfile::tempdir().unwrap();
-        let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
-            .await
-            .unwrap();
-        let pid = project(&host).await;
-        note(&host, 1, None, "Rust").await;
-        let p = Arc::new(Provider::default());
-        p.mode.store(4, Ordering::SeqCst);
-        let (endpoint, server) = server(p.clone()).await;
-        let (key, credential) = credentials();
-        let (task, _) = spawn(&host, credential, endpoint);
-        until(|| !p.requests.lock().unwrap().is_empty()).await;
-        match race {
-            "manual" => {
-                host.db
-                    .writer()
-                    .await
-                    .unwrap()
-                    .execute("UPDATE notes SET project_id=? WHERE short_id=1", [&pid])
-                    .unwrap();
+    for catch in [false, true] {
+        for race in ["manual", "project", "content", "archive", "key", "quit"] {
+            let root = tempfile::tempdir().unwrap();
+            let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
+                .await
+                .unwrap();
+            let pid = project(&host).await;
+            note(&host, 1, None, "Rust").await;
+            let p = Arc::new(Provider::default());
+            p.mode.store(4, Ordering::SeqCst);
+            let (endpoint, server) = server(p.clone()).await;
+            let (task, key, progress) = if catch {
+                let (task, key, progress) = spawn_catch_up(&host, endpoint);
+                (task, key, Some(progress))
+            } else {
+                let (key, credential) = credentials();
+                let (task, _) = spawn(&host, credential, endpoint);
+                (task, key, None)
+            };
+            until(|| !p.requests.lock().unwrap().is_empty()).await;
+            match race {
+                "manual" => {
+                    host.db
+                        .writer()
+                        .await
+                        .unwrap()
+                        .execute("UPDATE notes SET project_id=? WHERE short_id=1", [&pid])
+                        .unwrap();
+                }
+                "project" => {
+                    host.app
+                        .handle(AppRequest::ProjectArchive { id: pid })
+                        .await
+                        .unwrap();
+                }
+                "content" => {
+                    host.db
+                        .writer()
+                        .await
+                        .unwrap()
+                        .execute("UPDATE notes SET content='  ' WHERE short_id=1", [])
+                        .unwrap();
+                }
+                "archive" => {
+                    host.db
+                        .writer()
+                        .await
+                        .unwrap()
+                        .execute(
+                            "UPDATE notes SET deleted_at='2026-10-06T02:00:00Z' WHERE short_id=1",
+                            [],
+                        )
+                        .unwrap();
+                }
+                "key" => {
+                    key.send_replace(Credential {
+                        key: None,
+                        generation: 2,
+                        catch_up: None,
+                    });
+                }
+                _ => task.abort(),
             }
-            "project" => {
-                host.app
-                    .handle(AppRequest::ProjectArchive { id: pid })
-                    .await
-                    .unwrap();
+            p.gate.notify_one();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            assert_eq!(count(&host).await, 0, "{race}");
+            if let Some(progress) = progress {
+                assert_eq!(progress.borrow().processed, 0, "{race}");
+                if matches!(race, "manual" | "archive" | "content") {
+                    assert_eq!(progress.borrow().skipped, 1, "{race}");
+                }
             }
-            "content" => {
-                host.db
-                    .writer()
-                    .await
-                    .unwrap()
-                    .execute("UPDATE notes SET content='  ' WHERE short_id=1", [])
-                    .unwrap();
-            }
-            "key" => {
-                key.send_replace(Credential {
-                    key: None,
-                    generation: 2,
-                });
-            }
-            _ => task.abort(),
+            task.abort();
+            server.abort();
+            host.run_until(async { Ok(()) }).await.unwrap();
         }
-        p.gate.notify_one();
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        assert_eq!(count(&host).await, 0, "{race}");
-        task.abort();
-        server.abort();
-        host.run_until(async { Ok(()) }).await.unwrap();
     }
 }
+
 #[test]
 fn exact_answer_keys_types_probabilities_and_payload_budget() {
     let projects = vec![Project {
@@ -426,6 +459,8 @@ fn exact_answer_keys_types_probabilities_and_payload_budget() {
     let notes = vec![Note {
         id: 12,
         uuid: "canonical note".into(),
+        regular: true,
+        catch_up: false,
         text: "summary".into(),
     }];
     let b = Batch::new(&projects, &notes).unwrap();
@@ -460,6 +495,7 @@ async fn missing_key_catchup_ready_transition_transient_retry_and_oversized_proj
     let (key, credential) = watch::channel(Credential {
         key: None,
         generation: 1,
+        catch_up: None,
     });
     let (task, error) = spawn(&host, credential, endpoint);
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -467,6 +503,7 @@ async fn missing_key_catchup_ready_transition_transient_retry_and_oversized_proj
     key.send_replace(Credential {
         key: Some("fixture-secret".into()),
         generation: 2,
+        catch_up: None,
     });
     until(|| p.requests.lock().unwrap().len() == 1 && error.borrow().is_some()).await;
     p.mode.store(0, Ordering::SeqCst);
@@ -481,6 +518,7 @@ async fn missing_key_catchup_ready_transition_transient_retry_and_oversized_proj
     key.send_replace(Credential {
         key: None,
         generation: 3,
+        catch_up: None,
     });
     note(&host, 2, None, "later Rust").await;
     host.db
@@ -492,6 +530,7 @@ async fn missing_key_catchup_ready_transition_transient_retry_and_oversized_proj
     key.send_replace(Credential {
         key: Some("fixture-secret".into()),
         generation: 4,
+        catch_up: None,
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     let prior = p.requests.lock().unwrap().len();
@@ -543,7 +582,12 @@ async fn changes_in_verification_to_transaction_gap_never_route_stale_input() {
             .unwrap();
         let pid = project(&host).await;
         note(&host, 1, None, "Original compact text").await;
-        let params = [crate::spike::USER.into(), "2026-10-01T00:00:00Z".into()];
+        let params = [
+            crate::spike::USER.into(),
+            "2026-10-01T00:00:00Z".into(),
+            String::new(),
+            String::new(),
+        ];
         let snapshot = host
             .db
             .writer()
@@ -608,4 +652,359 @@ async fn changes_in_verification_to_transaction_gap_never_route_stale_input() {
         assert!(detail.note.project.is_none(), "{change}");
         host.run_until(async { Ok(()) }).await.unwrap();
     }
+}
+
+#[test]
+fn catch_up_semantic_days_and_frozen_end() {
+    use chrono::TimeZone as _;
+    let zone = chrono_tz::Asia::Shanghai;
+    let now = zone.with_ymd_and_hms(2026, 10, 6, 16, 0, 0).unwrap();
+    let three = CatchUp::recent(&now, 3, true).unwrap();
+    let seven = CatchUp::recent(&now, 7, false).unwrap();
+    assert_eq!(three.start, "2026-10-03T20:00:00+00:00");
+    assert_eq!(seven.start, "2026-09-29T20:00:00+00:00");
+    assert_eq!(three.end, "2026-10-06T08:00:00+00:00");
+    let early = zone.with_ymd_and_hms(2026, 10, 6, 3, 0, 0).unwrap();
+    assert_eq!(
+        CatchUp::recent(&early, 3, true).unwrap().start,
+        "2026-10-02T20:00:00+00:00"
+    );
+    let zone = chrono_tz::America::New_York;
+    let now = zone.with_ymd_and_hms(2026, 11, 2, 4, 0, 0).unwrap();
+    let range = CatchUp::recent(&now, 3, true).unwrap();
+    let start = chrono::DateTime::parse_from_rfc3339(&range.start).unwrap();
+    assert_eq!(now.signed_duration_since(start).num_hours(), 49);
+    assert!(CatchUp::recent(&now, 5, true).is_err());
+}
+
+async fn wall_until(predicate: impl Fn() -> bool + Send + Sync) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !predicate() {
+        assert!(std::time::Instant::now() < deadline, "owned actor deadline");
+        tokio::task::yield_now().await;
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owned actor verifies priority, cadence and complete drain together.
+async fn catch_up_preview_priority_drain_shared_cadence_and_none() {
+    let root = tempfile::tempdir().unwrap();
+    let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
+        .await
+        .unwrap();
+    project(&host).await;
+    for id in 1..=17 {
+        note(&host, id, None, &format!("Historical {id}")).await;
+    }
+    note(&host, 18, None, "Regular priority").await;
+    let writer = host.db.writer().await.unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET created_at='2026-10-06T03:00:00Z' WHERE short_id=18",
+            [],
+        )
+        .unwrap();
+    writer
+        .execute(
+            r#"UPDATE notes SET metadata='{"created_by_ai":true}' WHERE short_id=17"#,
+            [],
+        )
+        .unwrap();
+    drop(writer);
+    let provider = Arc::new(Provider::default());
+    provider.mode.store(5, Ordering::SeqCst);
+    let (endpoint, server) = server(provider.clone()).await;
+    let range = CatchUp {
+        days: 3,
+        start: "2026-10-03T20:00:00Z".into(),
+        end: "2026-10-06T02:00:00Z".into(),
+        running: false,
+    };
+    let (key, credential) = watch::channel(Credential {
+        key: None,
+        generation: 1,
+        catch_up: Some(range.clone()),
+    });
+    let (status, _) = watch::channel(None);
+    let (progress, result) = watch::channel(CatchProgress::default());
+    let db = host.db.clone();
+    let app = host.app.clone();
+    let task = tokio::spawn(async move {
+        run_with_endpoint(
+            db,
+            app,
+            crate::spike::USER.into(),
+            "2026-10-06T02:30:00Z".into(),
+            RoutingControl {
+                credential,
+                status,
+                catch_up: progress,
+            },
+            (&endpoint, Duration::from_secs(2)),
+        )
+        .await;
+    });
+    wall_until(|| result.borrow().remaining == 17).await;
+    assert!(
+        provider.requests.lock().unwrap().is_empty(),
+        "preview costs no requests"
+    );
+    tokio::time::pause();
+    key.send_replace(Credential {
+        key: Some("fixture-secret".into()),
+        generation: 2,
+        catch_up: Some(CatchUp {
+            running: true,
+            ..range
+        }),
+    });
+    wall_until(|| result.borrow().processed == 7).await;
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+    assert!(
+        provider.requests.lock().unwrap()[0]["questions"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|q| q["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("Regular priority"))
+    );
+    tokio::time::advance(Duration::from_secs(9)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(provider.requests.lock().unwrap().len(), 1);
+    tokio::time::advance(Duration::from_millis(1001)).await;
+    wall_until(|| result.borrow().processed == 15).await;
+    tokio::time::advance(Duration::from_millis(10001)).await;
+    wall_until(|| result.borrow().phase == CatchPhase::Complete).await;
+    assert_eq!(result.borrow().processed, 17);
+    assert_eq!(result.borrow().remaining, 0);
+    assert_eq!(result.borrow().skipped, 0);
+    assert_eq!(provider.requests.lock().unwrap().len(), 3);
+    assert_eq!(provider.max.load(Ordering::SeqCst), 1);
+    tokio::time::resume();
+    assert_eq!(count(&host).await, 18);
+    let writer = host.db.writer().await.unwrap();
+    assert_eq!(
+        writer
+            .query_row(
+                "SELECT count(*) FROM notes WHERE project_id IS NOT NULL",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        writer
+            .query_row(
+                "SELECT json_type(metadata,'$.created_by_ai') FROM notes WHERE short_id=17",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "true"
+    );
+    drop(writer);
+    task.abort();
+    server.abort();
+    host.run_until(async { Ok(()) }).await.unwrap();
+}
+
+fn spawn_catch_up(
+    host: &crate::spike::SpikeHost,
+    endpoint: String,
+) -> (
+    tokio::task::JoinHandle<()>,
+    watch::Sender<Credential>,
+    watch::Receiver<CatchProgress>,
+) {
+    let (key, credential) = watch::channel(Credential {
+        key: Some("fixture-secret".into()),
+        generation: 1,
+        catch_up: Some(CatchUp {
+            days: 3,
+            start: "2026-10-03T20:00:00Z".into(),
+            end: "2026-10-06T02:00:00Z".into(),
+            running: true,
+        }),
+    });
+    let (status, _) = watch::channel(None);
+    let (progress, result) = watch::channel(CatchProgress::default());
+    let db = host.db.clone();
+    let app = host.app.clone();
+    let task = tokio::spawn(async move {
+        run_with_endpoint(
+            db,
+            app,
+            crate::spike::USER.into(),
+            "2026-10-06T02:30:00Z".into(),
+            RoutingControl {
+                credential,
+                status,
+                catch_up: progress,
+            },
+            (&endpoint, Duration::from_secs(2)),
+        )
+        .await;
+    });
+    (task, key, result)
+}
+
+#[tokio::test]
+async fn catch_up_bounded_failures_do_not_starve_independent_batches() {
+    let root = tempfile::tempdir().unwrap();
+    let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
+        .await
+        .unwrap();
+    project(&host).await;
+    for id in 1..=17 {
+        note(&host, id, None, &format!("Historical {id}")).await;
+    }
+    let provider = Arc::new(Provider::default());
+    provider.mode.store(2, Ordering::SeqCst);
+    let (endpoint, server) = server(provider.clone()).await;
+    tokio::time::pause();
+    let (task, _key, result) = spawn_catch_up(&host, endpoint);
+    wall_until(|| provider.requests.lock().unwrap().len() == 1).await;
+    for expected in 2..=9 {
+        // Let the prior HTTP failure reach the actor before advancing its clock.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        tokio::time::advance(Duration::from_millis(10001)).await;
+        wall_until(|| provider.requests.lock().unwrap().len() == expected).await;
+    }
+    wall_until(|| result.borrow().phase == CatchPhase::Unfinished).await;
+    assert_eq!(result.borrow().processed, 0);
+    assert_eq!(result.borrow().remaining, 17);
+    assert_eq!(result.borrow().failed, 17);
+    tokio::time::advance(Duration::from_secs(100)).await;
+    for _ in 0..30 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(provider.requests.lock().unwrap().len(), 9);
+    assert_eq!(provider.max.load(Ordering::SeqCst), 1);
+    tokio::time::resume();
+    assert_eq!(count(&host).await, 0);
+    task.abort();
+    server.abort();
+    host.run_until(async { Ok(()) }).await.unwrap();
+}
+
+#[tokio::test]
+async fn catch_up_stop_and_credential_changes_cancel_old_generation() {
+    for enabled in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
+            .await
+            .unwrap();
+        project(&host).await;
+        note(&host, 1, None, "Historical").await;
+        let provider = Arc::new(Provider::default());
+        provider.mode.store(4, Ordering::SeqCst);
+        let (endpoint, server) = server(provider.clone()).await;
+        let (task, key, result) = spawn_catch_up(&host, endpoint);
+        until(|| provider.requests.lock().unwrap().len() == 1).await;
+        key.send_replace(Credential {
+            key: enabled.then(|| "fixture-secret".into()),
+            generation: 2,
+            catch_up: None,
+        });
+        until(|| result.borrow().phase == CatchPhase::Stopped).await;
+        provider.gate.notify_one();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(count(&host).await, 0);
+        assert_eq!(result.borrow().remaining, 1);
+        assert_eq!(provider.requests.lock().unwrap().len(), 1);
+        task.abort();
+        server.abort();
+        host.run_until(async { Ok(()) }).await.unwrap();
+    }
+}
+
+fn attempts_for(provider: &Provider, input: &str) -> usize {
+    provider
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| {
+            request["questions"]
+                .as_object()
+                .unwrap()
+                .values()
+                .any(|question| question["instructions"].as_str().unwrap().contains(input))
+        })
+        .count()
+}
+
+#[tokio::test]
+async fn review_regular_arrival_does_not_reset_unchanged_catch_up_failure_budget() {
+    let root = tempfile::tempdir().unwrap();
+    let host = crate::spike::SpikeHost::start(root.path(), 0, 0, Duration::ZERO)
+        .await
+        .unwrap();
+    project(&host).await;
+    for id in 1..=16 {
+        note(&host, id, None, &format!("Historical {id} END")).await;
+    }
+    let provider = Arc::new(Provider::default());
+    provider.mode.store(2, Ordering::SeqCst);
+    let (endpoint, server) = server(provider.clone()).await;
+    tokio::time::pause();
+    let (task, _key, result) = spawn_catch_up(&host, endpoint);
+    wall_until(|| provider.requests.lock().unwrap().len() == 1).await;
+    for expected in 2..=4 {
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        tokio::time::advance(Duration::from_millis(10001)).await;
+        wall_until(|| provider.requests.lock().unwrap().len() == expected).await;
+    }
+    assert_eq!(result.borrow().phase, CatchPhase::Running);
+    host.db.writer().await.unwrap().execute(
+        "INSERT INTO notes(id,short_id,user_id,type,status,content,metadata,created_at) VALUES('00000000-0000-0000-0000-000000000018',18,?1,'normal','ready','Unrelated regular note','{}','2026-10-06T03:00:00Z')",
+        [crate::spike::USER],
+    ).unwrap();
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    tokio::time::advance(Duration::from_millis(10001)).await;
+    wall_until(|| provider.requests.lock().unwrap().len() == 5).await;
+    let attempts = attempts_for(&provider, "Historical 1 END");
+    assert_eq!(
+        attempts, 3,
+        "unrelated arrival preserves the exhausted budget"
+    );
+    provider.mode.store(0, Ordering::SeqCst);
+    for expected in 6..=7 {
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        tokio::time::advance(Duration::from_millis(10001)).await;
+        wall_until(|| provider.requests.lock().unwrap().len() == expected).await;
+    }
+    wall_until(|| result.borrow().phase == CatchPhase::Unfinished).await;
+    assert_eq!(result.borrow().processed, 8);
+    assert_eq!(result.borrow().remaining, 8);
+    assert_eq!(result.borrow().failed, 8);
+    assert_eq!(
+        count(&host).await,
+        9,
+        "regular and independent historical group drain"
+    );
+    assert_eq!(provider.max.load(Ordering::SeqCst), 1);
+    assert_eq!(attempts_for(&provider, "Historical 1 END"), 3);
+    task.abort();
+    server.abort();
+    tokio::time::resume();
+    host.run_until(async { Ok(()) }).await.unwrap();
 }

@@ -32,14 +32,14 @@ def package(output, binaries):
         plistlib.dump({'CFBundleExecutable': 'flicknote-gpui', 'CFBundleIdentifier': bundle_id,
                       'CFBundleName': 'FlickNote', 'CFBundlePackageType': 'APPL',
                       'CFBundleVersion': commit[:12], 'NSHighResolutionCapable': True}, file)
-    manifest = {'spec': 3389, 'mode': 'normal', 'source_commit': commit, 'source_tree': tree,
+    manifest = {'spec': 3398, 'mode': 'normal', 'source_commit': commit, 'source_tree': tree,
                 'bundle_id': bundle_id, 'configuration': 'Config::load',
                 'sha256': {str(p.relative_to(output)): digest(p)
                            for p in sorted(app.rglob('*')) if p.is_file()}}
     (output / 'SOURCE.json').write_text(json.dumps(manifest, indent=2) + '\n')
     (output / 'SHA256SUMS').write_text(''.join(f'{h}  {p}\n' for p, h in manifest['sha256'].items()))
     (output / 'RUN.md').write_text(
-        f'# Normal FlickNote GUI #3389\n\nSource `{commit}`; tree `{tree}`.\n'
+        f'# Normal FlickNote GUI #3398\n\nSource `{commit}`; tree `{tree}`.\n'
         'Verify `shasum -a 256 -c SHA256SUMS` from this directory.\n'
         'The app directly runs its GUI binary without a CLI dependency or endpoint/profile flags.\n'
         'It uses the existing normal config/session/data, daemon.sock and default MCP37789.\n'
@@ -59,7 +59,12 @@ def package(output, binaries):
         'Configure through FlickNote > Automatic organization: save a masked OpenRouter key in the new account-scoped GUI Keychain service.\n'
         'The first-start cutoff persists even without a key; enabling can catch up post-cutoff ready notes.\n'
         'Provider descriptions are private data sent to a paid provider; Disable/Remove cancels routing.\n'
-        'No old key/preferences import or historical sweep occurs.\n'
+        'No old key/preferences import or automatic historical sweep occurs.\n'
+        'Catch up offers 3/7 local 04:00 workdays including today; Start freezes the end and preserves the cutoff.\n'
+        'It drains without a total cap using the shared coordinator, regular priority and at least10s between batch starts.\n'
+        'Stop/configuration changes cancel; window close continues; Quit never resumes a manual run.\n'
+        'Orc installs accepted merged updates to /Applications/FlickNote.app with verified hashes and rollback retained.\n'
+        'Installation never automatically quits/restarts a running app or clears drafts.\n'
         'See docs/automatic-organization.md in the matching source for privacy, input, eligibility and retry contracts.\n'
         'See docs/normal-gui-host.md in the matching source for cutover and rollback instructions.\n')
     return manifest

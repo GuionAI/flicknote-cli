@@ -167,6 +167,12 @@ guide; missing native pixels leave visual acceptance unverified. #3374 requires
 owned automated host/login/lifecycle/package evidence, no native launch or new
 manual matrix. Send IMPL_COMPLETE with final SHA/PR/absolute scratch report;
 Orc starts independent review and governs merge without another user review gate.
+Accepted merged normal GUI updates are installed by Orc to
+`/Applications/FlickNote.app` under standing user authorization, after independent
+review/merge and source/hash verification; preserve a rollback package. Worker
+verification/package actions do not install. Installation never automatically
+quits/restarts the running app or clears drafts. Follow `docs/normal-gui-host.md`
+for the operator boundary.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts.
 Read `docs/automatic-organization.md` before changing GUI project editors,
 organization eligibility/retries, cutoff preferences or credential handling.

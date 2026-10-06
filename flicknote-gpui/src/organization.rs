@@ -1,5 +1,7 @@
 //! Account-scoped, non-secret GUI preference and isolated Keychain adapter.
-use flicknote_sync::organization::Credential;
+use flicknote_sync::organization::{
+    CatchPhase, CatchProgress, CatchUp, Credential, RoutingControl,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -95,6 +97,9 @@ pub(crate) enum Change {
     Save(String),
     Enable(bool),
     Remove,
+    Preview(u32),
+    Start(u32),
+    Stop,
 }
 struct Request {
     change: Change,
@@ -106,6 +111,7 @@ pub(crate) struct Control {
     commands: mpsc::Sender<Request>,
     pub state: watch::Receiver<State>,
     pub routing_error: watch::Receiver<Option<String>>,
+    pub catch_up: watch::Receiver<CatchProgress>,
 }
 impl Control {
     pub(crate) async fn change(&self, change: Change) -> Result<(), String> {
@@ -131,9 +137,25 @@ pub(crate) fn start_with_store(
     store: Arc<dyn SecretStore>,
     started: String,
 ) -> Control {
+    start_with_provider(
+        services,
+        path,
+        store,
+        started,
+        flicknote_sync::organization::ENDPOINT.into(),
+    )
+}
+pub(crate) fn start_with_provider(
+    services: &crate::ui::Services,
+    path: PathBuf,
+    store: Arc<dyn SecretStore>,
+    started: String,
+    endpoint: String,
+) -> Control {
     let (commands, requests) = mpsc::channel::<Request>(8);
     let (state, state_receiver) = watch::channel(State::default());
     let (status, routing_error) = watch::channel(None);
+    let (progress, catch_up) = watch::channel(CatchProgress::default());
     let (credentials, credential) = watch::channel(Credential::default());
     let app = services.app.clone();
     let db = services.db.clone();
@@ -145,6 +167,7 @@ pub(crate) fn start_with_store(
                 store,
                 account,
                 started,
+                endpoint,
             },
             requests,
             state,
@@ -154,6 +177,7 @@ pub(crate) fn start_with_store(
                 app,
                 credential,
                 status,
+                progress,
             },
         )
         .await;
@@ -164,6 +188,7 @@ pub(crate) fn start_with_store(
         commands,
         state: state_receiver,
         routing_error,
+        catch_up,
     }
 }
 
@@ -172,6 +197,7 @@ struct Setup {
     store: Arc<dyn SecretStore>,
     account: String,
     started: String,
+    endpoint: String,
 }
 struct Cancel(tokio::task::AbortHandle);
 impl Drop for Cancel {
@@ -184,6 +210,78 @@ struct Routing {
     app: Arc<flicknote_sync::app::Application>,
     credential: watch::Receiver<Credential>,
     status: watch::Sender<Option<String>>,
+    progress: watch::Sender<CatchProgress>,
+}
+fn manual_range(
+    change: &Change,
+    usable: bool,
+    credentials: &watch::Sender<Credential>,
+    progress: &watch::Sender<CatchProgress>,
+) -> Result<Option<CatchUp>, String> {
+    match change {
+        Change::Preview(_) if progress.borrow().phase == CatchPhase::Running => {
+            Err("Stop the current Catch up first".into())
+        }
+        Change::Preview(days) => CatchUp::recent(&chrono::Local::now(), *days, false).map(Some),
+        Change::Start(_) if !usable => Err("Enable organization with a saved key first".into()),
+        Change::Start(_)
+            if progress.borrow().phase == CatchPhase::Running
+                || credentials
+                    .borrow()
+                    .catch_up
+                    .as_ref()
+                    .is_some_and(|r| r.running)
+                    && progress.borrow().phase == CatchPhase::Preview =>
+        {
+            Err("Catch up is already running".into())
+        }
+        Change::Start(days) => CatchUp::recent(&chrono::Local::now(), *days, true).map(Some),
+        Change::Stop => Ok(None),
+        _ => unreachable!(),
+    }
+}
+fn spawn_router(routing: Routing, account: String, cutoff: String, endpoint: String) -> Cancel {
+    let task = tokio::spawn(async move {
+        flicknote_sync::organization::run_with_endpoint(
+            routing.db,
+            routing.app,
+            account,
+            cutoff,
+            RoutingControl {
+                credential: routing.credential,
+                status: routing.status,
+                catch_up: routing.progress,
+            },
+            (&endpoint, std::time::Duration::from_secs(2)),
+        )
+        .await;
+    });
+    Cancel(task.abort_handle())
+}
+async fn read_key(store: Arc<dyn SecretStore>, user: String) -> (Option<String>, Option<String>) {
+    match tokio::task::spawn_blocking(move || store.read(&user)).await {
+        Ok(Ok(k)) => (k, None),
+        _ => (
+            None,
+            Some("Could not read organization key. Replace it to recover.".into()),
+        ),
+    }
+}
+async fn persist_change(
+    setup: &Setup,
+    current: BTreeMap<String, Preference>,
+    old: Preference,
+    existing_key: Option<String>,
+    change: Change,
+) -> Result<Saved, String> {
+    let store = setup.store.clone();
+    let user = setup.account.clone();
+    let path = setup.path.clone();
+    tokio::task::spawn_blocking(move || {
+        apply(&path, &user, &*store, current, old, existing_key, change)
+    })
+    .await
+    .map_err(|_| "Could not change organization configuration".to_owned())?
 }
 async fn coordinate(
     setup: Setup,
@@ -194,7 +292,7 @@ async fn coordinate(
 ) {
     let path = setup.path.clone();
     let account = setup.account.clone();
-    let started = setup.started;
+    let started = setup.started.clone();
     let loaded = tokio::task::spawn_blocking(move || load(&path, &account, &started)).await;
     let (mut prefs, mut preference) = match loaded {
         Ok(Ok(p)) => p,
@@ -203,15 +301,7 @@ async fn coordinate(
             return;
         }
     };
-    let secret = setup.store.clone();
-    let user = setup.account.clone();
-    let (mut key, error) = match tokio::task::spawn_blocking(move || secret.read(&user)).await {
-        Ok(Ok(k)) => (k, None),
-        _ => (
-            None,
-            Some("Could not read organization key. Replace it to recover.".into()),
-        ),
-    };
+    let (mut key, error) = read_key(setup.store.clone(), setup.account.clone()).await;
     let mut generation = 0;
     state.send_replace(State {
         ready: true,
@@ -222,42 +312,52 @@ async fn coordinate(
     credentials.send_replace(Credential {
         key: preference.enabled.then(|| key.clone()).flatten(),
         generation,
+        catch_up: None,
     });
-    let router = tokio::spawn(flicknote_sync::organization::run(
-        routing.db,
-        routing.app,
+    let progress = routing.progress.clone();
+    let _cancel = spawn_router(
+        routing,
         setup.account.clone(),
         preference.cutoff.clone(),
-        routing.credential,
-        routing.status,
-    ));
-    let _cancel = Cancel(router.abort_handle());
+        setup.endpoint.clone(),
+    );
     while let Some(request) = requests.recv().await {
         generation += 1;
+        if matches!(
+            request.change,
+            Change::Preview(_) | Change::Start(_) | Change::Stop
+        ) {
+            let range = manual_range(
+                &request.change,
+                preference.enabled && key.is_some(),
+                &credentials,
+                &progress,
+            );
+            let result = range.map(|catch_up| {
+                credentials.send_replace(Credential {
+                    key: preference.enabled.then(|| key.clone()).flatten(),
+                    generation,
+                    catch_up,
+                });
+            });
+            let _sent = request.reply.send(result);
+            continue;
+        }
         credentials.send_replace(Credential {
             key: None,
             generation,
+            catch_up: None,
         });
-        let store = setup.store.clone();
-        let user = setup.account.clone();
-        let path = setup.path.clone();
-        let current = prefs.clone();
-        let old = preference.clone();
-        let existing_key = key.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            apply(
-                &path,
-                &user,
-                &*store,
-                current,
-                old,
-                existing_key,
-                request.change,
-            )
-        })
+        let result = persist_change(
+            &setup,
+            prefs.clone(),
+            preference.clone(),
+            key.clone(),
+            request.change,
+        )
         .await;
         match result {
-            Ok(Ok((updated, p, k))) => {
+            Ok((updated, p, k)) => {
                 prefs = updated;
                 preference = p;
                 key = k;
@@ -270,16 +370,13 @@ async fn coordinate(
                 credentials.send_replace(Credential {
                     key: preference.enabled.then(|| key.clone()).flatten(),
                     generation,
+                    catch_up: None,
                 });
                 let _sent = request.reply.send(Ok(()));
             }
-            result => {
+            Err(error) => {
                 // Keychain may have changed before a preference write failed. Never reactivate cached secrets.
                 key = None;
-                let error = match result {
-                    Ok(Err(e)) => e,
-                    _ => "Could not change organization configuration".into(),
-                };
                 state.send_replace(State {
                     ready: true,
                     enabled: false,
@@ -319,6 +416,9 @@ fn apply(
             store.remove(user)?;
             key = None;
             preference.enabled = false;
+        }
+        Change::Preview(_) | Change::Start(_) | Change::Stop => {
+            unreachable!("manual run does not persist preferences")
         }
         Change::Enable(enabled) => {
             if enabled && key.is_none() {

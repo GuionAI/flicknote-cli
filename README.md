@@ -500,13 +500,21 @@ canonical stored Markdown. Failures retain submitted text without replacing new 
 a possible-after-write error requires checking the target before resubmitting. No offline
 queue or automatic mutation retry is added. Close keeps the owner alive; Quit releases it.
 
-Add projects from the rail and edit their summaries above the project All list.
+Add projects with the Plus icon beside Projects in the rail and edit their summaries above the project All list.
 The application menu's **Automatic organization…** control stores an account-scoped
 OpenRouter key in a new GUI Keychain service. The background GUI host routes
 post-first-start, unassigned ready notes from compact project/note summaries,
 with bounded content fallback, manual precedence and finite retries. Closing the
 window retains routing; Quit cancels it. Configuration, privacy/provider cost,
 cutoff and recovery are documented in [automatic organization](docs/automatic-organization.md).
+**Catch up** there offers the recent three or seven local 04:00 workdays,
+including today, with a free local eligible-count preview and an explicit Start.
+It freezes the end at Start, preserves the cutoff and drains without a total cap.
+Regular work shares one coordinator and takes priority; shared provider batch
+starts are at least ten seconds apart during Catch up. Stop and finite failure
+recovery preserve successful decisions; window close continues, Quit stops without
+automatic resume. Progress stays in the control. Reader drag selection freezes
+on pointer release while exact plain, canonical and code-block Copy remain distinct.
 **Only mine** in the right workspace header defaults off and applies to Home/Today
 and project-All. It excludes only `metadata.created_by_ai` JSON boolean `true`
 before the watched 10,000-note limit; missing, false and other JSON values remain.
@@ -520,7 +528,10 @@ config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md
 for implemented, partial and deferred desktop mappings. Private remote PostgreSQL
 MCP stays separate. Native OS input/pixels and real cloud acceptance are
 unperformed; rendered tests and builds establish separate evidence. Linux and
-installed distribution remain deferred.
+signed distribution remain deferred. Accepted merged GUI updates are installed by
+Orc to `/Applications/FlickNote.app` with verified source/hashes and rollback
+retained, under standing user authorization. Installation never automatically
+quits/restarts the running app or clears drafts.
 
 ## License
 

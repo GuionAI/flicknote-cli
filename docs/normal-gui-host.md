@@ -198,7 +198,7 @@ Shared/Archive/Charts browser, search or date surface is added.
 
 ## Projects and automatic organization (#3384)
 
-The rail's Add project control creates by name through Application. A project's
+The Plus icon beside the rail's Projects heading creates by name through Application. A project's
 summary appears above its All list; Edit offers multiline Save/Cancel and
 Cmd-Return. Editors retain failure text, own native input and block workspace
 navigation/capture. Project creation selects the canonical watched UUID while
@@ -214,6 +214,31 @@ Eligibility, privacy/cost, bounded retries, cancellation/manual precedence,
 non-secret preference location and configuration steps are authoritative in
 [automatic organization](automatic-organization.md). Headless routing is deferred;
 private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
+
+## Recent organization and reader release (#3398)
+
+Automatic organization also offers Catch up for three or seven local 04:00
+workdays, including today. Preview is local and free of inference; enabled
+credentials are required for Start. Start freezes the range end without changing
+the persisted cutoff. The shared coordinator prioritizes regular notes and drains
+without a total cap, at least ten seconds between shared provider batch starts.
+Progress, Stop and retained completed/unfinished results stay in the organization
+control. Closing it or the workspace retains the run; Quit does not resume it.
+See [the organization contract](automatic-organization.md#catch-up-recent-notes-3398)
+for eligibility, canonical accounting and bounded failure recovery.
+
+Markdown drag selection freezes after primary-pointer release, including release
+outside the reader. The reading pane lets MouseUp reach Kit's existing root
+selection layer. Exposed-center-canvas dismissal is scoped to that canvas,
+so clicks in the reading pane preserve detail and selection. Plain selected-text
+Cmd-C, whitespace, canonical toolbar Copy and code-block Copy retain their
+separate contracts. Owned rendered evidence is distinct from native acceptance.
+
+Accepted merged normal GUI updates are installed by Orc to
+`/Applications/FlickNote.app` under the user's standing authorization, after
+independent review/merge and source/hash verification. Preserve a rollback package.
+Installation does not quit/restart a running app or clear its drafts. Worker
+packaging and tests perform no installation, native launch or service changes.
 
 ## Close, reopen and Quit
 

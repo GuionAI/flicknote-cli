@@ -267,6 +267,11 @@ always-visible Copy button at top-right. It copies that block's entire code payl
 including whitespace and newlines, without Markdown fences or the language label.
 These block actions remain separate from selection copy and whole-note toolbar Copy.
 The pane is readonly and never writes rendering output back to a note.
+Primary-pointer release freezes the dragged interval; subsequent unpressed moves
+leave both selection and plain copy unchanged (#3398). Kit's root selection layer
+receives release normally; the reading pane no longer intercepts click bubbling.
+Center-canvas dismissal stays outside the reading pane. Owned rendered comparisons
+establish this integration repair; native OS delivery remains separate evidence.
 
 Only explicit activation of an http/https link can open the system browser.
 Other schemes are silently rejected. Document image loading is suppressed for

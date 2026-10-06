@@ -12,6 +12,67 @@ const BODY_LIMIT: usize = 64 * 1024;
 pub struct Credential {
     pub key: Option<String>,
     pub generation: u64,
+    pub catch_up: Option<CatchUp>,
+}
+/// A manual, process-local interval. Previewing never enables credentials.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatchUp {
+    pub days: u32,
+    pub start: String,
+    pub end: String,
+    pub running: bool,
+}
+impl CatchUp {
+    pub fn recent<T: chrono::TimeZone>(
+        now: &chrono::DateTime<T>,
+        days: u32,
+        running: bool,
+    ) -> Result<Self, String> {
+        if !matches!(days, 3 | 7) {
+            return Err("Choose 3 or 7 days".into());
+        }
+        let (today, _) = crate::today::bounds(now)?;
+        let day = today
+            .with_timezone(&now.timezone())
+            .date_naive()
+            .checked_sub_days(chrono::Days::new(u64::from(days - 1)))
+            .ok_or("Calendar underflow")?;
+        let start = now
+            .timezone()
+            .from_local_datetime(&day.and_hms_opt(4, 0, 0).expect("valid time"))
+            .earliest()
+            .ok_or("04:00 does not exist in local calendar")?;
+        Ok(Self {
+            days,
+            start: start.with_timezone(&chrono::Utc).to_rfc3339(),
+            end: now.with_timezone(&chrono::Utc).to_rfc3339(),
+            running,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum CatchPhase {
+    #[default]
+    Preview,
+    Running,
+    Complete,
+    Stopped,
+    Unfinished,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CatchProgress {
+    pub days: u32,
+    pub phase: CatchPhase,
+    pub initial: usize,
+    pub processed: usize,
+    pub remaining: usize,
+    pub failed: usize,
+    pub skipped: usize,
+}
+pub struct RoutingControl {
+    pub credential: watch::Receiver<Credential>,
+    pub status: watch::Sender<Option<String>>,
+    pub catch_up: watch::Sender<CatchProgress>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Project {
@@ -24,6 +85,8 @@ struct Note {
     id: i64,
     uuid: String,
     text: String,
+    regular: bool,
+    catch_up: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Snapshot {
@@ -43,7 +106,7 @@ fn text(summary: Option<String>, content: &str) -> String {
     content[..end].to_owned()
 }
 fn sql() -> &'static str {
-    "SELECT 'p', id, name, json_extract(metadata, '$.summary'), NULL FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 UNION ALL SELECT 'n', id, short_id, summary, coalesce(content, '') FROM notes WHERE user_id = ?1 AND deleted_at IS NULL AND status = 'ready' AND project_id IS NULL AND short_id > 0 AND julianday(created_at) >= julianday(?2) AND coalesce(json_type(metadata, '$.project_routing.routed'), '') != 'true' ORDER BY 1, 2"
+    "SELECT 'p', id, name, json_extract(metadata, '$.summary'), NULL, NULL, NULL FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 UNION ALL SELECT 'n', id, short_id, summary, coalesce(content, ''), julianday(created_at) >= julianday(?2), julianday(created_at) >= julianday(?3) AND julianday(created_at) <= julianday(?4) FROM notes WHERE user_id = ?1 AND deleted_at IS NULL AND status = 'ready' AND project_id IS NULL AND short_id > 0 AND (julianday(created_at) >= julianday(?2) OR (julianday(created_at) >= julianday(?3) AND julianday(created_at) <= julianday(?4))) AND coalesce(json_type(metadata, '$.project_routing.routed'), '') != 'true' ORDER BY 1, 2"
 }
 fn read(stmt: &mut rusqlite::Statement<'_>, params: &[String]) -> rusqlite::Result<Snapshot> {
     let mut snapshot = Snapshot::default();
@@ -62,16 +125,18 @@ fn read(stmt: &mut rusqlite::Statement<'_>, params: &[String]) -> rusqlite::Resu
                     uuid: row.get(1)?,
                     id: row.get(2)?,
                     text,
+                    regular: row.get(5)?,
+                    catch_up: row.get::<_, Option<bool>>(6)?.unwrap_or(false),
                 });
             }
         }
     }
+    snapshot.notes.sort_by_key(|n| (!n.regular, n.uuid.clone()));
     Ok(snapshot)
 }
 struct Batch {
     snapshot: Snapshot,
     body: Vec<u8>,
-    signature: String,
 }
 impl Batch {
     fn new(projects: &[Project], notes: &[Note]) -> Result<Self, &'static str> {
@@ -99,15 +164,12 @@ impl Batch {
                 "Project summaries or note input are too large. Shorten them to resume organization.",
             );
         }
-        // Canonical identity participates only in the local retry/staleness key.
-        let signature = format!("{:?}:{:?}", projects, notes);
         Ok(Self {
             snapshot: Snapshot {
                 projects: projects.to_vec(),
                 notes: notes.to_vec(),
             },
             body,
-            signature,
         })
     }
     fn routes(&self, response: &Value) -> Result<Vec<NoteRouteProjectInput>, &'static str> {
@@ -214,27 +276,11 @@ async fn decide(
         .map_err(fail)
 }
 
-/// Run in a GUI-owned task. Dropping/aborting it cancels HTTP, watch and retry futures.
-pub async fn run(
-    db: PowerSyncDatabase,
-    app: Arc<Application>,
-    user: String,
-    cutoff: String,
-    credential: watch::Receiver<Credential>,
-    status: watch::Sender<Option<String>>,
-) {
-    run_with_endpoint(
-        db,
-        app,
-        user,
-        cutoff,
-        credential,
-        status,
-        (ENDPOINT, Duration::from_secs(2)),
-    )
-    .await;
+type Failures = BTreeMap<String, (u32, tokio::time::Instant, Note)>;
+fn failure_key(projects: &[Project], note: &Note) -> String {
+    // Eligibility/priority and positional batch membership are not canonical input.
+    format!("{projects:?}:{:?}:{:?}", note.uuid, note.text)
 }
-type Failures = BTreeMap<String, (u32, tokio::time::Instant)>;
 fn choose(
     snapshot: &Snapshot,
     failures: &mut Failures,
@@ -247,12 +293,29 @@ fn choose(
         status.send_replace(Some(e.into()));
         return (None, None);
     }
-    let mut offset = 0;
-    let mut next_retry = None;
     let mut signatures = std::collections::BTreeSet::new();
+    let mut notes = Vec::new();
+    let mut next_retry = None;
+    for note in &snapshot.notes {
+        let signature = failure_key(&snapshot.projects, note);
+        signatures.insert(signature.clone());
+        if let Some((attempts, until, _)) = failures.get(&signature) {
+            if *attempts >= 3 {
+                continue;
+            }
+            if *until > tokio::time::Instant::now() {
+                next_retry =
+                    Some(next_retry.map_or(*until, |old: tokio::time::Instant| old.min(*until)));
+                continue;
+            }
+        }
+        notes.push(note.clone());
+    }
+    failures.retain(|signature, _| signatures.contains(signature));
+    let mut offset = 0;
     let mut chosen = None;
-    while offset < snapshot.notes.len() {
-        let group = &snapshot.notes[offset..];
+    while offset < notes.len() {
+        let group = &notes[offset..];
         let mut size = group.len().min(8);
         let batch = loop {
             match Batch::new(&snapshot.projects, &group[..size]) {
@@ -268,22 +331,10 @@ fn choose(
         let Some(batch) = batch else {
             continue;
         };
-        signatures.insert(batch.signature.clone());
-        if let Some((attempts, until)) = failures.get(&batch.signature) {
-            if *attempts >= 3 {
-                continue;
-            }
-            if *until > tokio::time::Instant::now() {
-                next_retry =
-                    Some(next_retry.map_or(*until, |old: tokio::time::Instant| old.min(*until)));
-                continue;
-            }
-        }
         if chosen.is_none() {
             chosen = Some(batch);
         }
     }
-    failures.retain(|signature, _| signatures.contains(signature));
     (chosen, next_retry)
 }
 async fn apply_response(
@@ -338,12 +389,16 @@ fn record_failure(
     failure: Failure,
     status: &watch::Sender<Option<String>>,
 ) {
-    let entry = failures
-        .entry(batch.signature.clone())
-        .or_insert((0, tokio::time::Instant::now()));
-    entry.0 += 1;
-    entry.1 = tokio::time::Instant::now() + backoff * entry.0;
-    status.send_replace(Some(if entry.0 >= 3 {
+    let mut exhausted = false;
+    for note in &batch.snapshot.notes {
+        let entry = failures
+            .entry(failure_key(&batch.snapshot.projects, note))
+            .or_insert((0, tokio::time::Instant::now(), note.clone()));
+        entry.0 += 1;
+        entry.1 = tokio::time::Instant::now() + backoff * entry.0;
+        exhausted |= entry.0 >= 3;
+    }
+    status.send_replace(Some(if exhausted {
         format!(
             "{} Automatic retries paused; edit input or configuration to resume.",
             failure.message
@@ -352,50 +407,227 @@ fn record_failure(
         failure.message
     }));
 }
+#[derive(Default)]
+struct Coordinator {
+    params: [String; 4],
+    snapshot: Snapshot,
+    failures: Failures,
+    paused: bool,
+    generation: Option<u64>,
+    loaded: bool,
+    active: bool,
+    initialized: bool,
+    progress: CatchProgress,
+    seen: std::collections::BTreeSet<i64>,
+    last_start: Option<tokio::time::Instant>,
+}
+impl Coordinator {
+    fn configure(
+        &mut self,
+        config: &Credential,
+        user: &str,
+        cutoff: &str,
+        status: &watch::Sender<Option<String>>,
+        catch_up: &watch::Sender<CatchProgress>,
+    ) -> bool {
+        if self.generation == Some(config.generation) {
+            return false;
+        }
+        self.failures.clear();
+        self.paused = false;
+        status.send_replace(None);
+        self.generation = Some(config.generation);
+        if let Some(range) = &config.catch_up {
+            self.params = [
+                user.to_owned(),
+                cutoff.to_owned(),
+                range.start.clone(),
+                range.end.clone(),
+            ];
+            self.active = range.running && config.key.is_some();
+            self.initialized = false;
+            self.seen.clear();
+            self.progress = CatchProgress {
+                days: range.days,
+                phase: if self.active {
+                    CatchPhase::Running
+                } else {
+                    CatchPhase::Preview
+                },
+                ..Default::default()
+            };
+        } else {
+            self.params = [
+                user.to_owned(),
+                cutoff.to_owned(),
+                String::new(),
+                String::new(),
+            ];
+            if self.active {
+                self.progress.phase = CatchPhase::Stopped;
+            }
+            self.active = false;
+        }
+        self.snapshot = Snapshot::default();
+        self.loaded = false;
+        catch_up.send_replace(self.progress.clone());
+        true
+    }
+    fn choose(
+        &mut self,
+        config: &Credential,
+        status: &watch::Sender<Option<String>>,
+        catch_up: &watch::Sender<CatchProgress>,
+    ) -> (Option<Batch>, Option<tokio::time::Instant>) {
+        let current: std::collections::BTreeSet<_> = self
+            .snapshot
+            .notes
+            .iter()
+            .filter(|n| n.catch_up)
+            .map(|n| n.id)
+            .collect();
+        if self.loaded
+            && config.catch_up.is_some()
+            && (!self.initialized || self.active || self.progress.phase == CatchPhase::Preview)
+        {
+            if !self.initialized {
+                self.progress.initial = current.len();
+                self.initialized = true;
+            }
+            self.progress.skipped += self.seen.difference(&current).count();
+            self.seen = current.clone();
+            self.progress.remaining = current.len();
+            self.progress.failed = self
+                .failures
+                .values()
+                .filter(|(attempts, _, _)| *attempts >= 3 || self.paused)
+                .map(|(_, _, note)| note)
+                .filter(|n| n.catch_up && current.contains(&n.id))
+                .map(|n| n.id)
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            catch_up.send_replace(self.progress.clone());
+        }
+        let candidates = Snapshot {
+            projects: self.snapshot.projects.clone(),
+            notes: self
+                .snapshot
+                .notes
+                .iter()
+                .filter(|n| n.regular || self.active)
+                .cloned()
+                .collect(),
+        };
+        let (chosen, next_retry) = if self.loaded && config.key.is_some() && !self.paused {
+            choose(&candidates, &mut self.failures, status)
+        } else {
+            (None, None)
+        };
+        if self.loaded
+            && self.active
+            && (self.progress.remaining == 0 || (chosen.is_none() && next_retry.is_none()))
+        {
+            self.active = false;
+            self.progress.phase = if self.progress.remaining == 0 {
+                CatchPhase::Complete
+            } else {
+                CatchPhase::Unfinished
+            };
+            catch_up.send_replace(self.progress.clone());
+        }
+        (chosen, next_retry)
+    }
+    fn cadence_deadline(&self) -> Option<tokio::time::Instant> {
+        self.last_start
+            .filter(|_| self.active)
+            .map(|at| at + Duration::from_secs(10))
+            .filter(|until| *until > tokio::time::Instant::now())
+    }
+    fn applied(
+        &mut self,
+        result: Result<(Snapshot, bool), Failure>,
+        batch: &Batch,
+        backoff: Duration,
+        status: &watch::Sender<Option<String>>,
+    ) {
+        match result {
+            Ok((current, applied)) => {
+                self.snapshot = current;
+                if applied {
+                    if self.active {
+                        for note in batch.snapshot.notes.iter().filter(|n| n.catch_up) {
+                            self.progress.processed += 1;
+                            self.seen.remove(&note.id);
+                        }
+                    }
+                    status.send_replace(None);
+                    for note in &batch.snapshot.notes {
+                        self.failures
+                            .remove(&failure_key(&batch.snapshot.projects, note));
+                    }
+                }
+            }
+            Err(f) => {
+                self.paused = f.pause;
+                record_failure(&mut self.failures, batch, backoff, f, status);
+            }
+        }
+    }
+}
+fn provider_client(status: &watch::Sender<Option<String>>) -> Option<reqwest::Client> {
+    match reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(c) => Some(c),
+        Err(_) => {
+            status.send_replace(Some("Could not initialize organization".into()));
+            None
+        }
+    }
+}
+/// GUI-owned singleflight actor. Aborting it cancels HTTP, watch and retry futures.
 pub async fn run_with_endpoint(
     db: PowerSyncDatabase,
     app: Arc<Application>,
     user: String,
     cutoff: String,
-    mut credential: watch::Receiver<Credential>,
-    status: watch::Sender<Option<String>>,
+    control: RoutingControl,
     provider: (&str, Duration),
 ) {
+    let RoutingControl {
+        mut credential,
+        status,
+        catch_up,
+    } = control;
     let (endpoint, backoff) = provider;
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => {
-            status.send_replace(Some("Could not initialize organization".into()));
-            return;
-        }
+    let Some(client) = provider_client(&status) else {
+        return;
     };
-    let params = [user, cutoff];
-    let stream = db.watch_statement(sql().to_owned(), params.clone(), |stmt, params| {
-        read(stmt, &params).map_err(Into::into)
-    });
-    futures_lite::pin!(stream);
-    let mut snapshot = Snapshot::default();
-    let mut failures: BTreeMap<String, (u32, tokio::time::Instant)> = BTreeMap::new();
-    let mut paused = false;
-    let mut generation = credential.borrow().generation;
+    let subscribe = |params: [String; 4]| {
+        db.watch_statement(sql().to_owned(), params, |stmt, params| {
+            read(stmt, &params).map_err(Into::into)
+        })
+    };
+    let mut state = Coordinator::default();
+    let mut stream = Box::pin(subscribe(state.params.clone()));
     loop {
         let config = credential.borrow_and_update().clone();
-        if generation != config.generation {
-            failures.clear();
-            paused = false;
-            status.send_replace(None);
-            generation = config.generation;
+        if state.configure(&config, &user, &cutoff, &status, &catch_up) {
+            stream = Box::pin(subscribe(state.params.clone()));
         }
-        let (chosen, next_retry) = if config.key.is_some() && !paused {
-            choose(&snapshot, &mut failures, &status)
-        } else {
-            (None, None)
-        };
+        let (chosen, next_retry) = state.choose(&config, &status, &catch_up);
         if let Some(batch) = chosen {
+            if let Some(until) = state.cadence_deadline() {
+                tokio::select! { biased;
+                    _ = credential.changed() => {},
+                    updated = stream.next() => match updated { Some(Ok(s)) => { state.snapshot = s; state.loaded = true; }, Some(Err(_)) => { status.send_replace(Some("Could not watch organization inputs".into())); }, None => return },
+                    () = tokio::time::sleep_until(until) => {},
+                }
+                continue;
+            }
+            state.last_start = Some(tokio::time::Instant::now());
             let key = config.key.as_deref().expect("enabled credential");
             let request = decide(&client, endpoint, key, &batch);
             tokio::pin!(request);
@@ -405,8 +637,8 @@ pub async fn run_with_endpoint(
                     _ = credential.changed() => break None,
                     result = &mut request => break Some(result),
                     updated = stream.next() => {
-                        match updated { Some(Ok(s))=>snapshot=s, Some(Err(_))=> { status.send_replace(Some("Could not watch organization inputs".into())); break None; }, None=>return }
-                        if !batch.current(&snapshot) { break None; }
+                        match updated { Some(Ok(s))=>{state.snapshot=s; state.loaded=true;}, Some(Err(_))=> { status.send_replace(Some("Could not watch organization inputs".into())); break None; }, None=>return }
+                        if !batch.current(&state.snapshot) { break None; }
                     }
                 }
             };
@@ -419,33 +651,21 @@ pub async fn run_with_endpoint(
                 result=apply_response(
                 &db,
                 &app,
-                &params,
+                &state.params,
                 &batch,
-                (generation, &validation),
+                (config.generation, &validation),
                 result,
                 #[cfg(test)]
                 None,
             ) => result,
             };
-            match application {
-                Ok((current, applied)) => {
-                    snapshot = current;
-                    if applied {
-                        status.send_replace(None);
-                        failures.remove(&batch.signature);
-                    }
-                }
-                Err(f) => {
-                    paused = f.pause;
-                    record_failure(&mut failures, &batch, backoff, f, &status);
-                }
-            }
+            state.applied(application, &batch, backoff, &status);
             continue;
         }
         tokio::select! {
             _ = credential.changed()=>{},
             _ = async { match next_retry { Some(at)=>tokio::time::sleep_until(at).await, None=>std::future::pending().await } }=>{},
-            updated=stream.next()=>match updated { Some(Ok(s))=>snapshot=s, Some(Err(_))=>{status.send_replace(Some("Could not watch organization inputs".into()));}, None=>return }
+            updated=stream.next()=>match updated { Some(Ok(s))=>{state.snapshot=s; state.loaded=true;}, Some(Err(_))=>{status.send_replace(Some("Could not watch organization inputs".into()));}, None=>return }
         }
     }
 }

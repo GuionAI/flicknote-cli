@@ -291,6 +291,7 @@ impl Today {
         self.organization_task = Some(cx.spawn_in(window, async move |entity, cx| {
             let mut state = control.state;
             let mut error = control.routing_error;
+            let mut catch_up = control.catch_up;
             let mut opened=control.opened.subscribe();
             loop {
                 let requested=*opened.borrow_and_update();
@@ -299,7 +300,7 @@ impl Today {
                     cx.notify();
                 }).is_err(){break;}
                 if requested {control.opened.send_replace(false);}
-                tokio::select! {r=state.changed()=>if r.is_err(){break;}, r=error.changed()=>if r.is_err(){break;},r=opened.changed()=>if r.is_err(){break;}}
+                tokio::select! {r=state.changed()=>if r.is_err(){break;}, r=error.changed()=>if r.is_err(){break;},r=opened.changed()=>if r.is_err(){break;},r=catch_up.changed()=>if r.is_err(){break;}}
             }
         }));
     }

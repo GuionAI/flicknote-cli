@@ -1,7 +1,7 @@
 //! Bounded workspace editors; Kit owns text, composition and selection.
 use super::*;
 use flicknote_client::dto::{Patch, ProjectAddInput, ProjectModifyInput};
-use gpui_kit::base::{Disableable, TestSupportExt};
+use gpui_kit::base::{Disableable, Selectable, TestSupportExt};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{
     Sizable,
@@ -18,6 +18,7 @@ pub(super) struct Editor {
     pub(super) input: Entity<TextareaState>,
     pub(super) key: Option<Entity<InputState>>,
     pub(super) busy: bool,
+    catch_days: u32,
     pub(super) error: Option<String>,
     _enter: Subscription,
     _operation: Option<Task<()>>,
@@ -79,10 +80,44 @@ impl Today {
             input,
             key,
             busy: false,
+            catch_days: self
+                .services
+                .organization
+                .lock()
+                .expect("organization control")
+                .as_ref()
+                .map_or(3, |c| match c.catch_up.borrow().days {
+                    7 => 7,
+                    _ => 3,
+                }),
             error: None,
             _enter: subscription,
             _operation: None,
         });
+        if masked {
+            let preview = self
+                .services
+                .organization
+                .lock()
+                .expect("organization control")
+                .clone();
+            if let Some(control) = preview
+                && control.catch_up.borrow().phase
+                    == flicknote_sync::organization::CatchPhase::Preview
+            {
+                let days = self
+                    .editor
+                    .as_ref()
+                    .expect("organization editor")
+                    .catch_days;
+                let job = self.services.runtime.spawn(async move {
+                    control
+                        .change(crate::organization::Change::Preview(days))
+                        .await
+                });
+                self.services.track(&job);
+            }
+        }
         cx.notify();
     }
     pub(super) fn editor_composing(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -357,6 +392,105 @@ impl Today {
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_editor(window, cx))),
             )
     }
+    fn catch_up_controls(
+        &self,
+        e: &Editor,
+        control: &crate::organization::Control,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        use flicknote_sync::organization::CatchPhase;
+        let progress = control.catch_up.borrow().clone();
+        let state = control.state.borrow().clone();
+        let running = progress.phase == CatchPhase::Running;
+        let days = e.catch_days;
+        let label = match progress.phase {
+            CatchPhase::Preview => {
+                format!("{} eligible notes in the local cache", progress.remaining)
+            }
+            CatchPhase::Running => format!(
+                "Running — {} initially eligible · {} processed · {} remaining · {} failed · {} skipped",
+                progress.initial,
+                progress.processed,
+                progress.remaining,
+                progress.failed,
+                progress.skipped
+            ),
+            CatchPhase::Complete => format!(
+                "Local range complete — {} initially eligible · {} processed · {} skipped",
+                progress.initial, progress.processed, progress.skipped
+            ),
+            CatchPhase::Stopped => format!(
+                "Stopped — {} initially eligible · {} processed · {} remaining · {} failed · {} skipped",
+                progress.initial,
+                progress.processed,
+                progress.remaining,
+                progress.failed,
+                progress.skipped
+            ),
+            CatchPhase::Unfinished => format!(
+                "Unfinished — {} initially eligible · {} processed · {} remaining · {} failed · {} skipped. Check the error, then start again.",
+                progress.initial,
+                progress.processed,
+                progress.remaining,
+                progress.failed,
+                progress.skipped
+            ),
+        };
+        div()
+            .id("catch-up-control")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Catch up")
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .children([3, 7].into_iter().map(|choice| {
+                        Button::new(if choice == 3 {
+                            "catch-up-3-days"
+                        } else {
+                            "catch-up-7-days"
+                        })
+                        .label(format!("{choice} days"))
+                        .selected(choice == days)
+                        .disabled(e.busy || running)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                if let Some(editor) = &mut this.editor {
+                                    editor.catch_days = choice;
+                                }
+                                this.organization_change(
+                                    crate::organization::Change::Preview(choice),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        ))
+                    })),
+            )
+            .child(format!("Including today · {days} days · no total limit"))
+            .child(div().id("catch-up-progress").test_support().child(label))
+            .child(
+                Button::new("catch-up-start-stop")
+                    .label(if running { "Stop" } else { "Start" })
+                    .disabled(
+                        e.busy || !state.ready || (!running && (!state.enabled || !state.has_key)),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.organization_change(
+                            if running {
+                                crate::organization::Change::Stop
+                            } else {
+                                crate::organization::Change::Start(days)
+                            },
+                            window,
+                            cx,
+                        );
+                    })),
+            )
+    }
     pub(super) fn render_editor(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
         let e = self.editor.as_ref()?;
         let title = match e.kind {
@@ -428,7 +562,14 @@ impl Today {
             })
             .child(input)
             .children(error.map(|e| div().text_sm().text_color(theme.danger).child(e)))
-            .child(buttons);
+            .child(buttons)
+            .when(e.kind == Kind::Organization, |d| {
+                if let Some(control) = &control {
+                    d.child(self.catch_up_controls(e, control, cx))
+                } else {
+                    d
+                }
+            });
         Some(
             div()
                 .id("workspace-editor")

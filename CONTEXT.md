@@ -106,6 +106,12 @@ _Avoid_: Human-authored note
 
 ## Local application hosting
 
+**Organization catch-up**:
+A person-initiated run that organizes eligible, previously unprocessed notes
+from a chosen recent period. It is distinct from ongoing automatic organization
+and from reclassifying notes that already have a routing decision.
+_Avoid_: Full-history sweep, reclassification, sync catch-up
+
 **Normal GUI host**:
 The macOS workspace process owning the existing normal config/session/data,
 PowerSync, Unix IPC and local MCP. It shares daemon config resolution and single

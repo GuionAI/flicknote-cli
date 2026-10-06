@@ -277,23 +277,32 @@ impl Today {
                     .child(self.render_home(p, cx))
                     .child(
                         div()
+                            .id("projects-heading")
+                            .test_support()
                             .px(px(12.))
                             .mt(px(12.))
                             .mb(px(5.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
                             .text_size(px(12.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(p.muted_foreground)
-                            .child("Projects"),
-                    )
-                    .child(
-                        Button::new("add-project")
-                            .label("Add project")
-                            .ghost()
-                            .small()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.edit(project_editor::Kind::Add, window, cx);
-                            })),
+                            .child("Projects")
+                            .child(
+                                Button::new("add-project")
+                                    .icon(IconName::Plus)
+                                    .text_color(p.secondary_foreground)
+                                    .ghost()
+                                    .small()
+                                    .w(px(28.))
+                                    .h(px(28.))
+                                    .accessibility_label("Add project")
+                                    .tooltip("Add project")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.edit(project_editor::Kind::Add, window, cx);
+                                    })),
+                            ),
                     )
                     .children(
                         self.projects
@@ -505,7 +514,6 @@ impl Today {
             .bg(p.surface)
             .flex()
             .flex_col()
-            .on_click(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
                     .flex()
@@ -659,6 +667,7 @@ impl Today {
     fn render_canvas(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("center-pane")
+            .on_click(cx.listener(|this, _, window, cx| this.close_detail(window, cx)))
             .flex_1()
             .min_w_0()
             .h_full()
@@ -831,7 +840,6 @@ impl Render for Today {
             .on_action(cx.listener(|this, _: &Reopen, window, cx| {
                 this.change_destination(Destination::Home, window, cx);
             }))
-            .on_click(cx.listener(|this, _, window, cx| this.close_detail(window, cx)))
             .child(
                 div()
                     .size_full()
@@ -1019,6 +1027,77 @@ fn append_recovery(appends: &crate::append::Appends, p: ColorTokens) -> Vec<gpui
 mod resource_tests {
     use super::*;
     use gpui_kit::test::TestWindowExt;
+
+    #[gpui_kit::test]
+    fn plain_markdown_pointer_release(cx: &mut gpui_kit::TestAppContext) {
+        pointer_release(cx);
+    }
+    fn pointer_release(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::{InputEvent as _, MouseMoveEvent, point};
+        cx.executor().allow_parking();
+        cx.update(gpui_kit::init);
+        struct Plain {
+            state: Entity<gpui_kit::base::TextViewState>,
+        }
+        impl Render for Plain {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().id("plain-reader").w(px(300.)).child(
+                    gpui_kit::base::TextView::new(&self.state)
+                        .selectable(true)
+                        .selection_format(gpui_kit::base::SelectionFormat::Plain),
+                )
+            }
+        }
+        let (window, view) = cx.update(|cx| {
+            gpui_kit::open_window(Default::default(), cx, |_, cx| {
+                cx.new(|cx| Plain {
+                    state: cx
+                        .new(|cx| gpui_kit::base::TextViewState::markdown("# 中文 Heading", cx)),
+                })
+            })
+            .unwrap()
+        });
+        super::super::tests::settle(cx, |cx| {
+            cx.update(|cx| !view.read(cx).state.read(cx).rendered_text().is_empty())
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let state = view.read(cx).state.clone();
+            let origin = state.read(cx).bounds().origin;
+            super::super::markdown_tests::drag_text(
+                window,
+                cx,
+                origin + point(px(2.), px(10.)),
+                origin + point(px(90.), px(10.)),
+            );
+            let released = state.read(cx).selected_text();
+            assert!(!released.is_empty());
+            window.press("cmd-c", cx);
+            let copied = cx.read_from_clipboard().unwrap().text().unwrap();
+            assert!(!copied.is_empty());
+            for x in [140., 180.] {
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: origin + point(px(x), px(10.)),
+                        pressed_button: None,
+                        modifiers: Default::default(),
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.render_frame(cx);
+                assert_eq!(
+                    state.read(cx).selected_text(),
+                    released,
+                    "plain pinned TextView release"
+                );
+                window.press("cmd-c", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
+            }
+            window.remove_window();
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn document_resources_have_no_implicit_effects(cx: &mut gpui_kit::TestAppContext) {

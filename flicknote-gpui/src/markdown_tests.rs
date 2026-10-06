@@ -9,7 +9,7 @@ use gpui_kit::{Focusable as _, InputEvent as _};
 const MARKDOWN: &str = "# 中文 Heading\n\n**bold** and *emphasis* with `inline`\n\n> quotation\n\n- first\n- second\n\n| Column | Value | Third | Fourth | Fifth | Sixth |\n| --- | --- | --- | --- | --- | --- |\n| 中文 | English | very-wide-content | very-wide-content | very-wide-content | very-wide-content |\n\n```rust\nlet x = 1;\n```\n\n[link](https://example.invalid)\n\n$E=mc^2$\n\n```mermaid\ngraph TD; A-->B\n```\n";
 
 #[gpui_kit::test]
-#[allow(clippy::too_many_lines)] // One owned window checks state across real watched changes.
+#[allow(clippy::too_many_lines, clippy::cognitive_complexity)] // One owned window checks pointer, copy and identity across watched changes.
 fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestAppContext) {
     cx.executor().allow_parking();
     let root = tempfile::tempdir().unwrap();
@@ -167,7 +167,59 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
             let selected = state.read(cx).selected_text();
             assert!(!selected.is_empty());
             assert!(!selected.contains('#'));
+            for delta in [140., 180.] {
+                window.dispatch_event(
+                    MouseMoveEvent {
+                        position: origin + point(px(delta), px(10.)),
+                        pressed_button: None,
+                        modifiers: Default::default(),
+                    }
+                    .to_platform_input(),
+                    cx,
+                );
+                window.render_frame(cx);
+                assert_eq!(
+                    state.read(cx).selected_text(),
+                    selected,
+                    "released pointer must not extend Markdown selection"
+                );
+                window.press("cmd-c", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), selected);
+            }
             assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), selected);
+            // Release outside the pane still ends Kit's drag; a new drag replaces it.
+            state.update(cx, gpui_kit::base::TextViewState::clear_selection);
+            drag_and_release(
+                window,
+                cx,
+                origin + point(px(2.), px(10.)),
+                origin + point(px(90.), px(10.)),
+                window.find("composer-surface").bounds().center(),
+                1,
+            );
+            let outside = state.read(cx).selected_text();
+            assert!(!outside.is_empty());
+            unpressed_move(window, cx, origin + point(px(180.), px(10.)));
+            assert_eq!(state.read(cx).selected_text(), outside);
+            window.press("cmd-c", cx);
+            assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), outside);
+            drag_text(
+                window,
+                cx,
+                origin + point(px(50.), px(10.)),
+                origin + point(px(90.), px(10.)),
+            );
+            assert_ne!(state.read(cx).selected_text(), outside);
+            for clicks in [2, 3] {
+                let position = origin + point(px(50.), px(10.));
+                drag_and_release(window, cx, position, position, position, clicks);
+                let multi = state.read(cx).selected_text();
+                assert!(!multi.is_empty());
+                unpressed_move(window, cx, origin + point(px(180.), px(10.)));
+                assert_eq!(state.read(cx).selected_text(), multi);
+                window.press("cmd-c", cx);
+                assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), multi);
+            }
             window.resize(size(px(980.), px(720.)));
             window.bounds_changed(cx);
             window.render_frame(cx);
@@ -508,18 +560,40 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
     runtime.block_on(host.shutdown());
 }
 
-fn drag_text(
+pub(super) fn drag_text(
     window: &mut Window,
     cx: &mut App,
     start: gpui_kit::Point<gpui_kit::Pixels>,
     end: gpui_kit::Point<gpui_kit::Pixels>,
+) {
+    drag_and_release(window, cx, start, end, end, 1);
+}
+fn unpressed_move(window: &mut Window, cx: &mut App, position: gpui_kit::Point<gpui_kit::Pixels>) {
+    window.dispatch_event(
+        MouseMoveEvent {
+            position,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        cx,
+    );
+    window.render_frame(cx);
+}
+fn drag_and_release(
+    window: &mut Window,
+    cx: &mut App,
+    start: gpui_kit::Point<gpui_kit::Pixels>,
+    end: gpui_kit::Point<gpui_kit::Pixels>,
+    release: gpui_kit::Point<gpui_kit::Pixels>,
+    clicks: usize,
 ) {
     window.dispatch_event(
         MouseDownEvent {
             button: MouseButton::Left,
             position: start,
             modifiers: Default::default(),
-            click_count: 1,
+            click_count: clicks,
             first_mouse: false,
         }
         .to_platform_input(),
@@ -539,9 +613,9 @@ fn drag_text(
     window.dispatch_event(
         MouseUpEvent {
             button: MouseButton::Left,
-            position: end,
+            position: release,
             modifiers: Default::default(),
-            click_count: 1,
+            click_count: clicks,
         }
         .to_platform_input(),
         cx,

@@ -170,3 +170,17 @@ preview parity or destination scope expands. Owned rendered tests cover 980×720
 and 760×560 detail open/closed, final-row/full-width/action reachability and
 composer growth without reading-pane overlap. Native pixels/IME/cloud and personal
 aesthetic acceptance are separate evidence, unperformed by this implementation.
+
+## Catch up and pointer release (#3398)
+
+Catch up lives in Automatic organization, with three/seven-day choice and
+Start/Stop; no workspace shortcut or date-navigation surface is added. Closing
+its editor retains host-owned work. Number/Option/capture guards under editors
+remain unchanged. Pointer selection uses Kit's root layer: release ends the
+interval before unpressed motion, and exact plain Cmd-C preserves whitespace.
+The pane-wide click interceptor blocked MouseUp bubbling; bare Kit passed while
+the actual reader and a minimal intercepted TextView failed. Disabling Copy
+capture or code-block actions separately left the same failure. The repair removes
+that interception and scopes dismissal to the center canvas. Canonical and block
+Copy, focus/IME and keyboard guards remain as documented. This is rendered evidence,
+not a native input/pixel claim.
