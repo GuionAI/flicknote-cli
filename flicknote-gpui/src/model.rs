@@ -9,6 +9,7 @@ pub(crate) struct Pending {
 }
 #[derive(Default)]
 pub(crate) struct Capture {
+    pub(crate) appends: crate::append::Appends,
     pub(crate) pending: Vec<Pending>,
     pub(crate) recovery: Vec<String>,
     pub(crate) uncertain: Vec<(String, flicknote_client::WireError)>,
@@ -65,6 +66,7 @@ impl Model {
         self.reconcile();
     }
     pub(crate) fn reconcile(&mut self) {
+        self.capture().appends.observe(&self.rows);
         self.capture()
             .pending
             .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));

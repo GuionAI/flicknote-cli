@@ -27,7 +27,7 @@ surface or native acceptance.
 | OptionLeft/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Deferred: fixed current Today and project-All only; no date/Week surface |
 | OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
-| Return | Nonempty composer submits; empty composer opens selected detail | Implemented primary Return; marked Return commits composition without premature create/open |
+| Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; marked Return commits composition without premature create/append/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
 | Keypad Enter | Swift accepts it like Return for selected-detail routing | Deferred; user explicitly does not need it for this slice; no added GPUI binding |
 | CmdF / CtrlF | Focus workspace search | Deferred: no GPUI workspace search; Kit editor-local CmdF is a separate capability |
@@ -61,7 +61,10 @@ group implementation is implied. Watched project archival/removal falls back
 Home while retaining the composer. Ordinary reopen retains the last available
 process-local destination and draft/caret; closed capture completions retain
 recovery or unknown/partial identity and guidance. Cmd1 selects Home.
-Capture is always a new unassigned note (`project=None`). Pending/unknown/partial
+With detail closed, capture is a new unassigned note (`project=None`). With confirmed
+detail open, Return appends to the accepted UUID with exact text; `Append to #ID`
+shows the next target. The same-target busy guard retains new typing. Append identity,
+recovery and completion survive navigation/close/reopen without automatic retries. Pending/unknown/partial
 identity survives navigation/close/reopen, with no unmatched optimistic project rows.
 
 Normal GUI packaging reuses existing config/session/endpoints; synthetic tests use owned roots and port0.

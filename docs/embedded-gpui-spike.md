@@ -90,10 +90,10 @@ Titles use the same folding to keep rows single-line. Pending capture always
 shows folded content until its persisted watch row reconciles. Content/title
 updates refresh previews through the existing bounded account-scoped watch on
 the host runtime; stable IDs, ordering, membership and selection remain intact.
-Rows remain full-width, 32 points high and truncated. Detail and Copy retain
-full canonical content, including its original whitespace and newlines.
+Rows remain full-width, 32 points high and truncated. Detail overlays accepted append
+on canonical content; toolbar Copy retains stored Markdown with exact whitespace.
 
-Return accepts capture and clears input immediately; Shift-Return inserts a
+Return accepts create/append input and clears it immediately; Shift-Return inserts a
 newline. Marked composition text cannot submit. Pending rows are non-interactive
 and reconcile by persisted ID whether watch or acknowledgement arrives first.
 A failed capture restores text only into an empty, noncomposing composer;
@@ -108,8 +108,9 @@ selects the next confirmed note and Option-K the previous. Either starts at the
 first note when nothing is selected; neither wraps. These actions retain editor
 focus, reveal the selected row through the existing virtual list and update
 canonical detail only when it is already open. Empty-composer Return opens the
-selected note. Nonempty Return creates; Shift-Return inserts a newline. IME Return
-commits composition without prematurely creating or opening. Option-A uses the
+selected note. Nonempty Return creates with detail closed or appends with detail open;
+Shift-Return inserts a newline. IME Return commits composition without prematurely
+creating, appending or opening. Option-A uses the
 same guarded archive action. Navigation/open/archive shortcuts are blocked by
 unsubmitted or marked composer input; native Command-A/C/V editing is retained.
 The supported selection/archive actions are also in the application menu.
@@ -130,8 +131,16 @@ the old list/detail/selection and watch; capture stays global/unassigned with
 pending/recovery/unknown identity retained. Unmatched captures stay out of project
 lists. See [the shortcuts audit](shortcuts-audit.md) for deferred mappings.
 
-The composer always creates new notes,
-even with detail open; it never implies append support. Archive is blocked while the
+The composer creates an unassigned note with detail closed and appends to the
+confirmed open detail with it open (#3378). The `Append to #ID` placeholder reflects
+the next target; each accepted UUID/text stays fixed through navigation/close/reopen.
+Input clears and the reader extends optimistically without a new row. One outstanding
+append per target blocks a second acceptance while retaining typing. Canonical watch
+updates replace the overlay without duplicating its suffix. Definite rejection restores
+only into the same empty/unmarked append context; other cases retain copyable recovery.
+Possible-after-write failure requires checking the target before resubmission; no retries
+occur automatically. See [the operator contract](normal-gui-host.md) for metadata-read
+uncertainty and process-local lifetime. Archive is blocked while the
 composer has unsubmitted text or marked composition. On success it selects the
 first surviving successor from the prior persisted-ID order, or surviving
 predecessor if no successor remains. Batched insertions/removals and either
@@ -211,7 +220,7 @@ interaction contracts, not aesthetic acceptance or native pixels. The new visual
 direction was accepted in the original DEV trial; #3374 uses automatic independent review.
 
 The synthetic boundary is identified in the window title and these operator docs.
-Readonly Markdown and creation rather than append are intentional limits.
+Readonly Markdown is intentional; the separate bottom composer supplies append.
 Lucide vector icons are optical equivalents, not SF Symbols replicas.
 The app packages its screen icons explicitly alongside Kit’s default component
 assets; icon names alone do not register the full catalog.
@@ -248,7 +257,11 @@ formula/Mermaid renderers, rich HTML/JS and Markdown editing are deferred.
 Only an open detail owns a document state. Metadata-only changes retain its
 revision, logical selection and scroll; a new note identity resets selection and
 scroll to the beginning and isolates old asynchronous parse results. Closing
-releases reading state; reopening reads current watched content. Option-J/K
+releases reading state; reopening reads current watched content. Accepted append
+operations and recovery remain with the host. Optimistic content is never written as
+a whole document or copied by toolbar Copy; that action retains watched Markdown.
+Append parse completion follows only its original open reader to the appended end;
+unrelated metadata/watch updates do not move the reader. Option-J/K
 follows the open detail. Close, Escape, canvas, Home and final-row removal restore
 composer focus even from text or toolbar buttons. Surviving watch changes do not
 steal focus. Existing draft/IME/archive/close-reopen guards remain as documented.
@@ -417,4 +430,7 @@ passes. This is experimental trial approval, not installed production takeover.
 First-sync presentation uses the pinned Kit horizontal progress component, with
 a structured weighted value from SDK events. Unknown totals use indeterminate
 loading without a percentage; applied required-default completion removes the bar.
-Kit owns presentation animation; no application timer advances readiness.
+Kit owns presentation animation; no application timer advances readiness. After
+first-sync completion, routine connecting/downloading activity shows no status/bar
+or transient layout space. Cached completion, reopen and reconnect stay quiet;
+initial weighted progress and real offline/error feedback remain unchanged.

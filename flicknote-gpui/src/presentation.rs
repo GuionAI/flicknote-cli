@@ -103,6 +103,9 @@ impl Today {
             self.composer
                 .update(cx, |input, cx| input.focus(window, cx));
         }
+        self.composer.update(cx, |input, cx| {
+            input.set_placeholder("Create a new note", window, cx)
+        });
         self.detail_open = false;
         self.detail = None;
         gpui_kit::base::TextSelection::clear(window, cx);
@@ -374,6 +377,8 @@ impl Today {
             .children(self.render_sync_progress(p))
             .children(self.sync_message.clone().map(|message| {
                 div()
+                    .id("sync-message")
+                    .test_support()
                     .px(px(8.))
                     .text_size(px(12.))
                     .text_color(p.secondary_foreground)
@@ -483,7 +488,16 @@ impl Today {
                             .tooltip("Copy note")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(
-                                    this.detail.as_ref().expect("open detail").source.clone(),
+                                    this.model
+                                        .rows
+                                        .iter()
+                                        .find(|r| {
+                                            r.uuid
+                                                == this.detail.as_ref().expect("open detail").uuid
+                                        })
+                                        .expect("watched note")
+                                        .content
+                                        .clone(),
                                 ));
                             })),
                     )
@@ -527,7 +541,11 @@ impl Today {
             .child(
                 Textarea::new(&self.composer)
                     .accessibility_id("composer")
-                    .aria_label("New note")
+                    .aria_label(if self.detail.is_some() {
+                        "Append to note"
+                    } else {
+                        "New note"
+                    })
                     .appearance(false)
                     .bordered(false)
                     .text_size(px(15.)),
@@ -547,6 +565,7 @@ impl Today {
                             .text_color(p.destructive)
                             .child(error)
                     }))
+                    .children(append_recovery(&capture.appends, p))
                     .children(capture.uncertain.last().map(|(text, error)| {
                         let id = error
                             .details
@@ -866,6 +885,41 @@ fn activate_link(url: &str, open: impl FnOnce(&str)) {
     {
         open(url);
     }
+}
+
+fn append_recovery(appends: &crate::append::Appends, p: ColorTokens) -> Vec<gpui_kit::AnyElement> {
+    appends
+        .recovery
+        .iter()
+        .map(|recovery| {
+            let text = recovery.text.clone();
+            let guidance = if recovery.uncertain {
+                "Check the note before resubmitting."
+            } else {
+                "Submitted text is recoverable."
+            };
+            div()
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(p.secondary_foreground)
+                .child(format!(
+                    "Append #{}: {} {guidance}",
+                    recovery.id, recovery.message
+                ))
+                .child(
+                    Button::new(gpui_kit::SharedString::from(format!(
+                        "copy-append-{}",
+                        recovery.token
+                    )))
+                    .label("Copy submitted text")
+                    .ghost()
+                    .on_click(move |_, _, cx| {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                    }),
+                )
+                .into_any_element()
+        })
+        .collect()
 }
 
 #[cfg(test)]

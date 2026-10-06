@@ -1538,8 +1538,9 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
     });
     cx.update_window(window.into(), |_, window, cx| {
         assert_project_note_navigation(window, cx, &view);
-        // A capture remains global while switching twice before its completion.
+        // A closed-detail capture remains global while switching twice before completion.
         view.update(cx, |this, cx| {
+            this.close_detail(window, cx);
             this.submit(window, cx);
             this.change_destination(Destination::Home, window, cx);
             this.change_destination(Destination::Project(project.clone()), window, cx);

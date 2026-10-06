@@ -181,6 +181,49 @@ fn sdk_first_sync_waits_for_every_default_checkpoint(cx: &mut gpui_kit::TestAppC
     emit(json!({"partial_checkpoint_complete":{"last_op_id":"2","priority":4}}));
     tests::settle(cx, |cx| cx.update(|cx| view.read(cx).first_synced));
     assert_bar(cx, window, &view, None);
+    // Approved quiet ongoing presentation: stable list geometry through normal activity.
+    let viewport = cx
+        .update_window(window.into(), |_, window, cx| {
+            window.render_frame(cx);
+            (
+                window.find("today-notes").bounds(),
+                window.find("list-status").bounds(),
+            )
+        })
+        .unwrap();
+    for (connecting, downloading) in [(false, false), (true, false), (false, true), (false, false)]
+    {
+        let status = crate::sync_progress::Snapshot {
+            connected: !connecting,
+            connecting,
+            error: false,
+            required_ready: None,
+            notes_applied: false,
+            notes_progress: downloading.then_some((100, 50)),
+        };
+        let mut first = services.first_sync.lock().unwrap();
+        let message = first.update(status);
+        let progress = first.progress;
+        drop(first);
+        assert_eq!(message, None);
+        cx.update_window(window.into(), |_, window, cx| {
+            view.update(cx, |this, _| {
+                this.sync_message = message;
+                this.sync_progress = progress;
+            });
+            window.render_frame(cx);
+            assert!(window.try_find("first-sync-progress").is_none());
+            assert!(window.try_find("sync-message").is_none());
+            assert_eq!(
+                (
+                    window.find("today-notes").bounds(),
+                    window.find("list-status").bounds()
+                ),
+                viewport
+            );
+        })
+        .unwrap();
+    }
     // An active optional subscription has not applied; default readiness is enough.
     let status = host.db.status();
     let optional_status = status.for_stream(&optional).unwrap();

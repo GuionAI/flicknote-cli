@@ -415,7 +415,7 @@ uses `flicknote daemon run`; it does not use synthetic fixtures.
 This is a synthetic fixture experiment. It embeds real PowerSync, shared
 application operations and the existing local MCP/IPC servers. It loads no login
 or cloud session. The GUI presents a continuous workbench with a compact rail, full-width note
-rows, a docked create-only composer and an optional right readonly Markdown reading pane.
+rows, a docked create/append composer and an optional right readonly Markdown reading pane.
 Use the FlickNote application menu for System, Light or Dark appearance with
 independently authored Light/Dark workbench roles adapted through existing Kit. The
 minimum window size is 760×560 points. Home and active projects are working
@@ -424,7 +424,7 @@ and project dots. Detail fills a separate 272–420-point reading pane without c
 Option-J/K select next/previous confirmed notes without wrapping and preserve
 editor focus; empty Return opens selected detail, and Option-A archives with
 the existing input guard. Unsubmitted/marked input blocks note-selection shortcuts.
-Append, Markdown editing, formula/Mermaid rendering, unsupported navigation shortcuts, global trigger,
+Markdown editing, formula/Mermaid rendering, unsupported navigation shortcuts, global trigger,
 voice and full Swift desktop parity remain deferred. Home watches current Today;
 projects watch All active project notes across dates, capped at 10,000. Cmd1 selects
 Home; Cmd2..9 select the first eight active projects in displayed rail order,
@@ -433,7 +433,9 @@ Home and projects without wrap, skipping unavailable groups. Closing keeps the
 host alive; ordinary reopen keeps the last available destination and draft/caret.
 Capture results arriving while closed retain recovery or canonical identity and
 do-not-submit-again guidance. Cmd1 opens Home, and CmdQ stops the host.
-Capture always creates an unassigned new note.
+With detail closed, capture creates an unassigned new note. With a confirmed detail
+open, Return appends exact submitted text to that note and immediately clears input.
+The short-ID placeholder shows the accepted target for the next submission.
 Home/project-All previews match the Swift desktop: <=512 raw UTF-8 bytes show
 folded content; longer notes show nullable title or `Untitled note`. Empty titles
 stay empty. Folding trims line edges and omits blank lines while retaining
@@ -486,12 +488,17 @@ archival/removal falls back Home while retaining the composer. First-sync progre
 uses a visible Kit bar: notes download maps to 0–90%, then holds at 90% while
 other required default streams finish, and hides on applied completion. It measures SDK operations,
 not remaining unique notes. Unknown totals stay indeterminate; offline/errors
-keep honest cached-data status. Cached first-sync completion skips the indicator.
+keep honest cached-data status. Cached first-sync completion skips the indicator. Completed sync has no routine
+connecting/downloading status or transient layout space; offline/errors remain visible.
 The empty, unmarked composer offers Option-J/K to workspace bindings before an
 active Chinese IME; draft/marked input retains Kit IME routing and native editing.
 Text highlighting keeps Kit’s dedicated input-selection role; workbench
-row selection is separate. Capture remains global/unassigned even inside a project, with no offline queue or automatic
-retry of unknown/partial creation. Close keeps the owner alive; Quit releases it.
+row selection is separate. Closed-detail capture remains global/unassigned even inside a project. Open-detail
+append keeps its accepted UUID across navigation and close/reopen, with one outstanding
+append per note. Optimistic Markdown overlays watched content; toolbar Copy retains
+canonical stored Markdown. Failures retain submitted text without replacing new typing;
+a possible-after-write error requires checking the target before resubmitting. No offline
+queue or automatic mutation retry is added. Close keeps the owner alive; Quit releases it.
 
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)

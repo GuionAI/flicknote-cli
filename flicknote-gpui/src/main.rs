@@ -1,4 +1,6 @@
 #[cfg(target_os = "macos")]
+mod append;
+#[cfg(target_os = "macos")]
 mod assets;
 #[cfg(target_os = "macos")]
 mod launch;

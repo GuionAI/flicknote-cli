@@ -112,6 +112,7 @@ struct Reading {
     source: String,
     state: Entity<gpui_kit::base::TextViewState>,
     scroll: gpui_kit::ScrollHandle,
+    append_scroll: Option<Subscription>,
 }
 
 struct Today {
@@ -425,7 +426,6 @@ impl Today {
                 let snapshot = crate::sync_progress::Snapshot {
                     connected: status.is_connected(),
                     connecting: status.is_connecting(),
-                    downloading: status.is_downloading(),
                     error: status.download_error().is_some() || status.upload_error().is_some(),
                     required_ready,
                     notes_applied: notes.as_ref().is_some_and(|s| s.subscription.has_synced()),
@@ -502,6 +502,18 @@ impl Today {
                     .update(cx, |input, cx| input.set_value(text, window, cx));
             }
         }
+        self.refresh_detail(window, cx);
+        let target = self.detail.as_ref().map(|r| r.uuid.clone());
+        let eligible = self.composer.read(cx).value().is_empty() && !self.composing(window, cx);
+        let text = self
+            .model
+            .capture()
+            .appends
+            .restore(target.as_deref(), eligible);
+        if let Some(text) = text {
+            self.composer
+                .update(cx, |input, cx| input.set_value(text, window, cx));
+        }
         cx.notify();
     }
 
@@ -517,6 +529,15 @@ impl Today {
         }
         let text = self.composer.read(cx).value().to_string();
         if text.trim().is_empty() {
+            return;
+        }
+        if let Some(row) = self
+            .detail
+            .as_ref()
+            .and_then(|detail| self.model.rows.iter().find(|r| r.uuid == detail.uuid))
+            .cloned()
+        {
+            self.submit_append(row, text, window, cx);
             return;
         }
         let token = self.model.accept(text.clone());
@@ -549,6 +570,91 @@ impl Today {
         cx.notify();
     }
 
+    fn submit_append(
+        &mut self,
+        row: flicknote_sync::today::TodayRow,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(token) = self.model.capture().appends.accept(&row, text.clone()) else {
+            return;
+        };
+        self.composer
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        *self.services.draft.lock().expect("composer draft") = (String::new(), 0..0);
+        self.follow_append_parse(window, cx);
+        self.refresh_detail(window, cx);
+        let services = self.services.clone();
+        let job = self.services.runtime.spawn(async move {
+            let result = services
+                .app
+                .handle(AppRequest::NoteAppend {
+                    id: row.uuid,
+                    content: text,
+                })
+                .await;
+            services
+                .capture
+                .lock()
+                .expect("capture state")
+                .appends
+                .complete(token, result);
+            services.capture_changed.send_replace(());
+        });
+        self.services.track(&job);
+        cx.notify();
+    }
+
+    fn follow_append_parse(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(reading) = &mut self.detail else {
+            return;
+        };
+        let before = reading.state.read(cx).rendered_text();
+        let expected = self
+            .model
+            .capture()
+            .appends
+            .pending
+            .iter()
+            .find(|p| p.uuid == reading.uuid)
+            .expect("accepted append")
+            .expected
+            .clone();
+        reading.append_scroll =
+            Some(
+                cx.observe_in(&reading.state, window, move |this, state, window, cx| {
+                    let Some(reading) = &mut this.detail else {
+                        return;
+                    };
+                    if reading.state != state {
+                        return;
+                    }
+                    if reading.source != expected {
+                        reading.append_scroll.take();
+                        return;
+                    }
+                    if state.read(cx).rendered_text() != before {
+                        reading.append_scroll.take();
+                        let identity = state.entity_id();
+                        let weak = cx.entity().downgrade();
+                        let expected = expected.clone();
+                        window.on_next_frame(move |_, cx| {
+                            let _updated = weak.update(cx, |this, cx| {
+                                if let Some(reading) = &this.detail
+                                    && reading.state.entity_id() == identity
+                                    && reading.source == expected
+                                {
+                                    reading.scroll.scroll_to_bottom();
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    }
+                }),
+            );
+    }
+
     fn refresh_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.detail_open && self.model.selected.is_none() {
             self.close_detail(window, cx);
@@ -564,14 +670,19 @@ impl Today {
             self.close_detail(window, cx);
             return;
         };
+        let source = self.model.capture().appends.source(row);
+        let placeholder = format!("Append to #{}", row.id);
+        self.composer.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx)
+        });
         if let Some(reading) = &mut self.detail
             && reading.uuid == row.uuid
         {
-            if reading.source != row.content {
+            if reading.source != source {
                 reading
                     .state
-                    .update(cx, |state, cx| state.set_text(&row.content, cx));
-                reading.source.clone_from(&row.content);
+                    .update(cx, |state, cx| state.set_text(&source, cx));
+                reading.source.clone_from(&source);
             } else if reading.title != row.title || reading.project_name != row.project_name {
                 // Header reflow changes body geometry, not document revision.
                 reading
@@ -587,7 +698,7 @@ impl Today {
             .as_ref()
             .is_some_and(|r| r.state.read(cx).focus_handle().is_focused(window));
         gpui_kit::base::TextSelection::clear(window, cx);
-        let state = cx.new(|cx| gpui_kit::base::TextViewState::markdown(&row.content, cx));
+        let state = cx.new(|cx| gpui_kit::base::TextViewState::markdown(&source, cx));
         if was_focused {
             window.focus(&state.read(cx).focus_handle().clone(), cx);
         }
@@ -595,9 +706,10 @@ impl Today {
             uuid: row.uuid.clone(),
             title: row.title.clone(),
             project_name: row.project_name.clone(),
-            source: row.content.clone(),
+            source,
             state,
             scroll: gpui_kit::ScrollHandle::new(),
+            append_scroll: None,
         });
     }
 
@@ -937,3 +1049,7 @@ mod markdown_tests;
 #[cfg(test)]
 #[path = "sync_progress_tests.rs"]
 mod sync_progress_tests;
+
+#[cfg(test)]
+#[path = "append_tests.rs"]
+mod append_tests;

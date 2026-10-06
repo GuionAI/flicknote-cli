@@ -16,7 +16,6 @@ pub(crate) enum Progress {
 pub(crate) struct Snapshot {
     pub(crate) connected: bool,
     pub(crate) connecting: bool,
-    pub(crate) downloading: bool,
     pub(crate) error: bool,
     // None means the required active default subscriptions are not known yet.
     pub(crate) required_ready: Option<bool>,
@@ -46,7 +45,7 @@ impl FirstSync {
             return Some("Offline. Showing cached notes.".into());
         }
         if self.complete {
-            return (status.connecting || status.downloading).then(|| "Syncing…".into());
+            return None;
         }
         if status.notes_applied {
             self.progress = Some(Progress::Percent(90));
@@ -78,7 +77,6 @@ mod tests {
         Snapshot {
             connected: true,
             connecting: false,
-            downloading: true,
             error: false,
             required_ready: Some(false),
             notes_applied: false,
@@ -110,7 +108,6 @@ mod tests {
         assert!(!first.complete);
         let mut s = snapshot();
         s.required_ready = Some(true);
-        s.downloading = false;
         assert_eq!(first.update(s), None);
         assert_eq!(first.progress, None);
         assert!(first.complete);
@@ -139,7 +136,6 @@ mod tests {
         let mut first = FirstSync::default();
         let mut s = snapshot();
         s.connected = false;
-        s.downloading = false;
         s.required_ready = Some(true);
         assert_eq!(
             first.update(s).as_deref(),
@@ -150,8 +146,7 @@ mod tests {
         s.required_ready = None;
         s.connected = false;
         s.connecting = true;
-        s.downloading = false;
-        assert_eq!(first.update(s).as_deref(), Some("Syncing…"));
+        assert_eq!(first.update(s), None);
         assert!(first.complete);
         assert_eq!(first.progress, None);
         s.connected = true;

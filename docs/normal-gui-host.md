@@ -85,7 +85,9 @@ without polling or counts from the database/cloud. Notes download operations map
 Downloaded 100% still waits for the notes applied checkpoint; applied notes show
 “90% — Finishing sync…” until **all active default subscriptions** have applied.
 Completion reaches the weighted 100% state and immediately hides the first-sync
-indicator; ongoing sync retains quiet status. Optional subscriptions do not block
+indicator. After completion, ordinary connecting/downloading activity shows no
+message, bar or reserved status space; cached completion/reopen/reconnect keeps the
+list viewport stable. Real offline/error feedback remains. Optional subscriptions do not block
 completion. This is weighted progress, not a count of remaining unique notes.
 Unknown/zero totals use the Kit indeterminate bar with Connecting/Syncing text
 and no percentage. Offline/error states cannot complete an in-progress first sync. Previously completed cached sync
@@ -133,11 +135,27 @@ Shared/Archive/Charts remain unavailable. Project Week,
 date navigation, workspace search, settings, global shortcuts and keypad Enter
 are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
-Capture always creates a new **unassigned** note (`project=None`), including in
-a project. Pending/unknown/partial operations keep their original identity across
+With detail closed, capture creates a new **unassigned** note (`project=None`),
+including in a project. With confirmed detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
+The accepted UUID and exact text stay immutable after navigation or window close.
+Nonempty content receives two newline characters before the exact submitted text;
+an empty body receives that text alone. Accepted input clears immediately and the
+reader extends optimistically, without a new timeline row. One outstanding append
+per target retains later typing on Return; other targets and closed-detail capture
+remain available. Watched content is authoritative, with no duplicate optimistic
+suffix in either watch/ack order. Toolbar Copy always copies stored Markdown.
+
+Definite append rejection removes only its overlay and restores text only into an
+empty, unmarked composer still showing the same target. Otherwise submitted text
+remains available through Copy submitted text. A possible-after-write error preserves
+target/text with check-before-resubmitting guidance, never a blind retry: the current
+service updates content before reading mutation metadata, so even a metadata read
+failure cannot establish rejection. Later typing, titles, project assignment, lifecycle
+and creation provenance remain intact. Pending/unknown/partial creation operations
+keep their original identity across
 switches; unmatched captures are never injected into a project's list.
 
-GUI create/read/copy/archive use production Application operations. Existing
+GUI create/append/read/copy/archive use production Application operations. Existing
 local reads and mutations follow production sync semantics during an outage;
 remote-backed creation still requires the network. There is no added offline
 creation queue or automatic mutation retry. Definite rejection preserves text
@@ -150,10 +168,11 @@ Pending/watch acknowledgement reconciles by persisted ID in either order.
 
 Closing Today cancels only its watch/input work; IPC, local MCP and sync continue.
 Ordinary reopen restores the last available destination in this process with a
-fresh watch, including changes made while closed. Draft text/caret and capture
+fresh watch, including changes made while closed. Draft text/caret, capture and append
 state remain process-local across close/reopen. Completions arriving while closed
 retain definite-failure recovery or unknown/partial identity and guidance; reopening
-never resubmits them. These values are not persisted to disk or across Quit.
+never resubmits them. Append work also completes while closed; reopening observes
+its original note through a fresh watch and retains recovery without retargeting. These values are not persisted to disk or across Quit.
 Command-1 opens Home while closed and selects Home while open; number bindings
 do not navigate login. Command-Q explicitly quits: owned operations and actors
 cancel, servers stop, sync disconnects, the database checkpoints and socket/lock
