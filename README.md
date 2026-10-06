@@ -456,7 +456,8 @@ Unix socket and MCP endpoint (`http://127.0.0.1:37789/mcp`). Start without flags
 ```bash
 cargo build --locked -p flicknote-gpui -p flicknote-cli
 # From clean committed source, package into a NEW output without launching:
-python3 scripts/package-gpui.py --output .scratch/normal-gui-host/normal-v1-3374
+python3 scripts/package-gpui.py --output .scratch/normal-gui-host/normal-v1-3374 \
+  --signing-identity 3C696934260FDAFA30B7A1959AD9CC0D964C5BB7
 ```
 
 The package directly runs the GUI binary and needs no CLI companion or wrapper.

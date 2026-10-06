@@ -144,7 +144,16 @@ explicit Quit shuts down and releases it. Remote private MCP remains separate.
 Build clean committed source with `cargo build --locked -p flicknote-cli -p
 flicknote-gpui` on Apple Silicon macOS. Package GUI only with
 `scripts/package-gpui.py` in a NEW versioned ignored `.scratch` output; verify
-source/tree/hash evidence. Preserve existing apps/profiles/reports. Packaging
+source/tree/hash evidence. Normal packaging requires an explicit Apple Development
+certificate SHA1 (`--signing-identity`); use the operator contract in
+`docs/normal-gui-host.md`. Sign the complete new scratch bundle before manifest
+hashes, verify certificate/team/identifier/designated requirement and strict
+signatures, and record unsigned input separately from final signed hashes.
+Reuse verified cached builds; preserve historical originals. Tests use only fake
+signers/owned fixtures. Authorized artifact signing uses the confirmed identity
+only on new scratch bundles; a missing/locked identity or human authentication
+need must be reported without prompt automation, unlock or ACL/trust changes.
+Preserve existing apps/profiles/reports. Packaging
 performs no launch, installation, service changes or real-account operations.
 Manual normal cutover requires separate user direction; shared CLI `--profile`
 auth-only/headless support remains available and unchanged.
@@ -161,7 +170,7 @@ runtime::local_host_tests -- --nocapture`, `cargo test --locked -p flicknote-gpu
 and CLI tests for relevant changes. Complete the full routine and locked Mac
 CLI/GUI build on final clean committed source. Native input/IME/pixels and live
 cloud/cutover evidence remain separate from rendered tests/builds. Linux GUI,
-login-item registration, signing/updater and automatic handoff are deferred.
+login-item registration, public distribution/updater and automatic handoff are deferred.
 For visual changes follow the native synthetic screenshot workflow in the spike
 guide; missing native pixels leave visual acceptance unverified. #3374 requires
 owned automated host/login/lifecycle/package evidence, no native launch or new
@@ -169,7 +178,10 @@ manual matrix. Send IMPL_COMPLETE with final SHA/PR/absolute scratch report;
 Orc starts independent review and governs merge without another user review gate.
 Accepted merged normal GUI updates are installed by Orc to
 `/Applications/FlickNote.app` under standing user authorization, after independent
-review/merge and source/hash verification; preserve a rollback package. Worker
+review/merge and source/hash/signature verification; preserve a rollback package.
+Install the already signed whole bundle and reverify its seal/hashes; never sign
+or patch the installed app in place. Native launch/dyld/Keychain acceptance is
+a user handoff and remains unverified by static packaging checks. Worker
 verification/package actions do not install. Installation never automatically
 quits/restarts the running app or clears drafts. Follow `docs/normal-gui-host.md`
 for the operator boundary.

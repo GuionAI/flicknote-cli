@@ -11,16 +11,52 @@ On Apple Silicon macOS, from clean committed source:
 
 ```bash
 cargo build --locked -p flicknote-cli -p flicknote-gpui
-python3 scripts/package-gpui.py --output .scratch/normal-gui-host/normal-v1-3374
+python3 scripts/package-gpui.py --output .scratch/normal-gui-host/normal-v2 \
+  --signing-identity 3C696934260FDAFA30B7A1959AD9CC0D964C5BB7
 ```
 
 Choose a new output version if it exists. The normal `FlickNote.app` directly
 runs `Contents/MacOS/flicknote-gpui` without a wrapper, profile flags, forced
 endpoint environment or CLI runtime dependency. Packaging creates no runtime
 state, launches nothing and installs no service. `SOURCE.json` records source
-commit/tree and app hashes; run `shasum -a 256 -c SHA256SUMS` in that output.
+commit/tree, unsigned input digest, certificate metadata and final signed app hashes; run `shasum -a 256 -c SHA256SUMS` in that output.
 Preserve historical apps/profiles/sessions and scratch evidence unchanged.
-Signing, release distribution, updater and boot-at-login registration are deferred.
+The explicit local identity is **Apple Development: Sifang Feng (Z283R4SYUZ)**,
+SHA1 `3C696934260FDAFA30B7A1959AD9CC0D964C5BB7`, team `RL5WAW5828`.
+The stable bundle identifier remains `app.flicknote.gpui`. Packaging requires a
+certificate SHA1; it never chooses the first identity or falls back to ad-hoc signing.
+It signs the complete bundle after Info.plist/resources, preserves existing
+entitlements, and lets codesign generate the certificate-bound designated requirement.
+No hardened runtime, sandbox or additional entitlement is introduced.
+
+Before recording hashes it verifies strict signatures, certificate fingerprint,
+Apple Development authority, identifier, team and matching bundle/executable
+requirements. `sha256` and `SHA256SUMS` cover every final app file, including the
+resource seal and signed executable; `unsigned_input_sha256` separately identifies
+the cached Cargo input. Do not compare that input digest to the signed executable
+as if signing preserved bytes. A failed or timed-out signing/verification operation
+leaves no success manifest; retain that failed output for diagnosis and choose a new
+output on retry. Missing or locked identities fail clearly. Any Keychain authentication
+prompt needs the user; never automate it, unlock a Keychain or change certificate,
+trust or private-key ACL settings. Tests inject a fake signer and own all fixtures.
+
+Reuse the existing cached build after the locked build verifies clean committed
+source; do not compile a second historical version just to compare requirements.
+For artifact verification, sign new scratch copies of two available different
+source-bound GUI versions with the same identity and identifier, verify each,
+and compare `codesign --display -r-` output. Preserve the historical originals;
+label the older copy as a reference, never as the current-source deliverable.
+
+This is local development signing, not Developer ID distribution or notarization.
+Apple describes update identity and Keychain requirement tracking in
+[TN2206](https://developer.apple.com/library/archive/technotes/tn2206/_index.html)
+and [the requirement language guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/CodeSigningGuide/RequirementLang/RequirementLang.html).
+An existing Keychain item may prompt once on the first transition from ad-hoc to
+certificate identity. Do not promise zero prompts, recreate the item or broaden
+access to all applications. Static signatures and hashes do not prove native
+launch, dyld loading or actual Keychain acceptance. Those remain the user's manual
+check after reviewed merge and Orc installation, without another acceptance matrix.
+Release distribution, updater and boot-at-login registration remain deferred.
 
 ## Existing config, ownership and login
 
@@ -236,7 +272,9 @@ separate contracts. Owned rendered evidence is distinct from native acceptance.
 
 Accepted merged normal GUI updates are installed by Orc to
 `/Applications/FlickNote.app` under the user's standing authorization, after
-independent review/merge and source/hash verification. Preserve a rollback package.
+independent review/merge and source/hash/signature verification. Preserve a rollback package.
+Install the already signed whole bundle; never sign or patch Applications in place.
+Verify the sealed signature and final hashes again without modifying the bundle.
 Installation does not quit/restart a running app or clear its drafts. Worker
 packaging and tests perform no installation, native launch or service changes.
 
