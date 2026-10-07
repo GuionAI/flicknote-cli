@@ -9,6 +9,7 @@ pub(crate) struct Pending {
 }
 #[derive(Default)]
 pub(crate) struct Capture {
+    pub(crate) note_actions: crate::ui::note_actions::NoteActions,
     pub(crate) appends: crate::append::Appends,
     pub(crate) pending: Vec<Pending>,
     pub(crate) recovery: Vec<String>,
@@ -71,6 +72,7 @@ impl Model {
             .pending
             .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));
     }
+    #[cfg(test)]
     pub(crate) fn archive_success(&mut self, id: i64) {
         self.snapshot(Arc::new(
             self.rows.iter().filter(|r| r.id != id).cloned().collect(),
@@ -159,6 +161,9 @@ mod tests {
                     project_name: None,
                     note_type: "normal".into(),
                     project_color: None,
+                    archived: false,
+                    draft: false,
+                    shared: false,
                 })
                 .collect(),
         )

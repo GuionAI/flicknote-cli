@@ -148,6 +148,62 @@ impl Today {
                     }))
             }))
     }
+    fn drop_target(
+        &self,
+        element: gpui_kit::Stateful<gpui_kit::Div>,
+        destination: Destination,
+        p: ColorTokens,
+        cx: &Context<Self>,
+    ) -> gpui_kit::Stateful<gpui_kit::Div> {
+        let weak = cx.entity().downgrade();
+        let target = destination.clone();
+        element
+            .can_drop(move |value, window, cx| {
+                let Some(drag) = value.downcast_ref::<NoteDrag>() else {
+                    return false;
+                };
+                weak.update(cx, |this, cx| this.accepts_drop(drag, &target, window, cx))
+                    .unwrap_or(false)
+            })
+            .drag_over::<NoteDrag>(move |style, _, _, _| {
+                style.bg(p.accent).border_1().border_color(p.primary)
+            })
+            .on_drop(cx.listener(move |this, drag: &NoteDrag, window, cx| {
+                this.drop_note(drag, &destination, window, cx);
+            }))
+    }
+    fn render_collection(
+        &self,
+        id: &'static str,
+        title: &'static str,
+        name: IconName,
+        destination: Destination,
+        p: ColorTokens,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let selected = self.destination == destination;
+        let target = destination.clone();
+        let row = div()
+            .id(id)
+            .role(Role::Button)
+            .aria_label(title)
+            .aria_selected(selected)
+            .h(px(32.))
+            .px(px(12.))
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .text_color(p.secondary_foreground)
+            .when(selected, |d| d.bg(p.selection))
+            .hover(move |d| d.bg(if selected { p.selection } else { p.accent }))
+            .child(rail_slot(icon(name, p.secondary_foreground, 14.)))
+            .child(rail_label(title))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                cx.stop_propagation();
+                this.change_destination(destination.clone(), window, cx);
+            }));
+        self.drop_target(row, target, p, cx).test_support()
+    }
     fn render_home(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("home")
@@ -173,6 +229,11 @@ impl Today {
             .child(div().flex_1().child(rail_label("Home")))
             .child(
                 div()
+                    .id("home-accessory")
+                    .w(px(20.))
+                    .flex_shrink_0()
+                    .text_center()
+                    .test_support()
                     .text_color(p.muted_foreground)
                     .text_size(px(12.))
                     .child("⌘1"),
@@ -191,49 +252,106 @@ impl Today {
     ) -> impl IntoElement + use<> {
         let destination = Destination::Project(project.id.clone());
         let selected = self.destination == destination;
+        let target = destination.clone();
+        self.drop_target(
+            div()
+                .id(gpui_kit::SharedString::from(format!(
+                    "project-{}",
+                    project.id
+                )))
+                .role(Role::Button)
+                .aria_label(project.name.clone())
+                .aria_selected(selected)
+                .when(
+                    !selected
+                        && !cx.has_active_drag()
+                        && self.related_project() == Some(project.id.as_str()),
+                    |d| d.bg(p.accent),
+                )
+                .when(selected, |d| d.bg(p.selection))
+                .hover(|d| d.bg(if selected { p.selection } else { p.accent }))
+                .h(px(32.))
+                .px(px(12.))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .text_color(if selected {
+                    p.foreground
+                } else {
+                    p.secondary_foreground
+                })
+                .child(rail_slot(dot(
+                    project.color.as_deref().unwrap_or(""),
+                    8.,
+                    p.secondary_foreground,
+                )))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(rail_label(&project.name)),
+                )
+                .children((index < 8).then(|| {
+                    div()
+                        .id(gpui_kit::SharedString::from(format!(
+                            "project-accessory-{}",
+                            project.id
+                        )))
+                        .w(px(20.))
+                        .flex_shrink_0()
+                        .text_center()
+                        .test_support()
+                        .text_size(px(12.))
+                        .text_color(p.muted_foreground)
+                        .child(format!("⌘{}", index + 2))
+                }))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.change_destination(destination.clone(), window, cx);
+                })),
+            target,
+            p,
+            cx,
+        )
+        .test_support()
+    }
+    fn projects_heading(&self, p: ColorTokens, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
-            .id(gpui_kit::SharedString::from(format!(
-                "project-{}",
-                project.id
-            )))
-            .role(Role::Button)
-            .aria_label(project.name.clone())
-            .aria_selected(selected)
-            .when(selected, |d| d.bg(p.selection))
-            .hover(|d| d.bg(if selected { p.selection } else { p.accent }))
-            .h(px(32.))
-            .px(px(12.))
+            .id("projects-heading")
+            .test_support()
+            .pl(px(12.))
+            .pr(px(8.))
+            .mt(px(12.))
+            .mb(px(5.))
             .flex()
             .items_center()
-            .gap(px(10.))
-            .text_color(if selected {
-                p.foreground
-            } else {
-                p.secondary_foreground
-            })
-            .child(rail_slot(dot(
-                project.color.as_deref().unwrap_or(""),
-                8.,
-                p.secondary_foreground,
-            )))
+            .justify_between()
+            .text_size(px(12.))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(p.muted_foreground)
+            .child("Projects")
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(rail_label(&project.name)),
+                Button::new("add-project")
+                    .child(
+                        div()
+                            .id("project-plus-glyph")
+                            .size(px(12.))
+                            .flex_shrink_0()
+                            .child(icon(IconName::Plus, p.secondary_foreground, 12.))
+                            .test_support(),
+                    )
+                    .text_color(p.secondary_foreground)
+                    .ghost()
+                    .small()
+                    .w(px(28.))
+                    .h(px(28.))
+                    .accessibility_label("Add project")
+                    .tooltip("Add project")
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.edit(project_editor::Kind::Add, window, cx);
+                    })),
             )
-            .children((index < 8).then(|| {
-                div()
-                    .text_size(px(12.))
-                    .text_color(p.muted_foreground)
-                    .child(format!("⌘{}", index + 2))
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                cx.stop_propagation();
-                this.change_destination(destination.clone(), window, cx);
-            }))
-            .test_support()
     }
     fn render_rail(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -275,47 +393,29 @@ impl Today {
                     .flex_col()
                     .gap(px(0.))
                     .child(self.render_home(p, cx))
-                    .child(
-                        div()
-                            .id("projects-heading")
-                            .test_support()
-                            .px(px(12.))
-                            .mt(px(12.))
-                            .mb(px(5.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .text_size(px(12.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.muted_foreground)
-                            .child("Projects")
-                            .child(
-                                Button::new("add-project")
-                                    .icon(IconName::Plus)
-                                    .text_color(p.secondary_foreground)
-                                    .ghost()
-                                    .small()
-                                    .w(px(28.))
-                                    .h(px(28.))
-                                    .accessibility_label("Add project")
-                                    .tooltip("Add project")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.edit(project_editor::Kind::Add, window, cx);
-                                    })),
-                            ),
-                    )
+                    .child(self.projects_heading(p, cx))
                     .children(
                         self.projects
                             .iter()
                             .enumerate()
                             .map(|(index, project)| self.render_project(index, project, p, cx)),
                     )
-                    .child(
-                        div()
-                            .mt(px(12.))
-                            .child(landmark("Shared", IconName::Link, p)),
-                    )
-                    .child(landmark("Archive", IconName::Archive, p))
+                    .child(div().mt(px(12.)).child(self.render_collection(
+                        "shared",
+                        "Shared",
+                        IconName::Link,
+                        Destination::Shared,
+                        p,
+                        cx,
+                    )))
+                    .child(self.render_collection(
+                        "archive-destination",
+                        "Archive",
+                        IconName::Archive,
+                        Destination::Archive,
+                        p,
+                        cx,
+                    ))
                     .child(landmark("Charts", IconName::ChartBar, p)),
             )
             .test_support()
@@ -426,7 +526,11 @@ impl Today {
                         } else if self.destination == Destination::Home {
                             "No notes today"
                         } else {
-                            "No active notes in this project"
+                            match self.destination {
+                                Destination::Shared => "No shared notes",
+                                Destination::Archive => "No archived notes",
+                                _ => "No active notes in this project",
+                            }
                         })
                 }),
             )
@@ -482,12 +586,75 @@ impl Today {
                 row.project_color.as_deref(),
                 p,
             ))
+            .on_hover(cx.listener(move |this, hovered, _, cx| {
+                if *hovered {
+                    this.related_note = Some(id);
+                } else if this.related_note == Some(id) {
+                    this.related_note = None;
+                }
+                cx.notify();
+            }))
+            .when(self.drag_eligible(row, cx), |d| {
+                d.on_drag(
+                    NoteDrag {
+                        row: row.clone(),
+                        owner: self.services.user_id.clone(),
+                    },
+                    |drag, _, _, cx| cx.new(|_| drag.clone()),
+                )
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 cx.stop_propagation();
                 this.select(id, window, cx);
             }))
             .test_support()
             .into_any_element()
+    }
+    fn share_actions(
+        &self,
+        row: &flicknote_sync::today::TodayRow,
+        disabled: bool,
+        cx: &Context<Self>,
+    ) -> Vec<gpui_kit::AnyElement> {
+        if row.archived || row.draft {
+            return vec![];
+        }
+        let label = if row.shared {
+            "Copy share link"
+        } else {
+            "Share note"
+        };
+        let target = row.clone();
+        let mut buttons = vec![
+            Button::new("share-note")
+                .icon(IconName::Link)
+                .ghost()
+                .small()
+                .accessibility_label(label)
+                .tooltip(label)
+                .disabled(disabled)
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.perform_note_action(target.clone(), NoteAction::Share, window, cx)
+                }))
+                .into_any_element(),
+        ];
+        if row.shared {
+            let target = row.clone();
+            buttons.push(
+                Button::new("unshare-note")
+                    .icon(IconName::Unlink)
+                    .ghost()
+                    .small()
+                    .accessibility_label("Unshare note")
+                    .tooltip("Unshare note")
+                    .disabled(disabled)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.perform_note_action(target.clone(), NoteAction::Unshare, window, cx)
+                    }))
+                    .into_any_element(),
+            );
+        }
+        buttons
     }
     fn render_detail(
         &self,
@@ -502,7 +669,19 @@ impl Today {
             .iter()
             .find(|row| row.uuid == reading.uuid)
             .expect("selected watched note");
-        let disabled = self.archive_busy || !self.composer.read(cx).value().is_empty();
+        let disabled = self.note_busy(&row.uuid) || !self.drag_allowed;
+        let content = row.content.clone();
+        let target = row.clone();
+        let lifecycle = if row.archived {
+            NoteAction::Restore
+        } else {
+            NoteAction::Archive
+        };
+        let (action_icon, label, tooltip) = if row.archived {
+            (IconName::ArchiveRestore, "Restore note", "Restore note")
+        } else {
+            (IconName::Archive, "Archive note", "Archive note (⌥A)")
+        };
         div()
             .id("detail-surface")
             .w(px(width))
@@ -524,8 +703,8 @@ impl Today {
                     .flex_shrink_0()
                     .border_b_1()
                     .border_color(p.border)
-                    .gap(px(8.))
-                    .px(px(12.))
+                    .gap(px(4.))
+                    .px(px(8.))
                     .test_support()
                     .child(
                         div()
@@ -539,36 +718,36 @@ impl Today {
                         Button::new("copy-detail")
                             .icon(IconName::Copy)
                             .ghost()
+                            .small()
                             .accessibility_label("Copy note")
                             .tooltip("Copy note")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                    this.model
-                                        .rows
-                                        .iter()
-                                        .find(|r| {
-                                            r.uuid
-                                                == this.detail.as_ref().expect("open detail").uuid
-                                        })
-                                        .expect("watched note")
-                                        .content
-                                        .clone(),
-                                ));
-                            })),
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
+                            }),
                     )
+                    .children(self.share_actions(row, disabled, cx))
                     .child(
                         Button::new("archive")
-                            .icon(IconName::Archive)
+                            .icon(action_icon)
                             .ghost()
-                            .accessibility_label("Archive note")
-                            .tooltip("Archive note (⌥A)")
+                            .small()
+                            .accessibility_label(label)
+                            .tooltip(tooltip)
                             .disabled(disabled)
-                            .on_click(cx.listener(|this, _, window, cx| this.archive(window, cx))),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.perform_note_action(
+                                    target.clone(),
+                                    lifecycle.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })),
                     )
                     .child(
                         Button::new("close-detail")
                             .icon(IconName::X)
                             .ghost()
+                            .small()
                             .accessibility_label("Close detail")
                             .tooltip("Close detail")
                             .on_click(
@@ -596,11 +775,18 @@ impl Today {
             .child(
                 Textarea::new(&self.composer)
                     .accessibility_id("composer")
-                    .aria_label(if self.detail.is_some() {
-                        "Append to note"
-                    } else {
-                        "New note"
-                    })
+                    .aria_label(
+                        if self.detail.as_ref().is_some_and(|detail| {
+                            self.model
+                                .rows
+                                .iter()
+                                .any(|row| row.uuid == detail.uuid && !row.archived)
+                        }) {
+                            "Append to note"
+                        } else {
+                            "New note"
+                        },
+                    )
                     .appearance(false)
                     .bordered(false)
                     .text_size(px(15.)),
@@ -692,6 +878,8 @@ impl Today {
                             .truncate()
                             .child(match &self.destination {
                                 Destination::Home => "Today".to_string(),
+                                Destination::Shared => "Shared".to_string(),
+                                Destination::Archive => "Archive".to_string(),
                                 Destination::Project(id) => format!(
                                     "{} — All",
                                     self.projects
@@ -774,6 +962,7 @@ impl Render for Today {
             self.frames += 1;
         }
         self.visible = window.is_visible();
+        self.drag_allowed = !self.shortcuts_blocked(window, cx);
         let navigation_context = if self.editor.is_some() {
             "WorkspaceEditor"
         } else if self.shortcuts_blocked(window, cx) {
@@ -817,6 +1006,10 @@ impl Render for Today {
             ))
             .capture_action(
                 cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
+                    if cx.stop_active_drag(window) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     this.escape_composing = if this.editor.is_some() {
                         this.editor_composing(window, cx)
                     } else {

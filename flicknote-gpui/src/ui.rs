@@ -17,6 +17,7 @@ use gpui_kit::{
     prelude::*,
     px, size,
 };
+use note_actions::{NoteAction, NoteDrag};
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
@@ -150,8 +151,9 @@ struct Today {
     projects: Arc<Vec<flicknote_sync::today::ProjectContext>>,
     status_task: Option<Task<()>>,
     capture_task: Option<Task<()>>,
-    archive_busy: bool,
-    archived: Vec<i64>,
+    canonical_rows: Arc<Vec<flicknote_sync::today::TodayRow>>,
+    related_note: Option<i64>,
+    drag_allowed: bool,
     watch: Option<TodayWatch>,
     watch_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -227,8 +229,9 @@ impl Today {
             projects: Arc::default(),
             status_task: None,
             capture_task: None,
-            archive_busy: false,
-            archived: vec![],
+            canonical_rows: Arc::default(),
+            related_note: None,
+            drag_allowed: false,
             watch: None,
             watch_task: None,
             _subscriptions: vec![subscription],
@@ -412,20 +415,16 @@ impl Today {
         }
         match result {
             Ok(snapshot) => {
-                self.archived
-                    .retain(|id| snapshot.rows.iter().any(|r| r.id == *id));
-                let rows = if self.archived.is_empty() {
-                    snapshot.rows.clone()
-                } else {
-                    Arc::new(
-                        snapshot
-                            .rows
-                            .iter()
-                            .filter(|r| !self.archived.contains(&r.id))
-                            .cloned()
-                            .collect(),
-                    )
-                };
+                self.model
+                    .capture()
+                    .note_actions
+                    .observe(&snapshot.rows, &(scope.0.clone(), scope.1));
+                self.canonical_rows = snapshot.rows;
+                let rows = self
+                    .model
+                    .capture()
+                    .note_actions
+                    .project(&self.canonical_rows, &self.destination);
                 self.projects = snapshot.projects;
                 if self
                     .pending_project
@@ -484,24 +483,24 @@ impl Today {
         if self.shortcuts_blocked(window, cx) {
             return;
         }
-        let index = match &self.destination {
-            Destination::Home => 0,
-            Destination::Project(id) => {
-                let Some(index) = self.projects.iter().position(|p| &p.id == id) else {
-                    return;
-                };
-                index + 1
-            }
+        let destinations: Vec<_> = std::iter::once(Destination::Home)
+            .chain(
+                self.projects
+                    .iter()
+                    .map(|p| Destination::Project(p.id.clone())),
+            )
+            .chain([Destination::Shared, Destination::Archive])
+            .collect();
+        let Some(index) = destinations.iter().position(|d| d == &self.destination) else {
+            return;
         };
         let target = if next {
             index + 1
         } else {
             index.saturating_sub(1)
         };
-        if target == 0 {
-            self.change_destination(Destination::Home, window, cx);
-        } else if let Some(project) = self.projects.get(target - 1) {
-            self.change_destination(Destination::Project(project.id.clone()), window, cx);
+        if let Some(destination) = destinations.get(target) {
+            self.change_destination(destination.clone(), window, cx);
         }
     }
 
@@ -532,7 +531,8 @@ impl Today {
             .expect("window destination") = destination;
         self.model.selected = None;
         self.model.rows = Arc::default();
-        self.archived.clear();
+        self.canonical_rows = Arc::default();
+        self.related_note = None;
         self.loaded = false;
         self.watch_error = None;
         self.list_scroll = gpui_kit::UniformListScrollHandle::new();
@@ -632,7 +632,19 @@ impl Today {
 
     fn refresh_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.reconcile();
-        self.error = self.model.capture().error.clone();
+        self.error = {
+            let capture = self.model.capture();
+            capture
+                .note_actions
+                .error
+                .clone()
+                .or_else(|| capture.error.clone())
+        };
+        let links = std::mem::take(&mut self.model.capture().note_actions.links);
+        for link in links {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(link));
+        }
+        self.project_notes(window, cx);
         let restore = std::mem::take(&mut self.model.capture().restore);
         if restore && self.composer.read(cx).value().is_empty() && !self.composing(window, cx) {
             let text = self.model.capture().recovery.pop();
@@ -674,8 +686,12 @@ impl Today {
             .detail
             .as_ref()
             .and_then(|detail| self.model.rows.iter().find(|r| r.uuid == detail.uuid))
+            .filter(|row| !row.archived)
             .cloned()
         {
+            if self.note_busy(&row.uuid) {
+                return;
+            }
             self.submit_append(row, text, window, cx);
             return;
         }
@@ -810,7 +826,11 @@ impl Today {
             return;
         };
         let source = self.model.capture().appends.source(row);
-        let placeholder = format!("Append to #{}", row.id);
+        let placeholder = if row.archived {
+            "Create a new note".to_string()
+        } else {
+            format!("Append to #{}", row.id)
+        };
         self.composer.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx)
         });
@@ -854,6 +874,7 @@ impl Today {
 
     fn select(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         self.model.selected = Some(id);
+        self.related_note = None;
         self.detail_open = true;
         self.refresh_detail(window, cx);
         cx.notify();
@@ -888,6 +909,7 @@ impl Today {
             Some(index) => index.saturating_sub(1),
         };
         self.model.selected = Some(self.model.rows[index].id);
+        self.related_note = None;
         if self.detail_open {
             self.refresh_detail(window, cx);
         }
@@ -898,42 +920,7 @@ impl Today {
     }
 
     fn archive(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.archive_busy
-            || !self.composer.read(cx).value().is_empty()
-            || self.composing(window, cx)
-        {
-            return;
-        }
-        let Some(id) = self.model.selected else {
-            return;
-        };
-        self.archive_busy = true;
-        let app = self.services.app.clone();
-        let job = self.services.runtime.spawn(async move {
-            app.handle(AppRequest::NoteArchive { id: id.to_string() })
-                .await
-        });
-        self.services.track(&job);
-        cx.spawn_in(window, async move |entity, cx| {
-            let result = job.await;
-            let _result = entity.update_in(cx, |this, window, cx| {
-                this.archive_busy = false;
-                match result {
-                    Ok(Ok(AppResponse::NoteArchive(_))) => {
-                        this.archived.push(id);
-                        this.model.archive_success(id);
-                        this.refresh_detail(window, cx);
-                    }
-                    Ok(Err(error)) => {
-                        this.error = Some(format!("Could not archive: {}", error.message))
-                    }
-                    other => this.error = Some(format!("Could not archive: {other:?}")),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+        self.selected_action(note_actions::NoteAction::Archive, window, cx);
     }
 }
 
@@ -1228,3 +1215,10 @@ mod project_editor_tests;
 #[cfg(test)]
 #[path = "source_tests.rs"]
 mod source_tests;
+
+#[path = "note_actions.rs"]
+pub(crate) mod note_actions;
+
+#[cfg(test)]
+#[path = "note_action_tests.rs"]
+mod note_action_tests;

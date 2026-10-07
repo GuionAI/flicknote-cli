@@ -123,6 +123,9 @@ mod tests {
             project_id: None,
             project_name: None,
             project_color: None,
+            archived: false,
+            draft: false,
+            shared: false,
             note_type: "normal".into(),
         }
     }

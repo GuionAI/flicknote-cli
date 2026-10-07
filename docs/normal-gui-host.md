@@ -157,8 +157,8 @@ as specified above.
 
 Cmd1 selects Home; Cmd2..9 select the first eight projects in displayed order,
 allowing a draft but blocking marked composition. Missing numbers do nothing.
-Option-Up/Down requires an empty, unmarked composer and traverses only Home and
-active projects without wrap; with a draft it leaves editor dispatch intact.
+Option-Up/Down requires an empty, unmarked composer and traverses Home,
+active projects, Shared and Archive without wrap; with a draft it leaves editor dispatch intact.
 Option-J/K, empty Return, Option-A and Escape retain their note/detail guards on
 the active surface. The composer’s local native input adapter gives bindings first
 refusal only while input is empty/unmarked, so Chinese-source Option letters can
@@ -167,12 +167,12 @@ fall through to the native IME; drafts and marked input keep IME-first priority.
 Kit continues to own text, selection, undo, composition and candidate geometry.
 Text highlighting retains Kit’s dedicated input-selection color and intended
 alpha in Light/Dark; workbench row selection uses a separate list role.
-Shared/Archive/Charts remain unavailable. Project Week,
+Shared and Archive are available; Charts remains unavailable. Project Week,
 date navigation, workspace search, settings, global shortcuts and keypad Enter
 are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
 With detail closed, capture creates a new **unassigned** note (`project=None`),
-including in a project. With confirmed detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
+including in a project. With confirmed active detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
 The accepted UUID and exact text stay immutable after navigation or window close.
 Nonempty content receives two newline characters before the exact submitted text;
 an empty body receives that text alone. Accepted input clears immediately and the
@@ -203,7 +203,7 @@ Pending/watch acknowledgement reconciles by persisted ID in either order.
 ## Workspace source choice (#3389)
 
 **Only mine** sits on the right of the existing header. Its pressed state applies
-across Home/current Today and project-All, defaults off, and survives destination
+across Home/current Today, project-All, Shared and Archive, defaults off, and survives destination
 changes, window close/reopen and normal restart. Click it or use Tab then Space/Return.
 Only `metadata.created_by_ai` JSON boolean `true` is excluded. Missing metadata/key,
 null, false, numbers, strings and other JSON types remain visible; legacy `created_by`
@@ -230,7 +230,7 @@ older projection or overwrite a newer choice. No Swift preferences are imported.
 This is a list projection, not access control. Explicit-ID Application, CLI IPC
 and MCP operations remain unfiltered without warning. Background Jev continues
 across all eligible creation channels, including hidden MCP notes. No direct-ID GUI,
-Shared/Archive/Charts browser, search or date surface is added.
+Charts browser, search or date surface is added.
 
 ## Projects and automatic organization (#3384)
 
@@ -250,6 +250,64 @@ Eligibility, privacy/cost, bounded retries, cancellation/manual precedence,
 non-secret preference location and configuration steps are authoritative in
 [automatic organization](automatic-organization.md). Headless routing is deferred;
 private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
+
+## Dragging, Shared and Archive (#3402)
+
+The rail's Shared and Archive rows open real bounded pages across dates. Shared
+includes active notes with a current same-account share row, excluding expired
+links; Archive includes deleted notes, including archived drafts. Both use numeric
+short-ID descending order, the 10,000-note bound and Only mine before that bound.
+Known project metadata remains visible even for archived assignments; the rail
+still contains active projects only. Destination/source swaps retain the same
+composer draft/caret/undo and discard old watch completions. Pending creation is
+shown only on Home. Option-Up/Down traverses Home, active projects, Shared and
+Archive without wrapping; Cmd1 and Cmd2..9 retain their numbering. Charts is skipped.
+
+Drag one confirmed active non-draft note from Home, project-All or Shared onto an
+active project to classify, Archive to archive, or Shared to publish and copy its
+confirmed share URL. These are intentional actions without a confirmation modal.
+Home/Charts and archived, draft, pending or busy notes cannot accept these drops.
+Unsubmitted/marked input and modal editors retain priority; an outstanding append
+blocks conflicting actions on that note. Same-project drops do nothing. GPUI owns
+the drag threshold, cancel/outside release and drop hit testing; no external OS
+payload, import/export, multi-select, unassign or reorder is provided.
+
+The plus glyph is centered in the same accessory column as the numbered rail
+hints, with a 28-point accessible hit target. The existing color-only trailing
+note dot remains unchanged; a project without color has no invented indicator.
+Row pointer hover and Option-J/K show lighter related-project feedback while the
+persistent destination selection stays in place. Last input wins, leaving the
+list falls back to the selected note, and drag-target feedback takes priority.
+Missing/archived assignments never highlight an active project falsely.
+
+Classification/removal feedback appears immediately, then canonical watch wins
+in either acknowledgement order or after another writer. A completed operation's
+projection expires after five seconds if no watch confirms it; the complete
+workspace operation has a 30-second deadline. Definite pre-write rejection removes
+its feedback; uncertain failures say to inspect the note before trying again.
+Confirmed Share acknowledgement projects shared feedback until canonical watch or
+the existing five-second expiry; already watched shared notes need no overlay.
+No failure copies a stale/fabricated link or automatically retries publishing.
+Accepted operations retain their original UUID/short ID and project UUID with the
+host across navigation and window close. Quit cancels them through the existing
+operation registry. Classification preserves content/lifecycle/provenance and
+uses the manual assignment path, without calling Jev.
+
+Active detail offers Share or Copy share link, and Unshare when watched shared.
+Copy share link reuses the canonical get-or-create gateway semantics. Unshare
+removes the row from Shared; archive removes an accepted row from the active
+page. Archive detail offers Restore instead, has no sharing/classification/append,
+and its composer creates a new unassigned note. Restore removes the row from
+Archive without switching destinations. Row removals choose the surviving
+successor, else predecessor, through the existing model; final removal closes
+detail and restores composer focus. Markdown selection, MouseUp propagation,
+canonical Copy and code-block Copy retain their reader contracts.
+
+Owned LocalHost/fake HTTP and rendered pointer tests verify these interactions,
+account/source/expiry/limit membership, gateway errors, delayed close/reopen and
+geometry in both themes at 980/760 points. They use only temporary state and port0.
+Native pixels/input/IME, real cloud/share links and real Keychain acceptance remain
+separate, unperformed evidence for the user's trial after reviewed installation.
 
 ## Recent organization and reader release (#3398)
 

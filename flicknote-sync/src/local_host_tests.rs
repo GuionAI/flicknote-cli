@@ -978,3 +978,167 @@ async fn human_scope_marker_matrix_before_limit_and_direct_access() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owned host verifies canonical mutation, readers and bounded watch membership.
+async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let events_path = config
+        .paths
+        .data_dir
+        .join("events/project_assignment.jsonl");
+    let host = start(config).await;
+    seed_source_matrix(&host, "11111111-1111-4111-8111-111111111111").await;
+    // This projection matrix also has intentionally sparse historical rows;
+    // canonical lifecycle readers require their stored type to be populated.
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("UPDATE notes SET type=coalesce(type, 'normal')", [])
+        .unwrap();
+    // Exercise the internal UUID seam through the production Application, then its
+    // existing IPC/MCP readers; no new wire contract or routing provenance.
+    let project = "11111111-1111-4111-8111-111111111111";
+    let other = "33333333-3333-4333-8333-333333333333";
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "INSERT INTO projects(id,user_id,name,is_archived) VALUES(?,'account-a','Other',0)",
+            [other],
+        )
+        .unwrap();
+    let local =
+        flicknote_core::backend::LocalPowerSyncBackend::new(host.db.clone(), host.user_id.clone());
+    host.app
+        .classify_local_note(&local, "a", 3, other)
+        .await
+        .unwrap();
+    let response = DaemonClient::new(&host.socket)
+        .app(AppRequest::NoteGet {
+            id: "3".into(),
+            archived: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(response, AppResponse::NoteDetail(ref n) if n.note.project_id.as_deref() == Some(other))
+    );
+    let response = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    assert!(!response["result"]["isError"].as_bool().unwrap_or(false));
+    host.app
+        .classify_local_note(&local, "a", 3, other)
+        .await
+        .unwrap();
+    host.app
+        .classify_local_note(&local, "a", 3, project)
+        .await
+        .unwrap();
+    let events = std::fs::read_to_string(events_path).unwrap();
+    let events: Vec<serde_json::Value> = events
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 2, "same-project drop emits no event");
+    assert!(
+        events
+            .iter()
+            .all(|e| e["source"] == "manual" && e["probability"].is_null())
+    );
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("INSERT INTO note_shares(id,user_id,token,created_at) SELECT id,user_id,'owned-token','2026-01-01T00:00:00Z' FROM notes", []).unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET is_archived=1 WHERE user_id='account-a'",
+                [],
+            )
+            .unwrap();
+    }
+    let mut shared = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Shared,
+        true,
+    );
+    let observed = snapshot(&mut shared, |s| s.rows.len() == 12).await;
+    assert!(observed.projects.is_empty());
+    assert!(observed.rows.iter().all(|r| r.shared && !r.archived));
+    assert!(observed.rows.windows(2).all(|r| r[0].id > r[1].id));
+    assert_eq!(observed.rows.last().unwrap().uuid, "a");
+    assert_eq!(observed.rows[0].project_name.as_deref(), Some("Current"));
+    assert!(
+        observed
+            .rows
+            .iter()
+            .all(|r| r.project_color.as_deref() == Some("123456"))
+    );
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE note_shares SET expires_at='2000-01-01T00:00:00Z' WHERE id='source-0'",
+                [],
+            )
+            .unwrap();
+        // The share row's owner must match the note, independent of other account rows.
+        writer
+            .execute(
+                "UPDATE note_shares SET user_id='account-b' WHERE id='source-1'",
+                [],
+            )
+            .unwrap();
+    }
+    snapshot(&mut shared, |s| s.rows.len() == 10).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET deleted_at='2026-01-02T00:00:00Z',status='draft' WHERE user_id='account-a'", []).unwrap();
+    }
+    snapshot(&mut shared, |s| s.rows.is_empty()).await;
+    let mut archived = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Archive,
+        true,
+    );
+    let observed = snapshot(&mut archived, |s| s.rows.len() == 13).await;
+    assert!(observed.rows.iter().all(|r| r.archived && r.draft));
+    assert_eq!(observed.rows.last().unwrap().uuid, "a");
+    let mut full = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Archive,
+        false,
+    );
+    snapshot(&mut full, |s| s.rows.len() == crate::today::LIMIT).await;
+    host.app
+        .handle(AppRequest::NoteRestore { id: "100".into() })
+        .await
+        .unwrap();
+    snapshot(&mut archived, |s| {
+        s.rows.len() == 12 && s.rows.iter().all(|r| r.uuid != "source-0")
+    })
+    .await;
+    // Explicit archived reads via existing IPC/MCP remain unfiltered.
+    let response = DaemonClient::new(&host.socket)
+        .app(AppRequest::NoteGet {
+            id: "1000".into(),
+            archived: true,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(response, AppResponse::NoteDetail(_)));
+    let response = mcp(
+        host.mcp_port,
+        "note_get",
+        json!({"id":1000,"archived":true}),
+    )
+    .await;
+    assert!(!response["result"]["isError"].as_bool().unwrap_or(false));
+    drop((shared, archived, full));
+    host.shutdown().await;
+    server.abort();
+}

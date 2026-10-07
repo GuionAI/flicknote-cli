@@ -151,14 +151,14 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         view.update(cx, |this, cx| this.archive(window, cx));
     })
     .unwrap();
-    cx.update(|cx| assert!(!view.read(cx).archive_busy));
+    cx.update(|cx| assert!(!view.read(cx).archive_busy()));
     cx.update_window(window.into(), |_, window, cx| {
         composer.update(cx, |input, cx| input.set_value("", window, cx));
         view.update(cx, |this, cx| this.archive(window, cx));
     })
     .unwrap();
     settle(cx, |cx| {
-        cx.update(|cx| !view.read(cx).archive_busy && view.read(cx).model.rows.len() == 5)
+        cx.update(|cx| !view.read(cx).archive_busy() && view.read(cx).model.rows.len() == 5)
     });
     cx.update(|cx| assert_eq!(view.read(cx).model.selected, Some(5)));
     cx.update_window(window.into(), |_, window, cx| {
@@ -307,7 +307,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
     })
     .unwrap();
     settle(cx, |cx| {
-        cx.update(|cx| view.read(cx).model.rows.is_empty() && !view.read(cx).archive_busy)
+        cx.update(|cx| view.read(cx).model.rows.is_empty() && !view.read(cx).archive_busy())
     });
     cx.update_window(window.into(), |_, window, cx| {
         window.render_frame(cx);
@@ -397,6 +397,7 @@ fn tab_to_detail_button(id: &'static str, window: &mut Window, cx: &mut App) {
 
 /// Rendered bounds and real hit testing on GPUI's test platform; not native pixel evidence.
 #[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned rendered fixture verifies its complete geometry/input contract.
 fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let root = tempfile::tempdir().unwrap();
@@ -460,6 +461,9 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                             project_name: None,
                             note_type: "normal".into(),
                             project_color: Some("05C7F7".into()),
+                            archived: false,
+                            draft: false,
+                            shared: false,
                         })
                         .collect(),
                 ));
@@ -618,7 +622,7 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
                 assert_detail_independent_of_composer(window, cx, &view);
                 assert_bounded_workbench_feedback(window, cx, &view);
                 window.click("archive", cx);
-                assert!(!view.read(cx).archive_busy);
+                assert!(!view.read(cx).archive_busy());
                 assert_eq!(view.read(cx).model.rows.len(), 80);
                 window.click("copy-detail", cx);
                 assert_eq!(
@@ -866,11 +870,11 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
             input.set_value("", window, cx);
         });
         window.press("alt-a", cx);
-        assert!(view.read(cx).archive_busy);
+        assert!(view.read(cx).archive_busy());
     })
     .unwrap();
     settle(cx, |cx| {
-        cx.update(|cx| !view.read(cx).archive_busy && view.read(cx).model.rows.len() == 79)
+        cx.update(|cx| !view.read(cx).archive_busy() && view.read(cx).model.rows.len() == 79)
     });
     cx.update(|cx| assert_eq!(view.read(cx).model.selected, Some(2)));
     // A stale confirmed row after another actor archives it exercises guarded failure.
@@ -885,9 +889,9 @@ fn app_local_shortcuts_preserve_input_and_follow_confirmed_selection(cx: &mut Te
         .unwrap();
     cx.update_window(window.into(), |_, window, cx| window.press("alt-a", cx))
         .unwrap();
-    settle(cx, |cx| cx.update(|cx| !view.read(cx).archive_busy));
+    settle(cx, |cx| cx.update(|cx| !view.read(cx).archive_busy()));
     cx.update(|cx| {
-        assert_eq!(view.read(cx).model.selected, Some(2));
+        assert_eq!(view.read(cx).model.selected, Some(3));
         assert!(
             view.read(cx)
                 .error
@@ -1052,7 +1056,7 @@ fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity
         window.press(key, cx);
     }
     assert_eq!(view.read(cx).model.selected, Some(1));
-    assert!(!view.read(cx).archive_busy);
+    assert!(!view.read(cx).archive_busy());
     window.press("cmd-a", cx);
     window.press("cmd-c", cx);
     assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "draft");
@@ -1073,7 +1077,7 @@ fn assert_shortcut_input_guards(window: &mut Window, cx: &mut App, view: &Entity
     }
     assert_eq!(view.read(cx).model.selected, Some(1));
     assert!(!view.read(cx).detail_open);
-    assert!(!view.read(cx).archive_busy);
+    assert!(!view.read(cx).archive_busy());
     assert!(view.read(cx).model.capture().pending.is_empty());
     // Simulate native composition ending before the queued PressEnter callback.
     // Capture-phase composition must still prevent open or submission.
@@ -1777,11 +1781,12 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         }
         window.render_frame(cx);
         window.press("alt-down", cx);
-        assert_eq!(
-            view.read(cx).destination,
-            Destination::Project(projects[9].id.clone())
-        );
-        for _ in 0..10 {
+        assert_eq!(view.read(cx).destination, Destination::Shared);
+        window.press("alt-down", cx);
+        assert_eq!(view.read(cx).destination, Destination::Archive);
+        window.press("alt-down", cx);
+        assert_eq!(view.read(cx).destination, Destination::Archive);
+        for _ in 0..12 {
             window.render_frame(cx);
             window.press("alt-up", cx);
         }
@@ -1834,7 +1839,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         window.render_frame(cx);
         window.press("cmd-9", cx);
         window.press("alt-down", cx);
-        assert_eq!(reopened.read(cx).destination, Destination::Home);
+        assert_eq!(reopened.read(cx).destination, Destination::Shared);
         window.remove_window();
     })
     .unwrap();

@@ -21,6 +21,20 @@ pub struct Application {
 }
 
 impl Application {
+    /// Narrow local workspace seam for an immutable watched note/project identity.
+    #[cfg(feature = "experimental-spike")]
+    pub async fn classify_local_note(
+        &self,
+        local: &flicknote_core::backend::LocalPowerSyncBackend,
+        uuid: &str,
+        short_id: i64,
+        project: &str,
+    ) -> Result<(), WireError> {
+        self.notes()
+            .classify_local_note(local, uuid, short_id, project)
+            .await
+            .map_err(Into::into)
+    }
     pub fn new(
         db: Arc<dyn NoteDb>,
         creator: Arc<dyn NoteCreator>,

@@ -70,6 +70,30 @@ pub struct NoteService<'a> {
 }
 
 impl<'a> NoteService<'a> {
+    /// Local GUI UUID destination; not a machine DTO or a remote routing operation.
+    #[cfg(feature = "powersync")]
+    pub async fn classify_local_note(
+        &self,
+        local: &crate::backend::LocalPowerSyncBackend,
+        uuid: &str,
+        short_id: i64,
+        project: &str,
+    ) -> Result<(), ServiceError> {
+        if let Some(previous) = local.classify_note(uuid, short_id, project).await? {
+            self.try_append_assignment_events(&[ProjectAssignmentEvent {
+                v: ProjectAssignmentEvent::VERSION,
+                event: ProjectAssignmentEvent::KIND,
+                note_id: uuid.to_owned(),
+                from_project_id: previous,
+                to_project_id: Some(project.to_owned()),
+                source: ProjectAssignmentSource::Manual,
+                probability: None,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            }])
+            .await;
+        }
+        Ok(())
+    }
     pub fn new(db: &'a dyn NoteDb) -> Self {
         Self {
             db,

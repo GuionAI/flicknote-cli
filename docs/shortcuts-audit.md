@@ -19,15 +19,15 @@ and rendered-test evidence; new native OS keyboard/IME/pixel and real dev cloud
 acceptance were **not performed**. A binding alone does not establish a working
 surface or native acceptance.
 
-| Keys | Pinned Swift desktop behavior | GPUI after #3290 |
+| Keys | Pinned Swift desktop behavior | GPUI through #3402 |
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
 | Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, project-All; no numbering for Shared/Archive/Charts |
-| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Partial desktop scope: implemented Home + active projects only, bounded/no wrap; unavailable groups skipped |
+| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap; Charts skipped (#3402) |
 | OptionLeft/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Deferred: fixed current Today and project-All only; no date/Week surface |
-| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
+| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
-| Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; marked Return commits composition without premature create/append/open |
+| Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; archived detail creates new; marked Return commits composition without premature create/append/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
 | Keypad Enter | Swift accepts it like Return for selected-detail routing | Deferred; user explicitly does not need it for this slice; no added GPUI binding |
 | CmdF / CtrlF | Focus workspace search | Deferred: no GPUI workspace search; Kit editor-local CmdF is a separate capability |
@@ -94,7 +94,7 @@ draft/caret and accepted capture/append work; modal editors and marked compositi
 block it. Its account-scoped default-off choice persists across Home/project-All,
 window close/reopen and restart. It excludes only JSON boolean `created_by_ai:true`
 before the bounded watch LIMIT. Rail/context and explicit-ID operations stay
-unfiltered; Jev includes hidden eligible notes. Unsupported destinations remain
+unfiltered; Jev includes hidden eligible notes. Shared/Archive use the same filter; Charts remains
 deferred. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
 
 ## Chinese input-source Option routing (#3296)
@@ -184,3 +184,21 @@ capture or code-block actions separately left the same failure. The repair remov
 that interception and scopes dismissal to the center canvas. Canonical and block
 Copy, focus/IME and keyboard guards remain as documented. This is rendered evidence,
 not a native input/pixel claim.
+
+## Note dragging and collections (#3402)
+
+Shared and Archive are functional bounded destinations across dates. Only mine
+filters before LIMIT on these pages as on Home/project-All. Option-Up/Down adds
+Shared then Archive after active projects; number hints remain Home/project-only.
+Archive detail is readonly with Restore; its composer creates a new unassigned
+note. Option-A remains an active-note archive action and never restores.
+Active detail exposes Share/Copy share link and watched Unshare.
+
+Public GPUI note dragging targets active project UUIDs, Archive or Shared. Shared
+publishes and copies only the confirmed gateway URL; already-shared drops reuse
+get-or-create semantics. Empty/unmarked/editor/append busy guards retain priority.
+Accepted drag does not also click a row or destination. Pointer hover and Option-J/K
+use last-input related-project emphasis, with drop-target priority, without
+changing the persistent destination. See [the operator contract](normal-gui-host.md#dragging-shared-and-archive-3402)
+for bounded watch reconciliation, uncertainty, close/reopen and verification limits.
+No search, date/week, Charts, reorder or global shortcut expands.

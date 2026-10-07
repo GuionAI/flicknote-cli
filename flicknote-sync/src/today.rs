@@ -17,6 +17,9 @@ pub struct TodayRow {
     pub project_name: Option<String>,
     pub note_type: String,
     pub project_color: Option<String>,
+    pub archived: bool,
+    pub draft: bool,
+    pub shared: bool,
 }
 
 /// Match desktop line folding while preserving spaces/tabs inside each line.
@@ -65,6 +68,8 @@ pub enum Destination {
     #[default]
     Home,
     Project(String),
+    Shared,
+    Archive,
 }
 
 #[derive(Debug, Clone)]
@@ -126,12 +131,14 @@ impl TodayWatch {
                         "?4 = '' AND julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3)"
                     }
                     Destination::Project(_) => "n.project_id = ?4",
+                    Destination::Shared => "shared = 1",
+                    Destination::Archive => "n.deleted_at IS NOT NULL",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.deleted_at IS NULL AND n.short_id IS NOT NULL AND {membership} AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary, archived, draft, shared FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
-                    Destination::Home => String::new(),
+                    Destination::Home | Destination::Shared | Destination::Archive => String::new(),
                     Destination::Project(id) => id.clone(),
                 };
                 let params = [
@@ -140,6 +147,12 @@ impl TodayWatch {
                     end.to_rfc3339(),
                     project_id,
                     if human_only { "1" } else { "0" }.to_string(),
+                    if destination == Destination::Archive {
+                        "1"
+                    } else {
+                        "0"
+                    }
+                    .to_string(),
                 ];
                 let stream = db.watch_statement(sql, params, |stmt, params| {
                     let mut rows = Vec::new();
@@ -160,6 +173,9 @@ impl TodayWatch {
                                 project_name: r.get(8)?,
                                 note_type: r.get(3)?,
                                 project_color: r.get(4)?,
+                                archived: r.get(10)?,
+                                draft: r.get(11)?,
+                                shared: r.get(12)?,
                             });
                         } else {
                             projects.push(ProjectContext {

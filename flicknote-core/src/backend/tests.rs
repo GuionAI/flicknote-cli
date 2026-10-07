@@ -2355,3 +2355,74 @@ async fn manual_project_change_clears_routing_metadata_and_preserves_other_keys(
     assert_eq!(metadata["unknown"], "keep");
     assert!(metadata.get("project_routing").is_none());
 }
+
+#[tokio::test]
+async fn desktop_classification_binds_uuid_owner_and_active_project_atomically() {
+    let (_root, db, backend) = make_powersync_backend().await;
+    let project = backend.create_project("Manual UUID").await.unwrap();
+    let other = backend.create_project("Reclassification").await.unwrap();
+    let id = seed_routing_note(
+        &db,
+        701,
+        "2026-09-24T01:00:00Z",
+        None,
+        Some(r#"{"created_by_ai":true,"keep":"value","project_routing":{"routed":true}}"#),
+    )
+    .await;
+    let before = backend.find_note(&id).await.unwrap();
+    assert_eq!(
+        backend.classify_note(&id, 701, &project).await.unwrap(),
+        Some(None)
+    );
+    let note = backend.find_note(&id).await.unwrap();
+    assert_eq!(note.content, before.content);
+    assert_eq!(note.status, before.status);
+    assert_eq!(note.title, before.title);
+    let metadata: serde_json::Value =
+        serde_json::from_str(note.metadata.as_deref().unwrap()).unwrap();
+    assert_eq!(metadata["created_by_ai"], true);
+    assert_eq!(metadata["keep"], "value");
+    assert!(metadata.get("project_routing").is_none());
+    assert_eq!(
+        backend.classify_note(&id, 701, &project).await.unwrap(),
+        None
+    );
+    assert_eq!(
+        backend.classify_note(&id, 701, &other).await.unwrap(),
+        Some(Some(project.clone()))
+    );
+    for (uuid, short_id, destination) in [
+        ("missing", 701, other.as_str()),
+        (&id, 702, other.as_str()),
+        (&id, 701, "missing"),
+    ] {
+        assert!(
+            backend
+                .classify_note(uuid, short_id, destination)
+                .await
+                .is_err()
+        );
+    }
+    let foreign = LocalPowerSyncBackend::new(db.clone(), "foreign-owner".into());
+    assert!(foreign.classify_note(&id, 701, &project).await.is_err());
+    for sql in [
+        "UPDATE projects SET is_archived=1",
+        "UPDATE notes SET status='draft'",
+        "UPDATE notes SET deleted_at='2026-09-25T00:00:00Z'",
+    ] {
+        db.writer()
+            .await
+            .unwrap()
+            .execute("UPDATE projects SET is_archived=0", [])
+            .unwrap();
+        db.writer().await.unwrap().execute(sql, []).unwrap();
+        assert!(backend.classify_note(&id, 701, &project).await.is_err());
+    }
+    let reader = db.reader().await.unwrap();
+    let assigned: String = reader
+        .query_row("SELECT project_id FROM notes WHERE id=?", [&id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(assigned, other);
+}

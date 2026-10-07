@@ -24,6 +24,47 @@ impl LocalPowerSyncBackend {
         Self { db, user_id }
     }
 
+    /// Manual desktop classification binds both identities under the canonical writer.
+    /// Reuse manual modification's routing-marker removal, without Jev provenance.
+    pub async fn classify_note(
+        &self,
+        uuid: &str,
+        short_id: i64,
+        project: &str,
+    ) -> Result<Option<Option<String>>, CliError> {
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        let previous = tx
+            .query_row(
+                "SELECT project_id FROM notes WHERE user_id = ? AND id = ? AND short_id = ? \
+             AND short_id > 0 AND deleted_at IS NULL AND coalesce(status, '') != 'draft'",
+                params![self.user_id, uuid, short_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .ok_or_else(|| CliError::NoteNotFound {
+                id: uuid.to_owned(),
+            })?;
+        let active = tx.query_row(
+            "SELECT 1 FROM projects WHERE user_id = ? AND id = ? AND coalesce(is_archived, 0) = 0",
+            params![self.user_id, project], |_| Ok(()),
+        ).optional()?.is_some();
+        if !active {
+            return Err(CliError::ProjectNotFound {
+                name: project.to_owned(),
+            });
+        }
+        if previous.as_deref() == Some(project) {
+            return Ok(None);
+        }
+        tx.execute(
+            SQ_UPDATE_PROJECT,
+            params![project, chrono::Utc::now().to_rfc3339(), self.user_id, uuid],
+        )?;
+        tx.commit()?;
+        Ok(Some(previous))
+    }
+
     #[cfg(test)]
     pub(crate) fn database(&self) -> &PowerSyncDatabase {
         &self.db

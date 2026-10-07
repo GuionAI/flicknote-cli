@@ -124,8 +124,8 @@ Chinese acceptance on the corrected source; see the shortcuts audit for evidence
 Active projects are UUID destinations showing All active notes across dates,
 bounded at 10,000 and ordered by canonical short ID. Cmd1 selects Home;
 Cmd2..9 select the first eight active projects in rail order, retaining draft/caret
-unless marked. Empty/unmarked Option-Up/Down traverses Home and projects without
-wrap. Shared/Archive/Charts are unavailable and skipped. A watched missing or
+unless marked. Empty/unmarked Option-Up/Down traverses Home, projects, Shared and Archive without
+wrap. Shared and Archive are available (#3402); Charts is unavailable and skipped. A watched missing or
 archived project falls back Home while preserving the composer. Switching drops
 the old list/detail/selection and watch; capture stays global/unassigned with
 pending/recovery/unknown identity retained. Unmatched captures stay out of project
@@ -173,8 +173,7 @@ GPL components, fonts or assets are imported. No Penpot design exists.
 The 196-point rail, flexible center and optional right reading pane share thin
 separators without outer card gutters or shadows. Aligned 17-point icon/dot slots
 keep navigation text edges consistent. Home and project-All remain the working
-destinations; the rail starts with an honest Workspace heading. Shared, Archive
-browsing and Charts remain inert. The 44-point center header uses restrained
+destinations; the rail starts with an honest Workspace heading. Shared and Archive have bounded browsing pages (#3402); Charts remains inert. The 44-point center header uses restrained
 14-point type. Stable-ID virtualized rows
 remain full-width and 32 points high, with 14-point previews.
 
@@ -235,7 +234,7 @@ assets; icon names alone do not register the full catalog.
 ## Only mine source projection (#3389)
 
 The right header's accessible **Only mine** control filters existing Home/Today and
-project-All using the JSON creation-channel predicate before their 10,000-note
+project-All, Shared and Archive using the JSON creation-channel predicate before their 10,000-note
 limit. It defaults off, persists per account in separate `gui-source.json`, and
 leaves rail/context, direct-ID operations and Jev eligibility unchanged. Source
 changes retain draft/caret, pending capture/append and surviving reader/selection;
@@ -460,3 +459,17 @@ Kit owns presentation animation; no application timer advances readiness. After
 first-sync completion, routine connecting/downloading activity shows no status/bar
 or transient layout space. Cached completion, reopen and reconnect stay quiet;
 initial weighted progress and real offline/error feedback remain unchanged.
+
+## Note destinations and public dragging (#3402)
+
+The [normal operator guide](normal-gui-host.md#dragging-shared-and-archive-3402)
+defines the current Shared/Archive, readonly archived composer, native drop,
+related-project and retained mutation contracts. Synthetic launch never performs
+remote sharing: it has no live ShareGateway. Tests use the production LocalHost
+with an owned fake gateway HTTP endpoint and port0 to verify real get/create/revoke
+requests and confirmed fake URL clipboard behavior. Rendered geometry checks use
+known-colored long rows and the actual plus glyph at 980/760 points in both
+themes with detail open/closed. The unchanged preview constraints pass these
+checks; missing live project colors never establish a clipping cause.
+Native pixels, OS drag/IME delivery, cloud publishing and real Keychain remain
+unverified user handoff; no native launch or repeat manual matrix is required.
