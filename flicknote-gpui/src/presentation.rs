@@ -131,116 +131,48 @@ impl Today {
             )
             .test_support()
     }
-    fn render_search_status(&self, p: ColorTokens, cx: &Context<Self>) -> impl IntoElement + use<> {
+    fn render_search_status(
+        &self,
+        p: ColorTokens,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement + use<>> {
         let status = if self.search.error.is_some() {
             "Search unavailable"
-        } else if self.search.marked {
+        } else if self.search.marked && self.model.rows.is_empty() {
             "Finish typing to search"
         } else if self.search.loading {
             "Searching…"
         } else if self.model.rows.is_empty() {
             "No matching notes"
-        } else if flicknote_sync::workspace_search::exact_id(&self.search.query).is_some() {
-            if self.search.bounded {
-                "Top 50 results · Exact ID and active keyword matches"
-            } else {
-                "Exact ID and active keyword matches · All projects"
-            }
-        } else if self.search.bounded {
-            "Top 50 results · Active notes, all dates and projects"
         } else {
-            "Active notes · All dates and projects"
+            return None;
         };
-        div()
-            .id("search-status")
-            .w_full()
-            .px(px(8.))
-            .py(px(6.))
-            .flex_shrink_0()
-            .text_size(px(12.))
-            .text_color(p.muted_foreground)
-            .child(status)
-            .children(self.search.error.clone().map(|error| {
-                div().text_color(p.destructive).child(error).child(
-                    Button::new("retry-search")
-                        .label("Retry search")
-                        .small()
-                        .ghost()
-                        .on_click(
-                            cx.listener(|this, _, w, cx| this.run_search(Duration::ZERO, w, cx)),
-                        ),
-                )
-            }))
-            .test_support()
-    }
-    fn render_search_row(
-        &self,
-        row: &flicknote_sync::today::TodayRow,
-        p: ColorTokens,
-    ) -> impl IntoElement + use<> {
-        let mut excerpt = String::new();
-        let mut highlights = Vec::new();
-        if let Some(hit) = self.search.hits.iter().find(|h| h.short_id == Some(row.id)) {
-            for segment in &hit.snippet.segments {
-                let start = excerpt.len();
-                excerpt.push_str(&segment.text);
-                if segment.highlighted {
-                    highlights.push((
-                        start..excerpt.len(),
-                        gpui_kit::HighlightStyle {
-                            font_weight: Some(FontWeight::SEMIBOLD),
-                            color: Some(p.foreground),
-                            ..Default::default()
-                        },
-                    ));
-                }
-            }
-        }
-        div()
-            .w_full()
-            .h(px(64.))
-            .flex()
-            .flex_col()
-            .child(preview(
-                &row.preview,
-                &row.note_type,
-                row.project_color.as_deref(),
-                p,
-            ))
-            .child(
-                div()
-                    .w_full()
-                    .min_w_0()
-                    .h(px(26.))
-                    .px(px(8.))
-                    .flex()
-                    .gap(px(8.))
-                    .items_center()
-                    .text_size(px(12.))
-                    .text_color(p.muted_foreground)
-                    .child(
-                        div()
-                            .id(("match-excerpt", row.id as u64))
-                            .aria_label(excerpt.clone())
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .child(gpui_kit::StyledText::new(excerpt).with_highlights(highlights))
-                            .test_support(),
+        Some(
+            div()
+                .id("search-status")
+                .aria_label(status)
+                .w_full()
+                .px(px(8.))
+                .py(px(6.))
+                .flex_shrink_0()
+                .text_size(px(12.))
+                .text_color(p.muted_foreground)
+                .child(status)
+                .children(self.search.error.clone().map(|error| {
+                    div().text_color(p.destructive).child(error).child(
+                        Button::new("retry-search")
+                            .label("Retry search")
+                            .small()
+                            .ghost()
+                            .on_click(
+                                cx.listener(|this, _, w, cx| {
+                                    this.run_search(Duration::ZERO, w, cx)
+                                }),
+                            ),
                     )
-                    .child(
-                        div()
-                            .id(("search-note-id", row.id as u64))
-                            .max_w(px(120.))
-                            .truncate()
-                            .child(format!(
-                                "{} #{}",
-                                row.project_name.as_deref().unwrap_or(""),
-                                row.id
-                            ))
-                            .test_support(),
-                    ),
-            )
+                }))
+                .test_support(),
+        )
     }
     fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
@@ -576,7 +508,7 @@ impl Today {
             .flex()
             .flex_col()
             .when(self.search.active(), |d| {
-                d.child(self.render_search_status(p, cx))
+                d.children(self.render_search_status(p, cx))
             })
             .when(!self.search.active(), |d| {
                 d.child(self.render_list_status(p, cx))
@@ -696,7 +628,7 @@ impl Today {
             .role(Role::ListBoxOption)
             .aria_selected(self.model.selected == Some(id))
             .aria_label(format!("Note {id}: {}", row.preview))
-            .h(px(if self.search.active() { 64. } else { 32. }))
+            .h(px(32.))
             .w_full()
             .when(self.model.selected == Some(id), |row| row.bg(p.selection))
             .hover(|row| {
@@ -706,17 +638,12 @@ impl Today {
                     p.accent
                 })
             })
-            .when(!self.search.active(), |d| {
-                d.child(preview(
-                    &row.preview,
-                    &row.note_type,
-                    row.project_color.as_deref(),
-                    p,
-                ))
-            })
-            .when(self.search.active(), |d| {
-                d.child(self.render_search_row(row, p))
-            })
+            .child(preview(
+                &row.preview,
+                &row.note_type,
+                row.project_color.as_deref(),
+                p,
+            ))
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.related_note = Some(id);

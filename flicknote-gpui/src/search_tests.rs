@@ -5,6 +5,122 @@ use flicknote_sync::workspace_search::{self, Results};
 use gpui_kit::{Focusable, TestAppContext, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn hello_search_uses_same_today_rows(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    seed(&runtime, &host);
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        for (id, content, title, kind, project) in [
+            (3, format!("{} hello excerpt", "界".repeat(200)), Some("标题  保留\n下一行"), "meeting", Some("search-project")),
+            (4, format!("{} hello", "x".repeat(600)), None, "normal", None),
+            (5, format!("{} hello", "x".repeat(600)), Some(""), "flash", Some("search-project")),
+            (6, "hello\n\n短文  保留".into(), Some("Unused title"), "link", Some("search-project")),
+        ] {
+            writer.execute("INSERT OR REPLACE INTO notes(id,short_id,user_id,content,type,status,is_flagged,title,metadata,created_at,project_id) VALUES(?,CAST(? AS INTEGER),'append-owner',?,?,'ready',0,?,'{}',strftime('%Y-%m-%dT%H:%M:%SZ','now'),?)", [Some(format!("00000000-0000-4000-8000-{id:012}")), Some(id.to_string()), Some(content), Some(kind.to_owned()), title.map(str::to_owned), project.map(str::to_owned)]).unwrap();
+        }
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 6)
+    });
+    for (mode, width) in [
+        (gpui_kit::component::ThemeMode::Light, 760.),
+        (gpui_kit::component::ThemeMode::Light, 980.),
+        (gpui_kit::component::ThemeMode::Dark, 760.),
+        (gpui_kit::component::ThemeMode::Dark, 980.),
+    ] {
+        let ordinary = cx
+            .update_window(window.into(), |_, w, cx| {
+                apply_theme(mode, cx);
+                w.resize(size(px(width), px(560.)));
+                w.render_frame(cx);
+                let rows = [3, 4, 5, 6].map(|id| row_presentation(w, id));
+                assert_eq!(rows[0].0, "标题  保留 下一行");
+                assert_eq!(rows[1].0, "Untitled note");
+                assert_eq!(rows[2].0, "");
+                assert_eq!(rows[3].0, "hello 短文  保留");
+                w.press("cmd-f", cx);
+                w.input("hello", cx);
+                rows
+            })
+            .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).search.active() && !view.read(cx).search.loading)
+        });
+        cx.update_window(window.into(), |_, w, cx| {
+            w.render_frame(cx);
+            assert_eq!(view.read(cx).search.query, "hello");
+            assert_eq!(view.read(cx).search.error, None);
+            assert_eq!(view.read(cx).model.rows.len(), 4);
+            assert_eq!(
+                (
+                    w.find(("note", 3_u64)).bounds().size.height,
+                    w.try_find("search-status").is_some(),
+                    w.try_find(("match-excerpt", 3_u64)).is_some()
+                ),
+                (px(32.), false, false),
+                "hello must use the Today row with no successful strip or excerpt"
+            );
+            assert_eq!([3, 4, 5, 6].map(|id| row_presentation(w, id)), ordinary);
+            assert_eq!(
+                w.find(("note", view.read(cx).model.rows[0].id as u64))
+                    .bounds()
+                    .top(),
+                w.find("destination-header").bounds().bottom()
+            );
+            assert!(w.try_find("only-mine").is_some());
+            assert_eq!(
+                view.read(cx)
+                    .model
+                    .rows
+                    .iter()
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>(),
+                find(&runtime, &host, "hello", false, None)
+                    .rows
+                    .iter()
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>()
+            );
+            w.press("escape", cx);
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 6)
+        });
+    }
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}
+
+fn row_presentation(
+    w: &mut gpui_kit::Window,
+    id: u64,
+) -> (String, Vec<gpui_kit::Bounds<gpui_kit::Pixels>>) {
+    let row = w.find(("note", id)).bounds();
+    let scope = w.within(("note", id));
+    let text = scope.find("note-preview");
+    let mut bounds = vec![row, text.bounds(), scope.find("type-glyph").bounds()];
+    if let Some(dot) = scope.try_find("project-dot") {
+        bounds.push(dot.bounds());
+    }
+    for bound in &mut bounds {
+        bound.origin -= row.origin;
+    }
+    (text.label().unwrap().to_owned(), bounds)
+}
+
+#[gpui_kit::test]
 fn empty_search_escape_returns_composer(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let root = tempfile::tempdir().unwrap();
@@ -469,7 +585,7 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
             w.render_frame(cx);
             let center = w.find("center-pane").bounds();
             let row = w.find(("note", 3_u64)).bounds();
-            assert_eq!(row.size.height, px(64.));
+            assert_eq!(row.size.height, px(32.));
             assert!(row.right() <= center.right());
             let rail = w.find("navigation-rail").bounds();
             let search = w.find("workspace-search").bounds();
@@ -732,6 +848,8 @@ fn query_generations_source_ime_errors_origin_period_and_close_reopen(cx: &mut T
     let old = find(&runtime, &host, "buriedneedle", false, None);
     cx.update_window(window.into(), |_, w, cx| {
         query(&view, "unmatchable", w, cx);
+        w.render_frame(cx);
+        assert_eq!(w.find("search-status").label(), Some("Searching…"));
     })
     .unwrap();
     cx.update_window(window.into(), |_, w, cx| {
@@ -743,6 +861,8 @@ fn query_generations_source_ime_errors_origin_period_and_close_reopen(cx: &mut T
     .unwrap();
     settle(cx, |cx| cx.update(|cx| !view.read(cx).search.loading));
     cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert_eq!(w.find("search-status").label(), Some("No matching notes"));
         view.update(cx, |v, cx| {
             v.receive_search(
                 v.search.generation,
@@ -753,6 +873,7 @@ fn query_generations_source_ime_errors_origin_period_and_close_reopen(cx: &mut T
             )
         });
         w.render_frame(cx);
+        assert_eq!(w.find("search-status").label(), Some("Search unavailable"));
         assert!(w.try_find("retry-search").is_some());
         w.click("retry-search", cx);
     })

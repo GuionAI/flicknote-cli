@@ -238,6 +238,10 @@ and ignores discovery source filtering. Arrows/Return in the search input select
 and open canonical results; Return can flush debounce. Native CmdA/C/V, caret,
 composition and candidate handling stay with Kit. Marked Return/Escape commits or
 cancels composition first, and modal project/organization editors block search.
+Search results use the same Today row renderer at 32 points (#3446), with identical
+preview, type glyph, project-color marker, accessories, hover and selection; only
+the collection and ranked order change. No GUI excerpt/highlight or successful
+scope/count strip remains. The backend bound and snippet DTO remain unchanged.
 OptionJ/K follows search selection only under the existing empty/unmarked composer
 guards; focused search text never navigates origin notes or enters the composer.
 

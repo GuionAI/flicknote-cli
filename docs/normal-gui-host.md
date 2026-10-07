@@ -275,11 +275,14 @@ CtrlF/B retain native editor-local forward/backward editing; login and modal
 editors retain their own input. Empty input keeps ordinary browsing.
 Nonempty keywords replace that same list with up to 50 ranked active non-draft hits across all projects and dates,
 including from Shared/Archive origins. Only mine is applied by the existing FTS
-before its bound. Results show the canonical preview, backend-highlighted excerpt
-and trailing project/short ID. A reached bound is labeled Top 50; no total count,
-pagination or full-history coverage is promised. Numeric or `#number` queries put
-an exact canonical ID first, deduplicating any lexical hit without losing its
-excerpt. Exact access ignores discovery source filtering and retains draft/archive
+before its bound. Search uses the exact Today row renderer: the same 32-point
+height, folded content/title preview, type glyph, project-color dot, accessories,
+hover and selection. Only the collection and ranked order differ. Long previews
+truncate with the same reserved metadata space. #3446 supersedes #3430's two-level
+excerpt/highlight rows and successful scope/Top 50 strip; successful results reserve
+no status space. The 50-hit backend bound remains, without pagination or a total
+count. Numeric or `#number` queries put an exact canonical ID first, deduplicating
+any lexical hit. Exact access ignores discovery source filtering and retains draft/archive
 readability; archived lexical search and Command lookup remain deferred.
 
 On first nonempty query, search snapshots the destination UUID, period, selected
@@ -298,7 +301,8 @@ first. Option note/navigation guards retain composer/editor priority. Modal edit
 cannot launch search. Unmarked Escape from empty search returns focus to the
 same composer without changing browsing; populated search exits even with detail
 open. Reading-focused Escape closes detail first. Kit consumes native transient
-surfaces and marking before workspace exit. Loading, empty, bounded and error states remain distinct; errors offer explicit Retry search.
+surfaces and marking before workspace exit. Loading, empty and error feedback stays quiet and distinct; errors offer explicit
+Retry search. Composition shows feedback only when there are no retained rows.
 Only mine changes, query edits, exit, rail navigation and window teardown invalidate
 older responses. Local database notifications refresh only active search, without
 polling or automatic error retries.
@@ -315,10 +319,11 @@ never creates or changes a note. Closed detail creates current unassigned notes;
 only an explicitly open canonical active reader supplies an append target.
 
 Owned production LocalHost/fake HTTP/port0 and rendered Kit tests cover body-only
-FTS outside the 10,000-row slice, rank/highlights, source/limit/lifecycle boundaries,
+FTS outside the 10,000-row slice, backend rank/snippet contracts, source/limit/lifecycle boundaries,
 exact IDs, canonical outside-origin reader/append/actions, input/composition guards,
 stale generations, origin periods/scroll and close/reopen. Light/Dark rendered
-980/760 geometry is separate from unverified native OS pixels/IME and cloud use.
+980/760 geometry includes same-note Today/search preview, glyph and project-dot
+comparison. This is separate from unverified native OS pixels/IME and cloud use.
 No native launch or new manual acceptance gate is required.
 
 ## Projects and automatic organization (#3384)
