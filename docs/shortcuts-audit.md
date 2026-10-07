@@ -19,12 +19,12 @@ and rendered-test evidence; new native OS keyboard/IME/pixel and real dev cloud
 acceptance were **not performed**. A binding alone does not establish a working
 surface or native acceptance.
 
-| Keys | Pinned Swift desktop behavior | GPUI through #3402 |
+| Keys | Pinned Swift desktop behavior | GPUI through #3422 |
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
-| Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, project-All; no numbering for Shared/Archive/Charts |
+| Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Shared/Archive/Charts |
 | OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap; Charts skipped (#3402) |
-| OptionLeft/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Deferred: fixed current Today and project-All only; no date/Week surface |
+| OptionH/Left, OptionL/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Implemented #3422: previous/next Home semantic day or project Week; current forward and All are no-ops; draft/marked/editor retains input priority |
 | OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
 | Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; archived detail creates new; marked Return commits composition without premature create/append/open |
@@ -55,13 +55,13 @@ empty Return retain their existing draft/marked guards. Number bindings are
 workspace-scoped and do not navigate the login pane. Native editing commands
 continue to belong to the focused composer or read-only detail.
 
-Home watches the current 04:00-to-04:00 semantic day, including DST. Projects
-show **All active notes across dates**, capped at 10,000 and short-ID descending.
-No Week toggle, historical pagination, date/search/settings/global or unavailable
-group implementation is implied. Watched project archival/removal falls back
+Home watches the chosen 04:00-to-04:00 semantic day, including DST. Projects
+default to **All active notes across dates**, capped at 10,000 and short-ID descending.
+Project All/Week and Home historical day navigation are implemented in #3422;
+historical pagination, search/settings/global and Charts remain deferred. Watched project archival/removal falls back
 Home while retaining the composer. Ordinary reopen retains the last available
 process-local destination and draft/caret; closed capture completions retain
-recovery or unknown/partial identity and guidance. Cmd1 selects Home.
+recovery or unknown/partial identity and guidance. Cmd1 resets Home current Today.
 With detail closed, capture is a new unassigned note (`project=None`). With confirmed
 detail open, Return appends to the accepted UUID with exact text; `Append to #ID`
 shows the next target. The same-target busy guard retains new typing. Append identity,
@@ -201,4 +201,26 @@ Accepted drag does not also click a row or destination. Pointer hover and Option
 use last-input related-project emphasis, with drop-target priority, without
 changing the persistent destination. See [the operator contract](normal-gui-host.md#dragging-shared-and-archive-3402)
 for bounded watch reconciliation, uncertainty, close/reopen and verification limits.
-No search, date/week, Charts, reorder or global shortcut expands.
+No search, Charts, reorder or global shortcut expands. Draft dragging remains deferred.
+
+
+## Calendar navigation (#3422)
+
+Home's Today/date header and project All/Week controls use real watched ranges.
+Week starts Monday at local midnight, independently of Home's 04:00 day boundary.
+Previous/next and Today/This week are keyboard-reachable Kit buttons; forward is
+disabled at current time. Option-H/Left and Option-L/Right share actions. Empty
+workspace input has a scoped descendant binding overriding Kit word motion;
+with draft or marking that context disappears and Kit input/IME retains priority.
+Mouse controls permit ordinary draft while marked input and editors block them.
+
+Home day and each project UUID's mode/week survive rail visits and close/reopen
+in process memory. Cmd1 resets Today; project numbers restore retained scope.
+Current modes renew on clock boundaries; fixed historical selections stay anchored.
+Scope changes close detail and clear selection/old rows while preserving composer
+identity/caret/undo and accepted operations. Shared/Archive/All do no time action.
+See [the operator calendar contract](normal-gui-host.md#historical-days-and-project-weeks-3422)
+for range identity, pending membership and canonical action reconciliation.
+Owned LocalHost/rendered tests cover actual header clicks, focused key dispatch,
+minimum Light/Dark layout and stale period emissions. Native pixels/OS IME/cloud
+remain unverified; no native launch or new manual gate is required.

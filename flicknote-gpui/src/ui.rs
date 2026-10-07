@@ -4,7 +4,7 @@ use flicknote_client::dto::NoteAddInput;
 use flicknote_client::{AppRequest, AppResponse};
 use flicknote_sync::{
     app::Application as NoteApplication,
-    today::{Destination, TodayWatch},
+    today::{Destination, Period, Range, TodayWatch},
 };
 use gpui_kit::{
     App, Bounds, Context, Entity, EntityInputHandler, KeyBinding, Menu, MenuItem, QuitMode, Role,
@@ -32,6 +32,7 @@ pub(super) struct Services {
     pub(super) real_account: bool,
     pub(super) first_sync: Mutex<crate::sync_progress::FirstSync>,
     pub(super) destination: Mutex<Destination>,
+    pub(super) temporal: Mutex<temporal::Memory>,
     pub(super) capture: Arc<Mutex<Capture>>,
     pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
     pub(super) organization: Mutex<Option<crate::organization::Control>>,
@@ -74,6 +75,8 @@ actions!(
         Project7,
         Project8,
         Project9,
+        PreviousPeriod,
+        NextPeriod,
         NextDestination,
         PreviousDestination,
         SaveEditor,
@@ -108,6 +111,33 @@ fn install_today_keys(cx: &mut App) {
             NextDestination,
             Some("Today && destination_navigation"),
         ),
+        // Override Kit word motion only inside the empty/unmarked workspace input.
+        KeyBinding::new(
+            "alt-left",
+            PreviousPeriod,
+            Some("(Today && destination_navigation) > Input"),
+        ),
+        KeyBinding::new(
+            "alt-right",
+            NextPeriod,
+            Some("(Today && destination_navigation) > Input"),
+        ),
+        KeyBinding::new(
+            "alt-left",
+            PreviousPeriod,
+            Some("Today && destination_navigation"),
+        ),
+        KeyBinding::new(
+            "alt-h",
+            PreviousPeriod,
+            Some("Today && destination_navigation"),
+        ),
+        KeyBinding::new(
+            "alt-right",
+            NextPeriod,
+            Some("Today && destination_navigation"),
+        ),
+        KeyBinding::new("alt-l", NextPeriod, Some("Today && destination_navigation")),
         KeyBinding::new("alt-j", NextNote, Some("Today")),
         KeyBinding::new("alt-k", PreviousNote, Some("Today")),
         KeyBinding::new("alt-a", ArchiveNote, Some("Today")),
@@ -132,6 +162,8 @@ struct Today {
     organization_task: Option<Task<()>>,
     services: Arc<Services>,
     destination: Destination,
+    period: Period,
+    range: Option<Range>,
     source: crate::source::State,
     source_task: Option<Task<()>>,
     watch_epoch: u64,
@@ -201,11 +233,18 @@ impl Today {
             .lock()
             .expect("window destination")
             .clone();
+        let period = services
+            .temporal
+            .lock()
+            .expect("calendar memory")
+            .period(&destination);
         let mut this = Self {
             editor: None,
             pending_project: None,
             organization_task: None,
             destination,
+            range: period.range(&chrono::Local::now()).ok().flatten(),
+            period,
             source: services.source.state(),
             source_task: None,
             watch_epoch: 0,
@@ -368,11 +407,13 @@ impl Today {
         self.watch.take();
         let _entered = self.services.runtime.enter();
         let destination = self.destination.clone();
-        let watcher = TodayWatch::start_destination(
+        let period = self.period.clone();
+        let watcher = TodayWatch::start_period(
             self.services.db.clone(),
             self.services.user_id.clone(),
             destination.clone(),
             human_only,
+            period.clone(),
         );
         let mut receiver = watcher.receiver.clone();
         self.watch = Some(watcher);
@@ -383,7 +424,7 @@ impl Today {
                     && entity
                         .update_in(cx, |this, window, cx| {
                             this.receive_snapshot(
-                                &(destination.clone(), human_only, epoch),
+                                &(destination.clone(), human_only, epoch, period.clone()),
                                 result,
                                 window,
                                 cx,
@@ -402,7 +443,7 @@ impl Today {
 
     fn receive_snapshot(
         &mut self,
-        scope: &(Destination, bool, u64),
+        scope: &(Destination, bool, u64, Period),
         result: Result<flicknote_sync::today::Snapshot, String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -410,21 +451,29 @@ impl Today {
         if self.destination != scope.0
             || self.source.human_only != scope.1
             || self.watch_epoch != scope.2
+            || self.period != scope.3
         {
             return;
         }
         match result {
             Ok(snapshot) => {
+                if self.range != snapshot.range {
+                    self.close_detail(window, cx);
+                    self.model.selected = None;
+                    self.model.rows = Arc::default();
+                    self.related_note = None;
+                }
+                self.range = snapshot.range;
                 self.model
                     .capture()
                     .note_actions
-                    .observe(&snapshot.rows, &(scope.0.clone(), scope.1));
+                    .observe(&snapshot.rows, &self.action_scope());
                 self.canonical_rows = snapshot.rows;
                 let rows = self
                     .model
                     .capture()
                     .note_actions
-                    .project(&self.canonical_rows, &self.destination);
+                    .project(&self.canonical_rows, &self.action_scope());
                 self.projects = snapshot.projects;
                 if self
                     .pending_project
@@ -437,6 +486,16 @@ impl Today {
                 if let Destination::Project(id) = &self.destination
                     && !self.projects.iter().any(|p| &p.id == id)
                 {
+                    self.services
+                        .temporal
+                        .lock()
+                        .expect("calendar memory")
+                        .projects_remove(id);
+                    self.services
+                        .temporal
+                        .lock()
+                        .expect("calendar memory")
+                        .reset_home();
                     self.set_destination(Destination::Home, window, cx);
                     return;
                 }
@@ -529,6 +588,20 @@ impl Today {
             .destination
             .lock()
             .expect("window destination") = destination;
+        self.period = self
+            .services
+            .temporal
+            .lock()
+            .expect("calendar memory")
+            .period(&self.destination);
+        self.reset_projection(window, cx);
+    }
+
+    fn reset_projection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_detail(window, cx);
+        self.composer
+            .update(cx, |input, cx| input.focus(window, cx));
+        self.range = self.period.range(&chrono::Local::now()).ok().flatten();
         self.model.selected = None;
         self.model.rows = Arc::default();
         self.canonical_rows = Arc::default();
@@ -1074,6 +1147,11 @@ fn install_workspace_menu(
     cx.on_action(move |_: &Reopen, cx| {
         if let Some(Ok(WorkspaceState::Ready(services))) = reopen.borrow().as_ref() {
             *services.destination.lock().expect("window destination") = Destination::Home;
+            services
+                .temporal
+                .lock()
+                .expect("calendar memory")
+                .reset_home();
         }
         open(reopen.clone(), reopen_system.clone(), cx);
     });
@@ -1222,3 +1300,10 @@ pub(crate) mod note_actions;
 #[cfg(test)]
 #[path = "note_action_tests.rs"]
 mod note_action_tests;
+
+#[path = "temporal.rs"]
+mod temporal;
+
+#[cfg(test)]
+#[path = "temporal_tests.rs"]
+mod temporal_tests;

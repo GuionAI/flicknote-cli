@@ -103,7 +103,7 @@ source. Selection does not retarget editor
 focus. A confirmed row opens or replaces detail; Close, Escape or exposed canvas
 dismisses it while preserving selection and composer text. Escape consumed by
 marked composition or the input's own transient surface does not close detail.
-Home selects current Today and closes detail. In the focused Today window, Option-J
+Home restores its chosen day and closes detail; Cmd1 resets current Today. In the focused Today window, Option-J
 selects the next confirmed note and Option-K the previous. Either starts at the
 first note when nothing is selected; neither wraps. These actions retain editor
 focus, reveal the selected row through the existing virtual list and update
@@ -121,7 +121,7 @@ or marked input restores IME-first routing. Unmatched initial letters still reac
 the native input context. The #3296 regression covers this seam, not native
 Chinese acceptance on the corrected source; see the shortcuts audit for evidence.
 
-Active projects are UUID destinations showing All active notes across dates,
+Active projects are UUID destinations defaulting to All active notes across dates,
 bounded at 10,000 and ordered by canonical short ID. Cmd1 selects Home;
 Cmd2..9 select the first eight active projects in rail order, retaining draft/caret
 unless marked. Empty/unmarked Option-Up/Down traverses Home, projects, Shared and Archive without
@@ -231,6 +231,13 @@ Lucide vector icons are optical equivalents, not SF Symbols replicas.
 The app packages its screen icons explicitly alongside Kit’s default component
 assets; icon names alone do not register the full catalog.
 
+Calendar navigation #3422 adds historical Home days and per-UUID project All/Week
+choices in process memory. Monday-midnight weeks remain distinct from Home's
+04:00 semantic days. The [operator calendar contract](normal-gui-host.md#historical-days-and-project-weeks-3422)
+defines header controls, keyboard/IME guards, clock boundaries and operation identity.
+Owned LocalHost/rendered tests cover these paths; native pixels/OS input remain
+unverified. Draft dragging is deferred.
+
 ## Only mine source projection (#3389)
 
 The right header's accessible **Only mine** control filters existing Home/Today and
@@ -328,7 +335,7 @@ install a cross-toolchain to verify this spike. Upstream build and API evidence 
 in the local implementation report.
 
 Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
-note editing, formula/Mermaid rendering, unsupported navigation/date shortcuts, voice/global
+note editing, formula/Mermaid rendering, unsupported shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
 acceptance belongs to its historical source; it does not accept this new direction.

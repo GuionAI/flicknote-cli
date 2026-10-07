@@ -491,7 +491,7 @@ impl Today {
                 capture
                     .pending
                     .iter()
-                    .filter(|_| self.destination == Destination::Home)
+                    .filter(|pending| self.pending_visible(pending))
                     .rev()
                     .map(|pending| {
                         div()
@@ -510,7 +510,7 @@ impl Today {
             )
             .children(
                 (self.model.rows.is_empty()
-                    && (self.destination != Destination::Home || capture.pending.is_empty()))
+                    && !capture.pending.iter().any(|p| self.pending_visible(p)))
                 .then(|| {
                     div()
                         .px(px(8.))
@@ -524,7 +524,11 @@ impl Today {
                         } else if self.services.real_account && !self.first_synced {
                             "Waiting for the first sync…"
                         } else if self.destination == Destination::Home {
-                            "No notes today"
+                            if matches!(self.period, Period::Day(None)) {
+                                "No notes today"
+                            } else {
+                                "No notes on this day"
+                            }
                         } else {
                             match self.destination {
                                 Destination::Shared => "No shared notes",
@@ -850,6 +854,104 @@ impl Today {
             )
             .test_support()
     }
+    fn render_period_controls(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
+        if matches!(self.destination, Destination::Shared | Destination::Archive) {
+            return None;
+        }
+        let temporal = self.period != Period::All;
+        let project = matches!(self.destination, Destination::Project(_));
+        let forward = self.period.shifted(true, &chrono::Local::now()).is_some();
+        Some(
+            div()
+                .id("period-header")
+                .on_click(|_, _, cx| cx.stop_propagation())
+                .flex_shrink_0()
+                .px(px(8.))
+                .py(px(2.))
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(2.))
+                        .when(project, |d| {
+                            d.child(
+                                Button::new("scope-all")
+                                    .label("All")
+                                    .accessibility_label("All dates")
+                                    .small()
+                                    .ghost()
+                                    .selected(!temporal)
+                                    .toggled(!temporal)
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.project_scope(false, w, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("scope-week")
+                                    .label("Week")
+                                    .accessibility_label("Week")
+                                    .small()
+                                    .ghost()
+                                    .selected(temporal)
+                                    .toggled(temporal)
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.project_scope(true, w, cx)
+                                    })),
+                            )
+                        })
+                        .when(temporal, |d| {
+                            d.child(
+                                Button::new("period-back")
+                                    .icon(IconName::ChevronLeft)
+                                    .accessibility_label("Previous period")
+                                    .small()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, w, cx| {
+                                        this.mouse_period(false, w, cx)
+                                    })),
+                            )
+                            .child(
+                                Button::new("period-forward")
+                                    .icon(IconName::ChevronRight)
+                                    .accessibility_label("Next period")
+                                    .small()
+                                    .ghost()
+                                    .disabled(!forward)
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| {
+                                            this.mouse_period(true, w, cx)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                Button::new("period-current")
+                                    .label(if project { "This week" } else { "Today" })
+                                    .small()
+                                    .ghost()
+                                    .on_click(
+                                        cx.listener(|this, _, w, cx| this.current_period(w, cx)),
+                                    ),
+                            )
+                        }),
+                )
+                .when(project && temporal, |d| {
+                    d.child(
+                        div()
+                            .id("period-range")
+                            .aria_label(self.period_label())
+                            .text_size(px(12.))
+                            .truncate()
+                            .text_color(Theme::global(cx).muted_foreground)
+                            .child(self.period_label())
+                            .test_support(),
+                    )
+                })
+                .test_support(),
+        )
+    }
     fn render_canvas(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("center-pane")
@@ -877,21 +979,21 @@ impl Today {
                             .min_w_0()
                             .truncate()
                             .child(match &self.destination {
-                                Destination::Home => "Today".to_string(),
+                                Destination::Home => self.period_label(),
                                 Destination::Shared => "Shared".to_string(),
                                 Destination::Archive => "Archive".to_string(),
-                                Destination::Project(id) => format!(
-                                    "{} — All",
-                                    self.projects
-                                        .iter()
-                                        .find(|p| &p.id == id)
-                                        .map_or("Project", |p| p.name.as_str())
-                                ),
+                                Destination::Project(id) => self
+                                    .projects
+                                    .iter()
+                                    .find(|p| &p.id == id)
+                                    .map_or("Project", |p| p.name.as_str())
+                                    .to_string(),
                             }),
                     )
                     .child(self.render_source(cx))
                     .test_support(),
             )
+            .children(self.render_period_controls(cx))
             .child(
                 div()
                     .id("main-canvas")
@@ -940,6 +1042,12 @@ impl Today {
             )
             .on_action(
                 cx.listener(|this, _: &Project9, window, cx| this.select_number(9, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PreviousPeriod, window, cx| {
+                this.move_period(false, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &NextPeriod, window, cx| this.move_period(true, window, cx)),
             )
             .on_action(cx.listener(|this, _: &NextDestination, window, cx| {
                 this.traverse_destination(true, window, cx)
@@ -1031,7 +1139,7 @@ impl Render for Today {
                 }),
             )
             .on_action(cx.listener(|this, _: &Reopen, window, cx| {
-                this.change_destination(Destination::Home, window, cx);
+                this.home_today(window, cx);
             }))
             .child(
                 div()

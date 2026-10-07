@@ -25,6 +25,7 @@ fn synthetic_services(
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -56,6 +57,7 @@ fn rendered_creation_ime_multiline_selection_archive_and_recovery(cx: &mut TestA
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -385,7 +387,7 @@ fn assert_detail_dismissal_focus(window: &mut Window, cx: &mut App, view: &Entit
 }
 
 fn tab_to_detail_button(id: &'static str, window: &mut Window, cx: &mut App) {
-    for _ in 0..8 {
+    for _ in 0..12 {
         window.press("tab", cx);
         window.render_frame(cx);
         if window.find(id).focused() == Some(true) {
@@ -416,6 +418,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -526,6 +529,7 @@ fn composer_detail_theme_and_final_row_remain_reachable(cx: &mut TestAppContext)
         runtime: runtime.handle().clone(),
         operations: Mutex::new(vec![]),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -1270,6 +1274,7 @@ fn rendered_real_account_uses_production_creation_and_reopens_fresh(cx: &mut Tes
         runtime: runtime.handle().clone(),
         operations: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -1504,6 +1509,7 @@ fn project_click_watch_swap_capture_and_fallback_preserve_composer(cx: &mut Test
         runtime: runtime.handle().clone(),
         operations: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),
@@ -1709,6 +1715,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         runtime: runtime.handle().clone(),
         operations: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: std::sync::Mutex::default(),
         organization: Mutex::default(),

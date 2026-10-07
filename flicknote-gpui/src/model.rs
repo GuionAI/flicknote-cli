@@ -6,6 +6,7 @@ pub(crate) struct Pending {
     pub(crate) token: u64,
     pub(crate) text: String,
     pub(crate) id: Option<i64>,
+    pub(crate) accepted_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Default)]
 pub(crate) struct Capture {
@@ -87,6 +88,7 @@ impl Capture {
             token: self.next_token,
             text,
             id: None,
+            accepted_at: chrono::Utc::now(),
         });
         self.next_token
     }

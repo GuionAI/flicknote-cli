@@ -84,6 +84,7 @@ fn sdk_first_sync_waits_for_every_default_checkpoint(cx: &mut gpui_kit::TestAppC
         real_account: true,
         first_sync: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
         organization: Mutex::default(),

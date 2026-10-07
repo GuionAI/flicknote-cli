@@ -483,7 +483,7 @@ has a top-right Copy button for its whole payload, excluding fences and language
 Explicit http/https links can open the browser; images never load
 network, local files or data URLs. See [the reader contract](docs/embedded-gpui-spike.md#markdown-detail-reader-3348).
 
-Home/current Today and project-All use the production local host's watched local
+Home/day and project-All/Week use the production local host's watched local
 cache with Unix IPC and loopback MCP ready before the first download. Project
 archival/removal falls back Home while retaining the composer. First-sync progress
 uses a visible Kit bar: notes download maps to 0–90%, then holds at 90% while
@@ -501,6 +501,14 @@ canonical stored Markdown. Failures retain submitted text without replacing new 
 a possible-after-write error requires checking the target before resubmitting. No offline
 queue or automatic mutation retry is added. Close keeps the owner alive; Quit releases it.
 
+The experimental macOS GPUI workspace supports historical Home days and per-project
+All/Week navigation. Home uses local 04:00; weeks begin Monday at local midnight.
+Option-H/Left and Option-L/Right navigate with an empty, unmarked composer;
+header controls offer Today/This week return and never advance into the future.
+Choices remain in process memory across close/reopen. See the
+[normal GUI calendar contract](docs/normal-gui-host.md#historical-days-and-project-weeks-3422)
+for capture, input and verification boundaries.
+
 Add projects with the Plus icon beside Projects in the rail and edit their summaries above the project All list.
 The application menu's **Automatic organization…** control stores an account-scoped
 OpenRouter key in a new GUI Keychain service. The background GUI host routes
@@ -517,12 +525,11 @@ recovery preserve successful decisions; window close continues, Quit stops witho
 automatic resume. Progress stays in the control. Reader drag selection freezes
 on pointer release while exact plain, canonical and code-block Copy remain distinct.
 **Only mine** in the right workspace header defaults off and applies to Home/Today
-and project-All. It excludes only `metadata.created_by_ai` JSON boolean `true`
+and project-All/Week. It excludes only `metadata.created_by_ai` JSON boolean `true`
 before the watched 10,000-note limit; missing, false and other JSON values remain.
 The account-scoped choice persists across destination/window changes and restart.
 It describes creation channel, not authorship. Explicit-ID CLI/MCP/IPC access and
-background Jev eligibility remain independent. Shared/Archive/Charts/search/date
-surfaces and headless organization remain deferred.
+background Jev eligibility remain independent. Charts/search and headless organization remain deferred.
 
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)

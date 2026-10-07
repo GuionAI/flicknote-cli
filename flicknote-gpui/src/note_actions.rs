@@ -36,7 +36,7 @@ struct Accepted {
     token: u64,
     row: TodayRow,
     action: NoteAction,
-    scope: (Destination, bool),
+    scope: (Destination, bool, Option<Range>),
     projecting: bool,
     complete: bool,
 }
@@ -48,7 +48,7 @@ impl NoteActions {
         &mut self,
         row: TodayRow,
         action: NoteAction,
-        scope: (Destination, bool),
+        scope: (Destination, bool, Option<Range>),
     ) -> Option<u64> {
         if self.busy(&row.uuid) {
             return None;
@@ -65,7 +65,11 @@ impl NoteActions {
         });
         Some(self.next_token)
     }
-    pub(super) fn observe(&mut self, rows: &[TodayRow], scope: &(Destination, bool)) {
+    pub(super) fn observe(
+        &mut self,
+        rows: &[TodayRow],
+        scope: &(Destination, bool, Option<Range>),
+    ) {
         for pending in &mut self.pending {
             let row = rows.iter().find(|r| r.uuid == pending.row.uuid);
             let changed = row.is_some_and(|row| match &pending.action {
@@ -83,7 +87,7 @@ impl NoteActions {
     pub(super) fn project(
         &self,
         rows: &[TodayRow],
-        destination: &Destination,
+        scope: &(Destination, bool, Option<Range>),
     ) -> Arc<Vec<TodayRow>> {
         Arc::new(
             rows.iter()
@@ -91,20 +95,20 @@ impl NoteActions {
                     let Some(pending) = self
                         .pending
                         .iter()
-                        .find(|p| p.row.uuid == row.uuid && p.projecting)
+                        .find(|p| p.row.uuid == row.uuid && p.projecting && &p.scope == scope)
                     else {
                         return Some(row.clone());
                     };
                     match &pending.action {
                         NoteAction::Archive | NoteAction::Restore => None,
-                        NoteAction::Unshare if destination == &Destination::Shared => None,
+                        NoteAction::Unshare if scope.0 == Destination::Shared => None,
                         NoteAction::Share if pending.complete => {
                             let mut row = row.clone();
                             row.shared = true;
                             Some(row)
                         }
                         NoteAction::Project(project) => {
-                            if let Destination::Project(id) = destination
+                            if let Destination::Project(id) = &scope.0
                                 && id != &project.id
                             {
                                 return None;
@@ -306,7 +310,7 @@ impl Today {
         {
             return;
         }
-        let scope = (self.destination.clone(), self.source.human_only);
+        let scope = self.action_scope();
         let Some(token) =
             self.model
                 .capture()
@@ -357,7 +361,7 @@ impl Today {
             .model
             .capture()
             .note_actions
-            .project(&self.canonical_rows, &self.destination);
+            .project(&self.canonical_rows, &self.action_scope());
         self.model.snapshot(rows);
         self.refresh_detail(window, cx);
     }
@@ -463,7 +467,7 @@ mod tests {
         for watch_first in [true, false] {
             let mut state = NoteActions::default();
             let baseline = row();
-            let scope = (Destination::Home, false);
+            let scope = (Destination::Home, false, None);
             let token = state
                 .accept(baseline.clone(), action(), scope.clone())
                 .unwrap();
@@ -473,7 +477,7 @@ mod tests {
                     .is_none()
             );
             assert_eq!(
-                state.project(std::slice::from_ref(&baseline), &scope.0)[0]
+                state.project(std::slice::from_ref(&baseline), &scope)[0]
                     .project_color
                     .as_deref(),
                 Some("123456")
@@ -492,28 +496,28 @@ mod tests {
             watched.project_id = Some("external".into());
             watched.project_color = Some("abcdef".into());
             assert_eq!(
-                state.project(std::slice::from_ref(&watched), &scope.0)[0]
+                state.project(std::slice::from_ref(&watched), &scope)[0]
                     .project_color
                     .as_deref(),
                 Some("abcdef")
             );
             state.observe(std::slice::from_ref(&baseline), &scope);
-            assert_eq!(state.project(&[baseline], &scope.0)[0].project_id, None);
+            assert_eq!(state.project(&[baseline], &scope)[0].project_id, None);
         }
     }
     #[test]
     fn confirmed_share_feedback_yields_to_watch_or_expiry() {
         let baseline = row();
-        let scope = (Destination::Home, false);
+        let scope = (Destination::Home, false, None);
         for observed in [true, false] {
             let mut state = NoteActions::default();
             let token = state
                 .accept(baseline.clone(), NoteAction::Share, scope.clone())
                 .unwrap();
-            assert!(!state.project(std::slice::from_ref(&baseline), &scope.0)[0].shared);
+            assert!(!state.project(std::slice::from_ref(&baseline), &scope)[0].shared);
             state.complete(token, Ok(Some("https://owned.invalid/confirmed".into())));
             assert!(state.busy("original"));
-            assert!(state.project(std::slice::from_ref(&baseline), &scope.0)[0].shared);
+            assert!(state.project(std::slice::from_ref(&baseline), &scope)[0].shared);
             assert_eq!(state.links, ["https://owned.invalid/confirmed"]);
             let mut watched = baseline.clone();
             if observed {
@@ -525,35 +529,36 @@ mod tests {
                 state.expire(token);
             }
             assert!(!state.busy("original"));
-            assert!(!state.project(&[watched], &scope.0)[0].shared);
+            assert!(!state.project(&[watched], &scope)[0].shared);
         }
     }
     #[test]
     fn removal_scope_expiry_and_errors_keep_watch_authoritative() {
         let baseline = row();
-        let scope = (Destination::Shared, false);
+        let scope = (Destination::Shared, false, None);
         let mut state = NoteActions::default();
         let token = state
             .accept(baseline.clone(), NoteAction::Archive, scope.clone())
             .unwrap();
         assert!(
             state
-                .project(std::slice::from_ref(&baseline), &scope.0)
+                .project(std::slice::from_ref(&baseline), &scope)
                 .is_empty()
         );
-        state.observe(&[], &(Destination::Project("different".into()), false));
+        state.observe(
+            &[],
+            &(Destination::Project("different".into()), false, None),
+        );
         assert!(
             state
-                .project(std::slice::from_ref(&baseline), &scope.0)
+                .project(std::slice::from_ref(&baseline), &scope)
                 .is_empty(),
             "another page cannot acknowledge removal"
         );
         state.complete(token, Ok(None));
         state.expire(token);
         assert_eq!(
-            state
-                .project(std::slice::from_ref(&baseline), &scope.0)
-                .len(),
+            state.project(std::slice::from_ref(&baseline), &scope).len(),
             1,
             "bounded overlay expires"
         );
@@ -585,10 +590,10 @@ mod tests {
                 uncertain
             );
             assert_eq!(
-                state.project(std::slice::from_ref(&baseline), &scope.0)[0].project_id,
+                state.project(std::slice::from_ref(&baseline), &scope)[0].project_id,
                 None
             );
-            assert!(!state.project(std::slice::from_ref(&baseline), &scope.0)[0].shared);
+            assert!(!state.project(std::slice::from_ref(&baseline), &scope)[0].shared);
             assert!(state.links.is_empty());
             assert!(!state.busy("original"));
         }

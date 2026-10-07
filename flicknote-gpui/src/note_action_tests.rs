@@ -786,3 +786,209 @@ fn archived_composer_creates_new_and_drop_guards_keep_draft_ime_append(cx: &mut 
     services.cancel_operations();
     runtime.block_on(host.shutdown());
 }
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // Accepted capture/append/share identity across real calendar watch changes.
+fn historical_capture_append_and_share_keep_original_membership(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (host, fake) = fixture(&runtime, root.path());
+    let historical = Period::Day(None)
+        .shifted(false, &chrono::Local::now())
+        .unwrap();
+    let range = historical.range(&chrono::Local::now()).unwrap().unwrap();
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET created_at=? WHERE short_id IN (2,3)",
+                [range.0.to_rfc3339()],
+            )
+            .unwrap();
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    ready(cx, &view, 2);
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.press("alt-h", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    let writer = runtime.block_on(host.db.writer()).unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |i, cx| {
+            i.focus(w, cx);
+            i.set_value("Current unassigned capture from history", w, cx)
+        });
+        w.render_frame(cx);
+        w.press("enter", cx);
+        w.render_frame(cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).model.capture().pending.len() == 1)
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert_eq!(view.read(cx).model.capture().pending.len(), 1);
+        let capture = view.read(cx).model.capture();
+        assert!(!view.read(cx).pending_visible(&capture.pending[0]));
+        drop(capture);
+        assert_eq!(view.read(cx).model.rows.len(), 2);
+        w.click("period-current", cx);
+    })
+    .unwrap();
+    drop(writer);
+    ready(cx, &view, 3);
+    let created = runtime
+        .block_on(host.app.handle(AppRequest::NoteGet {
+            id: "5".into(),
+            archived: false,
+        }))
+        .unwrap();
+    assert!(
+        matches!(created,AppResponse::NoteDetail(ref n) if n.note.project.is_none() && n.content=="Current unassigned capture from history")
+    );
+    runtime.block_on(async {
+        let created_at: String = host
+            .db
+            .reader()
+            .await
+            .unwrap()
+            .query_row("SELECT created_at FROM notes WHERE short_id=5", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let today = Period::Day(None)
+            .range(&chrono::Local::now())
+            .unwrap()
+            .unwrap();
+        assert!(created_at >= today.0 && created_at < today.1);
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.press("alt-left", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    let writer = runtime.block_on(host.db.writer()).unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("note", 2_u64), cx);
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |i, cx| {
+            i.focus(w, cx);
+            i.set_value("Historical immutable append", w, cx)
+        });
+        w.render_frame(cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| !view.read(cx).model.capture().appends.pending.is_empty())
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert_eq!(view.read(cx).period, historical);
+        assert!(
+            view.read(cx)
+                .detail
+                .as_ref()
+                .unwrap()
+                .source
+                .ends_with("Historical immutable append")
+        );
+        w.render_frame(cx);
+        w.click("period-back", cx);
+    })
+    .unwrap();
+    drop(writer);
+    ready(cx, &view, 0);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let note = runtime
+            .block_on(host.app.handle(AppRequest::NoteGet {
+                id: uuid(2),
+                archived: false,
+            }))
+            .unwrap();
+        if matches!(note,AppResponse::NoteDetail(ref n) if n.content.ends_with("Historical immutable append"))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        cx.run_until_parked();
+    }
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.press("alt-l", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    fake.mode.store(3, Ordering::SeqCst); // Gateway acknowledges without a canonical share emission.
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("note", 3_u64), cx);
+        w.render_frame(cx);
+        w.click("share-note", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx).model.capture().note_actions.links.len() == 1
+                || view
+                    .read(cx)
+                    .model
+                    .rows
+                    .iter()
+                    .any(|r| r.id == 3 && r.shared)
+        })
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("period-back", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 0);
+    assert!(
+        services.capture.lock().unwrap().note_actions.busy(&uuid(3)),
+        "absence in a different date cannot confirm Share"
+    );
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("period-forward", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    cx.update(|cx| {
+        assert!(
+            view.read(cx)
+                .model
+                .rows
+                .iter()
+                .any(|r| r.id == 3 && r.shared),
+            "confirmed Share projects in its accepted period"
+        )
+    });
+    runtime.block_on(async { host.db.writer().await.unwrap().execute("INSERT INTO note_shares(id,user_id,token,created_at) VALUES(?,'append-owner','canonical','2026-01-01T00:00:00Z')",[uuid(3)]).unwrap(); });
+    settle(cx, |_| {
+        !services.capture.lock().unwrap().note_actions.busy(&uuid(3))
+    });
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}

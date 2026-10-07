@@ -185,6 +185,11 @@ a user handoff and remains unverified by static packaging checks. Worker
 verification/package actions do not install. Installation never automatically
 quits/restarts the running app or clears drafts. Follow `docs/normal-gui-host.md`
 for the operator boundary.
+Before changing GUI calendar navigation or watch/action membership, read
+`docs/normal-gui-host.md`'s #3422 calendar contract. Home days use local 04:00;
+project Week uses Monday 00:00. Keep historical ranges fixed, current ranges
+clock-following, per-UUID choices process-local and creation current/unassigned.
+Include period identity in stale-watch and accepted-operation reconciliation.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts.
 Read `docs/automatic-organization.md` before changing GUI project editors,
 organization eligibility/retries, cutoff preferences or credential handling.

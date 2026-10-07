@@ -31,6 +31,7 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
         real_account: false,
         first_sync: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
         organization: Mutex::default(),

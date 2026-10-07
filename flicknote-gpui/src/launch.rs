@@ -128,6 +128,7 @@ impl Host {
             runtime,
             operations: std::sync::Mutex::new(vec![]),
             destination: std::sync::Mutex::default(),
+            temporal: std::sync::Mutex::default(),
             capture: std::sync::Arc::default(),
             draft: std::sync::Mutex::default(),
             organization: std::sync::Mutex::default(),

@@ -65,6 +65,7 @@ pub(super) fn services(
         real_account: false,
         first_sync: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
         organization: Mutex::default(),

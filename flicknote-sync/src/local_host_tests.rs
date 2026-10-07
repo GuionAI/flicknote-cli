@@ -1142,3 +1142,263 @@ async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owned host verifies the calendar and SQL boundary together.
+async fn historical_day_and_project_week_calendar_membership_before_limit() {
+    use crate::today::{Destination, Period};
+    use chrono::{Days, TimeZone};
+    use chrono_tz::America::New_York;
+    for (month, day, hours) in [(3, 7, 23), (10, 31, 25)] {
+        let now = New_York
+            .with_ymd_and_hms(2026, month, day, 12, 0, 0)
+            .unwrap();
+        let historical = Period::Day(Some(now.date_naive()));
+        let (start, end) = historical.range(&now).unwrap().unwrap();
+        assert_eq!((end - start).num_hours(), hours);
+        let later = now + chrono::Duration::days(10);
+        assert_eq!(historical.range(&later).unwrap(), Some((start, end)));
+        assert_ne!(Period::Day(None).range(&later).unwrap(), Some((start, end)));
+        assert!(!historical.follows_clock());
+        assert!(Period::Day(None).follows_clock());
+        let week = Period::Week(None).range(&now).unwrap().unwrap();
+        assert_eq!((week.1 - week.0).num_hours(), 168 - (24 - hours));
+    }
+    let before = New_York.with_ymd_and_hms(2026, 1, 5, 3, 59, 59).unwrap();
+    let after = before + chrono::Duration::seconds(1);
+    assert_ne!(
+        Period::Day(None).range(&before).unwrap(),
+        Period::Day(None).range(&after).unwrap()
+    );
+    let sunday = New_York.with_ymd_and_hms(2026, 1, 4, 23, 59, 59).unwrap();
+    let monday = sunday + chrono::Duration::seconds(1);
+    assert_eq!(Period::Week(None).date(&sunday).to_string(), "2025-12-29");
+    assert_eq!(Period::Week(None).date(&monday).to_string(), "2026-01-05");
+    assert_eq!(Period::Day(None).date(&monday).to_string(), "2026-01-04");
+    for period in [Period::Day(None), Period::Week(None), Period::All] {
+        assert!(period.shifted(true, &monday).is_none());
+    }
+    let previous = Period::Week(None).shifted(false, &monday).unwrap();
+    assert_eq!(previous.shifted(true, &monday), Some(Period::Week(None)));
+    assert_eq!(
+        previous.range(&before).unwrap(),
+        previous.range(&monday).unwrap()
+    );
+
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
+    let day = chrono::Local::now()
+        .date_naive()
+        .checked_sub_days(Days::new(30))
+        .unwrap();
+    let day_period = Period::Day(Some(day));
+    let (day_start, day_end) = day_period.range(&chrono::Local::now()).unwrap().unwrap();
+    let monday = day
+        - chrono::Duration::days(i64::from(
+            chrono::Datelike::weekday(&day).num_days_from_monday(),
+        ));
+    let week_period = Period::Week(Some(monday));
+    let (week_start, week_end) = week_period.range(&chrono::Local::now()).unwrap().unwrap();
+    {
+        let mut writer = host.db.writer().await.unwrap();
+        let tx = writer.transaction().unwrap();
+        tx.execute("DELETE FROM notes", []).unwrap();
+        for (id, date, owner, assigned) in [
+            (
+                1,
+                day_start - chrono::Duration::seconds(1),
+                "account-a",
+                project,
+            ),
+            (2, day_start, "account-a", project),
+            (
+                3,
+                day_end - chrono::Duration::seconds(1),
+                "account-a",
+                project,
+            ),
+            (4, day_end, "account-a", project),
+            (5, week_start, "account-a", project),
+            (6, week_end, "account-a", project),
+            (7, day_start, "account-b", project),
+            (8, day_start, "account-a", "other-project"),
+        ] {
+            tx.execute("INSERT INTO notes(id,short_id,user_id,project_id,created_at,content,status) VALUES(?,?,?,?,?,'Calendar body','ready')", rusqlite::params![format!("calendar-{id}"),id,owner,assigned,date.to_rfc3339()]).unwrap();
+        }
+        // Excluded high IDs must not exhaust the bound before calendar/source/owner filtering.
+        for index in 0..=crate::today::LIMIT {
+            let (kind, date, owner, metadata) = match index % 3 {
+                0 => ("future", week_end, "account-a", "{}"),
+                1 => (
+                    "machine",
+                    day_start,
+                    "account-a",
+                    "{\"created_by_ai\":true}",
+                ),
+                _ => ("foreign", day_start, "account-b", "{}"),
+            };
+            tx.execute("INSERT INTO notes(id,short_id,user_id,project_id,created_at,metadata,status) VALUES(?,?,?,?,?,?,'ready')", rusqlite::params![format!("{kind}-{index}"),100+index as i64,owner,project,date.to_rfc3339(),metadata]).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    let mut home = TodayWatch::start_period(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Home,
+        true,
+        day_period,
+    );
+    let home_snapshot = snapshot(&mut home, |s| s.rows.len() >= 3).await;
+    let mut expected = vec![8, 3, 2];
+    if week_start >= day_start && week_start < day_end {
+        expected.push(5);
+    }
+    expected.sort_unstable_by(|a, b| b.cmp(a));
+    assert_eq!(
+        home_snapshot.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(home_snapshot.range, Some((day_start, day_end)));
+    let mut week = TodayWatch::start_period(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+        true,
+        week_period,
+    );
+    let week_snapshot = snapshot(&mut week, |s| !s.rows.is_empty()).await;
+    assert_eq!(week_snapshot.range, Some((week_start, week_end)));
+    assert!(
+        week_snapshot
+            .rows
+            .iter()
+            .all(|r| r.project_id.as_deref() == Some(project))
+    );
+    assert!(week_snapshot.rows.iter().any(|r| r.id == 2));
+    assert!(week_snapshot.rows.iter().any(|r| r.id == 5));
+    assert!(
+        !week_snapshot
+            .rows
+            .iter()
+            .any(|r| [6, 7, 8].contains(&r.id) || r.id >= 100)
+    );
+    let mut all = TodayWatch::start_period(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Project(project.into()),
+        true,
+        Period::All,
+    );
+    let all_snapshot = snapshot(&mut all, |s| s.rows.len() > 3000).await;
+    assert_eq!(all_snapshot.range, None);
+    assert!(
+        all_snapshot
+            .rows
+            .iter()
+            .any(|r| r.uuid.starts_with("future-"))
+    );
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET content='Anchored emission' WHERE id='calendar-2'",
+            [],
+        )
+        .unwrap();
+    let updated = snapshot(&mut home, |s| {
+        s.rows
+            .iter()
+            .any(|r| r.id == 2 && r.content == "Anchored emission")
+    })
+    .await;
+    assert_eq!(updated.range, Some((day_start, day_end)));
+    drop((home, week, all));
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn calendar_timer_rolls_current_watch_but_keeps_historical_watch_fixed() {
+    use crate::today::{Destination, Period};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    for (destination, current) in [
+        (Destination::Home, Period::Day(None)),
+        (
+            Destination::Project("11111111-1111-4111-8111-111111111111".into()),
+            Period::Week(None),
+        ),
+    ] {
+        let actual = chrono::Local::now();
+        let old_range = current.range(&actual).unwrap().unwrap();
+        let before =
+            (old_range.1 - chrono::Duration::milliseconds(700)).with_timezone(&chrono::Local);
+        let clock = Arc::new(std::sync::Mutex::new(before));
+        let fixed = if matches!(current, Period::Day(_)) {
+            Period::Day(Some(current.date(&before)))
+        } else {
+            Period::Week(Some(current.date(&before)))
+        };
+        {
+            let writer = host.db.writer().await.unwrap();
+            writer.execute("DELETE FROM notes", []).unwrap();
+            for (id, date) in [
+                (1, old_range.1 - chrono::Duration::seconds(1)),
+                (2, old_range.1),
+            ] {
+                writer.execute("INSERT INTO notes(id,short_id,user_id,project_id,created_at,content,status) VALUES(?,?,'account-a','11111111-1111-4111-8111-111111111111',?,'Timer fixture','ready')",rusqlite::params![format!("timer-{id}"),id,date.to_rfc3339()]).unwrap();
+            }
+        }
+        let moving_clock = clock.clone();
+        let fixed_clock = clock.clone();
+        let mut moving = TodayWatch::start_clock(
+            host.db.clone(),
+            host.user_id.clone(),
+            destination.clone(),
+            false,
+            current.clone(),
+            move || *moving_clock.lock().unwrap(),
+        );
+        let mut historical = TodayWatch::start_clock(
+            host.db.clone(),
+            host.user_id.clone(),
+            destination,
+            false,
+            fixed,
+            move || *fixed_clock.lock().unwrap(),
+        );
+        assert_eq!(
+            snapshot(&mut moving, |s| s.rows.len() == 1).await.rows[0].id,
+            1
+        );
+        assert_eq!(
+            snapshot(&mut historical, |s| s.rows.len() == 1).await.rows[0].id,
+            1
+        );
+        let after = old_range.1.with_timezone(&chrono::Local);
+        *clock.lock().unwrap() = after;
+        let updated = snapshot(&mut moving, |s| s.rows.len() == 1 && s.rows[0].id == 2).await;
+        assert_eq!(updated.range, current.range(&after).unwrap());
+        assert_ne!(updated.range, Some(old_range));
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET content='Fixed after boundary' WHERE short_id=1",
+                [],
+            )
+            .unwrap();
+        let anchored = snapshot(&mut historical, |s| {
+            s.rows.iter().any(|r| r.content == "Fixed after boundary")
+        })
+        .await;
+        assert_eq!(anchored.range, Some(old_range));
+        assert_eq!(anchored.rows[0].id, 1);
+        drop((moving, historical));
+    }
+    host.shutdown().await;
+    server.abort();
+}

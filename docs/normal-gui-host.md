@@ -132,7 +132,7 @@ before the first download is not a definitive empty day. Today watches current
 account notes from local 04:00 to next-day 04:00, including DST transitions,
 ordered by confirmed numeric ID descending, capped at 10,000. Canonical metadata
 and current-account active project UUIDs come from the bounded watch. Click Home
-or a project to switch the real destination; each project shows **All** its active
+or a project to switch the real destination; each new project opens **All** its active
 notes across dates, descending short ID and bounded at 10,000. Archived projects
 leave the rail, and the selected missing/archived project falls back Home.
 Each switch drops the previous query/list/detail/selection, focuses the same Kit
@@ -155,7 +155,7 @@ deferred. See [the reader contract](embedded-gpui-spike.md#markdown-detail-reade
 for scroll, identity, focus and verification limits. Preview/list behavior stays
 as specified above.
 
-Cmd1 selects Home; Cmd2..9 select the first eight projects in displayed order,
+Cmd1 selects Home current Today; Cmd2..9 select the first eight projects in displayed order,
 allowing a draft but blocking marked composition. Missing numbers do nothing.
 Option-Up/Down requires an empty, unmarked composer and traverses Home,
 active projects, Shared and Archive without wrap; with a draft it leaves editor dispatch intact.
@@ -167,9 +167,8 @@ fall through to the native IME; drafts and marked input keep IME-first priority.
 Kit continues to own text, selection, undo, composition and candidate geometry.
 Text highlighting retains Kit’s dedicated input-selection color and intended
 alpha in Light/Dark; workbench row selection uses a separate list role.
-Shared and Archive are available; Charts remains unavailable. Project Week,
-date navigation, workspace search, settings, global shortcuts and keypad Enter
-are deferred; see [the source shortcuts audit](shortcuts-audit.md).
+Shared and Archive are available; Charts remains unavailable. Workspace search,
+settings, global shortcuts and keypad Enter are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
 With detail closed, capture creates a new **unassigned** note (`project=None`),
 including in a project. With confirmed active detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
@@ -200,10 +199,44 @@ structured identity, known canonical detail and **do not submit again** guidance
 check the identified note after sync/recovery before considering another create.
 Pending/watch acknowledgement reconciles by persisted ID in either order.
 
+## Historical days and project weeks (#3422)
+
+Home starts Today and offers previous/next semantic days, selected date and Today
+return. Home days use local 04:00–04:00 half-open bounds. Project first visits remain
+All; All/Week retains a separate choice per project UUID. Week uses Monday local
+00:00 to next Monday 00:00 exclusive, displays its actual range, and offers
+previous/next week and This week return. Calendar arithmetic handles DST and
+cross-year weeks. Forward at the current period is disabled; future periods are
+unavailable. Shared/Archive and project All have no temporal actions.
+
+Option-H/Left and Option-L/Right dispatch the same previous/next actions only with
+empty, unmarked composer and no modal editor. Draft arrows retain Kit word motion;
+marked text and modal editors retain priority. Pointer controls preserve ordinary
+draft/caret/undo but block marked input and editors. Compact Kit controls occupy
+an additional header row; Week's range has its own readable line at narrow widths.
+Scope/date changes close detail, reset row selection, discard old rows and replace
+the watch. Native pixels and OS IME remain separate, unverified user handoff.
+
+Home day and per-UUID project mode/week survive rail visits and close/reopen in
+process memory, without saved preferences. Current Today/Week follows its boundary;
+historical selections remain fixed on database emissions. Cmd1 explicitly resets
+Home to current Today; Cmd2..9 restores project choice. A selected missing/archived
+project falls Home current Today and loses its unavailable project choice.
+
+The owner/source/project/date predicates apply before LIMIT 10,000; metadata,
+previews and fixed 32-point rows remain unchanged. Period plus watch epoch rejects
+old snapshots and errors; action observation/optimism includes the resolved range.
+Absence in another period cannot acknowledge an accepted action. Confirmed Share
+retains the existing five-second bound, uncertainty and no automatic retry.
+Creation always uses current time and no project; historical Home and project
+ranges never acquire invented pending members. Accepted capture/recovery identity
+stays process-owned. Historical detail appends to its immutable UUID and completion
+never moves the viewed date. Empty history leaves completed sync presentation quiet.
+
 ## Workspace source choice (#3389)
 
 **Only mine** sits on the right of the existing header. Its pressed state applies
-across Home/current Today, project-All, Shared and Archive, defaults off, and survives destination
+across Home/day, project-All/Week, Shared and Archive, defaults off, and survives destination
 changes, window close/reopen and normal restart. Click it or use Tab then Space/Return.
 Only `metadata.created_by_ai` JSON boolean `true` is excluded. Missing metadata/key,
 null, false, numbers, strings and other JSON types remain visible; legacy `created_by`

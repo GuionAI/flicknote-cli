@@ -79,6 +79,7 @@ fn source_control_watch_detail_draft_keyboard_guards_and_stale_emissions(cx: &mu
             view.read(cx).destination.clone(),
             false,
             view.read(cx).watch_epoch,
+            view.read(cx).period.clone(),
         )
     });
     let stale_snapshot = cx.update(|cx| flicknote_sync::today::Snapshot {
@@ -86,6 +87,7 @@ fn source_control_watch_detail_draft_keyboard_guards_and_stale_emissions(cx: &mu
         projects: view.read(cx).projects.clone(),
         emission: 999,
         elapsed_ms: 0.,
+        range: view.read(cx).range,
     });
     cx.update_window(window.into(), |_, w, cx| {
         w.render_frame(cx);

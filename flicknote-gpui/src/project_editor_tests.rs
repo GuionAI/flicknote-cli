@@ -24,6 +24,7 @@ fn real_project_editor_watch_clear_cancel_validation_and_input_isolation(cx: &mu
         real_account: false,
         first_sync: Mutex::default(),
         destination: Mutex::default(),
+        temporal: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
         organization: Mutex::default(),
