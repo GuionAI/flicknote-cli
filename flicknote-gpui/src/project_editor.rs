@@ -1,7 +1,9 @@
 //! Bounded workspace editors; Kit owns text, composition and selection.
 use super::*;
 use flicknote_client::dto::{Patch, ProjectAddInput, ProjectModifyInput};
-use gpui_kit::base::{Disableable, Selectable, TestSupportExt};
+use gpui_kit::base::{
+    Dialog, DialogBackdrop, DialogPopup, Disableable, Selectable, TestSupportExt,
+};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::{
     Sizable,
@@ -20,6 +22,7 @@ pub(super) struct Editor {
     pub(super) busy: bool,
     catch_days: u32,
     pub(super) error: Option<String>,
+    focus: gpui_kit::FocusHandle,
     _enter: Subscription,
     _operation: Option<Task<()>>,
 }
@@ -28,6 +31,7 @@ impl Today {
         if self.editor.is_some() || self.composing(window, cx) {
             return;
         }
+        gpui_kit::base::TextSelection::clear(window, cx);
         let value = match &kind {
             Kind::Summary(id) => self
                 .projects
@@ -76,6 +80,7 @@ impl Today {
             }
         });
         self.editor = Some(Editor {
+            focus: cx.focus_handle(),
             kind,
             input,
             key,
@@ -303,6 +308,10 @@ impl Today {
         let id = id.clone();
         Some(
             div()
+                .id("project-summary-region")
+                .test_support()
+                .h(px(80.))
+                .flex_shrink_0()
                 .px_3()
                 .py_2()
                 .flex()
@@ -313,15 +322,18 @@ impl Today {
                         .id("project-summary")
                         .flex_1()
                         .min_w_0()
-                        .max_h(px(96.))
+                        .h_full()
+                        .test_support()
                         .overflow_y_scroll()
                         .text_sm()
                         .child(
-                            project
-                                .summary
-                                .clone()
-                                .filter(|s| !s.trim().is_empty())
-                                .unwrap_or_else(|| "Add a project summary".into()),
+                            div().id("project-summary-text").test_support().child(
+                                project
+                                    .summary
+                                    .clone()
+                                    .filter(|s| !s.trim().is_empty())
+                                    .unwrap_or_else(|| "Add a project summary".into()),
+                            ),
                         ),
                 )
                 .child(
@@ -508,23 +520,16 @@ impl Today {
             .as_ref()
             .map(|c| c.state.borrow().clone())
             .unwrap_or_default();
-        let error = e
-            .error
-            .clone()
-            .or_else(|| {
-                (e.kind == Kind::Organization)
-                    .then_some(state.error.clone())
-                    .flatten()
+        let error = e.error.clone().or_else(|| {
+            if e.kind != Kind::Organization {
+                return None;
+            }
+            state.error.clone().or_else(|| {
+                control
+                    .as_ref()
+                    .and_then(|c| c.routing_error.borrow().clone())
             })
-            .or_else(|| {
-                if e.kind == Kind::Organization {
-                    control
-                        .as_ref()
-                        .and_then(|c| c.routing_error.borrow().clone())
-                } else {
-                    None
-                }
-            });
+        });
         let theme = Theme::global(cx).clone();
         let input = if let Some(key) = &e.key {
             Input::new(key)
@@ -540,6 +545,7 @@ impl Today {
         let buttons = self.editor_buttons(e, &state, cx);
         let pane = div()
             .id("editor-pane")
+            .test_support()
             .w(px(420.))
             .max_h_full()
             .overflow_y_scroll()
@@ -570,18 +576,30 @@ impl Today {
                     d
                 }
             });
+        let save = cx.weak_entity();
+        let cancel = save.clone();
         Some(
-            div()
-                .id("workspace-editor")
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(theme.background.opacity(0.8))
-                .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
-                .child(pane)
-                .test_support()
+            Dialog::new(cx)
+                .focus_handle(e.focus.clone())
+                .close_on_escape(true)
+                .close_on_backdrop_press(false)
+                .on_ok(move |_, window, cx| {
+                    let _updated = save.update(cx, |this, cx| this.save_editor(window, cx));
+                    // The editor's UUID-bound async completion owns dismissal.
+                    false
+                })
+                .on_cancel(move |_, window, cx| {
+                    let _updated = cancel.update(cx, |this, cx| this.cancel_editor(window, cx));
+                    false
+                })
+                .backdrop(
+                    DialogBackdrop::new()
+                        .absolute()
+                        .inset_0()
+                        .bg(theme.background.opacity(0.8))
+                        .child(div().size_full().occlude()),
+                )
+                .popup(DialogPopup::new().max_h_full().child(pane))
                 .into_any_element(),
         )
     }

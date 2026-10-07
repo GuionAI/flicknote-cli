@@ -1,6 +1,331 @@
 use super::*;
-use gpui_kit::{TestAppContext, point, test::TestWindowExt};
+use gpui_kit::{Focusable, TestAppContext, point, test::TestWindowExt};
 use project_editor::Kind;
+
+fn wheel(w: &mut Window, cx: &mut App, position: gpui_kit::Point<gpui_kit::Pixels>, y: f32) {
+    use gpui_kit::InputEvent as _;
+    w.dispatch_event(
+        gpui_kit::ScrollWheelEvent {
+            position,
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(y))),
+            ..Default::default()
+        }
+        .to_platform_input(),
+        cx,
+    );
+    w.render_frame(cx);
+}
+
+fn editor_focus(view: &Entity<Today>, w: &mut Window, cx: &mut App) {
+    let editor = view.read(cx).editor.as_ref().unwrap();
+    let focus = editor.key.as_ref().map_or_else(
+        || editor.input.read(cx).focus_handle(cx),
+        |key| key.read(cx).focus_handle(cx),
+    );
+    assert!(focus.is_focused(w), "opening focuses the native input");
+    for _ in 0..12 {
+        w.press("tab", cx);
+        w.render_frame(cx);
+        assert!(gpui_kit::base::active_focus_trap(w, cx).is_some());
+        assert!(
+            !view
+                .read(cx)
+                .composer
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(w)
+        );
+        assert_ne!(w.find("add-project").focused(), Some(true));
+    }
+    w.focus(&focus, cx);
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned window verifies summary geometry and real modal wheel routing.
+fn summary_editor_wheel_isolates_background(cx: &mut TestAppContext) {
+    use flicknote_client::dto::{Patch, ProjectAddInput, ProjectModifyInput};
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    let services = append_tests::services(&host, &runtime);
+    let AppResponse::Project(project) = runtime
+        .block_on(host.app.handle(AppRequest::ProjectAdd(ProjectAddInput {
+            name: "Wheel fixture".into(),
+            color: None,
+        })))
+        .unwrap()
+    else {
+        panic!("project")
+    };
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        for id in 3..33 {
+            writer.execute("INSERT INTO notes(id,short_id,user_id,content,type,status,project_id,metadata,created_at) VALUES(?,?,'append-owner','Wheel row','normal','ready',?,'{}',strftime('%Y-%m-%dT%H:%M:%SZ','now'))", [format!("00000000-0000-4000-8000-{id:012}"), id.to_string(), project.id.clone()]).unwrap();
+        }
+    });
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    tests::settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.set_destination(Destination::Project(project.id.clone()), w, cx)
+        });
+    })
+    .unwrap();
+    tests::settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 30)
+    });
+    for summary in ["", "Short summary", &"Long summary line\n".repeat(100)] {
+        runtime
+            .block_on(
+                host.app
+                    .handle(AppRequest::ProjectModify(ProjectModifyInput {
+                        id: project.id.clone(),
+                        color: Patch::Missing,
+                        summary: if summary.is_empty() {
+                            Patch::Null
+                        } else {
+                            Patch::Value(summary.into())
+                        },
+                    })),
+            )
+            .unwrap();
+        tests::settle(cx, |cx| {
+            cx.update(|cx| {
+                view.read(cx).projects.iter().any(|p| {
+                    p.id == project.id && p.summary.as_deref().unwrap_or_default() == summary
+                })
+            })
+        });
+        cx.update_window(window.into(), |_, w, cx| {
+            for mode in [
+                gpui_kit::component::ThemeMode::Light,
+                gpui_kit::component::ThemeMode::Dark,
+            ] {
+                apply_theme(mode, cx);
+                for (width, height) in [(980., 720.), (760., 560.)] {
+                    w.resize(size(px(width), px(height)));
+                    w.bounds_changed(cx);
+                    w.render_frame(cx);
+                    let region = w.find("project-summary-region").bounds();
+                    let header = w.find("destination-header").bounds();
+                    let controls = w.find("period-header").bounds();
+                    let list = w.find("today-notes").bounds();
+                    assert_eq!(region.size.height, px(80.));
+                    assert_eq!(region.top(), header.bottom());
+                    assert_eq!(controls.top(), region.bottom());
+                    assert_eq!(list.top(), controls.bottom());
+                    assert!(list.bottom() <= w.find("composer-surface").bounds().top());
+                    w.click("scope-week", cx);
+                    w.render_frame(cx);
+                    assert_eq!(w.find("project-summary-region").bounds(), region);
+                    assert_eq!(w.find("today-notes").bounds().top(), list.top());
+                    w.click("period-back", cx);
+                    w.render_frame(cx);
+                    assert_eq!(w.find("today-notes").bounds().top(), list.top());
+                    w.click("scope-all", cx);
+                    w.render_frame(cx);
+                    if summary.len() > 100 {
+                        let before = w.find("project-summary-text").bounds().top();
+                        let background = view.read(cx).list_scroll.0.borrow().base_handle.clone();
+                        let offset = background.offset();
+                        let position = w.find("project-summary").bounds().center();
+                        wheel(w, cx, position, -40.);
+                        assert!(w.find("project-summary-text").bounds().top() < before);
+                        for delta in [-10000., -80., 80., 10000., 80.] {
+                            wheel(w, cx, position, delta);
+                            assert_eq!(background.offset(), offset);
+                        }
+                        assert_eq!(w.find("project-summary-text").bounds().top(), before);
+                    }
+                }
+            }
+        })
+        .unwrap();
+    }
+    tests::settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 30)
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| v.select(32, w, cx));
+        for mode in [
+            gpui_kit::component::ThemeMode::Light,
+            gpui_kit::component::ThemeMode::Dark,
+        ] {
+            apply_theme(mode, cx);
+            for (width, height) in [(980., 720.), (760., 560.)] {
+                w.resize(size(px(width), px(height)));
+                w.bounds_changed(cx);
+                w.render_frame(cx);
+                let summary = w.find("project-summary-region").bounds();
+                let list = w.find("today-notes").bounds();
+                let reader = w.find("detail-surface").bounds();
+                assert_eq!(summary.size.height, px(80.));
+                assert!(summary.right() <= reader.left());
+                assert!(list.right() <= reader.left());
+                assert!(list.bottom() <= w.find("composer-surface").bounds().top());
+            }
+        }
+        view.update(cx, |v, cx| v.close_detail(w, cx));
+    })
+    .unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        w.resize(size(px(980.), px(720.)));
+        w.bounds_changed(cx);
+        w.render_frame(cx);
+        let list = view.read(cx).list_scroll.0.borrow().base_handle.clone();
+        assert!(list.max_offset().y > px(0.));
+        let background_before = list.offset();
+        let summary_position = w.find("project-summary").bounds().center();
+        let text_top = w.find("project-summary-text").bounds().top();
+        wheel(w, cx, summary_position, -80.);
+        assert!(w.find("project-summary-text").bounds().top() < text_top);
+        for delta in [-10000., -80., 80., 10000., 80.] {
+            wheel(w, cx, summary_position, delta);
+            assert_eq!(list.offset(), background_before);
+        }
+        assert_eq!(w.find("project-summary-text").bounds().top(), text_top);
+        view.update(cx, |v, cx| {
+            v.edit(Kind::Summary(project.id.clone()), w, cx);
+            v.editor.as_ref().unwrap().input.update(cx, |i, cx| {
+                i.set_value("Long summary line\n".repeat(100), w, cx);
+                i.set_selected_range(0..0, cx);
+            });
+        });
+        w.render_frame(cx);
+        let input = view.read(cx).editor.as_ref().unwrap().input.clone();
+        editor_focus(&view, w, cx);
+        let position = input.read(cx).text_bounds().unwrap().center();
+        let editor_before = input.read(cx).scroll_offset();
+        wheel(w, cx, position, -80.);
+        assert!(input.read(cx).scroll_offset().y < editor_before.y);
+        wheel(w, cx, position, 40.);
+        assert_eq!(input.read(cx).scroll_offset().y, px(-40.));
+        for _ in 0..40 {
+            wheel(w, cx, position, -80.);
+        }
+        let editor_after = input.read(cx).scroll_offset();
+        assert!(editor_after.y < editor_before.y, "inner editor must scroll");
+        assert_eq!(
+            list.offset(),
+            background_before,
+            "wheel over editor moved background list"
+        );
+        for delta in [80., 10000., 80., -10000., -80.] {
+            wheel(w, cx, position, delta);
+            assert_eq!(
+                list.offset(),
+                background_before,
+                "editor bounds isolate background"
+            );
+        }
+        let pane = w.find("editor-pane").bounds();
+        let backdrop = w.find("dialog-0").bounds();
+        for position in [
+            point(pane.left() + px(4.), pane.top() + px(4.)),
+            point(backdrop.right() - px(8.), backdrop.center().y),
+        ] {
+            for delta in [-80., 80.] {
+                wheel(w, cx, position, delta);
+                assert_eq!(
+                    list.offset(),
+                    background_before,
+                    "whole backdrop isolates background"
+                );
+            }
+        }
+    })
+    .unwrap();
+    // Kit's standard textarea still owns selection, exact copy and composing dismissal.
+    cx.update_window(window.into(), |_, w, cx| {
+        let input = view.read(cx).editor.as_ref().unwrap().input.clone();
+        let list = view.read(cx).list_scroll.0.borrow().base_handle.clone();
+        let background_before = list.offset();
+        input.update(cx, |i, cx| {
+            i.set_value("copy  exact", w, cx);
+            i.set_selected_range(0..11, cx);
+        });
+        w.render_frame(cx);
+        w.press("cmd-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|c| c.text()),
+            Some("copy  exact".into())
+        );
+        let text = input.read(cx).text_bounds().unwrap();
+        let start = point(text.left() + px(2.), text.top() + px(8.));
+        let end = point(text.left() + px(45.), start.y);
+        markdown_tests::drag_text(w, cx, start, end);
+        let released = input.read(cx).selected_range();
+        assert!(!released.is_empty());
+        use gpui_kit::InputEvent as _;
+        w.dispatch_event(
+            gpui_kit::MouseMoveEvent {
+                position: point(end.x + px(40.), end.y),
+                pressed_button: None,
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+        w.render_frame(cx);
+        assert_eq!(
+            input.read(cx).selected_range(),
+            released,
+            "release freezes textarea selection"
+        );
+        w.press("cmd-c", cx);
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|c| c.text()),
+            Some("copy  exact"[released].into())
+        );
+        input.update(cx, |i, cx| {
+            i.replace_and_mark_text_in_range(None, "ni", Some(2..2), w, cx)
+        });
+        w.render_frame(cx);
+        w.press("escape", cx);
+        assert!(view.read(cx).editor.is_some());
+        input.update(cx, |i, cx| {
+            i.replace_and_mark_text_in_range(None, "ni", Some(2..2), w, cx)
+        });
+        w.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx);
+        assert!(view.read(cx).editor.is_some());
+        w.click("cancel-editor", cx);
+        assert!(view.read(cx).editor.is_some());
+        input.update(cx, |i, cx| i.unmark_text(w, cx));
+        w.press("tab", cx);
+        w.press("escape", cx);
+        w.render_frame(cx);
+        assert!(view.read(cx).editor.is_none());
+        assert!(
+            view.read(cx)
+                .composer
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(w)
+        );
+        wheel(w, cx, w.find("today-notes").bounds().center(), -80.);
+        assert!(
+            list.offset().y < background_before.y,
+            "list wheel works after dismissal"
+        );
+        view.update(cx, |v, cx| v.set_destination(Destination::Home, w, cx));
+        w.render_frame(cx);
+        assert!(w.try_find("project-summary-region").is_none());
+        assert_eq!(
+            w.find("period-header").bounds().top(),
+            w.find("destination-header").bounds().bottom()
+        );
+        w.remove_window();
+    })
+    .unwrap();
+    runtime
+        .block_on(host.run_until(async { Ok(()) }, || services.cancel_operations()))
+        .unwrap();
+}
 #[gpui_kit::test]
 #[allow(clippy::too_many_lines)] // One window checks retained composer/native input across editor transitions.
 fn real_project_editor_watch_clear_cancel_validation_and_input_isolation(cx: &mut TestAppContext) {
@@ -72,6 +397,18 @@ fn real_project_editor_watch_clear_cancel_validation_and_input_isolation(cx: &mu
             assert_eq!(plus.center().y, heading.center().y);
         }
         w.click("add-project", cx);
+        w.render_frame(cx);
+        editor_focus(&view, w, cx);
+        view.update(cx, |v, _| v.editor.as_mut().unwrap().busy = true);
+        w.render_frame(cx);
+        w.press("escape", cx);
+        w.press("cmd-enter", cx);
+        w.click("cancel-editor", cx);
+        assert!(view.read(cx).editor.as_ref().unwrap().busy);
+        view.update(cx, |v, cx| {
+            v.editor.as_mut().unwrap().busy = false;
+            cx.notify();
+        });
     })
     .unwrap();
     let input = cx.update(|cx| view.read(cx).editor.as_ref().unwrap().input.clone());
@@ -285,6 +622,8 @@ fn real_project_editor_watch_clear_cancel_validation_and_input_isolation(cx: &mu
             v.edit(Kind::Organization, w, cx);
         });
         let key = view.read(cx).editor.as_ref().unwrap().key.clone().unwrap();
+        w.render_frame(cx);
+        editor_focus(&view, w, cx);
         key.update(cx, |i, cx| {
             i.set_value("fixture-secret", w, cx);
             i.set_selected_range(0..14, cx);

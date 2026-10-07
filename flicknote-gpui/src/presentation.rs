@@ -864,6 +864,8 @@ impl Today {
         Some(
             div()
                 .id("period-header")
+                // Reserve the Week range line in All too, keeping the list start fixed.
+                .when(project, |d| d.h(px(52.)))
                 .on_click(|_, _, cx| cx.stop_propagation())
                 .flex_shrink_0()
                 .px(px(8.))
@@ -993,6 +995,7 @@ impl Today {
                     .child(self.render_source(cx))
                     .test_support(),
             )
+            .children(self.render_summary(cx))
             .children(self.render_period_controls(cx))
             .child(
                 div()
@@ -1001,7 +1004,6 @@ impl Today {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .children(self.render_summary(cx))
                     .child(self.render_list(p, cx))
                     .test_support(),
             )

@@ -212,8 +212,11 @@ unavailable. Shared/Archive and project All have no temporal actions.
 Option-H/Left and Option-L/Right dispatch the same previous/next actions only with
 empty, unmarked composer and no modal editor. Draft arrows retain Kit word motion;
 marked text and modal editors retain priority. Pointer controls preserve ordinary
-draft/caret/undo but block marked input and editors. Compact Kit controls occupy
-an additional header row; Week's range has its own readable line at narrow widths.
+draft/caret/undo but block marked input and editors. Compact Kit controls sit
+below the project summary and above the note list;
+project All/Week keeps the same control-region height, with Week's range on its
+own readable line at narrow widths. Home controls sit immediately below its
+header, without a summary spacer.
 Scope/date changes close detail, reset row selection, discard old rows and replace
 the watch. Native pixels and OS IME remain separate, unverified user handoff.
 
@@ -268,10 +271,25 @@ Charts browser, search or date surface is added.
 ## Projects and automatic organization (#3384)
 
 The Plus icon beside the rail's Projects heading creates by name through Application. A project's
-summary appears above its All list; Edit offers multiline Save/Cancel and
+summary appears above All/Week/date controls in a fixed total 80-point region,
+including inset and Edit. The region never shrinks or grows with its text;
+wrapped long text scrolls internally, and an empty summary retains the same
+region with **Add a project summary**. Edit offers multiline Save/Cancel and
 Cmd-Return. Editors retain failure text, own native input and block workspace
 navigation/capture. Project creation selects the canonical watched UUID while
-preserving the note draft/caret. Long summary display scrolls within a bounded area.
+preserving the note draft/caret. Add project, summary and Automatic organization
+share Kit 0.7.0's public unstyled `base::Dialog` host, with the existing skin and
+no added animation/shadow. Its stable focus trap keeps Tab inside the editor;
+guarded confirmation/cancellation retains busy and marked input, and only the
+UUID-bound successful async operation dismisses a saving editor. The standard
+backdrop/popup parts occlude the workspace. Inner textarea scrolling uses Kit input;
+wheel input at its bounds, panel padding and backdrop cannot scroll the covered
+note list. Dismissal restores ordinary list scrolling. No click/MouseUp/key
+interceptor is added; Kit Root selection release and IME retain their normal route.
+Login remains a full-window authentication page, and detail/composer remain
+persistent workspace panes rather than dialogs.
+Owned LocalHost/rendered tests establish wheel offsets and 980/760 Light/Dark
+geometry; native OS wheel, pixels and IME remain separate user handoff evidence.
 
 The application menu's Automatic organization control offers masked Save/Replace,
 Remove and enable/disable, with its own error feedback. Normal GUI startup starts
