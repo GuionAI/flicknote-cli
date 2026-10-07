@@ -11,7 +11,7 @@ use gpui_kit::{
     Subscription, Task, TitlebarOptions, Window, WindowBounds, WindowOptions, actions,
     component::{
         Theme,
-        input::{InputEvent, Textarea, TextareaState},
+        input::{InputEvent, InputState, Textarea, TextareaState},
     },
     div,
     prelude::*,
@@ -80,12 +80,19 @@ actions!(
         NextDestination,
         PreviousDestination,
         SaveEditor,
-        AutomaticOrganization
+        AutomaticOrganization,
+        FocusSearch,
+        SearchNext,
+        SearchPrevious
     ]
 );
 
 fn install_today_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("cmd-f", FocusSearch, Some("Today")),
+        KeyBinding::new("cmd-f", FocusSearch, Some("Today > Input")),
+        KeyBinding::new("down", SearchNext, Some("SearchInput > Input")),
+        KeyBinding::new("up", SearchPrevious, Some("SearchInput > Input")),
         KeyBinding::new("cmd-enter", SaveEditor, Some("WorkspaceEditor")),
         KeyBinding::new(
             "escape",
@@ -170,6 +177,9 @@ struct Today {
     loaded: bool,
     model: Model,
     composer: Entity<TextareaState>,
+    search_input: Entity<InputState>,
+    search: search::Search,
+    canonical_search_rows: Arc<Vec<flicknote_sync::today::TodayRow>>,
     detail: Option<Reading>,
     detail_open: bool,
     list_scroll: gpui_kit::UniformListScrollHandle,
@@ -197,6 +207,7 @@ struct Today {
 
 impl Today {
     fn new(services: Arc<Services>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search notes"));
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(1, 6)
@@ -207,6 +218,102 @@ impl Today {
         composer.update(cx, |input, cx| {
             input.set_value(text, window, cx);
             input.set_selected_range(caret, cx);
+        });
+        composer.update(cx, |input, cx| input.focus(window, cx));
+        let destination = services
+            .destination
+            .lock()
+            .expect("window destination")
+            .clone();
+        let period = services
+            .temporal
+            .lock()
+            .expect("calendar memory")
+            .period(&destination);
+        let restoring = services
+            .temporal
+            .lock()
+            .expect("calendar memory")
+            .search_return
+            .take()
+            .map(search::Origin::reopen);
+        let mut this = Self {
+            editor: None,
+            pending_project: None,
+            organization_task: None,
+            destination,
+            range: period.range(&chrono::Local::now()).ok().flatten(),
+            period,
+            source: services.source.state(),
+            source_task: None,
+            watch_epoch: 0,
+            loaded: false,
+            model: Model {
+                capture: services.capture.clone(),
+                ..Model::default()
+            },
+            services,
+            composer,
+            search_input,
+            search: search::Search::new(restoring),
+            canonical_search_rows: Arc::default(),
+            detail: None,
+            detail_open: false,
+            list_scroll: gpui_kit::UniformListScrollHandle::new(),
+            escape_composing: false,
+            enter_composing: false,
+            error: None,
+            watch_error: None,
+            sync_message: None,
+            sync_progress: None,
+            first_synced: false,
+            projects: Arc::default(),
+            status_task: None,
+            capture_task: None,
+            canonical_rows: Arc::default(),
+            related_note: None,
+            drag_allowed: false,
+            watch: None,
+            watch_task: None,
+            _subscriptions: vec![],
+            heartbeat: None,
+            frames: 0,
+            visible: window.is_visible(),
+            max_main_tick_ms: 0.,
+        };
+        let weak = cx.entity().downgrade();
+        this._subscriptions
+            .push(window.observe_window_visibility(move |visibility, _, cx| {
+                let _updated = weak.update(cx, |this, _| {
+                    log::info!("trial native visibility={}", visibility.is_visible());
+                    this.visible = visibility.is_visible();
+                });
+            }));
+        this.observe_input(window, cx);
+        this.subscribe_capture(window, cx);
+        this.observe_source(window, cx);
+        this.observe_main_loop(window, cx);
+        this.subscribe_status(window, cx);
+        this.observe_organization(window, cx);
+        this
+    }
+
+    fn observe_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let search_input = self.search_input.clone();
+        let composer = self.composer.clone();
+        let search_observer = cx.observe_in(&search_input, window, |this, _, window, cx| {
+            this.search_changed(window, cx)
+        });
+        let search_events = cx.subscribe_in(&search_input, window, |this, _, event, window, cx| {
+            if matches!(
+                event,
+                InputEvent::PressEnter {
+                    shift: false,
+                    secondary: false
+                }
+            ) {
+                this.search_enter(window, cx);
+            }
         });
         let subscription = cx.subscribe_in(&composer, window, |this, _, event, window, cx| {
             if matches!(
@@ -227,72 +334,8 @@ impl Today {
             }
             cx.notify();
         });
-        composer.update(cx, |input, cx| input.focus(window, cx));
-        let destination = services
-            .destination
-            .lock()
-            .expect("window destination")
-            .clone();
-        let period = services
-            .temporal
-            .lock()
-            .expect("calendar memory")
-            .period(&destination);
-        let mut this = Self {
-            editor: None,
-            pending_project: None,
-            organization_task: None,
-            destination,
-            range: period.range(&chrono::Local::now()).ok().flatten(),
-            period,
-            source: services.source.state(),
-            source_task: None,
-            watch_epoch: 0,
-            loaded: false,
-            model: Model {
-                capture: services.capture.clone(),
-                ..Model::default()
-            },
-            services,
-            composer,
-            detail: None,
-            detail_open: false,
-            list_scroll: gpui_kit::UniformListScrollHandle::new(),
-            escape_composing: false,
-            enter_composing: false,
-            error: None,
-            watch_error: None,
-            sync_message: None,
-            sync_progress: None,
-            first_synced: false,
-            projects: Arc::default(),
-            status_task: None,
-            capture_task: None,
-            canonical_rows: Arc::default(),
-            related_note: None,
-            drag_allowed: false,
-            watch: None,
-            watch_task: None,
-            _subscriptions: vec![subscription],
-            heartbeat: None,
-            frames: 0,
-            visible: window.is_visible(),
-            max_main_tick_ms: 0.,
-        };
-        let weak = cx.entity().downgrade();
-        this._subscriptions
-            .push(window.observe_window_visibility(move |visibility, _, cx| {
-                let _updated = weak.update(cx, |this, _| {
-                    log::info!("trial native visibility={}", visibility.is_visible());
-                    this.visible = visibility.is_visible();
-                });
-            }));
-        this.subscribe_capture(window, cx);
-        this.observe_source(window, cx);
-        this.observe_main_loop(window, cx);
-        this.subscribe_status(window, cx);
-        this.observe_organization(window, cx);
-        this
+        self._subscriptions
+            .extend([subscription, search_observer, search_events]);
     }
 
     fn observe_main_loop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -383,6 +426,9 @@ impl Today {
             state.ready && (!self.source.ready || state.human_only != self.source.human_only);
         self.source = state;
         if replace {
+            if self.search.active() {
+                self.run_search(Duration::from_millis(200), window, cx);
+            }
             self.subscribe(window, cx);
         }
         cx.notify();
@@ -457,6 +503,28 @@ impl Today {
         }
         match result {
             Ok(snapshot) => {
+                if self.search.active() {
+                    self.projects = snapshot.projects;
+                    self.canonical_rows = snapshot.rows;
+                    if self
+                        .pending_project
+                        .as_ref()
+                        .is_some_and(|id| self.projects.iter().any(|p| &p.id == id))
+                    {
+                        self.select_created(window, cx);
+                    }
+                    cx.notify();
+                    return;
+                }
+                if let Some(origin) = self.search.restoring.take() {
+                    origin.restore_anchor(&snapshot.rows);
+                    self.model.rows = origin.rows;
+                    self.model.selected = origin
+                        .selected
+                        .and_then(|uuid| self.model.rows.iter().find(|r| r.uuid == uuid))
+                        .map(|r| r.id);
+                    self.list_scroll = origin.scroll;
+                }
                 if self.range != snapshot.range {
                     self.close_detail(window, cx);
                     self.model.selected = None;
@@ -539,7 +607,7 @@ impl Today {
     }
 
     fn traverse_destination(&mut self, next: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shortcuts_blocked(window, cx) {
+        if self.search_focused(window, cx) || self.shortcuts_blocked(window, cx) {
             return;
         }
         let destinations: Vec<_> = std::iter::once(Destination::Home)
@@ -574,12 +642,19 @@ impl Today {
         {
             return;
         }
+        let searching = self.search.active();
+        if searching {
+            self.exit_search(false, window, cx);
+        }
         self.close_detail(window, cx);
         if self.editor.is_none() {
             self.composer
                 .update(cx, |input, cx| input.focus(window, cx));
         }
         if destination == self.destination {
+            if searching {
+                self.reset_projection(window, cx);
+            }
             return;
         }
         self.destination = destination.clone();
@@ -744,7 +819,7 @@ impl Today {
     fn composing(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.composer.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
-        })
+        }) || self.search_composing(window, cx)
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -890,6 +965,16 @@ impl Today {
         if !self.detail_open {
             return;
         }
+        if self.search.active() && self.search.detail != self.model.selected {
+            if self.detail.is_some() {
+                self.close_detail(window, cx);
+            }
+            self.detail = None;
+            self.composer.update(cx, |input, cx| {
+                input.set_placeholder("Create a new note", window, cx)
+            });
+            return;
+        }
         let Some(row) = self
             .model
             .selected
@@ -949,6 +1034,13 @@ impl Today {
         self.model.selected = Some(id);
         self.related_note = None;
         self.detail_open = true;
+        if self.search.active() && self.search.detail != Some(id) {
+            self.detail = None;
+            self.composer.update(cx, |input, cx| {
+                input.set_placeholder("Create a new note", window, cx)
+            });
+            self.run_search(Duration::ZERO, window, cx);
+        }
         self.refresh_detail(window, cx);
         cx.notify();
     }
@@ -969,7 +1061,10 @@ impl Today {
     }
 
     fn navigate(&mut self, next: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shortcuts_blocked(window, cx) || self.model.rows.is_empty() {
+        if self.search_focused(window, cx)
+            || self.shortcuts_blocked(window, cx)
+            || self.model.rows.is_empty()
+        {
             return;
         }
         let index = self
@@ -983,7 +1078,9 @@ impl Today {
         };
         self.model.selected = Some(self.model.rows[index].id);
         self.related_note = None;
-        if self.detail_open {
+        if self.search.active() && self.detail_open {
+            self.select(self.model.rows[index].id, window, cx);
+        } else if self.detail_open {
             self.refresh_detail(window, cx);
         }
         // A semantic key action reveals the row above the composer; snapshots never scroll.
@@ -999,6 +1096,13 @@ impl Today {
 
 impl Drop for Today {
     fn drop(&mut self) {
+        if let Some(origin) = &self.search.origin {
+            self.services
+                .temporal
+                .lock()
+                .expect("calendar memory")
+                .search_return = Some(origin.retain());
+        }
         log::info!(
             "trial window visible_renders={} max_visible_main_tick_ms={:.3}",
             self.frames,
@@ -1006,6 +1110,9 @@ impl Drop for Today {
         );
     }
 }
+
+#[path = "search.rs"]
+mod search;
 
 #[path = "presentation.rs"]
 mod presentation;
@@ -1307,3 +1414,7 @@ mod temporal;
 #[cfg(test)]
 #[path = "temporal_tests.rs"]
 mod temporal_tests;
+
+#[cfg(test)]
+#[path = "search_tests.rs"]
+mod search_tests;

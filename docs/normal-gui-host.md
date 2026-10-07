@@ -167,8 +167,7 @@ fall through to the native IME; drafts and marked input keep IME-first priority.
 Kit continues to own text, selection, undo, composition and candidate geometry.
 Text highlighting retains Kit’s dedicated input-selection color and intended
 alpha in Light/Dark; workbench row selection uses a separate list role.
-Shared and Archive are available; Charts remains unavailable. Workspace search,
-settings, global shortcuts and keypad Enter are deferred; see [the source shortcuts audit](shortcuts-audit.md).
+Shared and Archive are available; Charts remains unavailable. Settings, global shortcuts and keypad Enter are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
 With detail closed, capture creates a new **unassigned** note (`project=None`),
 including in a project. With confirmed active detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
@@ -265,8 +264,57 @@ older projection or overwrite a newer choice. No Swift preferences are imported.
 
 This is a list projection, not access control. Explicit-ID Application, CLI IPC
 and MCP operations remain unfiltered without warning. Background Jev continues
-across all eligible creation channels, including hidden MCP notes. No direct-ID GUI,
-Charts browser, search or date surface is added.
+across all eligible creation channels, including hidden MCP notes. Search exact-ID access follows this same unfiltered read contract.
+
+## Same-list workspace search (#3430)
+
+The native single-line Kit search input remains in the center workbench. CmdF
+focuses it; empty input keeps ordinary browsing. Nonempty keywords replace that
+same list with up to 50 ranked active non-draft hits across all projects and dates,
+including from Shared/Archive origins. Only mine is applied by the existing FTS
+before its bound. Results show the canonical preview, backend-highlighted excerpt
+and trailing project/short ID. A reached bound is labeled Top 50; no total count,
+pagination or full-history coverage is promised. Numeric or `#number` queries put
+an exact canonical ID first, deduplicating any lexical hit without losing its
+excerpt. Exact access ignores discovery source filtering and retains draft/archive
+readability; archived lexical search and Command lookup remain deferred.
+
+On first nonempty query, search snapshots the destination UUID, period, selected
+UUID and scroll anchor. Edits never replace that origin. Clear/Escape restores it
+under the current Only mine choice, retaining surviving selection/scroll and normal
+neighbor behavior. Current periods follow the clock; historical ranges stay fixed.
+Unavailable projects fall back to Home current Today. Any actual rail click clears
+search and enters the requested destination, including the same project; Escape
+cannot later rebound. Closing discards search and retains origin browsing and the
+process-owned composer/caret and accepted capture/append work for ordinary reopen.
+
+Input, native editing, selection and composition belong to Kit. About 200ms debounce
+waits for unmarked input; Enter flushes and opens the selected/first result, and arrows
+navigate results in the search input context. Composition consumes Return/Escape
+first. Option note/navigation guards retain composer/editor priority. Modal editors
+cannot launch search. Search exit returns focus to the same composer. Loading,
+empty, bounded and error states remain distinct; errors offer explicit Retry search.
+Only mine changes, query edits, exit, rail navigation and window teardown invalidate
+older responses. Local database notifications refresh only active search, without
+polling or automatic error retries.
+
+Search discovery uses Application NoteFind and a bounded local identity/metadata/
+preview projection, without preloading bodies. Only selected or exact-ID notes use
+canonical Application NoteGet; mutations never target a synthesized UUID or row
+index. The reader retains exact Markdown Copy, plain/code-block Copy, append,
+sharing, archive/restore and classification guards. Accepted action membership
+includes search query/source separately from origin calendar membership. Canonical
+body/lifecycle/project changes reconcile through the active notification stream;
+missing notes close stale readers and preserve safe selection. Discovery itself
+never creates or changes a note. Closed detail creates current unassigned notes;
+only an explicitly open canonical active reader supplies an append target.
+
+Owned production LocalHost/fake HTTP/port0 and rendered Kit tests cover body-only
+FTS outside the 10,000-row slice, rank/highlights, source/limit/lifecycle boundaries,
+exact IDs, canonical outside-origin reader/append/actions, input/composition guards,
+stale generations, origin periods/scroll and close/reopen. Light/Dark rendered
+980/760 geometry is separate from unverified native OS pixels/IME and cloud use.
+No native launch or new manual acceptance gate is required.
 
 ## Projects and automatic organization (#3384)
 

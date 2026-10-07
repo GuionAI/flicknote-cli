@@ -112,7 +112,7 @@ fn summary_editor_wheel_isolates_background(cx: &mut TestAppContext) {
                     w.bounds_changed(cx);
                     w.render_frame(cx);
                     let region = w.find("project-summary-region").bounds();
-                    let header = w.find("destination-header").bounds();
+                    let header = w.find("workspace-search").bounds();
                     let controls = w.find("period-header").bounds();
                     let list = w.find("today-notes").bounds();
                     assert_eq!(region.size.height, px(80.));
@@ -317,7 +317,7 @@ fn summary_editor_wheel_isolates_background(cx: &mut TestAppContext) {
         assert!(w.try_find("project-summary-region").is_none());
         assert_eq!(
             w.find("period-header").bounds().top(),
-            w.find("destination-header").bounds().bottom()
+            w.find("workspace-search").bounds().bottom()
         );
         w.remove_window();
     })

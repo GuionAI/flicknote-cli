@@ -23,6 +23,7 @@ pub(crate) struct Capture {
 pub(crate) struct Model {
     pub(crate) rows: Arc<Vec<TodayRow>>,
     pub(crate) selected: Option<i64>,
+    pub(crate) search: bool,
     pub(crate) capture: Arc<Mutex<Capture>>,
 }
 impl Model {
@@ -68,7 +69,9 @@ impl Model {
         self.reconcile();
     }
     pub(crate) fn reconcile(&mut self) {
-        self.capture().appends.observe(&self.rows);
+        if !self.search {
+            self.capture().appends.observe(&self.rows);
+        }
         self.capture()
             .pending
             .retain(|p| !p.id.is_some_and(|id| self.rows.iter().any(|r| r.id == id)));

@@ -19,7 +19,7 @@ and rendered-test evidence; new native OS keyboard/IME/pixel and real dev cloud
 acceptance were **not performed**. A binding alone does not establish a working
 surface or native acceptance.
 
-| Keys | Pinned Swift desktop behavior | GPUI through #3422 |
+| Keys | Pinned Swift desktop behavior | GPUI through #3430 |
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
 | Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Shared/Archive/Charts |
@@ -30,8 +30,8 @@ surface or native acceptance.
 | Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; archived detail creates new; marked Return commits composition without premature create/append/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
 | Keypad Enter | Swift accepts it like Return for selected-detail routing | Deferred; user explicitly does not need it for this slice; no added GPUI binding |
-| CmdF / CtrlF | Focus workspace search | Deferred: no GPUI workspace search; Kit editor-local CmdF is a separate capability |
-| Escape | Close detail → exit search/focus composer → dismiss workspace, according to current state | Partial: close detail and restore composer; retain marked/transient-input handling; no workspace search/dismiss stack |
+| CmdF / CtrlF | Focus workspace search | Implemented #3430: focus native same-list workspace search; CtrlF remains editor-local |
+| Escape | Close detail → exit search/focus composer → dismiss workspace, according to current state | Implemented search exit/restore origin and composer focus, else close detail; marked/transient input retains priority; workspace dismissal remains deferred |
 | CmdA/C/V/X | Native select-all/copy/paste/cut in the owning text editor | Retained Kit native editing; these are not missing workspace actions |
 | CmdZ / CmdShiftZ | Native undo/redo | Retained Kit native editing; navigation retains the same composer/undo state |
 | CmdReturn | Save project summary while editing | Implemented #3384: save without adding a newline; marked input retains Kit priority |
@@ -58,7 +58,7 @@ continue to belong to the focused composer or read-only detail.
 Home watches the chosen 04:00-to-04:00 semantic day, including DST. Projects
 default to **All active notes across dates**, capped at 10,000 and short-ID descending.
 Project All/Week and Home historical day navigation are implemented in #3422;
-historical pagination, search/settings/global and Charts remain deferred. Watched project archival/removal falls back
+historical pagination, settings/global and Charts remain deferred. Watched project archival/removal falls back
 Home while retaining the composer. Ordinary reopen retains the last available
 process-local destination and draft/caret; closed capture completions retain
 recovery or unknown/partial identity and guidance. Cmd1 resets Home current Today.
@@ -201,7 +201,7 @@ Accepted drag does not also click a row or destination. Pointer hover and Option
 use last-input related-project emphasis, with drop-target priority, without
 changing the persistent destination. See [the operator contract](normal-gui-host.md#dragging-shared-and-archive-3402)
 for bounded watch reconciliation, uncertainty, close/reopen and verification limits.
-No search, Charts, reorder or global shortcut expands. Draft dragging remains deferred.
+Charts, reorder and global shortcuts remain deferred. Draft dragging remains deferred.
 
 
 ## Calendar navigation (#3422)
@@ -224,3 +224,24 @@ for range identity, pending membership and canonical action reconciliation.
 Owned LocalHost/rendered tests cover actual header clicks, focused key dispatch,
 minimum Light/Dark layout and stale period emissions. Native pixels/OS IME/cloud
 remain unverified; no native launch or new manual gate is required.
+
+## Workspace search (#3430)
+
+CmdF focuses the native Kit input in the existing center list. Nonempty keywords
+search active non-draft notes across all dates/projects; Only mine filters before
+the top-50 bound. Positive numeric/`#ID` access puts an exact canonical note first
+and ignores discovery source filtering. Arrows/Return in the search input select
+and open canonical results; Return can flush debounce. Native CmdA/C/V, caret,
+composition and candidate handling stay with Kit. Marked Return/Escape commits or
+cancels composition first, and modal project/organization editors block search.
+OptionJ/K follows search selection only under the existing empty/unmarked composer
+guards; focused search text never navigates origin notes or enters the composer.
+
+Clear or Escape exits to the saved destination UUID/period/selection/scroll under
+current Only mine. Rail clicks cancel search and explicitly enter their destination;
+no later Escape rebound. Missing projects fall Home current Today. Draft/caret and
+accepted operations survive query edits, exits and close/reopen; search is disposable.
+Canonical reader/copy/append/sharing/archive/classification retain their guards,
+including for results outside origin watch. Owned rendered tests at 980/760 points
+in Light/Dark and actual LocalHost/FTS establish behavior; native pixels/OS IME and
+cloud remain unverified. No Command lookup or archived keyword search is provided.

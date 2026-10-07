@@ -6,6 +6,7 @@ use std::collections::HashMap;
 #[derive(Default)]
 pub(crate) struct Memory {
     home: Option<chrono::NaiveDate>,
+    pub(super) search_return: Option<super::search::RetainedOrigin>,
     projects: HashMap<String, (bool, Option<chrono::NaiveDate>)>,
 }
 impl Memory {
@@ -39,11 +40,26 @@ impl Memory {
     }
 }
 impl Today {
-    pub(super) fn action_scope(&self) -> (Destination, bool, Option<Range>) {
-        (self.destination.clone(), self.source.human_only, self.range)
+    pub(super) fn action_scope(&self) -> (Destination, bool, Option<Range>, Option<String>) {
+        if self.search.active() {
+            (
+                Destination::Home,
+                self.source.human_only,
+                None,
+                Some(self.search.query.clone()),
+            )
+        } else {
+            (
+                self.destination.clone(),
+                self.source.human_only,
+                self.range,
+                None,
+            )
+        }
     }
     pub(super) fn pending_visible(&self, pending: &crate::model::Pending) -> bool {
-        self.destination == Destination::Home
+        !self.search.active()
+            && self.destination == Destination::Home
             && matches!(self.period, Period::Day(None))
             && self.range.is_some_and(|(start, end)| {
                 pending.accepted_at >= start && pending.accepted_at < end
@@ -62,7 +78,10 @@ impl Today {
         self.reset_projection(window, cx);
     }
     pub(super) fn move_period(&mut self, next: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.shortcuts_blocked(window, cx) {
+        if self.search.active()
+            || self.search_focused(window, cx)
+            || self.shortcuts_blocked(window, cx)
+        {
             return;
         }
         if let Some(period) = self.period.shifted(next, &chrono::Local::now()) {
@@ -109,6 +128,9 @@ impl Today {
     pub(super) fn home_today(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.editor.is_some() || self.composing(window, cx) {
             return;
+        }
+        if self.search.active() {
+            self.exit_search(false, window, cx);
         }
         self.services.temporal.lock().expect("calendar memory").home = None;
         if self.destination == Destination::Home {

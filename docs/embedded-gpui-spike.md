@@ -334,7 +334,7 @@ compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
 
-Synthetic mode supplies no login, real cloud connectivity, workspace search/charts,
+Synthetic mode supplies no login, real cloud connectivity, Charts,
 note editing, formula/Mermaid rendering, unsupported shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
@@ -480,3 +480,8 @@ themes with detail open/closed. The unchanged preview constraints pass these
 checks; missing live project colors never establish a clipping cause.
 Native pixels, OS drag/IME delivery, cloud publishing and real Keychain remain
 unverified user handoff; no native launch or repeat manual matrix is required.
+
+Same-list search (#3430) also operates on synthetic notes through its existing local
+Application/FTS. The [search contract](normal-gui-host.md#same-list-workspace-search-3430)
+defines global active keywords, exact IDs, origin restoration and input/reader guards.
+Synthetic discovery never establishes real cloud, native OS IME or pixel evidence.

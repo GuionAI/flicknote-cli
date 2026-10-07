@@ -111,6 +111,134 @@ impl Today {
         gpui_kit::base::TextSelection::clear(window, cx);
         cx.notify();
     }
+    fn render_search_input(&self, _cx: &Context<Self>) -> impl IntoElement + use<> {
+        div()
+            .id("workspace-search")
+            .key_context("SearchInput")
+            .h(px(36.))
+            .flex_shrink_0()
+            .px(px(8.))
+            .py(px(3.))
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .child(
+                gpui_kit::component::input::Input::new(&self.search_input)
+                    .prefix(Icon::new(IconName::Search).size(px(14.)))
+                    .cleanable(true)
+                    .small(),
+            )
+            .test_support()
+    }
+    fn render_search_status(&self, p: ColorTokens, cx: &Context<Self>) -> impl IntoElement + use<> {
+        let status = if self.search.error.is_some() {
+            "Search unavailable"
+        } else if self.search.marked {
+            "Finish typing to search"
+        } else if self.search.loading {
+            "Searching…"
+        } else if self.model.rows.is_empty() {
+            "No matching notes"
+        } else if flicknote_sync::workspace_search::exact_id(&self.search.query).is_some() {
+            if self.search.bounded {
+                "Top 50 results · Exact ID and active keyword matches"
+            } else {
+                "Exact ID and active keyword matches · All projects"
+            }
+        } else if self.search.bounded {
+            "Top 50 results · Active notes, all dates and projects"
+        } else {
+            "Active notes · All dates and projects"
+        };
+        div()
+            .id("search-status")
+            .w_full()
+            .px(px(8.))
+            .py(px(6.))
+            .flex_shrink_0()
+            .text_size(px(12.))
+            .text_color(p.muted_foreground)
+            .child(status)
+            .children(self.search.error.clone().map(|error| {
+                div().text_color(p.destructive).child(error).child(
+                    Button::new("retry-search")
+                        .label("Retry search")
+                        .small()
+                        .ghost()
+                        .on_click(
+                            cx.listener(|this, _, w, cx| this.run_search(Duration::ZERO, w, cx)),
+                        ),
+                )
+            }))
+            .test_support()
+    }
+    fn render_search_row(
+        &self,
+        row: &flicknote_sync::today::TodayRow,
+        p: ColorTokens,
+    ) -> impl IntoElement + use<> {
+        let mut excerpt = String::new();
+        let mut highlights = Vec::new();
+        if let Some(hit) = self.search.hits.iter().find(|h| h.short_id == Some(row.id)) {
+            for segment in &hit.snippet.segments {
+                let start = excerpt.len();
+                excerpt.push_str(&segment.text);
+                if segment.highlighted {
+                    highlights.push((
+                        start..excerpt.len(),
+                        gpui_kit::HighlightStyle {
+                            font_weight: Some(FontWeight::SEMIBOLD),
+                            color: Some(p.foreground),
+                            ..Default::default()
+                        },
+                    ));
+                }
+            }
+        }
+        div()
+            .w_full()
+            .h(px(64.))
+            .flex()
+            .flex_col()
+            .child(preview(
+                &row.preview,
+                &row.note_type,
+                row.project_color.as_deref(),
+                p,
+            ))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .h(px(26.))
+                    .px(px(8.))
+                    .flex()
+                    .gap(px(8.))
+                    .items_center()
+                    .text_size(px(12.))
+                    .text_color(p.muted_foreground)
+                    .child(
+                        div()
+                            .id(("match-excerpt", row.id as u64))
+                            .aria_label(excerpt.clone())
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(gpui_kit::StyledText::new(excerpt).with_highlights(highlights))
+                            .test_support(),
+                    )
+                    .child(
+                        div()
+                            .id(("search-note-id", row.id as u64))
+                            .max_w(px(120.))
+                            .truncate()
+                            .child(format!(
+                                "{} #{}",
+                                row.project_name.as_deref().unwrap_or(""),
+                                row.id
+                            ))
+                            .test_support(),
+                    ),
+            )
+    }
     fn render_source(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         div()
             .id("source-control")
@@ -458,7 +586,12 @@ impl Today {
             .min_h_0()
             .flex()
             .flex_col()
-            .child(self.render_list_status(p, cx))
+            .when(self.search.active(), |d| {
+                d.child(self.render_search_status(p, cx))
+            })
+            .when(!self.search.active(), |d| {
+                d.child(self.render_list_status(p, cx))
+            })
             .child(
                 uniform_list(
                     "today-list",
@@ -574,7 +707,7 @@ impl Today {
             .role(Role::ListBoxOption)
             .aria_selected(self.model.selected == Some(id))
             .aria_label(format!("Note {id}: {}", row.preview))
-            .h(px(32.))
+            .h(px(if self.search.active() { 64. } else { 32. }))
             .w_full()
             .when(self.model.selected == Some(id), |row| row.bg(p.selection))
             .hover(|row| {
@@ -584,12 +717,17 @@ impl Today {
                     p.accent
                 })
             })
-            .child(preview(
-                &row.preview,
-                &row.note_type,
-                row.project_color.as_deref(),
-                p,
-            ))
+            .when(!self.search.active(), |d| {
+                d.child(preview(
+                    &row.preview,
+                    &row.note_type,
+                    row.project_color.as_deref(),
+                    p,
+                ))
+            })
+            .when(self.search.active(), |d| {
+                d.child(self.render_search_row(row, p))
+            })
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.related_note = Some(id);
@@ -980,23 +1118,30 @@ impl Today {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .child(match &self.destination {
-                                Destination::Home => self.period_label(),
-                                Destination::Shared => "Shared".to_string(),
-                                Destination::Archive => "Archive".to_string(),
-                                Destination::Project(id) => self
-                                    .projects
-                                    .iter()
-                                    .find(|p| &p.id == id)
-                                    .map_or("Project", |p| p.name.as_str())
-                                    .to_string(),
+                            .child(if self.search.active() {
+                                "Search".to_owned()
+                            } else {
+                                match &self.destination {
+                                    Destination::Home => self.period_label(),
+                                    Destination::Shared => "Shared".to_string(),
+                                    Destination::Archive => "Archive".to_string(),
+                                    Destination::Project(id) => self
+                                        .projects
+                                        .iter()
+                                        .find(|p| &p.id == id)
+                                        .map_or("Project", |p| p.name.as_str())
+                                        .to_string(),
+                                }
                             }),
                     )
                     .child(self.render_source(cx))
                     .test_support(),
             )
-            .children(self.render_summary(cx))
-            .children(self.render_period_controls(cx))
+            .child(self.render_search_input(cx))
+            .when(!self.search.active(), |d| {
+                d.children(self.render_summary(cx))
+                    .children(self.render_period_controls(cx))
+            })
             .child(
                 div()
                     .id("main-canvas")
@@ -1020,6 +1165,11 @@ impl Today {
         div()
             .id("workspace")
             .key_context(navigation_context)
+            .on_action(cx.listener(|this, _: &FocusSearch, w, cx| this.focus_search(w, cx)))
+            .on_action(cx.listener(|this, _: &SearchNext, w, cx| this.search_navigate(true, w, cx)))
+            .on_action(
+                cx.listener(|this, _: &SearchPrevious, w, cx| this.search_navigate(false, w, cx)),
+            )
             .on_action(cx.listener(|this, _: &SaveEditor, window, cx| this.save_editor(window, cx)))
             .on_action(
                 cx.listener(|this, _: &Project2, window, cx| this.select_number(2, window, cx)),
@@ -1063,7 +1213,11 @@ impl Today {
             .on_action(
                 cx.listener(|this, _: &PreviousNote, window, cx| this.navigate(false, window, cx)),
             )
-            .on_action(cx.listener(|this, _: &ArchiveNote, window, cx| this.archive(window, cx)))
+            .on_action(cx.listener(|this, _: &ArchiveNote, window, cx| {
+                if !this.search_focused(window, cx) {
+                    this.archive(window, cx);
+                }
+            }))
     }
 }
 impl Render for Today {
@@ -1097,6 +1251,8 @@ impl Render for Today {
                 |this, action: &gpui_kit::base::input::Enter, window, cx| {
                     this.enter_composing = if this.editor.is_some() {
                         this.editor_composing(window, cx)
+                    } else if this.search_focused(window, cx) {
+                        this.search_composing(window, cx)
                     } else {
                         this.composing(window, cx)
                     };
@@ -1122,6 +1278,8 @@ impl Render for Today {
                     }
                     this.escape_composing = if this.editor.is_some() {
                         this.editor_composing(window, cx)
+                    } else if this.search_focused(window, cx) {
+                        this.search_composing(window, cx)
                     } else {
                         this.composing(window, cx)
                     };
@@ -1133,6 +1291,8 @@ impl Render for Today {
                     if !this.escape_composing {
                         if this.editor.is_some() {
                             this.cancel_editor(window, cx);
+                        } else if this.search.active() {
+                            this.exit_search(true, window, cx);
                         } else {
                             this.close_detail(window, cx);
                         }
@@ -1150,8 +1310,10 @@ impl Render for Today {
                     .child(self.render_rail(p, cx))
                     .child(self.render_canvas(p, cx))
                     .children(
-                        (self.detail_open && self.model.selected.is_some())
-                            .then(|| self.render_detail(p, detail_width, cx)),
+                        (self.detail.is_some()
+                            && self.detail_open
+                            && self.model.selected.is_some())
+                        .then(|| self.render_detail(p, detail_width, cx)),
                     ),
             )
             .when(self.editor.is_none(), |d| {

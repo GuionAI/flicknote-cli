@@ -80,6 +80,14 @@ _Avoid_: Automatic recall, verified evidence
 A bounded passage from a note showing why a search result matched the query. It supports judging a result before opening the full note and is distinct from the note's summary.
 _Avoid_: Summary, generated answer
 
+**Search browsing**:
+The FlickNote workspace's note-browsing mode showing candidates for an explicit note search in place of its ordinary timeline. It is discovery within the same workspace, not a separate destination or a command launcher.
+_Avoid_: Search page, command palette
+
+**Exact note access**:
+Reading a particular note by its explicit identifier. Discovery filters narrow candidates but do not restrict exact note access or change the note owner's authorization boundary.
+_Avoid_: Unfiltered search, permission bypass
+
 ## Note discovery
 
 **FlickNote workspace**:

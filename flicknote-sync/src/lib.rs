@@ -26,3 +26,6 @@ mod test_support;
 
 #[cfg(feature = "experimental-spike")]
 pub mod spike;
+
+#[cfg(feature = "experimental-spike")]
+pub mod workspace_search;

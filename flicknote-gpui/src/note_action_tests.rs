@@ -992,3 +992,153 @@ fn historical_capture_append_and_share_keep_original_membership(cx: &mut TestApp
     services.cancel_operations();
     runtime.block_on(host.shutdown());
 }
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned gateway/window journey verifies canonical search actions and membership.
+fn outside_origin_search_actions_keep_canonical_identity_and_query_membership(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (host, fake) = fixture(&runtime, root.path());
+    runtime.block_on(async {
+        let writer=host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET short_id=CAST(short_id AS INTEGER)",[]).unwrap();
+        writer.execute("UPDATE notes SET content='searchaction canonical body',created_at='2020-01-01T12:00:00Z' WHERE short_id=4",[]).unwrap();
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
+    cx.update_window(window.into(), |_, w, cx| {
+        super::search_tests::query(&view, "searchaction", w, cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| !view.read(cx).search.loading && view.read(cx).model.rows.len() == 1)
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("note", 4_u64), cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail.is_some()));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("share-note", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).model.rows[0].shared));
+    cx.update(|cx| {
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().unwrap(),
+            format!("https://owned.invalid/share/{}", uuid(4))
+        )
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("unshare-note", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| !view.read(cx).model.rows[0].shared && !view.read(cx).note_busy(&uuid(4)))
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        drag(w, cx, 4, &format!("project-{}", project(2)));
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .rows
+                .first()
+                .is_some_and(|r| r.project_id == Some(project(2)))
+                && !view.read(cx).note_busy(&uuid(4))
+        })
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        drag(w, cx, 4, "archive-destination");
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).model.rows.is_empty() && view.read(cx).detail.is_none())
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        super::search_tests::query(&view, "#4", w, cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            !view.read(cx).search.loading
+                && view.read(cx).model.rows.first().is_some_and(|r| r.archived)
+        })
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("note", 4_u64), cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail.is_some()));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.try_find("share-note").is_none());
+        w.click("archive", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .rows
+                .first()
+                .is_some_and(|r| !r.archived)
+                && !view.read(cx).note_busy(&uuid(4))
+        })
+    });
+    // A delayed accepted share keeps its immutable outside-origin target after rail exit.
+    fake.mode.store(1, Ordering::SeqCst);
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("note", 4_u64), cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail.is_some()));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("share-note", cx);
+        w.click("home", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && !view.read(cx).search.active())
+    });
+    cx.update(|cx| {
+        assert!(
+            view.read(cx).note_busy(&uuid(4)),
+            "origin absence cannot acknowledge search action"
+        )
+    });
+    fake.gate.notify_one();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            cx.read_from_clipboard().unwrap().text().unwrap()
+                == format!("https://owned.invalid/share/{}", uuid(4))
+        })
+    });
+    assert!(
+        fake.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, id)| id == &uuid(4))
+    );
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}

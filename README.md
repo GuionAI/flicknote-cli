@@ -419,7 +419,7 @@ rows, a docked create/append composer and an optional right readonly Markdown re
 Use the FlickNote application menu for System, Light or Dark appearance with
 independently authored Light/Dark workbench roles adapted through existing Kit. The
 minimum window size is 760×560 points. Home and active projects are working
-destinations; search, Shared, Archive browsing and Charts remain inactive rail landmarks with aligned packaged Lucide icons
+destinations alongside Shared and Archive; Charts remains unavailable. The rail uses packaged Lucide icons
 and project dots. Detail fills a separate 272–420-point reading pane without covering the list or composer.
 Option-J/K select next/previous confirmed notes without wrapping and preserve
 editor focus; empty Return opens selected detail, and Option-A archives with
@@ -429,7 +429,7 @@ voice and full Swift desktop parity remain deferred. Home watches current Today;
 projects watch All active project notes across dates, capped at 10,000. Cmd1 selects
 Home; Cmd2..9 select the first eight active projects in displayed rail order,
 retaining draft text/caret unless marked. Empty/unmarked Option-Up/Down traverses
-Home and projects without wrap, skipping unavailable groups. Closing keeps the
+Home, projects, Shared and Archive without wrap, skipping Charts. Closing keeps the
 host alive; ordinary reopen keeps the last available destination and draft/caret.
 Capture results arriving while closed retain recovery or canonical identity and
 do-not-submit-again guidance. Cmd1 opens Home, and CmdQ stops the host.
@@ -509,6 +509,19 @@ Choices remain in process memory across close/reopen. See the
 [normal GUI calendar contract](docs/normal-gui-host.md#historical-days-and-project-weeks-3422)
 for capture, input and verification boundaries.
 
+Search notes in the same center list with the quiet native input or CmdF. Nonempty
+keywords search active non-draft notes globally across projects and dates, with
+**Only mine** applied before the top-50 bound. Results retain backend ranking and
+highlighted match excerpts; reaching 50 is a bounded result set, not a total count.
+A positive numeric query or `#ID` reads that exact note first, independently of
+Only mine, including canonical draft/archive access. Opening a result reads its
+canonical body in the existing reader; capture and guarded append/actions retain
+their normal behavior. Clear or Escape restores the previous destination, chosen
+period, surviving selection and scroll under the current source filter. A rail click
+clears search and enters that destination directly. Composer drafts/caret and
+accepted operations survive search and window close. Archived keyword search,
+Command lookup, pagination and search history remain deferred.
+
 Add projects with the Plus icon beside Projects in the rail and edit their summaries above the project All list.
 The application menu's **Automatic organization…** control stores an account-scoped
 OpenRouter key in a new GUI Keychain service. The background GUI host routes
@@ -529,7 +542,7 @@ and project-All/Week. It excludes only `metadata.created_by_ai` JSON boolean `tr
 before the watched 10,000-note limit; missing, false and other JSON values remain.
 The account-scoped choice persists across destination/window changes and restart.
 It describes creation channel, not authorship. Explicit-ID CLI/MCP/IPC access and
-background Jev eligibility remain independent. Charts/search and headless organization remain deferred.
+background Jev eligibility remain independent. Charts and headless organization remain deferred.
 
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)

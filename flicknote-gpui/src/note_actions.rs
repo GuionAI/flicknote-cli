@@ -36,7 +36,7 @@ struct Accepted {
     token: u64,
     row: TodayRow,
     action: NoteAction,
-    scope: (Destination, bool, Option<Range>),
+    scope: (Destination, bool, Option<Range>, Option<String>),
     projecting: bool,
     complete: bool,
 }
@@ -48,7 +48,7 @@ impl NoteActions {
         &mut self,
         row: TodayRow,
         action: NoteAction,
-        scope: (Destination, bool, Option<Range>),
+        scope: (Destination, bool, Option<Range>, Option<String>),
     ) -> Option<u64> {
         if self.busy(&row.uuid) {
             return None;
@@ -68,7 +68,7 @@ impl NoteActions {
     pub(super) fn observe(
         &mut self,
         rows: &[TodayRow],
-        scope: &(Destination, bool, Option<Range>),
+        scope: &(Destination, bool, Option<Range>, Option<String>),
     ) {
         for pending in &mut self.pending {
             let row = rows.iter().find(|r| r.uuid == pending.row.uuid);
@@ -87,7 +87,7 @@ impl NoteActions {
     pub(super) fn project(
         &self,
         rows: &[TodayRow],
-        scope: &(Destination, bool, Option<Range>),
+        scope: &(Destination, bool, Option<Range>, Option<String>),
     ) -> Arc<Vec<TodayRow>> {
         Arc::new(
             rows.iter()
@@ -357,11 +357,14 @@ impl Today {
         cx.notify();
     }
     pub(super) fn project_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rows = self
-            .model
-            .capture()
-            .note_actions
-            .project(&self.canonical_rows, &self.action_scope());
+        let rows = self.model.capture().note_actions.project(
+            if self.search.active() {
+                &self.canonical_search_rows
+            } else {
+                &self.canonical_rows
+            },
+            &self.action_scope(),
+        );
         self.model.snapshot(rows);
         self.refresh_detail(window, cx);
     }
@@ -467,7 +470,7 @@ mod tests {
         for watch_first in [true, false] {
             let mut state = NoteActions::default();
             let baseline = row();
-            let scope = (Destination::Home, false, None);
+            let scope = (Destination::Home, false, None, None);
             let token = state
                 .accept(baseline.clone(), action(), scope.clone())
                 .unwrap();
@@ -508,7 +511,7 @@ mod tests {
     #[test]
     fn confirmed_share_feedback_yields_to_watch_or_expiry() {
         let baseline = row();
-        let scope = (Destination::Home, false, None);
+        let scope = (Destination::Home, false, None, None);
         for observed in [true, false] {
             let mut state = NoteActions::default();
             let token = state
@@ -535,7 +538,7 @@ mod tests {
     #[test]
     fn removal_scope_expiry_and_errors_keep_watch_authoritative() {
         let baseline = row();
-        let scope = (Destination::Shared, false, None);
+        let scope = (Destination::Shared, false, None, None);
         let mut state = NoteActions::default();
         let token = state
             .accept(baseline.clone(), NoteAction::Archive, scope.clone())
@@ -547,7 +550,7 @@ mod tests {
         );
         state.observe(
             &[],
-            &(Destination::Project("different".into()), false, None),
+            &(Destination::Project("different".into()), false, None, None),
         );
         assert!(
             state
