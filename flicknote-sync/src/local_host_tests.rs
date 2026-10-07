@@ -1402,3 +1402,230 @@ async fn calendar_timer_rolls_current_watch_but_keeps_historical_watch_fixed() {
     host.shutdown().await;
     server.abort();
 }
+
+async fn chart_snapshot(
+    chart: &mut crate::creation_chart::ChartWatch,
+    predicate: impl Fn(&crate::creation_chart::Snapshot) -> bool + Send + Sync,
+) -> crate::creation_chart::Snapshot {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let result = chart.receiver.borrow_and_update().clone();
+            if let Some(result) = result {
+                let snapshot = result.expect("owned Chart query");
+                if predicate(&snapshot) {
+                    return snapshot;
+                }
+            }
+            chart.receiver.changed().await.unwrap();
+        }
+    })
+    .await
+    .expect("Chart watch predicate")
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One owned host checks unbounded counts and canonical refresh.
+async fn creation_chart_unbounded_owner_status_source_project_and_mutation_watch() {
+    use crate::creation_chart::{ChartWatch, days};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let calendar = days(&chrono::Local::now()).unwrap();
+    let start = calendar[0].range.0;
+    let end = calendar[29].range.1;
+    let stamp = calendar[29].range.0 + chrono::Duration::hours(1);
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("DELETE FROM notes", []).unwrap();
+        writer.execute("DELETE FROM projects", []).unwrap();
+        for (id, owner, name, color, archived) in [
+            ("p1", "account-a", "Same", "#abcdef", 0),
+            ("p2", "account-a", "Same", "invalid", 1),
+            ("foreign", "account-b", "SECRET", "#ff0000", 0),
+        ] {
+            writer
+                .execute(
+                    "INSERT INTO projects(id,user_id,name,color,is_archived) VALUES(?,?,?,?,?)",
+                    rusqlite::params![id, owner, name, color, archived],
+                )
+                .unwrap();
+        }
+        writer.execute_batch("BEGIN").unwrap();
+        for i in 1..=10_017 {
+            writer.execute("INSERT INTO notes(id,short_id,user_id,status,created_at,project_id,metadata) VALUES(?,?,'account-a',?,?,'p1','{}')",rusqlite::params![format!("chart-{i}"),i,if i%3==0 {"draft"} else if i%3==1 {"ai_queued"} else {"ready"},(stamp+chrono::Duration::milliseconds(i)).to_rfc3339()]).unwrap();
+        }
+        writer.execute_batch("COMMIT").unwrap();
+        for (id, metadata) in [
+            (20_001, "{}"),
+            (20_002, "{\"created_by_ai\":false}"),
+            (20_003, "{\"created_by_ai\":true}"),
+            (20_004, "{\"created_by_ai\":\"true\"}"),
+            (20_005, "{\"created_by_ai\":1}"),
+            (20_006, "{\"created_by_ai\":null}"),
+            (20_007, "{\"created_by_ai\":[]}"),
+            (20_008, "{\"created_by\":\"ai\"}"),
+        ] {
+            writer.execute("INSERT INTO notes(id,short_id,user_id,status,created_at,metadata) VALUES(?,?,'account-a','draft',?,?)",rusqlite::params![format!("chart-{id}"),id,stamp.to_rfc3339(),metadata]).unwrap();
+        }
+        for (id, owner, project, date, deleted) in [
+            (21_001, "account-a", Some("p2"), stamp, None),
+            (21_002, "account-a", Some("missing"), stamp, None),
+            (21_003, "account-a", Some("foreign"), stamp, None),
+            (21_004, "account-b", Some("p1"), stamp, None),
+            (21_005, "account-a", Some("p1"), stamp, Some("2026-01-01")),
+            (21_006, "account-a", None, start, None),
+            (
+                21_007,
+                "account-a",
+                None,
+                start - chrono::Duration::microseconds(1),
+                None,
+            ),
+            (
+                21_008,
+                "account-a",
+                None,
+                end - chrono::Duration::microseconds(1),
+                None,
+            ),
+            (21_009, "account-a", None, end, None),
+        ] {
+            writer.execute("INSERT INTO notes(id,short_id,user_id,status,project_id,created_at,deleted_at,metadata) VALUES(?,?,?,'ready',?,?,?,'{}')",rusqlite::params![format!("chart-{id}"),id,owner,project,date.to_rfc3339(),deleted]).unwrap();
+        }
+        writer.execute("INSERT INTO notes(id,user_id,created_at,metadata) VALUES('invalid-chart','account-a','nonsense','{}')",[]).unwrap();
+    }
+    let mut all = ChartWatch::start(host.db.clone(), host.user_id.clone(), false);
+    let mut human = ChartWatch::start(host.db.clone(), host.user_id.clone(), true);
+    let initial = chart_snapshot(&mut all, |s| s.total() == 10_030).await;
+    let only = chart_snapshot(&mut human, |s| s.total() == 10_029).await;
+    assert_eq!(initial.days.len(), 30);
+    assert_eq!(initial.days[0].counts["unassigned"], 1);
+    assert_eq!(
+        initial.days.iter().filter(|d| d.counts.is_empty()).count(),
+        28
+    );
+    let group = |key: &str| initial.groups.iter().find(|g| g.key == key).unwrap();
+    assert_eq!(group("project:p1").total, 10_017);
+    assert_eq!(group("project:p1").color, "#ABCDEF");
+    assert_eq!(
+        group("project:p2").name,
+        "Same",
+        "archived owned project label retained"
+    );
+    assert_eq!(group("project:foreign").name, "Unknown project");
+    assert_eq!(group("project:missing").name, "Unknown project");
+    assert_eq!(initial.projects.len(), 1);
+    assert_eq!(
+        only.groups
+            .iter()
+            .find(|g| g.key == "unassigned")
+            .unwrap()
+            .total,
+        9
+    );
+    assert!(!format!("{initial:?}").contains("SECRET"));
+    // Metadata/name/color changes and classification update the same UUID group, never creations.
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET name='Renamed',color='#123456' WHERE id='p1'",
+                [],
+            )
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET project_id='p2',status='ready' WHERE short_id=1",
+                [],
+            )
+            .unwrap();
+    }
+    let renamed = chart_snapshot(&mut all, |s| {
+        s.groups
+            .iter()
+            .any(|g| g.name == "Renamed" && g.total == 10_016)
+    })
+    .await;
+    assert_eq!(renamed.total(), initial.total());
+    assert_eq!(
+        renamed
+            .groups
+            .iter()
+            .find(|g| g.key == "project:p1")
+            .unwrap()
+            .color,
+        "#123456"
+    );
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET type='normal',content='',is_flagged=0 WHERE short_id=1",
+            [],
+        )
+        .unwrap();
+    host.app
+        .handle(AppRequest::NoteArchive { id: "1".into() })
+        .await
+        .unwrap();
+    chart_snapshot(&mut all, |s| s.total() == 10_029).await;
+    host.app
+        .handle(AppRequest::NoteRestore { id: "1".into() })
+        .await
+        .unwrap();
+    chart_snapshot(&mut all, |s| s.total() == 10_030).await;
+    // A synced persisted creation is authoritative, including draft and absent short ID.
+    host.db.writer().await.unwrap().execute("INSERT INTO notes(id,user_id,status,created_at,metadata) VALUES('new-chart','account-a','draft',?,'{}')",[stamp.to_rfc3339()]).unwrap();
+    chart_snapshot(&mut all, |s| s.total() == 10_031).await;
+    let receiver = all.receiver.clone();
+    drop((all, human));
+    tokio::time::timeout(Duration::from_secs(2), receiver.clone().changed())
+        .await
+        .unwrap()
+        .unwrap_err();
+    // Existing services remain available after the chart subscription is disposed.
+    assert!(
+        host.app
+            .handle(AppRequest::NoteGet {
+                id: "1".into(),
+                archived: false
+            })
+            .await
+            .is_ok()
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn creation_chart_watch_rolls_at_local_four_without_database_write() {
+    use crate::creation_chart::{ChartWatch, days};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let end = days(&chrono::Local::now()).unwrap()[29].range.1;
+    let before = (end - chrono::Duration::milliseconds(700)).with_timezone(&chrono::Local);
+    let clock = Arc::new(std::sync::Mutex::new(before));
+    let old = days(&before).unwrap();
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("DELETE FROM notes", []).unwrap();
+        for (id, date) in [("expires", old[0].range.0), ("enters", end)] {
+            writer.execute("INSERT INTO notes(id,user_id,created_at,metadata) VALUES(?,'account-a',?,'{}')",[id.to_owned(),date.to_rfc3339()]).unwrap();
+        }
+    }
+    let moving = clock.clone();
+    let mut chart =
+        ChartWatch::start_clock(host.db.clone(), host.user_id.clone(), false, move || {
+            *moving.lock().unwrap()
+        });
+    let initial = chart_snapshot(&mut chart, |s| s.total() == 1).await;
+    assert_eq!(initial.days[0].counts["unassigned"], 1);
+    *clock.lock().unwrap() = end.with_timezone(&chrono::Local);
+    let shifted = chart_snapshot(&mut chart, |s| s.range().0 != initial.range().0).await;
+    assert_eq!(shifted.total(), 1);
+    assert_eq!(shifted.days[29].counts["unassigned"], 1);
+    assert_eq!(shifted.days[0].date, initial.days[1].date);
+    drop(chart);
+    host.shutdown().await;
+    server.abort();
+}

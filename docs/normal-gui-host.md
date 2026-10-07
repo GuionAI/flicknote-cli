@@ -167,7 +167,7 @@ fall through to the native IME; drafts and marked input keep IME-first priority.
 Kit continues to own text, selection, undo, composition and candidate geometry.
 Text highlighting retains Kit’s dedicated input-selection color and intended
 alpha in Light/Dark; workbench row selection uses a separate list role.
-Shared and Archive are available; Charts remains unavailable. Settings, global shortcuts and keypad Enter are deferred; see [the source shortcuts audit](shortcuts-audit.md).
+Shared and Archive are available; Charts is available (#3450). Settings, global shortcuts and keypad Enter are deferred; see [the source shortcuts audit](shortcuts-audit.md).
 
 With detail closed, capture creates a new **unassigned** note (`project=None`),
 including in a project. With confirmed active detail open, the composer shows `Append to #ID` and Return appends to that note using the existing Application NoteAppend.
@@ -326,6 +326,76 @@ stale generations, origin periods/scroll and close/reopen. Light/Dark rendered
 comparison. This is separate from unverified native OS pixels/IME and cloud use.
 No native launch or new manual acceptance gate is required.
 
+## Creation Chart (#3450)
+
+Charts is a real rail destination after Archive, included in bounded Option-Up/Down
+navigation without a Command-number shortcut. The center keeps its existing header,
+Only mine control and composer dock. A native Kit 0.7.0 public Plot uses Stack and
+Bar primitives, scales, understated date/count axes and grid. The 30 dates include
+zero days; project legend entries show labels and counts. Pointer hover resolves
+one painted segment and shows its semantic date, project and exact creation count.
+The tooltip is bounded to the plot, and the wrapping legend scrolls inside its
+own bounded region. The chart and legend expose text labels/totals independently
+of bar color. No drilldown, note selection, export or new analytics preference
+is introduced.
+
+Statistics follow the pinned old Swift chart's active-list contract: **stored
+active notes include drafts, queued and ready statuses equally**. Status is not
+creation eligibility; archived notes are excluded. This corrects #3450's initial
+list/search conflation before implementation: Swift creationHistory supplies no
+status filter, listAll paginates the ordinary list, and its aggregator does not
+inspect draft status. Ordinary search retains its independent non-draft discovery
+contract unchanged. Only mine excludes only JSON boolean `created_by_ai:true`,
+before counting; every other JSON marker value remains included.
+
+The source is canonical persisted notes for the host's account, with valid
+RFC3339 created_at in a half-open rolling range. It includes the current local
+04:00 semantic day and 29 predecessors; each boundary uses calendar arithmetic,
+including DST/month/year changes, ending at the next 04:00. Count all matching
+UUIDs without the 10,000-row browsing or 50-hit search limits. Short-ID allocation,
+edits, append/share optimism and routes do not constitute creation. Archive/restore
+changes active totals; project assignment moves its count without changing the
+total. No note content, title or summary is loaded for aggregation.
+
+Groups use project UUID, never display name. The owned project JOIN retains labels
+and configured six-digit colors for archived assignments, keeps same-name projects
+separate, and hides foreign project metadata. Dangling/foreign assignments retain
+isolated Unknown project identities; unassigned is a distinct neutral group.
+Missing/invalid configured colors use a stable UUID-derived fallback palette.
+Renaming/recoloring updates presentation without duplicating creation counts.
+
+The watch/query and aggregation run on the host's Tokio runtime using cached local
+PowerSync data, without a network analytics endpoint. SQL reduces timestamp/project
+counts; Rust applies exact RFC3339 half-open boundaries after a small SQL candidate
+envelope that avoids SQLite date rounding dropping boundary timestamps. Active
+rail context remains independent of source/range. This projection makes no cloud
+completeness claim. Loading, empty “No notes created in this period” and an error
+with explicit Retry remain distinct; changing source clears the old chart.
+
+Entering Charts closes detail and clears note rows/selection. Option-J/K/A, empty
+Return and period-H/L/arrows cannot operate a hidden prior note. Charts does not
+accept a note drop. The same Kit composer preserves ordinary draft/caret/undo and
+creates current-time unassigned notes, then canonical watch updates the counts.
+Accepted operations and Home/project period memories remain process-owned.
+
+CmdF and the borderless rail search still discover ordinary active notes. Starting
+search from Charts drops the Chart subscription; Escape/clear restores Charts as
+the saved origin under current Only mine. Explicit rail clicks cancel that origin.
+Search input, same-Today rows and native CtrlF/B behavior retain #3443/#3446.
+Ordinary close/reopen retains Charts and composer state in process memory and
+starts a fresh watch; closing, leaving or searching cancels the chart work.
+Existing IPC/MCP/sync/organization hosting continues independently. Local 04:00
+rolls the range without a database write; source/epoch/range guards reject older
+completions. No analytics daemon, periodic polling or saved chart cache is added.
+
+Owned host checks cover >10,000 eligible notes, status/source/owner/project matrices,
+exact boundaries, archive/restore/classification/creation notifications and rollover.
+Rendered Kit pointer checks cover actual segment tooltips/legend and geometry at
+760/980 points in Light/Dark, rail traversal, retained draft/caret, no hidden note
+actions, search-origin restoration, stale responses, retry and close/reopen.
+These are isolated host and rendered-component evidence; native pixels, OS input,
+cloud completeness and installed-app/Keychain acceptance remain unverified.
+
 ## Projects and automatic organization (#3384)
 
 The Plus icon beside the rail's Projects heading creates by name through Application. A project's
@@ -370,7 +440,7 @@ Known project metadata remains visible even for archived assignments; the rail
 still contains active projects only. Destination/source swaps retain the same
 composer draft/caret/undo and discard old watch completions. Pending creation is
 shown only on Home. Option-Up/Down traverses Home, active projects, Shared and
-Archive without wrapping; Cmd1 and Cmd2..9 retain their numbering. Charts is skipped.
+Archive without wrapping; Cmd1 and Cmd2..9 retain their numbering. Charts follows Archive in bounded traversal.
 
 Drag one confirmed active non-draft note from Home, project-All or Shared onto an
 active project to classify, Archive to archive, or Shared to publish and copy its

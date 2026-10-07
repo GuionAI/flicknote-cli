@@ -150,6 +150,11 @@ impl Today {
                 rows: self.model.rows.clone(),
                 scroll: self.list_scroll.clone(),
             });
+            if self.destination == Destination::Charts {
+                self.chart_watch.take();
+                self.watch_task.take();
+                self.chart = None;
+            }
             self.model.search = true;
             self.model.rows = Arc::default();
             self.model.selected = None;

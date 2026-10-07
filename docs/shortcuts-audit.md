@@ -24,7 +24,7 @@ surface or native acceptance.
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
 | Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Shared/Archive/Charts |
-| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap; Charts skipped (#3402) |
+| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap including Charts (#3450) |
 | OptionLeft/Right; GPUI also OptionH/L | Swift arrows: Home Today previous/next date; project Week previous/next week; no project-All time action. H/L are GPUI additions | Implemented #3422: previous/next Home semantic day or project Week; current forward and All are no-ops; draft/marked/editor retains input priority |
 | OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
@@ -61,7 +61,7 @@ continue to belong to the focused composer or read-only detail.
 Home watches the chosen 04:00-to-04:00 semantic day, including DST. Projects
 default to **All active notes across dates**, capped at 10,000 and short-ID descending.
 Project All/Week and Home historical day navigation are implemented in #3422;
-historical pagination, settings/global and Charts remain deferred. Watched project archival/removal falls back
+historical pagination and settings/global remain deferred. Watched project archival/removal falls back
 Home while retaining the composer. Ordinary reopen retains the last available
 process-local destination and draft/caret; closed capture completions retain
 recovery or unknown/partial identity and guidance. Cmd1 resets Home current Today.
@@ -97,8 +97,7 @@ draft/caret and accepted capture/append work; modal editors and marked compositi
 block it. Its account-scoped default-off choice persists across Home/project-All,
 window close/reopen and restart. It excludes only JSON boolean `created_by_ai:true`
 before the bounded watch LIMIT. Rail/context and explicit-ID operations stay
-unfiltered; Jev includes hidden eligible notes. Shared/Archive use the same filter; Charts remains
-deferred. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
+unfiltered; Jev includes hidden eligible notes. Shared/Archive/Charts use the same filter. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
 
 ## Chinese input-source Option routing (#3296)
 
@@ -204,7 +203,7 @@ Accepted drag does not also click a row or destination. Pointer hover and Option
 use last-input related-project emphasis, with drop-target priority, without
 changing the persistent destination. See [the operator contract](normal-gui-host.md#dragging-shared-and-archive-3402)
 for bounded watch reconciliation, uncertainty, close/reopen and verification limits.
-Charts, reorder and global shortcuts remain deferred. Draft dragging remains deferred.
+Reorder and global shortcuts remain deferred. Draft dragging remains deferred.
 
 
 ## Calendar navigation (#3422)
@@ -308,6 +307,19 @@ Owned tests cover draft/caret/selection, marked and modal priority, reader/butto
 CmdF focus, empty/populated/pending/failed Escape, resumed typing, stale response rejection,
 selection release/Copy and 760/980 Light/Dark rail geometry/painted borders. These
 are rendered and source evidence; native pixels, OS input/candidates and Keychain/
-cloud acceptance remain unverified. Settings, Charts, global trigger, keypad Enter,
+cloud acceptance remain unverified. Settings, global trigger, keypad Enter,
 composer CmdReturn/list continuation and workspace dismissal are deferred. This
 read-only comparison authorizes no unrelated parity implementation or manual matrix.
+
+## Chart navigation (#3450)
+
+Charts follows Archive in bounded Option-Up/Down traversal; no Cmd-number is assigned.
+Entering it closes detail/clears selection and preserves the composer/destination
+memories. Option-J/K/A, empty Return and period-H/L/arrows have no note/time action
+on Charts; it is not a drop target. Nonempty composer capture remains current and
+unassigned. CmdF starts the same ordinary search; Escape/clear restores Charts as
+origin under current Only mine. Close/reopen retains Charts within the process.
+The [creation Chart contract](normal-gui-host.md#creation-chart-3450) records the
+source-audit correction: active stored drafts count equally with queued/ready notes;
+search's non-draft rule is independent. Owned rendered/host checks are separate
+from unverified native input/pixels/cloud acceptance.

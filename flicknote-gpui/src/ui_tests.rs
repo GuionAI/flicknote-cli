@@ -1792,8 +1792,10 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         window.press("alt-down", cx);
         assert_eq!(view.read(cx).destination, Destination::Archive);
         window.press("alt-down", cx);
-        assert_eq!(view.read(cx).destination, Destination::Archive);
-        for _ in 0..12 {
+        assert_eq!(view.read(cx).destination, Destination::Charts);
+        window.press("alt-down", cx);
+        assert_eq!(view.read(cx).destination, Destination::Charts);
+        for _ in 0..13 {
             window.render_frame(cx);
             window.press("alt-up", cx);
         }

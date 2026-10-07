@@ -125,7 +125,7 @@ Active projects are UUID destinations defaulting to All active notes across date
 bounded at 10,000 and ordered by canonical short ID. Cmd1 selects Home;
 Cmd2..9 select the first eight active projects in rail order, retaining draft/caret
 unless marked. Empty/unmarked Option-Up/Down traverses Home, projects, Shared and Archive without
-wrap. Shared and Archive are available (#3402); Charts is unavailable and skipped. A watched missing or
+wrap. Shared and Archive are available (#3402); Charts follows Archive (#3450). A watched missing or
 archived project falls back Home while preserving the composer. Switching drops
 the old list/detail/selection and watch; capture stays global/unassigned with
 pending/recovery/unknown identity retained. Unmatched captures stay out of project
@@ -173,7 +173,7 @@ GPL components, fonts or assets are imported. No Penpot design exists.
 The 196-point rail, flexible center and optional right reading pane share thin
 separators without outer card gutters or shadows. Aligned 17-point icon/dot slots
 keep navigation text edges consistent. Home and project-All remain the working
-destinations; the rail starts with the native search input (#3432). Shared and Archive have bounded browsing pages (#3402); Charts remains inert. The 44-point center header uses restrained
+destinations; the rail starts with the native search input (#3432). Shared and Archive have bounded browsing pages (#3402); Charts shows the native 30-day creation Plot (#3450). The 44-point center header uses restrained
 14-point type. Stable-ID virtualized rows
 remain full-width and 32 points high, with 14-point previews.
 
@@ -334,7 +334,7 @@ compilation and Linux runtime validation are deferred and not validated; do not
 install a cross-toolchain to verify this spike. Upstream build and API evidence is recorded
 in the local implementation report.
 
-Synthetic mode supplies no login, real cloud connectivity, Charts,
+Synthetic mode supplies no login or real cloud connectivity,
 note editing, formula/Mermaid rendering, unsupported shortcuts, voice/global
 trigger, updater/signing distribution, Linux GUI,
 production takeover or GUI/headless handoff. The current layout targets the #3326 continuous-workbench brief. Earlier v4
@@ -485,3 +485,9 @@ Same-list search (#3430) also operates on synthetic notes through its existing l
 Application/FTS. The [search contract](normal-gui-host.md#same-list-workspace-search-3430)
 defines global active keywords, exact IDs, origin restoration and input/reader guards.
 Synthetic discovery never establishes real cloud, native OS IME or pixel evidence.
+
+Creation Chart #3450 uses the same local owner-active persisted aggregate in
+synthetic mode. Stored drafts count; only archived notes and canonical Only mine
+filtering alter eligibility. No body preload/list bound applies. See the
+[operator contract](normal-gui-host.md#creation-chart-3450) for the native Plot,
+watch/calendar/search/composer behavior and isolated verification limits.

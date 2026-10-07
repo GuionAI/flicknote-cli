@@ -240,7 +240,7 @@ impl Today {
             && match target {
                 Destination::Project(id) => self.projects.iter().any(|p| &p.id == id),
                 Destination::Archive | Destination::Shared => true,
-                Destination::Home => false,
+                Destination::Home | Destination::Charts => false,
             }
     }
     pub(super) fn drop_note(
@@ -273,7 +273,7 @@ impl Today {
             }
             Destination::Archive => NoteAction::Archive,
             Destination::Shared => NoteAction::Share,
-            Destination::Home => return,
+            Destination::Home | Destination::Charts => return,
         };
         self.perform_note_action(drag.row.clone(), action, window, cx);
     }
@@ -357,6 +357,12 @@ impl Today {
         cx.notify();
     }
     pub(super) fn project_notes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.showing_chart() {
+            self.model.rows = Arc::default();
+            self.model.selected = None;
+            self.close_detail(window, cx);
+            return;
+        }
         let rows = self.model.capture().note_actions.project(
             if self.search.active() {
                 &self.canonical_search_rows

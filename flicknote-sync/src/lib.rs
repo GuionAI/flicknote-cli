@@ -29,3 +29,6 @@ pub mod spike;
 
 #[cfg(feature = "experimental-spike")]
 pub mod workspace_search;
+
+#[cfg(feature = "experimental-spike")]
+pub mod creation_chart;

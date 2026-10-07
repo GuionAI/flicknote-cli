@@ -196,6 +196,8 @@ struct Today {
     canonical_rows: Arc<Vec<flicknote_sync::today::TodayRow>>,
     related_note: Option<i64>,
     drag_allowed: bool,
+    chart: Option<Arc<chart::Data>>,
+    chart_watch: Option<flicknote_sync::creation_chart::ChartWatch>,
     watch: Option<TodayWatch>,
     watch_task: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -273,6 +275,8 @@ impl Today {
             canonical_rows: Arc::default(),
             related_note: None,
             drag_allowed: false,
+            chart: None,
+            chart_watch: None,
             watch: None,
             watch_task: None,
             _subscriptions: vec![],
@@ -451,6 +455,14 @@ impl Today {
         let human_only = self.source.human_only;
         self.watch_task.take();
         self.watch.take();
+        self.chart_watch.take();
+        self.chart = None;
+        if self.destination == Destination::Charts {
+            if !self.search.active() {
+                self.subscribe_chart(epoch, window, cx);
+            }
+            return;
+        }
         let _entered = self.services.runtime.enter();
         let destination = self.destination.clone();
         let period = self.period.clone();
@@ -616,7 +628,11 @@ impl Today {
                     .iter()
                     .map(|p| Destination::Project(p.id.clone())),
             )
-            .chain([Destination::Shared, Destination::Archive])
+            .chain([
+                Destination::Shared,
+                Destination::Archive,
+                Destination::Charts,
+            ])
             .collect();
         let Some(index) = destinations.iter().position(|d| d == &self.destination) else {
             return;
@@ -1110,6 +1126,9 @@ impl Drop for Today {
         );
     }
 }
+
+#[path = "chart.rs"]
+mod chart;
 
 #[path = "search.rs"]
 mod search;

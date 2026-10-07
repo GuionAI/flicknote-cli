@@ -85,17 +85,6 @@ fn rail_label(title: &str) -> impl IntoElement {
         .child(title.to_owned())
         .test_support()
 }
-fn landmark(title: &'static str, name: IconName, p: ColorTokens) -> impl IntoElement {
-    div()
-        .h(px(32.))
-        .px(px(12.))
-        .flex()
-        .items_center()
-        .gap(px(10.))
-        .text_color(p.secondary_foreground)
-        .child(rail_slot(icon(name, p.secondary_foreground, 14.)))
-        .child(rail_label(title))
-}
 
 impl Today {
     pub(super) fn close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -465,7 +454,14 @@ impl Today {
                         p,
                         cx,
                     ))
-                    .child(landmark("Charts", IconName::ChartBar, p)),
+                    .child(self.render_collection(
+                        "charts",
+                        "Charts",
+                        IconName::ChartBar,
+                        Destination::Charts,
+                        p,
+                        cx,
+                    )),
             )
             .test_support()
     }
@@ -1041,6 +1037,7 @@ impl Today {
                                     Destination::Home => self.period_label(),
                                     Destination::Shared => "Shared".to_string(),
                                     Destination::Archive => "Archive".to_string(),
+                                    Destination::Charts => "Charts".to_string(),
                                     Destination::Project(id) => self
                                         .projects
                                         .iter()
@@ -1064,7 +1061,13 @@ impl Today {
                     .min_h_0()
                     .flex()
                     .flex_col()
-                    .child(self.render_list(p, cx))
+                    .map(|d| {
+                        if self.showing_chart() {
+                            d.child(self.render_chart(p, cx))
+                        } else {
+                            d.child(self.render_list(p, cx))
+                        }
+                    })
                     .test_support(),
             )
             .child(self.render_composer(p, cx))
