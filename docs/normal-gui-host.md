@@ -269,9 +269,11 @@ across all eligible creation channels, including hidden MCP notes. Search exact-
 ## Same-list workspace search (#3430)
 
 The native single-line Kit search input sits in the upper-left rail, in a
-44-point row aligned with the center header (#3432). CmdF
-focuses it; empty input keeps ordinary browsing. Nonempty keywords replace that
-same list with up to 50 ranked active non-draft hits across all projects and dates,
+borderless 44-point cell aligned with the center header (#3443). CmdF
+focuses it from regular workspace controls or composer, preserving draft/caret;
+CtrlF/B retain native editor-local forward/backward editing; login and modal
+editors retain their own input. Empty input keeps ordinary browsing.
+Nonempty keywords replace that same list with up to 50 ranked active non-draft hits across all projects and dates,
 including from Shared/Archive origins. Only mine is applied by the existing FTS
 before its bound. Results show the canonical preview, backend-highlighted excerpt
 and trailing project/short ID. A reached bound is labeled Top 50; no total count,
@@ -293,8 +295,10 @@ Input, native editing, selection and composition belong to Kit. About 200ms debo
 waits for unmarked input; Enter flushes and opens the selected/first result, and arrows
 navigate results in the search input context. Composition consumes Return/Escape
 first. Option note/navigation guards retain composer/editor priority. Modal editors
-cannot launch search. Search exit returns focus to the same composer. Loading,
-empty, bounded and error states remain distinct; errors offer explicit Retry search.
+cannot launch search. Unmarked Escape from empty search returns focus to the
+same composer without changing browsing; populated search exits even with detail
+open. Reading-focused Escape closes detail first. Kit consumes native transient
+surfaces and marking before workspace exit. Loading, empty, bounded and error states remain distinct; errors offer explicit Retry search.
 Only mine changes, query edits, exit, rail navigation and window teardown invalidate
 older responses. Local database notifications refresh only active search, without
 polling or automatic error retries.

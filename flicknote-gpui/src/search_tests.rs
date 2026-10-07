@@ -5,6 +5,164 @@ use flicknote_sync::workspace_search::{self, Results};
 use gpui_kit::{Focusable, TestAppContext, test::TestWindowExt};
 
 #[gpui_kit::test]
+fn empty_search_escape_returns_composer(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
+    cx.update_window(window.into(), |_, w, cx| {
+        let composer = view.read(cx).composer.clone();
+        let input = view.read(cx).search_input.clone();
+        w.render_frame(cx);
+        for draft in ["", "kept draft"] {
+            if !draft.is_empty() {
+                w.click(("note", 2_u64), cx);
+            }
+            composer.update(cx, |i, cx| {
+                i.set_value(draft, w, cx);
+                i.set_selected_range(if draft.is_empty() { 0..0 } else { 2..5 }, cx);
+                i.focus(w, cx);
+            });
+            let before = (
+                view.read(cx).destination.clone(),
+                view.read(cx).period.clone(),
+                view.read(cx).model.selected,
+                view.read(cx).list_scroll.0.borrow().base_handle.offset(),
+            );
+            w.render_frame(cx);
+            w.press("cmd-f", cx);
+            w.render_frame(cx);
+            assert!(
+                input.read(cx).focus_handle(cx).is_focused(w),
+                "search focus"
+            );
+            w.press("cmd-f", cx);
+            assert!(input.read(cx).value().is_empty());
+            w.press("escape", cx);
+            w.render_frame(cx);
+            assert!(
+                composer.read(cx).focus_handle(cx).is_focused(w),
+                "composer focus"
+            );
+            assert_eq!(composer.read(cx).value(), draft);
+            assert_eq!(
+                composer.read(cx).selected_range(),
+                if draft.is_empty() { 0..0 } else { 2..5 }
+            );
+            assert_eq!(
+                before,
+                (
+                    view.read(cx).destination.clone(),
+                    view.read(cx).period.clone(),
+                    view.read(cx).model.selected,
+                    view.read(cx).list_scroll.0.borrow().base_handle.offset()
+                )
+            );
+            assert_eq!(view.read(cx).detail_open, !draft.is_empty());
+            w.input("X", cx);
+            assert_eq!(
+                composer.read(cx).value(),
+                if draft.is_empty() { "X" } else { "keXdraft" }
+            );
+        }
+        composer.update(cx, |i, cx| {
+            i.focus(w, cx);
+            i.replace_and_mark_text_in_range(None, "ni", Some(2..2), w, cx);
+        });
+        w.render_frame(cx);
+        w.press("cmd-f", cx);
+        assert!(composer.read(cx).focus_handle(cx).is_focused(w));
+        composer.update(cx, |i, cx| i.unmark_text(w, cx));
+        composer.update(cx, |i, cx| {
+            i.set_value("native caret", w, cx);
+            i.set_selected_range(3..3, cx);
+        });
+        w.render_frame(cx);
+        for key in ["ctrl-f", "ctrl-b"] {
+            w.press(key, cx);
+            assert!(composer.read(cx).focus_handle(cx).is_focused(w));
+            assert_eq!(composer.read(cx).value(), "native caret");
+        }
+        // Ordinary arrow caret motion is a separate Kit editing contract.
+        composer.update(cx, |i, cx| i.set_selected_range(3..3, cx));
+        w.press("right", cx);
+        assert_eq!(composer.read(cx).selected_range(), 4..4);
+        w.press("left", cx);
+        assert_eq!(composer.read(cx).selected_range(), 3..3);
+
+        view.update(cx, |v, cx| v.edit(project_editor::Kind::Add, w, cx));
+        w.render_frame(cx);
+        let editor = view.read(cx).editor.as_ref().unwrap().input.clone();
+        w.press("cmd-f", cx);
+        assert!(editor.read(cx).focus_handle(cx).is_focused(w));
+        w.remove_window();
+    })
+    .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}
+
+#[gpui_kit::test]
+fn escape_invalidates_pending_and_failed_search(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    seed(&runtime, &host);
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
+    let result = find(&runtime, &host, "buriedneedle", false, None);
+    for failed in [false, true] {
+        cx.update_window(window.into(), |_, w, cx| {
+            let composer = view.read(cx).composer.clone();
+            composer.update(cx, |i, cx| {
+                i.set_value("preserved", w, cx);
+                i.set_selected_range(3..3, cx);
+            });
+            query(&view, "buriedneedle", w, cx);
+            let generation = view.read(cx).search.generation;
+            if failed {
+                view.update(cx, |v, cx| {
+                    v.receive_search(generation, false, Err("owned failure".into()), w, cx)
+                });
+            }
+            w.render_frame(cx);
+            w.press("escape", cx);
+            assert!(!view.read(cx).search.active());
+            assert!(composer.read(cx).focus_handle(cx).is_focused(w));
+            view.update(cx, |v, cx| {
+                v.receive_search(generation, false, Ok(result.clone()), w, cx)
+            });
+            assert!(!view.read(cx).search.active());
+            assert_eq!(view.read(cx).model.selected, None);
+            assert!(view.read(cx).search_input.read(cx).value().is_empty());
+            assert_eq!(composer.read(cx).value(), "preserved");
+            assert_eq!(composer.read(cx).selected_range(), 3..3);
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 2)
+        });
+    }
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}
+
+#[gpui_kit::test]
 fn review_capture_refresh_cannot_revive_previous_query_rows(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
     let root = tempfile::tempdir().unwrap();
@@ -315,6 +473,29 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
             assert!(row.right() <= center.right());
             let rail = w.find("navigation-rail").bounds();
             let search = w.find("workspace-search").bounds();
+            let field = w.find(("input", input.entity_id()));
+            assert_eq!(field.label(), Some("Search notes"));
+            assert_eq!(field.bounds().size, search.size);
+            assert_eq!(field.bounds().origin, search.origin);
+            let cell = search.scale(w.scale_factor());
+            let zero = px(0.).scale(w.scale_factor());
+            for quad in w.painted_quads().into_iter().filter(|q| {
+                q.bounds.top() >= cell.top()
+                    && q.bounds.bottom() <= cell.bottom()
+                    && q.bounds.left() >= cell.left()
+                    && q.bounds.right() <= cell.right()
+                    && q.bounds.size.width > px(100.).scale(w.scale_factor())
+            }) {
+                assert_eq!(
+                    (
+                        quad.border_widths.top,
+                        quad.border_widths.left,
+                        quad.border_widths.right
+                    ),
+                    (zero, zero, zero)
+                );
+                assert_eq!(quad.corner_radii, Default::default(), "no inset capsule");
+            }
             let text = input.read(cx).text_bounds().unwrap();
             let clean = w.find("clean").bounds();
             assert_eq!(search.top(), rail.top());
@@ -327,6 +508,19 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
                 w.find("destination-header").bounds().bottom()
             );
             assert!(input.read(cx).focus_handle(cx).is_focused(w));
+            let reader = view.read(cx).detail.as_ref().unwrap().state.clone();
+            reader.read(cx).focus_handle().clone().focus(w, cx);
+            w.render_frame(cx);
+            w.press("cmd-f", cx);
+            assert!(input.read(cx).focus_handle(cx).is_focused(w));
+            w.press("tab", cx);
+            w.render_frame(cx);
+            assert!(!input.read(cx).focus_handle(cx).is_focused(w));
+            w.press("cmd-f", cx);
+            assert!(input.read(cx).focus_handle(cx).is_focused(w));
+            assert_eq!(input.read(cx).value(), "buriedneedle");
+            search_transient_escape(&input, w, cx);
+            assert!(view.read(cx).search.active());
             search_selection_release(&input, w, cx);
             assert!(view.read(cx).search.active() && view.read(cx).detail_open);
             w.click("copy-detail", cx);
@@ -340,6 +534,17 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
         })
         .unwrap();
     }
+    cx.update_window(window.into(), |_, w, cx| {
+        let reader = view.read(cx).detail.as_ref().unwrap().state.clone();
+        reader.read(cx).focus_handle().clone().focus(w, cx);
+        w.render_frame(cx);
+        w.press("escape", cx);
+        assert!(view.read(cx).search.active() && !view.read(cx).detail_open);
+        w.press("cmd-f", cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail_open));
     cx.update_window(window.into(), |_, w, cx| {
         composer.update(cx, |i, cx| {
             i.set_value("appended through search", w, cx);
@@ -418,6 +623,38 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
     drop(view);
     services.cancel_operations();
     runtime.block_on(host.shutdown());
+}
+
+fn search_transient_escape(input: &Entity<InputState>, w: &mut Window, cx: &mut App) {
+    use gpui_kit::InputEvent as _;
+    let at = input.read(cx).text_bounds().unwrap().origin + gpui_kit::point(px(4.), px(8.));
+    w.dispatch_event(
+        gpui_kit::MouseMoveEvent {
+            position: at,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        cx,
+    );
+    w.render_frame(cx);
+    for phase in [gpui_kit::TouchPhase::Started, gpui_kit::TouchPhase::Ended] {
+        w.dispatch_event(
+            gpui_kit::LongPressEvent {
+                phase,
+                start_position: at,
+                position: at,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        w.render_frame(cx);
+    }
+    assert!(input.read(cx).touch_selection().is_some());
+    w.press("escape", cx);
+    w.render_frame(cx);
+    assert!(input.read(cx).touch_selection().is_none());
+    assert!(input.read(cx).focus_handle(cx).is_focused(w));
 }
 
 fn search_selection_release(input: &Entity<InputState>, w: &mut Window, cx: &mut App) {
@@ -530,6 +767,8 @@ fn query_generations_source_ime_errors_origin_period_and_close_reopen(cx: &mut T
         });
         view.update(cx, |v, cx| v.search_changed(w, cx));
         w.render_frame(cx);
+        w.press("cmd-f", cx);
+        assert!(input.read(cx).focus_handle(cx).is_focused(w));
         w.press("enter", cx);
         w.press("escape", cx);
         assert!(view.read(cx).search.active());

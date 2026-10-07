@@ -1,10 +1,11 @@
 # Desktop shortcuts audit and GPUI implementation reference
 
-Audit date: **2026-10-04**. This records authoritative audit #3289 and the final
-runtime behavior of specs #3290 and #3296. Source pins:
+Audit updated: **2026-10-07** for #3443. This records authoritative audit #3289,
+#3290/#3296 and subsequent workspace slices. Source pins:
 
 - Read-only `fn-desktop`: `65c4b6380d1c9b2087205fc0d09ed06c34b513fd`.
 - `fn-cli` pre-change baseline: `52ab28b27b1efd65758285b4b088ce45cb7496f2`.
+- `fn-cli` #3443 clean baseline: `b9e6e7f5179034c6425060c6ad5782bc3de24677`.
 - `fn-cli` navigation implementation: `12555c9f26624f31ed3a38ba15024404fb407163`.
 
 Swift references are repository-relative in the pinned `fn-desktop` checkout:
@@ -19,22 +20,24 @@ and rendered-test evidence; new native OS keyboard/IME/pixel and real dev cloud
 acceptance were **not performed**. A binding alone does not establish a working
 surface or native acceptance.
 
-| Keys | Pinned Swift desktop behavior | GPUI through #3430 |
+| Keys | Pinned Swift desktop behavior | GPUI through #3443 |
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
 | Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Shared/Archive/Charts |
 | OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap; Charts skipped (#3402) |
-| OptionH/Left, OptionL/Right | Home Today previous/next date; project Week previous/next week; no project-All time action | Implemented #3422: previous/next Home semantic day or project Week; current forward and All are no-ops; draft/marked/editor retains input priority |
+| OptionLeft/Right; GPUI also OptionH/L | Swift arrows: Home Today previous/next date; project Week previous/next week; no project-All time action. H/L are GPUI additions | Implemented #3422: previous/next Home semantic day or project Week; current forward and All are no-ops; draft/marked/editor retains input priority |
 | OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
 | Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; archived detail creates new; marked Return commits composition without premature create/append/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
 | Keypad Enter | Swift accepts it like Return for selected-detail routing | Deferred; user explicitly does not need it for this slice; no added GPUI binding |
-| CmdF / CtrlF | Focus workspace search | Implemented #3430: focus native same-list workspace search; CtrlF remains editor-local |
-| Escape | Close detail → exit search/focus composer → dismiss workspace, according to current state | Implemented search exit/restore origin and composer focus, else close detail; marked/transient input retains priority; workspace dismissal remains deferred |
+| CmdF / CtrlF | Focus workspace search | CmdF matches: focus the native rail search, including draft composer. CtrlF deliberately retains native editor-local forward motion under the latest user decision; no search remap |
+| Escape | Close detail → exit search/focus composer → dismiss workspace, according to current state | Search-owned input: empty returns composer; populated exits/restores origin and focuses composer, including with detail open. Reading focus closes detail first. Native marked/transient input retains priority; workspace dismissal deferred |
+| CtrlB | Native backward caret motion in the owning editor | Native editor-local behavior retained; neither CtrlF nor CtrlB is remapped |
 | CmdA/C/V/X | Native select-all/copy/paste/cut in the owning text editor | Retained Kit native editing; these are not missing workspace actions |
 | CmdZ / CmdShiftZ | Native undo/redo | Retained Kit native editing; navigation retains the same composer/undo state |
-| CmdReturn | Save project summary while editing | Implemented #3384: save without adding a newline; marked input retains Kit priority |
+| Return (editors) | Save project name or inline note title; summary newline | Project name save and summary newline match; inline title editing is a missing/deferred GPUI surface |
+| CmdReturn | Composer submits; project summary editor saves | Summary save implemented #3384. Composer secondary Return is not submitted by GPUI; parity deferred; marked input retains Kit priority |
 | CmdQ | Quit application | Implemented: explicit host shutdown; window close keeps host alive |
 | CmdComma | Settings | Deferred: no GPUI settings surface |
 | Global Fn / configured trigger | Desktop global workspace trigger | Deferred: no GPUI global hook/trigger |
@@ -227,7 +230,8 @@ remain unverified; no native launch or new manual gate is required.
 
 ## Workspace search (#3430)
 
-CmdF focuses the native Kit input in the upper-left rail (#3432). Nonempty keywords
+CmdF focuses the same native Kit input filling the upper-left rail cell
+(#3443): borderless, 44 points high, with internal icon/text/clear padding. Nonempty keywords
 search active non-draft notes across all dates/projects; Only mine filters before
 the top-50 bound. Positive numeric/`#ID` access puts an exact canonical note first
 and ignores discovery source filtering. Arrows/Return in the search input select
@@ -245,3 +249,61 @@ Canonical reader/copy/append/sharing/archive/classification retain their guards,
 including for results outside origin watch. Owned rendered tests at 980/760 points
 in Light/Dark and actual LocalHost/FTS establish behavior; native pixels/OS IME and
 cloud remain unverified. No Command lookup or archived keyword search is provided.
+
+## Full supported local shortcut comparison (#3443)
+
+The table above covers the pinned desktop's local workspace key router, native
+editing and application menu equivalents. It is not a list of every OS text-editing
+command or a promise to implement missing desktop surfaces. Rechecked read-only
+at the desktop pin above, including these source seams:
+
+- `FlickNotePanelController.swift`: `FlickNotePanelKeyRouting` at 191–290;
+  key-window/editor/marked guards and intent effects at 561–666; summary
+  CmdReturn at 1477–1482; native plain search TextField at 1112–1124; project-name Return at 1182–1185
+  and inline title Return at 1626–1630.
+- `FlickNoteComposerEditor.swift`: Return/CommandReturn submit, ShiftReturn
+  newline and marked pass-through at 9–16; AppKit editor dispatch at 112–122.
+  Swift additionally continues Markdown list markers on ShiftReturn; GPUI
+  retains Kit newline semantics. No list-continuation parity is added here.
+- `FlickNoteInteractionController.swift`: search generation/clear at 399–435,
+  numeric destination mapping at 594–598 and date/week effects at 600–625.
+- `App/AppDelegate.swift` at 85–98: native editing equivalents;
+  `App/StatusItemController.swift` at 32–38: Settings and Quit equivalents.
+
+Search-specific comparison: Swift uses exactly Command or Control with F,
+excluding marked text. Current GPUI keeps the existing CmdF-only workspace
+`Today` and descendant `Today > Input` bindings unchanged. The latest user
+correction explicitly preserves BOTH native CtrlF forward and CtrlB backward
+editing without app remaps. Swift CtrlF search versus GPUI native editing is an
+approved difference, not a missing shortcut or defect. Login and modal editors
+retain their own contexts; modal editors replace Today with WorkspaceEditor.
+Repeated CmdF focus preserves query and composer selection.
+Swift search-owned arrows pass through to its native field; GPUI deliberately
+uses Up/Down and primary Return to select/open same-list canonical results.
+Swift Escape closes detail first regardless of search ownership. GPUI deliberately
+honors search-owned exit immediately; reading-focused Escape closes detail first.
+Both return an empty search-owned editor to composer. Swift search exit resets
+Home Today; GPUI preserves the user-approved saved destination/period/selection/
+scroll under current Only mine. These are deliberate differences, not regressions.
+
+Evidence is separate from diagnosis. #3443's owned rendered dispatch failed
+before repair for empty-search Escape composer focus. Earlier CtrlF search-focus
+RED and competing Kit MoveRight/root-versus-descendant probes are historical
+under superseded requirements; they are not current acceptance failures. No
+CtrlF search binding or CtrlF/B editor-local override remains. Actual headless
+CtrlF/B dispatch confirms owning-editor retention and no search-focus takeover;
+it does not run AppKit's control-selector caret translation. Ordinary right/left
+caret checks are separate Kit editing evidence, not CtrlF/B proof. Native control
+selector caret motion remains unverified; no injected binding or fake translation
+is used to manufacture acceptance. Escape stays a Kit action:
+its native transient handler runs before the workspace's bubbling handler, while
+the existing capture remembers marking before Kit cancels it. No global keyboard
+interceptor, custom editor, dependency fork or native input adapter change is used.
+
+Owned tests cover draft/caret/selection, marked and modal priority, reader/button
+CmdF focus, empty/populated/pending/failed Escape, resumed typing, stale response rejection,
+selection release/Copy and 760/980 Light/Dark rail geometry/painted borders. These
+are rendered and source evidence; native pixels, OS input/candidates and Keychain/
+cloud acceptance remain unverified. Settings, Charts, global trigger, keypad Enter,
+composer CmdReturn/list continuation and workspace dismissal are deferred. This
+read-only comparison authorizes no unrelated parity implementation or manual matrix.

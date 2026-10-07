@@ -117,15 +117,17 @@ impl Today {
             .key_context("SearchInput")
             .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
-            .px(px(8.))
-            .py(px(7.))
             .border_b_1()
             .border_color(p.border)
             .child(
                 gpui_kit::component::input::Input::new(&self.search_input)
                     .prefix(Icon::new(IconName::Search).size(px(14.)))
                     .cleanable(true)
-                    .small(),
+                    .appearance(false)
+                    .large()
+                    .text_size(px(14.))
+                    .px(px(12.))
+                    .py(px(0.)),
             )
             .test_support()
     }
@@ -1277,7 +1279,9 @@ impl Render for Today {
                     if !this.escape_composing {
                         if this.editor.is_some() {
                             this.cancel_editor(window, cx);
-                        } else if this.search.active() {
+                        } else if this.search_focused(window, cx) {
+                            this.escape_search(window, cx);
+                        } else if this.search.active() && !this.detail_open {
                             this.exit_search(true, window, cx);
                         } else {
                             this.close_detail(window, cx);

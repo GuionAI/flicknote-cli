@@ -331,6 +331,13 @@ impl Today {
             .scroll_to_item_strict(index, gpui_kit::ScrollStrategy::Nearest);
         self.select(id, window, cx);
     }
+    pub(super) fn escape_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.active() {
+            self.exit_search(true, window, cx);
+        } else {
+            self.composer.update(cx, |i, cx| i.focus(window, cx));
+        }
+    }
     pub(super) fn exit_search(
         &mut self,
         restore: bool,
