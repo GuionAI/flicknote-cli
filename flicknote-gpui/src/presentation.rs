@@ -111,15 +111,16 @@ impl Today {
         gpui_kit::base::TextSelection::clear(window, cx);
         cx.notify();
     }
-    fn render_search_input(&self, _cx: &Context<Self>) -> impl IntoElement + use<> {
+    fn render_search_input(&self, p: ColorTokens) -> impl IntoElement + use<> {
         div()
             .id("workspace-search")
             .key_context("SearchInput")
-            .h(px(36.))
+            .h(px(HEADER_HEIGHT))
             .flex_shrink_0()
             .px(px(8.))
-            .py(px(3.))
-            .on_click(|_, _, cx| cx.stop_propagation())
+            .py(px(7.))
+            .border_b_1()
+            .border_color(p.border)
             .child(
                 gpui_kit::component::input::Input::new(&self.search_input)
                     .prefix(Icon::new(IconName::Search).size(px(14.)))
@@ -493,21 +494,7 @@ impl Today {
             .border_color(p.border)
             .bg(p.secondary)
             .text_size(px(14.))
-            .child(
-                div()
-                    .id("workspace-heading")
-                    .test_support()
-                    .h(px(HEADER_HEIGHT))
-                    .flex_shrink_0()
-                    .px(px(12.))
-                    .border_b_1()
-                    .border_color(p.border)
-                    .flex()
-                    .gap(px(10.))
-                    .items_center()
-                    .text_color(p.secondary_foreground)
-                    .child("Workspace"),
-            )
+            .child(self.render_search_input(p))
             .child(
                 div()
                     .id("rail-destinations")
@@ -1137,7 +1124,6 @@ impl Today {
                     .child(self.render_source(cx))
                     .test_support(),
             )
-            .child(self.render_search_input(cx))
             .when(!self.search.active(), |d| {
                 d.children(self.render_summary(cx))
                     .children(self.render_period_controls(cx))

@@ -665,7 +665,7 @@ fn assert_closed_workbench(
     let center = window.find("center-pane").bounds();
     let rail = window.find("navigation-rail").bounds();
     assert_eq!(
-        window.find("workspace-heading").bounds().bottom(),
+        window.find("workspace-search").bounds().bottom(),
         window.find("home").bounds().origin.y
     );
     assert_eq!(closed.size.width, center.size.width);

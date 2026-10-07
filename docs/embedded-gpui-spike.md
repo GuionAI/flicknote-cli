@@ -173,7 +173,7 @@ GPL components, fonts or assets are imported. No Penpot design exists.
 The 196-point rail, flexible center and optional right reading pane share thin
 separators without outer card gutters or shadows. Aligned 17-point icon/dot slots
 keep navigation text edges consistent. Home and project-All remain the working
-destinations; the rail starts with an honest Workspace heading. Shared and Archive have bounded browsing pages (#3402); Charts remains inert. The 44-point center header uses restrained
+destinations; the rail starts with the native search input (#3432). Shared and Archive have bounded browsing pages (#3402); Charts remains inert. The 44-point center header uses restrained
 14-point type. Stable-ID virtualized rows
 remain full-width and 32 points high, with 14-point previews.
 

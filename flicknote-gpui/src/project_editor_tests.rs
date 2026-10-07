@@ -112,12 +112,13 @@ fn summary_editor_wheel_isolates_background(cx: &mut TestAppContext) {
                     w.bounds_changed(cx);
                     w.render_frame(cx);
                     let region = w.find("project-summary-region").bounds();
-                    let header = w.find("workspace-search").bounds();
+                    let header = w.find("destination-header").bounds();
                     let controls = w.find("period-header").bounds();
                     let list = w.find("today-notes").bounds();
                     assert_eq!(region.size.height, px(80.));
                     assert_eq!(region.top(), header.bottom());
                     assert_eq!(controls.top(), region.bottom());
+                    assert_eq!(controls.size.height, px(52.));
                     assert_eq!(list.top(), controls.bottom());
                     assert!(list.bottom() <= w.find("composer-surface").bounds().top());
                     w.click("scope-week", cx);
@@ -317,7 +318,7 @@ fn summary_editor_wheel_isolates_background(cx: &mut TestAppContext) {
         assert!(w.try_find("project-summary-region").is_none());
         assert_eq!(
             w.find("period-header").bounds().top(),
-            w.find("workspace-search").bounds().bottom()
+            w.find("destination-header").bounds().bottom()
         );
         w.remove_window();
     })

@@ -509,7 +509,8 @@ Choices remain in process memory across close/reopen. See the
 [normal GUI calendar contract](docs/normal-gui-host.md#historical-days-and-project-weeks-3422)
 for capture, input and verification boundaries.
 
-Search notes in the same center list with the quiet native input or CmdF. Nonempty
+Search notes in the same center list with the quiet native input in the upper-left
+rail or CmdF. Nonempty
 keywords search active non-draft notes globally across projects and dates, with
 **Only mine** applied before the top-50 bound. Results retain backend ranking and
 highlighted match excerpts; reaching 50 is a bounded result set, not a total count.

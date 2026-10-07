@@ -270,6 +270,8 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
         w.press("cmd-f", cx);
         w.render_frame(cx);
         assert!(input.read(cx).focus_handle(cx).is_focused(w));
+        let header = w.find("destination-header").bounds();
+        assert_eq!(w.find("period-header").bounds().top(), header.bottom());
         assert_eq!(
             view.read(cx).model.rows.len(),
             2,
@@ -297,18 +299,36 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
         })
     });
     for (mode, width) in [
+        (gpui_kit::component::ThemeMode::Light, 760.),
         (gpui_kit::component::ThemeMode::Light, 980.),
         (gpui_kit::component::ThemeMode::Dark, 760.),
+        (gpui_kit::component::ThemeMode::Dark, 980.),
     ] {
         cx.update_window(window.into(), |_, w, cx| {
             apply_theme(mode, cx);
             w.resize(size(px(width), px(560.)));
+            w.press("cmd-f", cx);
             w.render_frame(cx);
             let center = w.find("center-pane").bounds();
             let row = w.find(("note", 3_u64)).bounds();
             assert_eq!(row.size.height, px(64.));
             assert!(row.right() <= center.right());
-            assert!(w.find("workspace-search").bounds().right() <= center.right());
+            let rail = w.find("navigation-rail").bounds();
+            let search = w.find("workspace-search").bounds();
+            let text = input.read(cx).text_bounds().unwrap();
+            let clean = w.find("clean").bounds();
+            assert_eq!(search.top(), rail.top());
+            assert_eq!(search.size.height, px(44.));
+            assert!(search.right() <= rail.right() && search.right() <= center.left());
+            assert!(text.left() > search.left() && text.right() < clean.left());
+            assert!(clean.right() < rail.right() && clean.bottom() <= search.bottom());
+            assert_eq!(
+                w.find("today-notes").bounds().top(),
+                w.find("destination-header").bounds().bottom()
+            );
+            assert!(input.read(cx).focus_handle(cx).is_focused(w));
+            search_selection_release(&input, w, cx);
+            assert!(view.read(cx).search.active() && view.read(cx).detail_open);
             w.click("copy-detail", cx);
             assert!(
                 cx.read_from_clipboard()
@@ -352,6 +372,35 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
     cx.update_window(window.into(), |_, w, cx| {
         assert_eq!(view.read(cx).model.selected, Some(2));
         assert!(composer.read(cx).focus_handle(cx).is_focused(w));
+        composer.update(cx, |i, cx| {
+            i.set_value("rail draft", w, cx);
+            i.set_selected_range(2..5, cx);
+        });
+        w.press("cmd-f", cx);
+        w.input("buriedneedle", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).search.active() && !view.read(cx).search.loading)
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail_open));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("clean", cx);
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| !view.read(cx).search.active() && view.read(cx).loaded)
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        assert_eq!(view.read(cx).model.selected, Some(2));
+        assert_eq!(composer.read(cx).value(), "rail draft");
+        assert_eq!(composer.read(cx).selected_range(), 2..5);
         w.press("cmd-f", cx);
         w.input("buriedneedle", cx);
     })
@@ -369,6 +418,32 @@ fn native_search_input_outside_watch_reader_append_escape_and_rail(cx: &mut Test
     drop(view);
     services.cancel_operations();
     runtime.block_on(host.shutdown());
+}
+
+fn search_selection_release(input: &Entity<InputState>, w: &mut Window, cx: &mut App) {
+    use gpui_kit::InputEvent as _;
+    let text = input.read(cx).text_bounds().unwrap();
+    let start = text.origin + gpui_kit::point(px(2.), text.size.height / 2.);
+    let end = start + gpui_kit::point(px(45.), px(0.));
+    super::markdown_tests::drag_text(w, cx, start, end);
+    let selected = input.read(cx).selected_range();
+    assert!(!selected.is_empty());
+    w.dispatch_event(
+        gpui_kit::MouseMoveEvent {
+            position: start,
+            pressed_button: None,
+            modifiers: Default::default(),
+        }
+        .to_platform_input(),
+        cx,
+    );
+    w.render_frame(cx);
+    assert_eq!(input.read(cx).selected_range(), selected);
+    w.press("cmd-c", cx);
+    assert_eq!(
+        cx.read_from_clipboard().unwrap().text().unwrap(),
+        &input.read(cx).value()[selected]
+    );
 }
 
 pub(super) fn query(view: &Entity<Today>, text: &str, w: &mut Window, cx: &mut App) {

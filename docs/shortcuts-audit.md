@@ -227,7 +227,7 @@ remain unverified; no native launch or new manual gate is required.
 
 ## Workspace search (#3430)
 
-CmdF focuses the native Kit input in the existing center list. Nonempty keywords
+CmdF focuses the native Kit input in the upper-left rail (#3432). Nonempty keywords
 search active non-draft notes across all dates/projects; Only mine filters before
 the top-50 bound. Positive numeric/`#ID` access puts an exact canonical note first
 and ignores discovery source filtering. Arrows/Return in the search input select

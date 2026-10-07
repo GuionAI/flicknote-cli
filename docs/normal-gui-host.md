@@ -268,7 +268,8 @@ across all eligible creation channels, including hidden MCP notes. Search exact-
 
 ## Same-list workspace search (#3430)
 
-The native single-line Kit search input remains in the center workbench. CmdF
+The native single-line Kit search input sits in the upper-left rail, in a
+44-point row aligned with the center header (#3432). CmdF
 focuses it; empty input keeps ordinary browsing. Nonempty keywords replace that
 same list with up to 50 ranked active non-draft hits across all projects and dates,
 including from Shared/Archive origins. Only mine is applied by the existing FTS
