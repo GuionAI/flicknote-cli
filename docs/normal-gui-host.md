@@ -334,9 +334,25 @@ Only mine control and composer dock. A native Kit 0.7.0 public Plot uses Stack a
 Bar primitives, scales, understated date/count axes and grid. The 30 dates include
 zero days; project legend entries show labels and counts. Pointer hover resolves
 one painted segment and shows its semantic date, project and exact creation count.
-The tooltip is bounded to the plot, and the wrapping legend scrolls inside its
-own bounded region. The chart and legend expose text labels/totals independently
-of bar color. No drilldown, note selection, export or new analytics preference
+#3452 supersedes the initial cursor-relative tooltip. Loaded nonempty plots always
+reserve 68 points above their axes/bars, even without hover. A 190-point card stays
+in that band, centered on the selected date bar and clamped to an 8-point canvas
+inset; pointer movement within the same segment leaves its placement fixed. A
+subdued 1-point vertical guide follows that bar center through the plot. Neither
+card nor guide intercepts pointers. Only actual painted segments resolve; zero
+days, gaps, axes and leaving clear the card and guide immediately.
+
+The two-line card uses the current Light/Dark surface/border/text roles: 12-point
+semibold date, then a 7-point project-color circle, single truncated project name
+and right-aligned 11-point tabular-digit count. Padding and corner radius are 9
+points, with a 6-point row gap and at least 12 points between name and count.
+No internal day-boundary explanation, totals, actions, shadows or animation appear.
+Snapshot-specific native Plot identity prevents an old hover from surviving new
+data; scope changes discard it. Hover does not rebuild the background aggregate.
+This recovers the settled old desktop interaction (#2798 / read-only 65c4b638),
+while retaining Kit 0.7 native pointer tracking. The wrapping legend scrolls
+inside its own bounded region. The chart and legend expose text labels/totals
+independently of bar color. No drilldown, note selection, export or new analytics preference
 is introduced.
 
 Statistics follow the pinned old Swift chart's active-list contract: **stored
@@ -391,8 +407,9 @@ completions. No analytics daemon, periodic polling or saved chart cache is added
 Owned host checks cover >10,000 eligible notes, status/source/owner/project matrices,
 exact boundaries, archive/restore/classification/creation notifications and rollover.
 Rendered Kit pointer checks cover actual segment tooltips/legend and geometry at
-760/980 points in Light/Dark, rail traversal, retained draft/caret, no hidden note
-actions, search-origin restoration, stale responses, retry and close/reopen.
+760/980 points in Light/Dark, reserved hover bounds, day-center/clamp/guide,
+painted colors and stable bars, same-segment motion, snapshot/source/leave clearing,
+rail traversal, retained draft/caret, no hidden note actions, search-origin restoration, stale responses, retry and close/reopen.
 These are isolated host and rendered-component evidence; native pixels, OS input,
 cloud completeness and installed-app/Keychain acceptance remain unverified.
 

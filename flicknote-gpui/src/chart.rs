@@ -1,4 +1,4 @@
-//! One native stacked Plot; Kit owns pointer tracking and tooltip placement.
+//! One native stacked Plot; Kit tracks pointers, with a reserved day-anchored hover card.
 use super::*;
 use flicknote_sync::creation_chart::{ChartWatch, Snapshot};
 use gpui_kit::base::{ColorTokens, TestSupportExt};
@@ -9,10 +9,13 @@ use gpui_kit::component::{
         AxisLabelSide, AxisText, Grid, IntoPlot, Plot, PlotAxis,
         scale::{Scale, ScaleBand, ScaleLinear},
         shape::{Bar, Stack},
-        tooltip::{PlotHover, Tooltip, TooltipState},
+        tooltip::{PlotHover, TooltipState},
     },
 };
-use gpui_kit::{AnyElement, ElementId, Hsla, IntoElement, Pixels, Point, TextAlign, rgb};
+use gpui_kit::{
+    AnyElement, ElementId, FontFeatures, FontWeight, Hsla, IntoElement, Pixels, Point, TextAlign,
+    rgb,
+};
 
 #[derive(Clone)]
 struct Segment {
@@ -66,8 +69,18 @@ struct CreationPlot {
     identity: String,
     hovered: bool,
 }
+const HOVER_BAND: f32 = 68.;
+const CARD_WIDTH: f32 = 190.;
+
 impl CreationPlot {
+    fn plot_bounds(bounds: Bounds<Pixels>) -> Bounds<Pixels> {
+        Bounds::new(
+            bounds.origin + gpui_kit::point(px(0.), px(HOVER_BAND)),
+            size(bounds.size.width, bounds.size.height - px(HOVER_BAND)),
+        )
+    }
     fn scales(&self, bounds: Bounds<Pixels>) -> (ScaleBand<usize>, ScaleLinear<f32>) {
+        let bounds = Self::plot_bounds(bounds);
         (
             ScaleBand::new(0..30, [42., (f32::from(bounds.size.width) - 8.).max(43.)])
                 .padding_inner(0.3)
@@ -84,7 +97,7 @@ impl CreationPlot {
             let left = x.tick(&s.day).unwrap();
             let top = y.tick(&s.upper).unwrap();
             let bottom = y.tick(&s.lower).unwrap();
-            let (px, py) = (f32::from(position.x), f32::from(position.y));
+            let (px, py) = (f32::from(position.x), f32::from(position.y) - HOVER_BAND);
             px >= left && px < left + x.band_width() && py >= top && py < bottom
         })
     }
@@ -102,6 +115,7 @@ impl Plot for CreationPlot {
     }
     fn paint(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let (x, y) = self.scales(bounds);
+        let bounds = Self::plot_bounds(bounds);
         let step = (self.data.maximum / 4.).ceil().max(1.);
         let ticks: Vec<_> = (0..=(self.data.maximum / step).floor() as usize)
             .map(|i| {
@@ -167,7 +181,7 @@ impl Plot for CreationPlot {
     fn tooltip(
         &self,
         state: &TooltipState,
-        cursor: Point<Pixels>,
+        _: Point<Pixels>,
         bounds: Bounds<Pixels>,
         _: &mut Window,
         _: &mut App,
@@ -182,44 +196,111 @@ impl Plot for CreationPlot {
             .format("%A, %b %-d")
             .to_string();
         let count = self.data.snapshot.days[segment.day].counts[&group.key];
-        let label = format!("{date}, {}, {count}", group.name);
+        let (x, _) = self.scales(bounds);
+        let center = x.tick(&segment.day)? + x.band_width() / 2.;
+        let left =
+            (center - CARD_WIDTH / 2.).clamp(8., f32::from(bounds.size.width) - CARD_WIDTH - 8.);
+        let mut guide_color = self.palette.muted_foreground;
+        guide_color.a *= 0.35;
         Some(
-            Tooltip::new(cursor, bounds.size)
-                .glide(false)
-                .progress(1.)
-                .appearance(false)
-                .max_w(px(220.))
-                .px(px(8.))
-                .py(px(6.))
-                .bg(self.palette.surface)
-                .text_color(self.palette.foreground)
-                .border_1()
-                .border_color(self.palette.border)
+            div()
+                .size_full()
+                .relative()
                 .child(
                     div()
-                        .id("chart-tooltip")
-                        .aria_label(label.clone())
-                        .text_size(px(12.))
-                        .child(date)
-                        .child(
-                            div()
-                                .flex()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .child(group.name.clone()),
-                                )
-                                .child(count.to_string()),
-                        )
+                        .id("chart-guide")
+                        .absolute()
+                        .left(px(center - 0.5))
+                        .top(px(HOVER_BAND))
+                        .w(px(1.))
+                        .h(bounds.size.height - px(HOVER_BAND + 28.))
+                        .bg(guide_color)
                         .test_support(),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .left(px(left))
+                        .top(px(0.))
+                        .w(px(CARD_WIDTH))
+                        .h(px(HOVER_BAND))
+                        .flex()
+                        .items_center()
+                        .child(hover_card(
+                            self.palette,
+                            date,
+                            group.name.clone(),
+                            count,
+                            group_color(&group.color),
+                        )),
                 )
                 .into_any_element(),
         )
     }
 }
+fn hover_card(
+    palette: ColorTokens,
+    date: String,
+    name: String,
+    count: u64,
+    color: Hsla,
+) -> impl IntoElement {
+    div()
+        .id("chart-tooltip")
+        .aria_label(format!("{date}, {name}, {count}"))
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .p(px(9.))
+        .rounded(px(9.))
+        .bg(palette.surface)
+        .text_color(palette.foreground)
+        .border_1()
+        .border_color(palette.border)
+        .child(
+            div()
+                .text_size(px(12.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(date),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .text_size(px(11.))
+                .child(
+                    div()
+                        .id("chart-tooltip-color")
+                        .size(px(7.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(color)
+                        .test_support(),
+                )
+                .child(
+                    div()
+                        .id("chart-tooltip-project")
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .child(name)
+                        .test_support(),
+                )
+                .child(
+                    div()
+                        .id("chart-tooltip-count")
+                        .ml(px(6.))
+                        .flex_shrink_0()
+                        .font_features(FontFeatures(Arc::new(vec![("tnum".into(), 1)])))
+                        .child(count.to_string())
+                        .test_support(),
+                ),
+        )
+        .test_support()
+}
+
 fn legend(data: &Data, summary: String) -> impl IntoElement + use<> {
     div()
         .id("chart-legend")
@@ -380,9 +461,10 @@ impl Today {
                 if let Some(data) = data {
                     let summary = format!("{} notes created", data.snapshot.total());
                     let identity = format!(
-                        "creation-plot-{}-{}",
+                        "creation-plot-{}-{}-{:p}",
                         self.watch_epoch,
-                        data.snapshot.range().0.timestamp()
+                        data.snapshot.range().0.timestamp(),
+                        Arc::as_ptr(&data)
                     );
                     d.child(
                         div()
