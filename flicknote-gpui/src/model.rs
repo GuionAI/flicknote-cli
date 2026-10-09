@@ -169,6 +169,7 @@ mod tests {
                     archived: false,
                     draft: false,
                     shared: false,
+                    failed_stage: None,
                 })
                 .collect(),
         )

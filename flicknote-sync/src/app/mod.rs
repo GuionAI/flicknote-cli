@@ -21,6 +21,27 @@ pub struct Application {
 }
 
 impl Application {
+    /// Desktop-only lifecycle action; no IPC/MCP or PostgreSQL status setter.
+    #[cfg(feature = "experimental-spike")]
+    pub async fn retry_local_processing(
+        &self,
+        local: &flicknote_core::backend::LocalPowerSyncBackend,
+        uuid: &str,
+        stage: flicknote_core::backend::FailedStage,
+    ) -> Result<bool, WireError> {
+        local
+            .retry_processing(uuid, stage)
+            .await
+            .map_err(Self::db_error)
+    }
+    #[cfg(feature = "experimental-spike")]
+    pub async fn observe_local_processing(
+        &self,
+        local: &flicknote_core::backend::LocalPowerSyncBackend,
+        uuid: &str,
+    ) -> Result<Option<flicknote_core::backend::FailedStage>, WireError> {
+        local.observe_processing(uuid).await.map_err(Self::db_error)
+    }
     /// Narrow local workspace seam for an immutable watched note/project identity.
     #[cfg(feature = "experimental-spike")]
     pub async fn classify_local_note(

@@ -491,3 +491,10 @@ synthetic mode. Stored drafts count; only archived notes and canonical Only mine
 filtering alter eligibility. No body preload/list bound applies. See the
 [operator contract](normal-gui-host.md#creation-chart-3450) for the native Plot,
 watch/calendar/search/composer behavior and isolated verification limits.
+
+Failed-row Retry #155 follows the [normal retry contract](normal-gui-host.md#retry-failed-processing-155).
+Synthetic mode uses the same local Application/PowerSync stage transaction,
+without cloud retry actions. Owned rendered checks cover row targeting,
+Light/Dark width reservation, busy/duplicate guards and navigation/close/reopen.
+Native pixel attempts use only a new scratch app/root/port0, and do not launch
+the normal signed deliverable or control an existing app.

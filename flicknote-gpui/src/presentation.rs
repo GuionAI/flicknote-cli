@@ -630,6 +630,10 @@ impl Today {
     ) -> gpui_kit::AnyElement {
         let row = &self.model.rows[index];
         let id = row.id;
+        let retry = self.destination == Destination::Failed
+            && !self.search.active()
+            && row.failed_stage.is_some();
+        let target = row.clone();
         div()
             .id(("note", id as u64))
             .role(Role::ListBoxOption)
@@ -637,6 +641,8 @@ impl Today {
             .aria_label(format!("Note {id}: {}", row.preview))
             .h(px(32.))
             .w_full()
+            .flex()
+            .items_center()
             .when(self.model.selected == Some(id), |row| row.bg(p.selection))
             .hover(|row| {
                 row.bg(if self.model.selected == Some(id) {
@@ -645,12 +651,49 @@ impl Today {
                     p.accent
                 })
             })
-            .child(preview(
-                &row.preview,
-                &row.note_type,
-                row.project_color.as_deref(),
-                p,
-            ))
+            .child(
+                div()
+                    .id(("row-preview", id as u64))
+                    .flex_1()
+                    .min_w_0()
+                    .test_support()
+                    .child(preview(
+                        &row.preview,
+                        &row.note_type,
+                        row.project_color.as_deref(),
+                        p,
+                    )),
+            )
+            .when(retry, |d| {
+                d.child(
+                    div()
+                        .id(("retry-slot", id as u64))
+                        .w(px(68.))
+                        .flex_shrink_0()
+                        .px(px(4.))
+                        .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation()
+                        })
+                        .on_click(|_, _, cx| cx.stop_propagation())
+                        .child(
+                            Button::new(("retry-note", id as u64))
+                                .label(if self.note_busy(&row.uuid) {
+                                    "Busy…"
+                                } else {
+                                    "Retry"
+                                })
+                                .ghost()
+                                .small()
+                                .accessibility_label(format!("Retry processing note #{id}"))
+                                .tooltip("Retry failed processing")
+                                .disabled(self.note_busy(&row.uuid) || !self.retry_allowed)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    cx.stop_propagation();
+                                    this.retry_row(target.clone(), window, cx);
+                                })),
+                        ),
+                )
+            })
             .on_hover(cx.listener(move |this, hovered, _, cx| {
                 if *hovered {
                     this.related_note = Some(id);
@@ -823,6 +866,34 @@ impl Today {
             .child(render_reading(reading, row, p, cx))
             .test_support()
     }
+    fn retry_checks(
+        &self,
+        actions: &note_actions::NoteActions,
+        cx: &Context<Self>,
+    ) -> Vec<gpui_kit::AnyElement> {
+        actions
+            .unchecked
+            .iter()
+            .map(|row| {
+                let target = row.clone();
+                Button::new(("check-retry", row.id as u64))
+                    .label(format!("Check note #{} before retrying", row.id))
+                    .accessibility_label(format!("Check note #{} before retrying", row.id))
+                    .disabled(actions.in_flight(&row.uuid) || !self.retry_allowed)
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.perform_note_action(
+                            target.clone(),
+                            NoteAction::CheckRetry,
+                            window,
+                            cx,
+                        );
+                    }))
+                    .into_any_element()
+            })
+            .collect()
+    }
     fn render_composer(&self, p: ColorTokens, cx: &mut Context<Self>) -> impl IntoElement {
         let capture = self.model.capture();
         div()
@@ -871,6 +942,7 @@ impl Today {
                             .text_color(p.destructive)
                             .child(error)
                     }))
+                    .children(self.retry_checks(&capture.note_actions, cx))
                     .children(append_recovery(&capture.appends, p))
                     .children(capture.uncertain.last().map(|(text, error)| {
                         let id = error
@@ -1159,7 +1231,7 @@ impl Render for Today {
             self.frames += 1;
         }
         self.visible = window.is_visible();
-        self.drag_allowed = !self.shortcuts_blocked(window, cx);
+        self.update_note_input_guards(window, cx);
         let navigation_context = if self.editor.is_some() {
             "WorkspaceEditor"
         } else if self.shortcuts_blocked(window, cx) {

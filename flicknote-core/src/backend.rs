@@ -205,7 +205,7 @@ pub trait NoteDb: Send + Sync {
 #[cfg(feature = "powersync")]
 mod local;
 #[cfg(feature = "powersync")]
-pub use local::LocalPowerSyncBackend;
+pub use local::{FailedStage, LocalPowerSyncBackend};
 
 #[cfg(test)]
 #[cfg(feature = "powersync")]

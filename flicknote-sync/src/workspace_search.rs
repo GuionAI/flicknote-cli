@@ -173,6 +173,7 @@ async fn project(
                 archived: r.get(7)?,
                 draft: r.get(8)?,
                 shared: r.get(9)?,
+                failed_stage: None,
                 content: String::new(),
             })
         })()

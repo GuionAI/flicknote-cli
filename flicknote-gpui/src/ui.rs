@@ -196,6 +196,7 @@ struct Today {
     canonical_rows: Arc<Vec<flicknote_sync::today::TodayRow>>,
     related_note: Option<i64>,
     drag_allowed: bool,
+    retry_allowed: bool,
     chart: Option<Arc<chart::Data>>,
     chart_watch: Option<flicknote_sync::creation_chart::ChartWatch>,
     watch: Option<TodayWatch>,
@@ -275,6 +276,7 @@ impl Today {
             canonical_rows: Arc::default(),
             related_note: None,
             drag_allowed: false,
+            retry_allowed: false,
             chart: None,
             chart_watch: None,
             watch: None,
@@ -805,6 +807,13 @@ impl Today {
                 .clone()
                 .or_else(|| capture.error.clone())
         };
+        let refresh = std::mem::take(&mut self.model.capture().note_actions.refresh);
+        if refresh {
+            self.subscribe(window, cx);
+            if self.search.active() {
+                self.run_search(Duration::ZERO, window, cx);
+            }
+        }
         let links = std::mem::take(&mut self.model.capture().note_actions.links);
         for link in links {
             cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(link));

@@ -13,6 +13,28 @@ use super::{
     RouteProjectUpdate, parse_note_lookup,
 };
 
+/// Internal local processing stage; deliberately absent from machine DTOs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailedStage {
+    Ai,
+    Source,
+}
+impl FailedStage {
+    pub fn from_status(status: &str) -> Option<Self> {
+        match status {
+            "ai_failed" => Some(Self::Ai),
+            "source_failed" => Some(Self::Source),
+            _ => None,
+        }
+    }
+    fn statuses(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Ai => ("ai_failed", "ai_queued"),
+            Self::Source => ("source_failed", "source_queued"),
+        }
+    }
+}
+
 // ─── LocalPowerSyncBackend ───────────────────────────────────────────────────
 
 pub struct LocalPowerSyncBackend {
@@ -22,6 +44,37 @@ pub struct LocalPowerSyncBackend {
 impl LocalPowerSyncBackend {
     pub fn new(db: PowerSyncDatabase, user_id: String) -> Self {
         Self { db, user_id }
+    }
+
+    /// Single conditional PowerSync write: never restores archives or touches timestamps.
+    pub async fn retry_processing(&self, uuid: &str, stage: FailedStage) -> Result<bool, CliError> {
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        let (failed, queued) = stage.statuses();
+        let matched = tx.query_row(
+            "SELECT 1 FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = ?",
+            params![uuid, self.user_id, failed], |_| Ok(()),
+        ).optional()?.is_some();
+        if matched {
+            tx.execute(
+                "UPDATE notes SET status = ?, metadata = json_remove(metadata, '$.error') WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND status = ?",
+                params![queued, uuid, self.user_id, failed],
+            )?;
+        }
+        tx.commit()?;
+        Ok(matched)
+    }
+
+    pub async fn observe_processing(&self, uuid: &str) -> Result<Option<FailedStage>, CliError> {
+        let reader = self.db.reader().await?;
+        let status: Option<String> = reader
+            .query_row(
+                "SELECT status FROM notes WHERE id = ? AND user_id = ? AND deleted_at IS NULL",
+                params![uuid, self.user_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(status.as_deref().and_then(FailedStage::from_status))
     }
 
     /// Manual desktop classification binds both identities under the canonical writer.

@@ -1,5 +1,6 @@
 //! One bounded canonical projection; snapshots run only on the host runtime.
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, TimeZone, Utc};
+use flicknote_core::backend::FailedStage;
 use futures_lite::StreamExt;
 use powersync::PowerSyncDatabase;
 use std::{sync::Arc, time::Instant};
@@ -20,6 +21,7 @@ pub struct TodayRow {
     pub archived: bool,
     pub draft: bool,
     pub shared: bool,
+    pub failed_stage: Option<FailedStage>,
 }
 
 /// Match desktop line folding while preserving spaces/tabs inside each line.
@@ -229,12 +231,11 @@ impl TodayWatch {
                     Destination::Archive => "n.deleted_at IS NOT NULL",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary, archived, draft, shared FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, coalesce(n.status, '') AS status, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary, archived, draft, shared, status FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary, NULL, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
-                let project_id = if let Destination::Project(id) = &destination {
-                    id.clone()
-                } else {
-                    String::new()
+                let project_id = match &destination {
+                    Destination::Project(id) => id.clone(),
+                    _ => String::new(),
                 };
                 let params = [
                     user_id.clone(),
@@ -271,6 +272,7 @@ impl TodayWatch {
                                 archived: r.get(10)?,
                                 draft: r.get(11)?,
                                 shared: r.get(12)?,
+                                failed_stage: FailedStage::from_status(&r.get::<_, String>(13)?),
                             });
                         } else {
                             projects.push(ProjectContext {

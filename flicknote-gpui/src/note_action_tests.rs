@@ -1296,3 +1296,265 @@ fn failed_destination_render_watch_capture_and_reopen(cx: &mut TestAppContext) {
     .unwrap();
     runtime.block_on(host.shutdown());
 }
+
+fn assert_retry_input_guards(view: &Entity<Today>, w: &mut Window, cx: &mut App) {
+    let row = view
+        .read(cx)
+        .model
+        .rows
+        .iter()
+        .find(|r| r.id == 3)
+        .unwrap()
+        .clone();
+    let composer = view.read(cx).composer.clone();
+    composer.update(cx, |input, cx| {
+        input.replace_and_mark_text_in_range(None, "ni", Some(2..2), w, cx);
+    });
+    let marked = composer.read(cx).value().to_string();
+    w.render_frame(cx);
+    w.click(("retry-note", 3_u64), cx);
+    assert!(!view.read(cx).note_busy(&row.uuid));
+    assert_eq!(composer.read(cx).value(), marked);
+    composer.update(cx, |input, cx| {
+        input.unmark_text(w, cx);
+        input.set_value("retained draft", w, cx);
+        input.set_selected_range(3..3, cx);
+    });
+    view.update(cx, |v, cx| {
+        v.edit(project_editor::Kind::Add, w, cx);
+        v.retry_row(row.clone(), w, cx);
+        assert!(!v.note_busy(&row.uuid));
+        v.cancel_editor(w, cx);
+    });
+    assert_eq!(composer.read(cx).value(), "retained draft");
+    assert_eq!(composer.read(cx).selected_range(), 3..3);
+    w.render_frame(cx);
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned rendered journey tests immutable row target and retained host operation.
+fn failed_retry_row_target_busy_navigation_and_geometry(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (host, _fake) = fixture(&runtime, root.path());
+    runtime.block_on(async {
+        host.db.writer().await.unwrap().execute("UPDATE notes SET status=CASE short_id WHEN 3 THEN 'ai_failed' ELSE 'source_failed' END WHERE short_id IN (3,4)", []).unwrap();
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    ready(cx, &view, 4);
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("failed", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    cx.update_window(window.into(), |_, w, cx| {
+        for mode in [
+            gpui_kit::component::ThemeMode::Light,
+            gpui_kit::component::ThemeMode::Dark,
+        ] {
+            apply_theme(mode, cx);
+            for width in [760., 980.] {
+                w.resize(gpui_kit::size(px(width), px(560.)));
+                w.bounds_changed(cx);
+                w.render_frame(cx);
+                let row = w.find(("note", 3_u64)).bounds();
+                let button = w.find(("retry-note", 3_u64)).bounds();
+                assert_eq!(row.size.height, px(32.));
+                assert!(button.right() <= row.right());
+                assert!(button.size.width > px(30.));
+                assert!(w.find(("row-preview", 3_u64)).bounds().right() <= button.left());
+            }
+        }
+        w.click(("note", 4_u64), cx);
+        assert_eq!(view.read(cx).model.selected, Some(4));
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |input, cx| input.set_value("retained draft", w, cx));
+        assert_retry_input_guards(&view, w, cx);
+        w.render_frame(cx);
+    })
+    .unwrap();
+    // Hold the actual PowerSync writer: accepted retry cannot finish before its duplicate guard is checked.
+    let writer = runtime.block_on(host.db.writer()).unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        w.click(("retry-note", 3_u64), cx);
+        assert_eq!(
+            view.read(cx).model.selected,
+            Some(4),
+            "retry cannot bubble to another selection"
+        );
+        assert_eq!(view.read(cx).detail.as_ref().unwrap().uuid, uuid(4));
+        assert_eq!(view.read(cx).composer.read(cx).value(), "retained draft");
+        assert!(view.read(cx).note_busy(&uuid(3)));
+        w.render_frame(cx);
+        w.click(("retry-note", 3_u64), cx);
+        assert_eq!(
+            view.read(cx).model.selected,
+            Some(4),
+            "disabled retry cannot select its parent row"
+        );
+        view.update(cx, |v, cx| {
+            let target = v.model.rows.iter().find(|r| r.id == 3).unwrap().clone();
+            v.perform_note_action(target, NoteAction::Archive, w, cx);
+            v.change_destination(Destination::Shared, w, cx);
+        });
+        assert!(view.read(cx).note_busy(&uuid(3)));
+    })
+    .unwrap();
+    window.update(cx, |_, w, _| w.remove_window()).unwrap();
+    drop(writer);
+    settle(cx, |_| {
+        runtime
+            .block_on(host.db.reader())
+            .unwrap()
+            .query_row("SELECT status FROM notes WHERE short_id=3", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .unwrap()
+            == "ai_queued"
+    });
+    let (reopened, view) = append_tests::open(cx, services.clone());
+    ready(cx, &view, 0);
+    cx.update_window(reopened.into(), |_, w, cx| {
+        view.update(cx, |v, cx| v.change_destination(Destination::Failed, w, cx));
+    })
+    .unwrap();
+    ready(cx, &view, 1);
+    cx.update_window(reopened.into(), |_, w, cx| {
+        assert_eq!(view.read(cx).model.rows[0].id, 4);
+        assert_eq!(view.read(cx).composer.read(cx).value(), "retained draft");
+        w.render_frame(cx);
+        for _ in 0..40 {
+            if w.find(("retry-note", 4_u64)).focused() == Some(true) {
+                break;
+            }
+            w.focus_next(cx);
+            w.render_frame(cx);
+        }
+        assert_eq!(w.find(("retry-note", 4_u64)).focused(), Some(true));
+        w.press("space", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 0);
+    assert_eq!(
+        runtime
+            .block_on(host.db.reader())
+            .unwrap()
+            .query_row("SELECT status FROM notes WHERE short_id=4", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "source_queued"
+    );
+    reopened.update(cx, |_, w, _| w.remove_window()).unwrap();
+    runtime.block_on(host.shutdown());
+}
+
+#[gpui_kit::test]
+fn failed_retry_database_error_requires_check_across_destinations(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (host, _fake) = fixture(&runtime, root.path());
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE notes SET status='ai_failed' WHERE short_id=3", [])
+            .unwrap();
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    ready(cx, &view, 4);
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click("failed", cx);
+    })
+    .unwrap();
+    ready(cx, &view, 1);
+    let writer = runtime.block_on(host.db.writer()).unwrap();
+    writer
+        .execute(
+            "UPDATE notes SET metadata='invalid-json' WHERE short_id=3",
+            [],
+        )
+        .unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("retry-note", 3_u64), cx);
+    })
+    .unwrap();
+    drop(writer);
+    settle(cx, |_| {
+        !services
+            .capture
+            .lock()
+            .unwrap()
+            .note_actions
+            .unchecked
+            .is_empty()
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| v.change_destination(Destination::Shared, w, cx));
+        w.render_frame(cx);
+        assert!(
+            w.try_find(("check-retry", 3_u64)).is_some(),
+            "unknown feedback lives outside vanished row"
+        );
+        assert!(view.read(cx).note_busy(&uuid(3)));
+    })
+    .unwrap();
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET metadata='{}',status='source_failed' WHERE short_id=3",
+                [],
+            )
+            .unwrap();
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| v.change_destination(Destination::Failed, w, cx));
+    })
+    .unwrap();
+    ready(cx, &view, 1);
+    cx.update_window(window.into(), |_, w, cx| {
+        assert!(
+            view.read(cx).note_busy(&uuid(3)),
+            "a new processor failure cannot silently unlock retry"
+        );
+        w.render_frame(cx);
+        w.click(("check-retry", 3_u64), cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| !view.read(cx).note_busy(&uuid(3))));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        w.click(("retry-note", 3_u64), cx);
+    })
+    .unwrap();
+    ready(cx, &view, 0);
+    assert_eq!(
+        runtime
+            .block_on(host.db.reader())
+            .unwrap()
+            .query_row("SELECT status FROM notes WHERE short_id=3", [], |r| r
+                .get::<_, String>(0))
+            .unwrap(),
+        "source_queued"
+    );
+    window.update(cx, |_, w, _| w.remove_window()).unwrap();
+    runtime.block_on(host.shutdown());
+}

@@ -455,7 +455,7 @@ projects whose stored status is exactly `ai_failed` or `source_failed`, descendi
 numeric short ID with the existing 10,000 bound. Owner, active, failure and
 Only mine predicates all apply before LIMIT. The current six-status backend
 contract has no plain `failed` status. This local discovery view adds no public
-MCP status schema, retry operation or lifecycle mutation.
+MCP status schema or generic lifecycle setter.
 
 The same row previews, selection, Markdown reader, canonical Copy, append,
 classification, archive and sharing remain available under their existing guards.
@@ -621,3 +621,44 @@ Keep source-bound packages in ignored `.scratch`. Orc starts independent review
 after implementation completion and governs merge. Review/merge do not deploy or
 perform normal endpoint cutover. No native launch or new manual matrix is required
 for #3374; live cloud, normal native input/pixels and cutover remain unverified.
+
+## Retry failed processing (#155)
+
+Each canonical Failed row has a compact **Retry** button at its far right,
+within the fixed 32-point row. Its reserved width keeps previews and project
+markers separate at minimum/normal widths in Light/Dark. Search and other
+views have no Retry button. Pointer activation and Tab then Space/Return target
+the button's immutable UUID and observed failed stage, independently of selection
+or reader. There is no new shortcut. Ordinary composer draft/caret/undo remain
+intact; marked input and modal editors block activation.
+
+The process-owned action host calls a narrow local Application operation over
+the normal PowerSync writer. Within one writer transaction, current-account,
+active UUID and exact observed failed stage must still match. `ai_failed` maps
+to `ai_queued`; `source_failed` maps to `source_queued`. Only status and
+`metadata.error` change. Both `created_at` and `updated_at`, other metadata,
+provenance, content/source/title/summary/project/flag/extractions and archive
+state are preserved. NULL metadata stays NULL. Unlike the read-only iOS
+reference's `deleted_at=NULL`, this active-only action never restores an archive
+in a race. Ready, queued, opposite-stage, foreign, archived and plain `failed`
+rows are truthful no-matches, with canonical refresh rather than claimed success.
+
+The row shows **Busy…** while its UUID has an accepted action. Duplicate retry,
+append, archive, share and classification on that UUID are blocked. Navigation
+and close/reopen retain accepted UUID/stage in the existing host; they cannot
+retarget or resurrect a row. No optimistic retry removal is invented: the watch
+removes the queued row. Errors stay in the workspace feedback area even if the
+row disappears. An unknown result, including a timeout, locks another retry
+until **Check note #ID before retrying** explicitly reads the canonical local
+note and refreshes the view. Another processor failure alone cannot unlock it.
+Checking does not resubmit processing; there is no blind or automatic retry.
+A successful local queue write does not prove cloud upload or processing success;
+normal sync continues with the existing connector, including during an outage.
+
+Reference authority: read-only fn-ios `Shared/Database/Note/NoteModels.swift`
+(`NoteStatus.retryQueuedStatus`), `Shared/Database/Note/NoteRepo+Write.swift`
+(`retryNoteProcessing(id:failedStatus:)`) and
+`Shared/Components/Notes/NotePreviewListItem.swift` (`handleRetry`). This slice
+adds no machine DTO/status setter, IPC/MCP tool/schema, PostgreSQL adapter or
+DDL change. Owned runtime/rendered tests establish local behavior and geometry;
+native pixels and cloud processing remain separately reported evidence.

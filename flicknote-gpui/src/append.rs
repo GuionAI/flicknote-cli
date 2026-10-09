@@ -126,6 +126,7 @@ mod tests {
             archived: false,
             draft: false,
             shared: false,
+            failed_stage: None,
             note_type: "normal".into(),
         }
     }

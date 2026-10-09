@@ -467,6 +467,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                             archived: false,
                             draft: false,
                             shared: false,
+                            failed_stage: None,
                         })
                         .collect(),
                 ));

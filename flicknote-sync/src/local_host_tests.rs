@@ -1709,3 +1709,220 @@ async fn failed_watch_status_owner_source_and_membership_before_limit() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Owned host checks exact local lifecycle and preservation matrix.
+async fn retry_processing_exact_stage_active_account_and_preservation() {
+    use crate::today::Destination;
+    use flicknote_core::backend::{FailedStage, LocalPowerSyncBackend};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        for (id, stage, meta, owner, archived) in [
+            (
+                "ai",
+                "ai_failed",
+                Some(
+                    r#"{"error":{"message":"bad"},"created_by_ai":true,"link":{"url":"kept"},"other":[1,false]}"#,
+                ),
+                "account-a",
+                None,
+            ),
+            ("source", "source_failed", None, "account-a", None),
+            ("foreign", "ai_failed", Some("{\"error\":1}"), "other", None),
+            (
+                "archived",
+                "ai_failed",
+                Some("{\"error\":2}"),
+                "account-a",
+                Some("2026-01-03"),
+            ),
+            ("ready", "ready", Some("{\"error\":3}"), "account-a", None),
+            (
+                "queued",
+                "ai_queued",
+                Some("{\"error\":4}"),
+                "account-a",
+                None,
+            ),
+            ("plain", "failed", Some("{\"error\":5}"), "account-a", None),
+            (
+                "opposite",
+                "source_failed",
+                Some("{\"error\":6}"),
+                "account-a",
+                None,
+            ),
+            ("duplicate", "ai_failed", Some("{}"), "account-a", None),
+        ] {
+            writer.execute("INSERT INTO notes(id,short_id,user_id,type,status,content,title,summary,source,project_id,is_flagged,metadata,created_at,updated_at,deleted_at) VALUES(?,(SELECT coalesce(max(short_id),0)+1 FROM notes),?,'link',?,'body','title','summary','{\"source\":true}','project',1,?,'2026-01-01','2026-01-02',?)", rusqlite::params![id,owner,stage,meta,archived]).unwrap();
+        }
+        writer.execute("INSERT INTO note_extractions(id,note_id,user_id,key,value) VALUES('extraction','ai','account-a','::topic','kept')", []).unwrap();
+    }
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("DELETE FROM ps_crud", [])
+        .unwrap();
+    let local = LocalPowerSyncBackend::new(host.db.clone(), host.user_id.clone());
+    let read = |id: &str| {
+        let id = id.to_owned();
+        let db = host.db.clone();
+        async move {
+            let reader = db.reader().await.unwrap();
+            reader.query_row("SELECT json_object('owner',user_id,'type',type,'status',status,'content',content,'title',title,'summary',summary,'source',source,'project',project_id,'flag',is_flagged,'metadata',json(metadata),'created',created_at,'updated',updated_at,'deleted',deleted_at) FROM notes WHERE id=?", [id], |r| r.get::<_,String>(0)).map(|s| serde_json::from_str::<Value>(&s).unwrap()).unwrap()
+        }
+    };
+    let mut watch = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Failed,
+        false,
+    );
+    snapshot(&mut watch, |s| {
+        s.rows
+            .iter()
+            .any(|r| r.uuid == "ai" && r.failed_stage == Some(FailedStage::Ai))
+    })
+    .await;
+    for (id, stage, queued) in [
+        ("ai", FailedStage::Ai, "ai_queued"),
+        ("source", FailedStage::Source, "source_queued"),
+    ] {
+        let mut expected = read(id).await;
+        expected["status"] = json!(queued);
+        if let Some(metadata) = expected["metadata"].as_object_mut() {
+            metadata.remove("error");
+        }
+        assert!(
+            host.app
+                .retry_local_processing(&local, id, stage)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            read(id).await,
+            expected,
+            "all unrelated fields and both timestamps preserved"
+        );
+        let patch = host.db.next_crud_transaction().await.unwrap().unwrap();
+        assert_eq!(patch.crud.len(), 1);
+        assert_eq!(patch.crud[0].id, id);
+        assert_eq!(patch.crud[0].table, "notes");
+        assert!(matches!(
+            patch.crud[0].update_type,
+            powersync::UpdateType::Patch
+        ));
+        let data = patch.crud[0].data.as_ref().unwrap();
+        assert_eq!(data["status"], json!(queued));
+        assert!(!data.contains_key("created_at") && !data.contains_key("updated_at"));
+        assert!(data.keys().all(|key| key == "status" || key == "metadata"));
+        patch.complete().await.unwrap();
+        assert!(
+            !host
+                .app
+                .retry_local_processing(&local, id, stage)
+                .await
+                .unwrap()
+        );
+    }
+    snapshot(&mut watch, |s| {
+        s.rows.iter().all(|r| r.uuid != "ai" && r.uuid != "source")
+    })
+    .await;
+    for id in [
+        "foreign", "archived", "ready", "queued", "plain", "opposite",
+    ] {
+        let before = read(id).await;
+        assert!(
+            !host
+                .app
+                .retry_local_processing(&local, id, FailedStage::Ai)
+                .await
+                .unwrap()
+        );
+        assert_eq!(read(id).await, before);
+    }
+    assert!(
+        !host
+            .app
+            .retry_local_processing(&local, "missing", FailedStage::Ai)
+            .await
+            .unwrap()
+    );
+    let other = LocalPowerSyncBackend::new(host.db.clone(), "other".into());
+    assert!(
+        !host
+            .app
+            .retry_local_processing(&other, "duplicate", FailedStage::Ai)
+            .await
+            .unwrap()
+    );
+    let (a, b) = tokio::join!(
+        host.app
+            .retry_local_processing(&local, "duplicate", FailedStage::Ai),
+        host.app
+            .retry_local_processing(&local, "duplicate", FailedStage::Ai)
+    );
+    assert_ne!(
+        a.unwrap(),
+        b.unwrap(),
+        "exactly one atomic duplicate succeeds"
+    );
+    assert_eq!(
+        host.db
+            .reader()
+            .await
+            .unwrap()
+            .query_row(
+                "SELECT value FROM note_extractions WHERE id='extraction'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "kept"
+    );
+    assert_eq!(
+        host.app
+            .observe_local_processing(&local, "opposite")
+            .await
+            .unwrap(),
+        Some(FailedStage::Source)
+    );
+    assert_eq!(
+        host.app
+            .observe_local_processing(&local, "archived")
+            .await
+            .unwrap(),
+        None
+    );
+    // A real SQLite error must propagate, never claim a retry completed.
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='invalid-json' WHERE id='opposite'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        host.app
+            .retry_local_processing(&local, "opposite", FailedStage::Source)
+            .await
+            .is_err()
+    );
+    assert_eq!(read("ready").await["status"], json!("ready"));
+    assert_eq!(
+        host.app
+            .observe_local_processing(&local, "opposite")
+            .await
+            .unwrap(),
+        Some(FailedStage::Source)
+    );
+    drop(watch);
+    host.shutdown().await;
+    server.abort();
+}

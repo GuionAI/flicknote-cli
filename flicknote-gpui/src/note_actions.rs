@@ -1,4 +1,4 @@
-//! Process-owned, bounded feedback for the workspace's five explicit note actions.
+//! Process-owned, bounded feedback for explicit workspace note actions.
 use super::*;
 use flicknote_sync::today::{ProjectContext, TodayRow};
 
@@ -9,6 +9,8 @@ pub(super) enum NoteAction {
     Share,
     Unshare,
     Restore,
+    Retry(flicknote_core::backend::FailedStage),
+    CheckRetry,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ProjectContextIdentity {
@@ -29,6 +31,8 @@ impl From<&ProjectContext> for ProjectContextIdentity {
 pub(crate) struct NoteActions {
     pending: Vec<Accepted>,
     next_token: u64,
+    pub(super) unchecked: Vec<TodayRow>,
+    pub(super) refresh: bool,
     pub(crate) error: Option<String>,
     pub(crate) links: Vec<String>,
 }
@@ -41,8 +45,11 @@ struct Accepted {
     complete: bool,
 }
 impl NoteActions {
-    pub(super) fn busy(&self, uuid: &str) -> bool {
+    pub(super) fn in_flight(&self, uuid: &str) -> bool {
         self.pending.iter().any(|p| p.row.uuid == uuid)
+    }
+    pub(super) fn busy(&self, uuid: &str) -> bool {
+        self.in_flight(uuid) || self.unchecked.iter().any(|r| r.uuid == uuid)
     }
     fn accept(
         &mut self,
@@ -50,7 +57,9 @@ impl NoteActions {
         action: NoteAction,
         scope: (Destination, bool, Option<Range>, Option<String>),
     ) -> Option<u64> {
-        if self.busy(&row.uuid) {
+        if self.pending.iter().any(|p| p.row.uuid == row.uuid)
+            || (self.busy(&row.uuid) && action != NoteAction::CheckRetry)
+        {
             return None;
         }
         self.next_token += 1;
@@ -76,6 +85,8 @@ impl NoteActions {
                 NoteAction::Project(_) => row.project_id != pending.row.project_id,
                 NoteAction::Archive | NoteAction::Restore => row.archived != pending.row.archived,
                 NoteAction::Share | NoteAction::Unshare => row.shared != pending.row.shared,
+                NoteAction::Retry(stage) => row.failed_stage != Some(*stage),
+                NoteAction::CheckRetry => false,
             });
             if changed || (row.is_none() && scope == &pending.scope) {
                 // Includes unrelated external writers. Never resurrect an older overlay.
@@ -136,6 +147,16 @@ impl NoteActions {
         match result {
             Ok(link) => {
                 self.links.extend(link);
+                if self.pending[index].action == NoteAction::CheckRetry {
+                    let uuid = &self.pending[index].row.uuid;
+                    self.unchecked.retain(|r| &r.uuid != uuid);
+                    self.pending[index].projecting = false;
+                    self.refresh = true;
+                    self.error = Some(format!(
+                        "Checked note #{}. Retry is available only if it is still failed.",
+                        self.pending[index].row.id
+                    ));
+                }
                 if matches!(self.pending[index].action, NoteAction::Share)
                     && self.pending[index].row.shared
                 {
@@ -148,23 +169,37 @@ impl NoteActions {
                 }
             }
             Err(error) => {
-                let verb = match self.pending.remove(index).action {
+                let accepted = self.pending.remove(index);
+                let retry = matches!(accepted.action, NoteAction::Retry(_));
+                let verb = match accepted.action {
                     NoteAction::Project(_) => "classify",
                     NoteAction::Archive => "archive",
                     NoteAction::Share => "share",
                     NoteAction::Unshare => "unshare",
                     NoteAction::Restore => "restore",
+                    NoteAction::Retry(_) => "retry",
+                    NoteAction::CheckRetry => "check",
                 };
                 let definite = matches!(
                     error.code.as_str(),
                     "invalid_argument" | "project_not_found" | "note_not_found"
                 );
+                if retry {
+                    self.refresh = true;
+                    if !definite {
+                        self.unchecked.push(accepted.row.clone());
+                    }
+                }
+                let message = if retry || accepted.action == NoteAction::CheckRetry {
+                    format!("Note #{}: {}", accepted.row.id, error.message)
+                } else {
+                    error.message
+                };
                 self.error = Some(if definite {
-                    format!("Could not {verb}: {}", error.message)
+                    format!("Could not {verb}: {message}")
                 } else {
                     format!(
-                        "{} Check the note before trying again; the change may have completed.",
-                        error.message
+                        "{message} Check the note before trying again; the change may have completed."
                     )
                 });
             }
@@ -195,6 +230,10 @@ impl Render for NoteDrag {
     }
 }
 impl Today {
+    pub(super) fn update_note_input_guards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retry_allowed = self.editor.is_none() && !self.composing(window, cx);
+        self.drag_allowed = self.retry_allowed && self.composer.read(cx).value().is_empty();
+    }
     #[cfg(test)]
     pub(super) fn archive_busy(&self) -> bool {
         self.model
@@ -277,6 +316,14 @@ impl Today {
         };
         self.perform_note_action(drag.row.clone(), action, window, cx);
     }
+    pub(super) fn retry_row(&mut self, row: TodayRow, window: &mut Window, cx: &mut Context<Self>) {
+        if self.destination != Destination::Failed || self.search.active() {
+            return;
+        }
+        if let Some(stage) = row.failed_stage {
+            self.perform_note_action(row, NoteAction::Retry(stage), window, cx);
+        }
+    }
     pub(super) fn selected_action(
         &mut self,
         action: NoteAction,
@@ -302,8 +349,14 @@ impl Today {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shortcuts_blocked(window, cx)
-            || self.note_busy(&row.uuid)
+        let blocked = if matches!(action, NoteAction::Retry(_) | NoteAction::CheckRetry) {
+            self.editor.is_some() || self.composing(window, cx)
+        } else {
+            self.shortcuts_blocked(window, cx)
+        };
+        if blocked
+            || (self.note_busy(&row.uuid) && action != NoteAction::CheckRetry)
+            || (matches!(action, NoteAction::Retry(stage) if row.failed_stage != Some(stage)))
             || row.id <= 0
             || (row.draft && !matches!(action, NoteAction::Restore))
             || row.archived != matches!(action, NoteAction::Restore)
@@ -390,6 +443,27 @@ async fn execute_note_action(
     row: &TodayRow,
     action: NoteAction,
 ) -> Result<Option<String>, flicknote_client::WireError> {
+    if matches!(action, NoteAction::Retry(_) | NoteAction::CheckRetry) {
+        let local = flicknote_core::backend::LocalPowerSyncBackend::new(
+            services.db.clone(),
+            services.user_id.clone(),
+        );
+        if let NoteAction::Retry(stage) = action {
+            if !services
+                .app
+                .retry_local_processing(&local, &row.uuid, stage)
+                .await?
+            {
+                return Err(flicknote_client::WireError { code: "invalid_argument".into(), message: "The note is no longer active in the observed failed stage. Refreshing notes.".into(), retryable: false, details: None });
+            }
+        } else {
+            services
+                .app
+                .observe_local_processing(&local, &row.uuid)
+                .await?;
+        }
+        return Ok(None);
+    }
     if let NoteAction::Project(project) = action {
         let local = flicknote_core::backend::LocalPowerSyncBackend::new(
             services.db.clone(),
@@ -431,7 +505,9 @@ async fn execute_note_action(
         NoteAction::Unshare => AppRequest::NoteUnshare {
             id: row.id.to_string(),
         },
-        NoteAction::Project(_) => unreachable!("classification handled above"),
+        NoteAction::Project(_) | NoteAction::Retry(_) | NoteAction::CheckRetry => {
+            unreachable!("local action handled above")
+        }
     };
     match services.app.handle(request).await? {
         AppResponse::Share(result) => Ok(Some(result.url)),
@@ -462,6 +538,7 @@ mod tests {
             archived: false,
             draft: false,
             shared: false,
+            failed_stage: None,
         }
     }
     fn action() -> NoteAction {
@@ -639,5 +716,60 @@ mod tests {
             assert!(state.links.is_empty());
             assert!(!state.busy("original"));
         }
+    }
+    #[test]
+    fn retry_unknown_requires_explicit_check_even_after_failure_returns() {
+        let mut state = NoteActions::default();
+        let mut row = row();
+        row.failed_stage = Some(flicknote_core::backend::FailedStage::Ai);
+        let scope = (Destination::Failed, false, None, None);
+        let retry = NoteAction::Retry(row.failed_stage.unwrap());
+        let token = state
+            .accept(row.clone(), retry.clone(), scope.clone())
+            .unwrap();
+        assert!(
+            state
+                .accept(row.clone(), retry.clone(), scope.clone())
+                .is_none()
+        );
+        assert_eq!(
+            state.project(std::slice::from_ref(&row), &scope).len(),
+            1,
+            "no optimistic removal"
+        );
+        state.observe(&[], &scope);
+        state.complete(
+            token,
+            Err(flicknote_client::WireError {
+                code: "timeout".into(),
+                message: "owned timeout".into(),
+                retryable: false,
+                details: None,
+            }),
+        );
+        assert!(state.error.as_deref().unwrap().contains("#7"));
+        assert!(state.busy(&row.uuid));
+        state.expire(token);
+        state.observe(std::slice::from_ref(&row), &scope);
+        assert!(
+            state
+                .accept(row.clone(), retry.clone(), scope.clone())
+                .is_none(),
+            "a new failed emission is not explicit checking"
+        );
+        let check = state
+            .accept(row.clone(), NoteAction::CheckRetry, scope.clone())
+            .unwrap();
+        state.complete(check, Ok(None));
+        assert!(!state.busy(&row.uuid));
+        let token = state.accept(row.clone(), retry, scope.clone()).unwrap();
+        state.observe(&[], &(Destination::Shared, false, None, None));
+        state.complete(token, Ok(None));
+        assert!(
+            state.busy(&row.uuid),
+            "another destination cannot acknowledge retry"
+        );
+        state.observe(&[], &scope);
+        assert!(!state.busy(&row.uuid));
     }
 }
