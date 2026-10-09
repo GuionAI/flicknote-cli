@@ -127,6 +127,7 @@ pub enum Destination {
     #[default]
     Home,
     Project(String),
+    Failed,
     Shared,
     Archive,
     Charts,
@@ -223,6 +224,7 @@ impl TodayWatch {
                     Destination::Charts => "0",
                     Destination::Home => "?4 = ''",
                     Destination::Project(_) => "n.project_id = ?4",
+                    Destination::Failed => "n.status IN ('ai_failed', 'source_failed')",
                     Destination::Shared => "shared = 1",
                     Destination::Archive => "n.deleted_at IS NOT NULL",
                 };

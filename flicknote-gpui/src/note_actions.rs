@@ -240,7 +240,7 @@ impl Today {
             && match target {
                 Destination::Project(id) => self.projects.iter().any(|p| &p.id == id),
                 Destination::Archive | Destination::Shared => true,
-                Destination::Home | Destination::Charts => false,
+                Destination::Home | Destination::Failed | Destination::Charts => false,
             }
     }
     pub(super) fn drop_note(
@@ -273,7 +273,7 @@ impl Today {
             }
             Destination::Archive => NoteAction::Archive,
             Destination::Shared => NoteAction::Share,
-            Destination::Home | Destination::Charts => return,
+            Destination::Home | Destination::Failed | Destination::Charts => return,
         };
         self.perform_note_action(drag.row.clone(), action, window, cx);
     }
@@ -512,6 +512,39 @@ mod tests {
             );
             state.observe(std::slice::from_ref(&baseline), &scope);
             assert_eq!(state.project(&[baseline], &scope)[0].project_id, None);
+        }
+    }
+    #[test]
+    fn failed_actions_reconcile_only_matching_membership() {
+        let scope = (Destination::Failed, false, None, None);
+        for action in [action(), NoteAction::Archive, NoteAction::Unshare] {
+            let mut state = NoteActions::default();
+            let baseline = row();
+            let token = state
+                .accept(baseline.clone(), action.clone(), scope.clone())
+                .unwrap();
+            state.observe(&[], &(Destination::Shared, false, None, None));
+            state.complete(token, Ok(None));
+            assert!(
+                state.busy(&baseline.uuid),
+                "absence in another destination is no acknowledgement"
+            );
+            let projected = state.project(&[baseline], &scope);
+            if action == NoteAction::Archive {
+                assert!(projected.is_empty());
+            } else {
+                assert_eq!(
+                    projected.len(),
+                    1,
+                    "classify/unshare preserve failure membership"
+                );
+            }
+            state.observe(&[], &scope);
+            assert!(
+                !state.busy("original"),
+                "canonical failure removal ends overlay"
+            );
+            assert!(state.project(&[], &scope).is_empty());
         }
     }
     #[test]

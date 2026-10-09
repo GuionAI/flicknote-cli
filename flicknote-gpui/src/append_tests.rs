@@ -366,3 +366,136 @@ fn append_parse_follows_its_own_reader_end(cx: &mut TestAppContext) {
     drop(view);
     runtime.block_on(host.shutdown());
 }
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned target/lifecycle and membership reconciliation journey.
+fn failed_append_keeps_lifecycle_and_target_after_navigation(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = fixture(&runtime, root.path());
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE notes SET status='ai_failed' WHERE short_id=2", [])
+            .unwrap();
+    });
+    let services = services(&host, &runtime);
+    *services.destination.lock().unwrap() = Destination::Failed;
+    cx.update(gpui_kit::init);
+    let (window, view) = open(cx, services.clone());
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 1)
+    });
+    let writer = runtime.block_on(host.db.writer()).unwrap();
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.select(2, w, cx);
+            v.composer
+                .update(cx, |input, cx| input.set_value("Failed append", w, cx));
+            v.submit(w, cx);
+            assert_eq!(
+                v.detail.as_ref().unwrap().source,
+                "# Original\n\nBody\n\nFailed append"
+            );
+            v.change_destination(Destination::Shared, w, cx);
+        });
+    })
+    .unwrap();
+    drop(writer);
+    settle(cx, |_| {
+        services
+            .operations
+            .lock()
+            .unwrap()
+            .iter()
+            .all(tokio::task::AbortHandle::is_finished)
+    });
+    cx.update(|cx| {
+        assert!(
+            !view.read(cx).model.capture().appends.pending.is_empty(),
+            "absence from Shared must not acknowledge append"
+        )
+    });
+
+    runtime.block_on(async {
+        let reader = host.db.reader().await.unwrap();
+        let actual: (String, String) = reader
+            .query_row(
+                "SELECT content,status FROM notes WHERE short_id=2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            actual,
+            (
+                "# Original\n\nBody\n\nFailed append".into(),
+                "ai_failed".into()
+            )
+        );
+        assert_eq!(
+            reader
+                .query_row("SELECT content FROM notes WHERE short_id=1", [], |r| r
+                    .get::<_, String>(
+                    0
+                ))
+                .unwrap(),
+            ""
+        );
+    });
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE notes SET status='ready' WHERE short_id=2", [])
+            .unwrap();
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| v.change_destination(Destination::Failed, w, cx))
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.is_empty())
+    });
+    cx.update(|cx| {
+        assert!(
+            !view.read(cx).model.capture().appends.pending.is_empty(),
+            "absence after a status transition must not acknowledge append"
+        )
+    });
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute(
+                "UPDATE notes SET status='source_failed' WHERE short_id=2",
+                [],
+            )
+            .unwrap();
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx).model.rows.len() == 1
+                && view.read(cx).model.capture().appends.pending.is_empty()
+        })
+    });
+
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.select(2, w, cx);
+            assert_eq!(
+                v.detail.as_ref().unwrap().source,
+                "# Original\n\nBody\n\nFailed append"
+            );
+        });
+        w.remove_window();
+    })
+    .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}

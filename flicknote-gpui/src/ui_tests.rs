@@ -1788,6 +1788,8 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         }
         window.render_frame(cx);
         window.press("alt-down", cx);
+        assert_eq!(view.read(cx).destination, Destination::Failed);
+        window.press("alt-down", cx);
         assert_eq!(view.read(cx).destination, Destination::Shared);
         window.press("alt-down", cx);
         assert_eq!(view.read(cx).destination, Destination::Archive);
@@ -1795,7 +1797,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         assert_eq!(view.read(cx).destination, Destination::Charts);
         window.press("alt-down", cx);
         assert_eq!(view.read(cx).destination, Destination::Charts);
-        for _ in 0..13 {
+        for _ in 0..14 {
             window.render_frame(cx);
             window.press("alt-up", cx);
         }
@@ -1848,7 +1850,7 @@ fn destination_numbers_and_option_bounds_follow_the_rendered_rail(cx: &mut TestA
         window.render_frame(cx);
         window.press("cmd-9", cx);
         window.press("alt-down", cx);
-        assert_eq!(reopened.read(cx).destination, Destination::Shared);
+        assert_eq!(reopened.read(cx).destination, Destination::Failed);
         window.remove_window();
     })
     .unwrap();

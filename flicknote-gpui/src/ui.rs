@@ -629,6 +629,7 @@ impl Today {
                     .map(|p| Destination::Project(p.id.clone())),
             )
             .chain([
+                Destination::Failed,
                 Destination::Shared,
                 Destination::Archive,
                 Destination::Charts,

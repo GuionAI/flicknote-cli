@@ -7,6 +7,7 @@ gpui_kit::assets::icon_assets!(
     [
         House,
         ChartBar,
+        TriangleAlert,
         Archive,
         ArchiveRestore,
         Unlink,
@@ -45,6 +46,7 @@ mod tests {
         for name in [
             IconName::House,
             IconName::ChartBar,
+            IconName::TriangleAlert,
             IconName::Archive,
             IconName::ArchiveRestore,
             IconName::Unlink,

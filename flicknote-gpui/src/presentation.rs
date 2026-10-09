@@ -439,13 +439,21 @@ impl Today {
                             .map(|(index, project)| self.render_project(index, project, p, cx)),
                     )
                     .child(div().mt(px(12.)).child(self.render_collection(
+                        "failed",
+                        "Failed",
+                        IconName::TriangleAlert,
+                        Destination::Failed,
+                        p,
+                        cx,
+                    )))
+                    .child(self.render_collection(
                         "shared",
                         "Shared",
                         IconName::Link,
                         Destination::Shared,
                         p,
                         cx,
-                    )))
+                    ))
                     .child(self.render_collection(
                         "archive-destination",
                         "Archive",
@@ -494,6 +502,8 @@ impl Today {
             .role(Role::ListBox)
             .aria_label(if self.destination == Destination::Home {
                 "Today notes"
+            } else if self.destination == Destination::Failed {
+                "Failed notes"
             } else {
                 "Project All notes"
             })
@@ -581,6 +591,7 @@ impl Today {
                             }
                         } else {
                             match self.destination {
+                                Destination::Failed => "No failed notes",
                                 Destination::Shared => "No shared notes",
                                 Destination::Archive => "No archived notes",
                                 _ => "No active notes in this project",
@@ -905,7 +916,10 @@ impl Today {
             .test_support()
     }
     fn render_period_controls(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
-        if matches!(self.destination, Destination::Shared | Destination::Archive) {
+        if matches!(
+            self.destination,
+            Destination::Failed | Destination::Shared | Destination::Archive
+        ) {
             return None;
         }
         let temporal = self.period != Period::All;
@@ -1035,6 +1049,7 @@ impl Today {
                             } else {
                                 match &self.destination {
                                     Destination::Home => self.period_label(),
+                                    Destination::Failed => "Failed".to_string(),
                                     Destination::Shared => "Shared".to_string(),
                                     Destination::Archive => "Archive".to_string(),
                                     Destination::Charts => "Charts".to_string(),

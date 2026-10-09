@@ -1142,3 +1142,157 @@ fn outside_origin_search_actions_keep_canonical_identity_and_query_membership(
     services.cancel_operations();
     runtime.block_on(host.shutdown());
 }
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned end-to-end destination fixture.
+fn failed_destination_render_watch_capture_and_reopen(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let (host, _fake) = fixture(&runtime, root.path());
+    runtime.block_on(async {
+        host.db.writer().await.unwrap().execute("UPDATE notes SET status=CASE short_id WHEN 3 THEN 'ai_failed' ELSE 'source_failed' END WHERE short_id IN (3,4)", []).unwrap();
+    });
+    let services = append_tests::services(&host, &runtime);
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    ready(cx, &view, 4);
+    let stale = cx.update(|cx| {
+        let v = view.read(cx);
+        (
+            v.destination.clone(),
+            v.source.human_only,
+            v.watch_epoch,
+            v.period.clone(),
+        )
+    });
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        let composer = view.read(cx).composer.clone();
+        composer.update(cx, |input, cx| input.set_value("retained", w, cx));
+        w.render_frame(cx);
+        w.click("failed", cx);
+        assert_eq!(composer.read(cx).value(), "retained");
+        view.update(cx, |v, cx| {
+            v.receive_snapshot(&stale, Err("stale error".into()), w, cx)
+        });
+        assert!(view.read(cx).error.is_none());
+    })
+    .unwrap();
+    ready(cx, &view, 2);
+    cx.update_window(window.into(), |_, w, cx| {
+        for (theme, size) in [
+            (gpui_kit::component::ThemeMode::Light, (980., 720.)),
+            (gpui_kit::component::ThemeMode::Dark, (760., 560.)),
+        ] {
+            apply_theme(theme, cx);
+            w.resize(gpui_kit::size(px(size.0), px(size.1)));
+            w.bounds_changed(cx);
+            w.render_frame(cx);
+            assert!(w.find("failed").bounds().size.width > px(0.));
+            assert!(w.find(("note", 4_u64)).bounds().size.width > px(0.));
+        }
+        view.update(cx, |v, cx| {
+            let drag = NoteDrag {
+                row: v.model.rows[0].clone(),
+                owner: v.services.user_id.clone(),
+            };
+            assert!(!v.accepts_drop(&drag, &Destination::Failed, w, cx));
+            assert!(
+                !v.accepts_drop(&drag, &Destination::Project(project(2)), w, cx),
+                "draft composer retains guard"
+            );
+            v.composer
+                .update(cx, |input, cx| input.set_value("", w, cx));
+        });
+        w.render_frame(cx);
+        view.update(cx, |v, cx| {
+            let drag = NoteDrag {
+                row: v.model.rows[0].clone(),
+                owner: v.services.user_id.clone(),
+            };
+            assert!(v.accepts_drop(&drag, &Destination::Project(project(2)), w, cx));
+        });
+        w.click(("note", 4_u64), cx);
+    })
+    .unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).detail.is_some()));
+    cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |v, cx| {
+            v.close_detail(w, cx);
+            v.composer
+                .update(cx, |input, cx| input.set_value("Owned capture", w, cx));
+            v.submit(w, cx);
+            assert_eq!(
+                v.model.rows.len()
+                    + v.model
+                        .capture()
+                        .pending
+                        .iter()
+                        .filter(|p| v.pending_visible(p))
+                        .count(),
+                2,
+                "queued capture has no Failed pending row"
+            );
+        });
+    })
+    .unwrap();
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .capture()
+                .pending
+                .iter()
+                .any(|p| p.id == Some(5))
+        })
+    });
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("UPDATE notes SET status='ready' WHERE short_id=4", [])
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET status='source_failed' WHERE short_id=2",
+                [],
+            )
+            .unwrap();
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            view.read(cx)
+                .model
+                .rows
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+                == vec![3, 2]
+        })
+    });
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    drop(view);
+    let (window, view) = append_tests::open(cx, services);
+    ready(cx, &view, 2);
+    cx.update(|cx| assert_eq!(view.read(cx).destination, Destination::Failed));
+    runtime.block_on(async {
+        host.db
+            .writer()
+            .await
+            .unwrap()
+            .execute("UPDATE notes SET status='ready'", [])
+            .unwrap();
+    });
+    ready(cx, &view, 0);
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert!(w.find("failed").bounds().size.height > px(0.));
+        w.remove_window();
+    })
+    .unwrap();
+    runtime.block_on(host.shutdown());
+}

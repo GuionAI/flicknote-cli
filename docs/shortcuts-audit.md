@@ -23,10 +23,10 @@ surface or native acceptance.
 | Keys | Pinned Swift desktop behavior | GPUI through #3443 |
 | --- | --- | --- |
 | Cmd1 | Select Home | Implemented: select Home/current Today; open Home if closed |
-| Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Shared/Archive/Charts |
-| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Shared → Archive, bounded/no wrap including Charts (#3450) |
+| Cmd2..9 | First eight active projects in displayed sidebar order; missing index is a no-op | Implemented: same rail order, stable project UUID, retained All/Week; no numbering for Failed/Shared/Archive/Charts |
+| OptionUp/Down | Home → active projects → Shared → Archive → Charts, across groups, bounded/no wrap | Implemented Home → active projects → Failed → Shared → Archive → Charts, bounded/no wrap (#153) |
 | OptionLeft/Right; GPUI also OptionH/L | Swift arrows: Home Today previous/next date; project Week previous/next week; no project-All time action. H/L are GPUI additions | Implemented #3422: previous/next Home semantic day or project Week; current forward and All are no-ops; draft/marked/editor retains input priority |
-| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
+| OptionJ/K | Next/previous confirmed note, no wrap; reveal selection; detail follows only if already open | Home/project-All/Failed/Shared/Archive with empty/unmarked composer native priority adapter; user DEV-v2 manual native navigation PASS; full IME/candidate behavior unverified |
 | OptionA | Archive selected active note; success selects surviving successor, else predecessor | Implemented with existing guarded application archive; no automatic retry |
 | Return | Nonempty composer creates with detail closed or appends with confirmed detail open; empty composer opens selected detail | Implemented primary Return; archived detail creates new; marked Return commits composition without premature create/append/open |
 | ShiftReturn | Composer newline | Implemented by the retained Kit textarea |
@@ -97,7 +97,7 @@ draft/caret and accepted capture/append work; modal editors and marked compositi
 block it. Its account-scoped default-off choice persists across Home/project-All,
 window close/reopen and restart. It excludes only JSON boolean `created_by_ai:true`
 before the bounded watch LIMIT. Rail/context and explicit-ID operations stay
-unfiltered; Jev includes hidden eligible notes. Shared/Archive/Charts use the same filter. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
+unfiltered; Jev includes hidden eligible notes. Failed/Shared/Archive/Charts use the same filter. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
 
 ## Chinese input-source Option routing (#3296)
 
@@ -191,7 +191,7 @@ not a native input/pixel claim.
 
 Shared and Archive are functional bounded destinations across dates. Only mine
 filters before LIMIT on these pages as on Home/project-All. Option-Up/Down adds
-Shared then Archive after active projects; number hints remain Home/project-only.
+Failed then Shared and Archive after active projects; number hints remain Home/project-only.
 Archive detail is readonly with Restore; its composer creates a new unassigned
 note. Option-A remains an active-note archive action and never restores.
 Active detail exposes Share/Copy share link and watched Unshare.
@@ -220,7 +220,7 @@ Home day and each project UUID's mode/week survive rail visits and close/reopen
 in process memory. Cmd1 resets Today; project numbers restore retained scope.
 Current modes renew on clock boundaries; fixed historical selections stay anchored.
 Scope changes close detail and clear selection/old rows while preserving composer
-identity/caret/undo and accepted operations. Shared/Archive/All do no time action.
+identity/caret/undo and accepted operations. Failed/Shared/Archive/All do no time action.
 See [the operator calendar contract](normal-gui-host.md#historical-days-and-project-weeks-3422)
 for range identity, pending membership and canonical action reconciliation.
 Owned LocalHost/rendered tests cover actual header clicks, focused key dispatch,
@@ -323,3 +323,11 @@ The [creation Chart contract](normal-gui-host.md#creation-chart-3450) records th
 source-audit correction: active stored drafts count equally with queued/ready notes;
 search's non-draft rule is independent. Owned rendered/host checks are separate
 from unverified native input/pixels/cloud acceptance.
+
+## Failed navigation (#153)
+
+Failed precedes Shared after active projects in Option-Up/Down traversal. It
+uses the same empty/unmarked and modal guards and process-local close/reopen
+memory. It has no number shortcut or calendar action. Cmd1 remains Home Today;
+Cmd2..9 remain project-only. Failed is a discovery destination, never a drop
+action that sets status. See [the Failed contract](normal-gui-host.md#failed-processing-notes-153).

@@ -158,7 +158,7 @@ as specified above.
 Cmd1 selects Home current Today; Cmd2..9 select the first eight projects in displayed order,
 allowing a draft but blocking marked composition. Missing numbers do nothing.
 Option-Up/Down requires an empty, unmarked composer and traverses Home,
-active projects, Shared and Archive without wrap; with a draft it leaves editor dispatch intact.
+active projects, Failed, Shared and Archive without wrap; with a draft it leaves editor dispatch intact.
 Option-J/K, empty Return, Option-A and Escape retain their note/detail guards on
 the active surface. The composer’s local native input adapter gives bindings first
 refusal only while input is empty/unmarked, so Chinese-source Option letters can
@@ -238,7 +238,7 @@ never moves the viewed date. Empty history leaves completed sync presentation qu
 ## Workspace source choice (#3389)
 
 **Only mine** sits on the right of the existing header. Its pressed state applies
-across Home/day, project-All/Week, Shared and Archive, defaults off, and survives destination
+across Home/day, project-All/Week, Failed, Shared and Archive, defaults off, and survives destination
 changes, window close/reopen and normal restart. Click it or use Tab then Space/Return.
 Only `metadata.created_by_ai` JSON boolean `true` is excluded. Missing metadata/key,
 null, false, numbers, strings and other JSON types remain visible; legacy `created_by`
@@ -274,7 +274,7 @@ focuses it from regular workspace controls or composer, preserving draft/caret;
 CtrlF/B retain native editor-local forward/backward editing; login and modal
 editors retain their own input. Empty input keeps ordinary browsing.
 Nonempty keywords replace that same list with up to 50 ranked active non-draft hits across all projects and dates,
-including from Shared/Archive origins. Only mine is applied by the existing FTS
+including from Failed/Shared/Archive origins. Only mine is applied by the existing FTS
 before its bound. Search uses the exact Today row renderer: the same 32-point
 height, folded content/title preview, type glyph, project-color dot, accessories,
 hover and selection. Only the collection and ranked order differ. Long previews
@@ -447,6 +447,38 @@ non-secret preference location and configuration steps are authoritative in
 [automatic organization](automatic-organization.md). Headless routing is deferred;
 private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
 
+## Failed processing notes (#153)
+
+Failed appears before Shared in the utility rail and bounded Option-Up/Down
+traversal. It watches the current account's active notes across all dates and
+projects whose stored status is exactly `ai_failed` or `source_failed`, descending
+numeric short ID with the existing 10,000 bound. Owner, active, failure and
+Only mine predicates all apply before LIMIT. The current six-status backend
+contract has no plain `failed` status. This local discovery view adds no public
+MCP status schema, retry operation or lifecycle mutation.
+
+The same row previews, selection, Markdown reader, canonical Copy, append,
+classification, archive and sharing remain available under their existing guards.
+Failed is not a drop target; supported project and collection action targets
+retain their existing semantics. Classification and unsharing preserve Failed
+membership; archive or a canonical transition to a nonfailure status removes it.
+Absence from another destination cannot acknowledge an accepted action. A watch
+removal from its accepted Failed scope ends its overlay without resurrection.
+
+There are no date controls or new saved preference. Loading, errors and sync
+feedback remain shared, with a Failed heading and `No failed notes` empty state.
+Ordinary capture creates current unassigned notes and never adds queued/ready
+pending rows here. Detail append keeps its immutable accepted target and lifecycle.
+Destination/source switches reject stale emissions and preserve composer
+text/caret/undo and marked-input/modal priority. Close/reopen retains Failed in
+process memory; Cmd1 selects Home Today and Cmd2..9 still select projects only.
+
+Owned runtime and rendered tests cover status/source/owner/archive matrices,
+pre-limit membership, transitions, navigation, capture, action reconciliation
+and retained destination. Native pixels/IME and cloud account use remain
+unverified unless established by isolated synthetic screenshots; packaging never
+launches the normal deliverable or performs installation or service changes.
+
 ## Dragging, Shared and Archive (#3402)
 
 The rail's Shared and Archive rows open real bounded pages across dates. Shared
@@ -456,7 +488,7 @@ short-ID descending order, the 10,000-note bound and Only mine before that bound
 Known project metadata remains visible even for archived assignments; the rail
 still contains active projects only. Destination/source swaps retain the same
 composer draft/caret/undo and discard old watch completions. Pending creation is
-shown only on Home. Option-Up/Down traverses Home, active projects, Shared and
+shown only on Home. Option-Up/Down traverses Home, active projects, Failed, Shared and
 Archive without wrapping; Cmd1 and Cmd2..9 retain their numbering. Charts follows Archive in bounded traversal.
 
 Drag one confirmed active non-draft note from Home, project-All or Shared onto an

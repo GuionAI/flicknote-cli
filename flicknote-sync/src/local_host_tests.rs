@@ -1629,3 +1629,83 @@ async fn creation_chart_watch_rolls_at_local_four_without_database_write() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn failed_watch_status_owner_source_and_membership_before_limit() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    seed_source_matrix(&host, "11111111-1111-4111-8111-111111111111").await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET status='ai_failed' WHERE id LIKE 'source-%' OR id LIKE 'mcp-%' OR id IN ('foreign-source','deleted-source','old-source')", []).unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET status='source_failed' WHERE id='source-0'",
+                [],
+            )
+            .unwrap();
+        for (index, status) in ["draft", "source_queued", "ai_queued", "ready", "failed"]
+            .iter()
+            .enumerate()
+        {
+            writer.execute("INSERT INTO notes(id,user_id,short_id,content,status,created_at) VALUES(?,'account-a',?,'Nonfailure',?,'2020-01-01T00:00:00Z')", rusqlite::params![format!("other-{index}"), 20000 + index as i64, status]).unwrap();
+        }
+    }
+    let mut mine = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Failed,
+        true,
+    );
+    let observed = snapshot(&mut mine, |s| s.rows.len() == 11).await;
+    assert_eq!(observed.rows[0].uuid, "old-source");
+    assert_eq!(observed.rows.last().unwrap().uuid, "source-0");
+    assert!(observed.rows.windows(2).all(|r| r[0].id > r[1].id));
+    assert!(observed.rows.iter().all(|r| !r.archived && !r.draft));
+    assert!(
+        observed
+            .rows
+            .iter()
+            .all(|r| r.uuid == "old-source" || r.uuid.starts_with("source-"))
+    );
+    let mut full = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Failed,
+        false,
+    );
+    snapshot(&mut full, |s| s.rows.len() == crate::today::LIMIT).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("UPDATE notes SET status='ready' WHERE id='source-0'", [])
+            .unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET status='source_failed' WHERE id='other-0'",
+                [],
+            )
+            .unwrap();
+    }
+    let observed = snapshot(&mut mine, |s| {
+        s.rows.len() == 11
+            && s.rows[0].uuid == "other-0"
+            && s.rows.iter().all(|r| r.uuid != "source-0")
+    })
+    .await;
+    assert!(!observed.rows[0].draft);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET metadata='{\"created_by_ai\":true}' WHERE id='other-0'",
+            [],
+        )
+        .unwrap();
+    snapshot(&mut mine, |s| s.rows.len() == 10).await;
+    drop((mine, full));
+    host.shutdown().await;
+    server.abort();
+}
