@@ -332,6 +332,8 @@ fn source_project_pending_capture_and_reopen_preserve_identity(cx: &mut TestAppC
     settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
     let project = cx.update(|cx| view.read(cx).projects[0].id.clone());
     let composer = cx.update(|cx| view.read(cx).composer.clone());
+    // Hold only the owned writer so capture cannot complete before pending identity is checked.
+    let writer = runtime.block_on(services.db.writer()).unwrap();
     cx.update_window(window.into(), |_, w, cx| {
         w.render_frame(cx);
         w.click("only-mine", cx);
@@ -355,6 +357,7 @@ fn source_project_pending_capture_and_reopen_preserve_identity(cx: &mut TestAppC
         });
     })
     .unwrap();
+    drop(writer);
     settle(cx, |cx| {
         cx.update(|cx| {
             view.read(cx).loaded
@@ -417,4 +420,287 @@ fn source_project_pending_capture_and_reopen_preserve_identity(cx: &mut TestAppC
     runtime
         .block_on(host.run_until(async { Ok(()) }, || {}))
         .unwrap();
+}
+
+#[gpui_kit::test]
+#[allow(clippy::too_many_lines)] // One owned window follows saved choice across utility/search scopes.
+fn utility_sources_hidden_search_unfiltered_and_saved_choice_restored(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET content='utilityword', status='ai_failed', project_id='utility-project', metadata=CASE short_id WHEN 1 THEN '{}' ELSE metadata END", []).unwrap();
+        writer.execute("INSERT INTO projects(id,user_id,name,is_archived) VALUES('utility-project','append-owner','Utility project',0)", []).unwrap();
+        writer.execute("INSERT INTO note_shares(id,user_id,token) SELECT id,user_id,'owned-token' FROM notes", []).unwrap();
+    });
+    let path = root.path().join("source.json");
+    std::fs::write(&path, r#"{"append-owner":true}"#).unwrap();
+    let services = services(&host, &runtime, path.clone());
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 1)
+    });
+    // Force a truthful persistence failure, which must disappear with the entire group.
+    std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+    services.source.choose(true);
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).source.error.is_some())
+    });
+    let composer = cx.update(|cx| view.read(cx).composer.clone());
+    cx.update_window(window.into(), |_, w, cx| {
+        composer.update(cx, |i, cx| {
+            i.set_value("retained utility draft", w, cx);
+            i.set_selected_range(4..4, cx);
+        });
+    })
+    .unwrap();
+    for destination in [
+        Destination::Failed,
+        Destination::Shared,
+        Destination::Archive,
+    ] {
+        if destination == Destination::Archive {
+            runtime.block_on(async {
+                let writer = host.db.writer().await.unwrap();
+                writer.execute("UPDATE notes SET deleted_at='2026-01-01'", []).unwrap();
+                for (id, metadata) in [(3, "{}"), (4, r#"{"created_by_ai":true}"#)] {
+                    writer.execute("INSERT INTO notes(id,short_id,user_id,content,type,status,is_flagged,metadata,created_at) VALUES(?,CAST(? AS INTEGER),'append-owner','utilityword','normal','ready',0,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'))", [format!("00000000-0000-4000-8000-{id:012}"), id.to_string(), metadata.to_owned()]).unwrap();
+                }
+            });
+        }
+        cx.update_window(window.into(), |_, w, cx| {
+            view.update(cx, |v, cx| v.change_destination(destination.clone(), w, cx));
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 2)
+        });
+        for mode in [
+            gpui_kit::component::ThemeMode::Light,
+            gpui_kit::component::ThemeMode::Dark,
+        ] {
+            cx.update_window(window.into(), |_, w, cx| {
+                apply_theme(mode, cx);
+                w.resize(size(px(760.), px(560.)));
+                w.render_frame(cx);
+                for id in ["source-control", "only-mine", "retry-source"] {
+                    assert!(
+                        w.try_find(id).is_none(),
+                        "hidden group must have no rendered/AX/focus target"
+                    );
+                }
+                assert_eq!(
+                    w.find(("note", 2_u64)).bounds().top(),
+                    w.find("destination-header").bounds().bottom()
+                );
+                if destination == Destination::Failed {
+                    assert!(
+                        w.within(("note", 2_u64))
+                            .try_find(("retry-note", 2_u64))
+                            .is_some()
+                    );
+                }
+                let v = view.read(cx);
+                assert!(v.source.human_only && v.source.error.is_some());
+                assert!(!v.action_scope().1);
+                assert_eq!(composer.read(cx).value(), "retained utility draft");
+                assert_eq!(composer.read(cx).selected_range(), 4..4);
+            })
+            .unwrap();
+        }
+        cx.update_window(window.into(), |_, w, cx| {
+            view.update(cx, |v, cx| v.select(2, w, cx));
+        })
+        .unwrap();
+        let (epoch, scope, snapshot, reader) = cx.update(|cx| {
+            let v = view.read(cx);
+            (
+                v.watch_epoch,
+                v.action_scope(),
+                flicknote_sync::today::Snapshot {
+                    rows: v.canonical_rows.clone(),
+                    projects: v.projects.clone(),
+                    emission: 999,
+                    elapsed_ms: 0.,
+                    range: v.range,
+                },
+                v.detail.as_ref().unwrap().state.entity_id(),
+            )
+        });
+        // A late save notification changes preference presentation, not the effective scope.
+        cx.update_window(window.into(), |_, w, cx| {
+            view.update(cx, |v, cx| {
+                let mut state = v.source.clone();
+                state.generation += 1;
+                state.human_only = false;
+                v.apply_source(state.clone(), w, cx);
+                state.generation += 1;
+                state.human_only = true;
+                v.apply_source(state, w, cx);
+                assert_eq!(v.watch_epoch, epoch);
+                assert_eq!(v.action_scope(), scope);
+                assert_eq!(v.detail.as_ref().unwrap().state.entity_id(), reader);
+                v.receive_snapshot(
+                    &(destination.clone(), true, epoch, v.period.clone()),
+                    Err("stale filtered scope".into()),
+                    w,
+                    cx,
+                );
+                assert!(v.watch_error.is_none());
+                v.receive_snapshot(
+                    &(destination.clone(), false, epoch, v.period.clone()),
+                    Ok(snapshot.clone()),
+                    w,
+                    cx,
+                );
+                assert_eq!(v.model.rows.len(), 2);
+            });
+            let input = view.read(cx).search_input.clone();
+            input.update(cx, |i, cx| i.set_value("utilityword", w, cx));
+            view.update(cx, |v, cx| v.search_changed(w, cx));
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| !view.read(cx).search.loading && view.read(cx).search.active())
+        });
+        cx.update_window(window.into(), |_, w, cx| {
+            w.render_frame(cx);
+            assert!(w.try_find("source-control").is_none());
+            // Archive-origin lexical discovery still searches all active notes.
+            assert_eq!(
+                view.read(cx).model.rows.len(),
+                2,
+                "origin={destination:?} query={} error={:?} hits={:?}",
+                view.read(cx).search.query,
+                view.read(cx).search.error,
+                view.read(cx).search.hits
+            );
+            view.update(cx, |v, cx| {
+                let generation = v.search.generation;
+                let scope = v.action_scope();
+                let epoch = v.watch_epoch;
+                let mut state = v.source.clone();
+                state.generation += 1;
+                state.human_only = false;
+                v.apply_source(state.clone(), w, cx);
+                state.generation += 1;
+                state.human_only = true;
+                v.apply_source(state, w, cx);
+                v.toggle_source(w, cx);
+                assert!(v.source.human_only);
+                assert_eq!(v.search.generation, generation);
+                assert_eq!(v.watch_epoch, epoch);
+                assert_eq!(v.action_scope(), scope);
+                v.receive_search(generation, true, Err("stale filtered search".into()), w, cx);
+                assert!(v.search.error.is_none());
+                assert!(!v.action_scope().1);
+                v.exit_search(true, w, cx);
+            });
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| !view.read(cx).search.active() && view.read(cx).model.rows.len() == 2)
+        });
+    }
+    runtime.block_on(async {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("DELETE FROM notes WHERE short_id IN (3,4)", [])
+            .unwrap();
+        writer
+            .execute("UPDATE notes SET deleted_at=NULL", [])
+            .unwrap();
+    });
+    for destination in [
+        Destination::Home,
+        Destination::Project("utility-project".into()),
+    ] {
+        cx.update_window(window.into(), |_, w, cx| {
+            view.update(cx, |v, cx| v.change_destination(destination, w, cx));
+        })
+        .unwrap();
+        settle(cx, |cx| {
+            cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 1)
+        });
+        cx.update_window(window.into(), |_, w, cx| {
+            w.render_frame(cx);
+            assert_eq!(w.find("only-mine").checked(), Some(true));
+            assert!(w.try_find("retry-source").is_some());
+        })
+        .unwrap();
+    }
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        r#"{"append-owner":true}"#
+    );
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
+}
+
+#[gpui_kit::test]
+fn utility_watch_does_not_wait_for_or_restart_on_late_saved_preference(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    let host = append_tests::fixture(&runtime, root.path());
+    runtime.block_on(async {
+        host.db.writer().await.unwrap().execute("UPDATE notes SET status='source_failed', metadata=CASE short_id WHEN 1 THEN '{}' ELSE metadata END", []).unwrap();
+    });
+    let path = root.path().join("source.json");
+    std::fs::write(&path, r#"{"append-owner":true}"#).unwrap();
+    let (release, gate) = std::sync::mpsc::channel();
+    let (started, waiting) = std::sync::mpsc::channel();
+    let blocked = runtime.spawn_blocking(move || {
+        started.send(()).unwrap();
+        gate.recv().unwrap();
+    });
+    waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+    let services = services(&host, &runtime, path);
+    *services.destination.lock().unwrap() = Destination::Failed;
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        install_today_keys(cx);
+    });
+    let (window, view) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| {
+        cx.update(|cx| view.read(cx).loaded && view.read(cx).model.rows.len() == 2)
+    });
+    let epoch = cx.update(|cx| {
+        assert!(!view.read(cx).source.ready);
+        view.read(cx).watch_epoch
+    });
+    release.send(()).unwrap();
+    runtime.block_on(blocked).unwrap();
+    settle(cx, |cx| cx.update(|cx| view.read(cx).source.ready));
+    cx.update_window(window.into(), |_, w, cx| {
+        w.render_frame(cx);
+        assert!(view.read(cx).source.human_only);
+        assert_eq!(view.read(cx).watch_epoch, epoch);
+        assert_eq!(view.read(cx).model.rows.len(), 2);
+        assert!(w.try_find("source-control").is_none());
+        w.remove_window();
+    })
+    .unwrap();
+    drop(view);
+    let (window, reopened) = append_tests::open(cx, services.clone());
+    settle(cx, |cx| {
+        cx.update(|cx| reopened.read(cx).loaded && reopened.read(cx).model.rows.len() == 2)
+    });
+    cx.update(|cx| assert!(reopened.read(cx).source.human_only));
+    cx.update_window(window.into(), |_, w, _| w.remove_window())
+        .unwrap();
+    services.cancel_operations();
+    runtime.block_on(host.shutdown());
 }

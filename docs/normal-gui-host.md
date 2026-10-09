@@ -238,12 +238,21 @@ never moves the viewed date. Empty history leaves completed sync presentation qu
 ## Workspace source choice (#3389)
 
 **Only mine** sits on the right of the existing header. Its pressed state applies
-across Home/day, project-All/Week, Failed, Shared and Archive, defaults off, and survives destination
+across Home/day, project-All/Week and Charts, defaults off, and survives destination
 changes, window close/reopen and normal restart. Click it or use Tab then Space/Return.
 Only `metadata.created_by_ai` JSON boolean `true` is excluded. Missing metadata/key,
 null, false, numbers, strings and other JSON types remain visible; legacy `created_by`
 strings, note type, current AI status and later processing/edits do not define source.
 GUI-created pending and confirmed notes remain included.
+
+Failed, Shared and Archive ignore this choice (#157), including global keyword
+search initiated from those destinations. Their entire source-control group,
+including **Not saved** and its retry action, is absent with no reserved space or
+keyboard/accessibility target. Entering them never writes or clears the saved
+choice; returning to Home, a project or Charts restores its pressed state and
+filtering. Direct internal watches enforce the same utility policy before LIMIT.
+Late preference load/save notifications leave their effective watch/search/action
+scopes unchanged, retaining rows, reader and accepted operation identities.
 
 The owner/destination/source predicate precedes ordering and the 10,000-note SQL
 limit. The active project rail and summaries stay available even with no matching
@@ -257,7 +266,8 @@ The process owns the choice. `gui-source.json` beside `daemon.sock` stores only
 account identifiers and booleans with private permissions, separately from
 organization cutoff/enabled state and Keychain. Loading and saving run off the UI
 thread after directory ownership; IPC/MCP/auth/sync readiness does not wait.
-The loaded scope precedes the first note projection. A storage error retains the
+The loaded scope precedes the first eligible note projection; utility views can
+project immediately while the preference loads. A storage error retains the
 session choice, shows **Not saved** beside the control, and offers retry after fixing
 storage access. Rapid choices and late watch/save completions cannot restore an
 older projection or overwrite a newer choice. No Swift preferences are imported.
@@ -275,7 +285,8 @@ CtrlF/B retain native editor-local forward/backward editing; login and modal
 editors retain their own input. Empty input keeps ordinary browsing.
 Nonempty keywords replace that same list with up to 50 ranked active non-draft hits across all projects and dates,
 including from Failed/Shared/Archive origins. Only mine is applied by the existing FTS
-before its bound. Search uses the exact Today row renderer: the same 32-point
+before its bound for Home/project/Charts origins; utility origins bypass it and
+keep the source-control group absent. Search uses the exact Today row renderer: the same 32-point
 height, folded content/title preview, type glyph, project-color dot, accessories,
 hover and selection. Only the collection and ranked order differ. Long previews
 truncate with the same reserved metadata space. #3446 supersedes #3430's two-level
@@ -287,7 +298,8 @@ readability; archived lexical search and Command lookup remain deferred.
 
 On first nonempty query, search snapshots the destination UUID, period, selected
 UUID and scroll anchor. Edits never replace that origin. Clear/Escape restores it
-under the current Only mine choice, retaining surviving selection/scroll and normal
+under the origin destination's effective Only mine choice (always unfiltered for
+Failed/Shared/Archive), retaining surviving selection/scroll and normal
 neighbor behavior. Current periods follow the clock; historical ranges stay fixed.
 Unavailable projects fall back to Home current Today. Any actual rail click clears
 search and enters the requested destination, including the same project; Escape
@@ -303,7 +315,7 @@ same composer without changing browsing; populated search exits even with detail
 open. Reading-focused Escape closes detail first. Kit consumes native transient
 surfaces and marking before workspace exit. Loading, empty and error feedback stays quiet and distinct; errors offer explicit
 Retry search. Composition shows feedback only when there are no retained rows.
-Only mine changes, query edits, exit, rail navigation and window teardown invalidate
+Effective Only mine changes, query edits, exit, rail navigation and window teardown invalidate
 older responses. Local database notifications refresh only active search, without
 polling or automatic error retries.
 
@@ -452,8 +464,9 @@ private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
 Failed appears before Shared in the utility rail and bounded Option-Up/Down
 traversal. It watches the current account's active notes across all dates and
 projects whose stored status is exactly `ai_failed` or `source_failed`, descending
-numeric short ID with the existing 10,000 bound. Owner, active, failure and
-Only mine predicates all apply before LIMIT. The current six-status backend
+numeric short ID with the existing 10,000 bound. Owner, active and failure
+predicates apply before LIMIT; both human and MCP creation channels are included
+regardless of saved Only mine. The entire source-control group is absent (#157). The current six-status backend
 contract has no plain `failed` status. This local discovery view adds no public
 MCP status schema or generic lifecycle setter.
 
@@ -476,7 +489,8 @@ process memory; Cmd1 selects Home Today and Cmd2..9 still select projects only.
 Owned runtime and rendered tests cover status/source/owner/archive matrices,
 pre-limit membership, transitions, navigation, capture, action reconciliation
 and retained destination. Native pixels/IME and cloud account use remain
-unverified unless established by isolated synthetic screenshots; packaging never
+unverified. #157 prohibits native/CUA launches and captures; owned rendered
+checks are the UI gate for this slice. Packaging never
 launches the normal deliverable or performs installation or service changes.
 
 ## Dragging, Shared and Archive (#3402)
@@ -484,7 +498,9 @@ launches the normal deliverable or performs installation or service changes.
 The rail's Shared and Archive rows open real bounded pages across dates. Shared
 includes active notes with a current same-account share row, excluding expired
 links; Archive includes deleted notes, including archived drafts. Both use numeric
-short-ID descending order, the 10,000-note bound and Only mine before that bound.
+short-ID descending order and the 10,000-note bound. Both include every creation
+channel regardless of saved Only mine, and omit the entire source-control group
+including storage-error retry (#157).
 Known project metadata remains visible even for archived assignments; the rail
 still contains active projects only. Destination/source swaps retain the same
 composer draft/caret/undo and discard old watch completions. Pending creation is

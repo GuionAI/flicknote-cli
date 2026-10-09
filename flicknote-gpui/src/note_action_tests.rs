@@ -183,6 +183,7 @@ fn native_drag_classifies_archives_publishes_and_browses_collections(cx: &mut Te
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let (host, fake) = fixture(&runtime, root.path());
     let services = append_tests::services(&host, &runtime);
+    services.source.choose(true);
     cx.update(|cx| {
         gpui_kit::init(cx);
         install_today_keys(cx);
@@ -1342,6 +1343,7 @@ fn failed_retry_row_target_busy_navigation_and_geometry(cx: &mut TestAppContext)
         host.db.writer().await.unwrap().execute("UPDATE notes SET status=CASE short_id WHEN 3 THEN 'ai_failed' ELSE 'source_failed' END WHERE short_id IN (3,4)", []).unwrap();
     });
     let services = append_tests::services(&host, &runtime);
+    services.source.choose(true);
     cx.update(|cx| {
         gpui_kit::init(cx);
         install_today_keys(cx);
@@ -1470,12 +1472,12 @@ fn failed_retry_database_error_requires_check_across_destinations(cx: &mut TestA
             .unwrap();
     });
     let services = append_tests::services(&host, &runtime);
+    services.source.choose(true);
     cx.update(|cx| {
         gpui_kit::init(cx);
         install_today_keys(cx);
     });
     let (window, view) = append_tests::open(cx, services.clone());
-    ready(cx, &view, 4);
     cx.update_window(window.into(), |_, w, cx| {
         w.render_frame(cx);
         w.click("failed", cx);

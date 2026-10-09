@@ -981,7 +981,7 @@ async fn human_scope_marker_matrix_before_limit_and_direct_access() {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // One owned host verifies canonical mutation, readers and bounded watch membership.
-async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
+async fn shared_archive_watch_use_canonical_expiry_owner_all_sources_before_limit() {
     use crate::today::Destination;
     let (_root, config, _fake, _streams, server) = fixture().await;
     let events_path = config
@@ -1064,7 +1064,19 @@ async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
         Destination::Shared,
         true,
     );
-    let observed = snapshot(&mut shared, |s| s.rows.len() == 12).await;
+    let bounded = snapshot(&mut shared, |s| s.rows.len() == crate::today::LIMIT).await;
+    assert!(bounded.rows.iter().all(|r| r.uuid.starts_with("mcp-")));
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET user_id='account-b' WHERE id LIKE 'mcp-%'",
+            [],
+        )
+        .unwrap();
+    let observed = snapshot(&mut shared, |s| s.rows.len() == 13).await;
+    assert!(observed.rows.iter().any(|r| r.uuid == "source-10"));
     assert!(observed.projects.is_empty());
     assert!(observed.rows.iter().all(|r| r.shared && !r.archived));
     assert!(observed.rows.windows(2).all(|r| r[0].id > r[1].id));
@@ -1092,9 +1104,15 @@ async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
             )
             .unwrap();
     }
-    snapshot(&mut shared, |s| s.rows.len() == 10).await;
+    snapshot(&mut shared, |s| s.rows.len() == 11).await;
     {
         let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET user_id='account-a' WHERE id LIKE 'mcp-%'",
+                [],
+            )
+            .unwrap();
         writer.execute("UPDATE notes SET deleted_at='2026-01-02T00:00:00Z',status='draft' WHERE user_id='account-a'", []).unwrap();
     }
     snapshot(&mut shared, |s| s.rows.is_empty()).await;
@@ -1104,7 +1122,16 @@ async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
         Destination::Archive,
         true,
     );
-    let observed = snapshot(&mut archived, |s| s.rows.len() == 13).await;
+    let bounded = snapshot(&mut archived, |s| s.rows.len() == crate::today::LIMIT).await;
+    assert!(bounded.rows.iter().all(|r| r.uuid.starts_with("mcp-")));
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("DELETE FROM notes WHERE id LIKE 'mcp-%'", [])
+        .unwrap();
+    let observed = snapshot(&mut archived, |s| s.rows.len() == 14).await;
+    assert!(observed.rows.iter().any(|r| r.uuid == "source-10"));
     assert!(observed.rows.iter().all(|r| r.archived && r.draft));
     assert_eq!(observed.rows.last().unwrap().uuid, "a");
     let mut full = TodayWatch::start_destination(
@@ -1113,30 +1140,26 @@ async fn shared_archive_watch_use_canonical_expiry_owner_source_before_limit() {
         Destination::Archive,
         false,
     );
-    snapshot(&mut full, |s| s.rows.len() == crate::today::LIMIT).await;
+    let unfiltered = snapshot(&mut full, |s| s.rows.len() == 14).await;
+    assert_eq!(observed.rows, unfiltered.rows);
     host.app
         .handle(AppRequest::NoteRestore { id: "100".into() })
         .await
         .unwrap();
     snapshot(&mut archived, |s| {
-        s.rows.len() == 12 && s.rows.iter().all(|r| r.uuid != "source-0")
+        s.rows.len() == 13 && s.rows.iter().all(|r| r.uuid != "source-0")
     })
     .await;
     // Explicit archived reads via existing IPC/MCP remain unfiltered.
     let response = DaemonClient::new(&host.socket)
         .app(AppRequest::NoteGet {
-            id: "1000".into(),
+            id: "110".into(),
             archived: true,
         })
         .await
         .unwrap();
     assert!(matches!(response, AppResponse::NoteDetail(_)));
-    let response = mcp(
-        host.mcp_port,
-        "note_get",
-        json!({"id":1000,"archived":true}),
-    )
-    .await;
+    let response = mcp(host.mcp_port, "note_get", json!({"id":110,"archived":true})).await;
     assert!(!response["result"]["isError"].as_bool().unwrap_or(false));
     drop((shared, archived, full));
     host.shutdown().await;
@@ -1631,7 +1654,7 @@ async fn creation_chart_watch_rolls_at_local_four_without_database_write() {
 }
 
 #[tokio::test]
-async fn failed_watch_status_owner_source_and_membership_before_limit() {
+async fn failed_watch_status_owner_all_sources_and_membership_before_limit() {
     use crate::today::Destination;
     let (_root, config, _fake, _streams, server) = fixture().await;
     let host = start(config).await;
@@ -1658,7 +1681,16 @@ async fn failed_watch_status_owner_source_and_membership_before_limit() {
         Destination::Failed,
         true,
     );
-    let observed = snapshot(&mut mine, |s| s.rows.len() == 11).await;
+    let bounded = snapshot(&mut mine, |s| s.rows.len() == crate::today::LIMIT).await;
+    assert!(bounded.rows.iter().all(|r| r.uuid.starts_with("mcp-")));
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("DELETE FROM notes WHERE id LIKE 'mcp-%'", [])
+        .unwrap();
+    let observed = snapshot(&mut mine, |s| s.rows.len() == 12).await;
+    assert!(observed.rows.iter().any(|r| r.uuid == "source-10"));
     assert_eq!(observed.rows[0].uuid, "old-source");
     assert_eq!(observed.rows.last().unwrap().uuid, "source-0");
     assert!(observed.rows.windows(2).all(|r| r[0].id > r[1].id));
@@ -1675,7 +1707,8 @@ async fn failed_watch_status_owner_source_and_membership_before_limit() {
         Destination::Failed,
         false,
     );
-    snapshot(&mut full, |s| s.rows.len() == crate::today::LIMIT).await;
+    let unfiltered = snapshot(&mut full, |s| s.rows.len() == 12).await;
+    assert_eq!(observed.rows, unfiltered.rows);
     {
         let writer = host.db.writer().await.unwrap();
         writer
@@ -1689,7 +1722,7 @@ async fn failed_watch_status_owner_source_and_membership_before_limit() {
             .unwrap();
     }
     let observed = snapshot(&mut mine, |s| {
-        s.rows.len() == 11
+        s.rows.len() == 12
             && s.rows[0].uuid == "other-0"
             && s.rows.iter().all(|r| r.uuid != "source-0")
     })
@@ -1704,7 +1737,10 @@ async fn failed_watch_status_owner_source_and_membership_before_limit() {
             [],
         )
         .unwrap();
-    snapshot(&mut mine, |s| s.rows.len() == 10).await;
+    snapshot(&mut mine, |s| {
+        s.rows.len() == 12 && s.rows[0].uuid == "other-0"
+    })
+    .await;
     drop((mine, full));
     host.shutdown().await;
     server.abort();

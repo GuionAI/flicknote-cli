@@ -188,7 +188,10 @@ impl Today {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.search.active() || self.search.marked || !self.source.ready {
+        if !self.search.active()
+            || self.search.marked
+            || (!self.source.ready && self.destination.effective_human_only(true))
+        {
             return;
         }
         self.search.cancel();
@@ -197,7 +200,7 @@ impl Today {
         let generation = self.search.generation;
         let services = self.services.clone();
         let query = self.search.query.clone();
-        let human = self.source.human_only;
+        let human = self.effective_human_only();
         let selected = self.model.selected;
         let (send, mut receive) = tokio::sync::watch::channel(None);
         let job = self.services.runtime.spawn(async move {
@@ -258,7 +261,7 @@ impl Today {
     ) {
         if !self.search.active()
             || generation != self.search.generation
-            || human != self.source.human_only
+            || human != self.effective_human_only()
         {
             return;
         }

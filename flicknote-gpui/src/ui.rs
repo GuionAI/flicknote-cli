@@ -397,9 +397,7 @@ impl Today {
     }
 
     fn observe_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.source.ready {
-            self.subscribe(window, cx);
-        }
+        self.subscribe(window, cx);
         let mut receiver = self.services.source.subscribe();
         self.source_task = Some(cx.spawn_in(window, async move |entity, cx| {
             loop {
@@ -419,6 +417,11 @@ impl Today {
         }));
     }
 
+    fn effective_human_only(&self) -> bool {
+        self.destination
+            .effective_human_only(self.source.human_only)
+    }
+
     fn apply_source(
         &mut self,
         state: crate::source::State,
@@ -428,8 +431,10 @@ impl Today {
         if state.generation < self.source.generation {
             return;
         }
-        let replace =
-            state.ready && (!self.source.ready || state.human_only != self.source.human_only);
+        let replace = state.ready
+            && ((!self.source.ready && self.destination.effective_human_only(true))
+                || self.destination.effective_human_only(state.human_only)
+                    != self.effective_human_only());
         self.source = state;
         if replace {
             if self.search.active() {
@@ -441,7 +446,11 @@ impl Today {
     }
 
     fn toggle_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor.is_some() || self.composing(window, cx) || !self.source.ready {
+        if !self.destination.effective_human_only(true)
+            || self.editor.is_some()
+            || self.composing(window, cx)
+            || !self.source.ready
+        {
             return;
         }
         self.services.source.choose(!self.source.human_only);
@@ -449,12 +458,12 @@ impl Today {
     }
 
     fn subscribe(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.source.ready {
+        if !self.source.ready && self.destination.effective_human_only(true) {
             return;
         }
         self.watch_epoch += 1;
         let epoch = self.watch_epoch;
-        let human_only = self.source.human_only;
+        let human_only = self.effective_human_only();
         self.watch_task.take();
         self.watch.take();
         self.chart_watch.take();
@@ -509,7 +518,7 @@ impl Today {
         cx: &mut Context<Self>,
     ) {
         if self.destination != scope.0
-            || self.source.human_only != scope.1
+            || self.effective_human_only() != scope.1
             || self.watch_epoch != scope.2
             || self.period != scope.3
         {

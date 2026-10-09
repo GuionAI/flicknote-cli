@@ -241,8 +241,11 @@ unverified. Draft dragging is deferred.
 ## Only mine source projection (#3389)
 
 The right header's accessible **Only mine** control filters existing Home/Today and
-project-All, Shared and Archive using the JSON creation-channel predicate before their 10,000-note
-limit. It defaults off, persists per account in separate `gui-source.json`, and
+project-All/Week and Charts using the JSON creation-channel predicate before their
+applicable bound. Failed, Shared and Archive bypass it and hide the entire control
+group, including Not saved/retry, even during search from those origins (#157).
+Their watches include every creation channel before the 10,000-note limit. The
+choice defaults off, persists per account in separate `gui-source.json`, and
 leaves rail/context, direct-ID operations and Jev eligibility unchanged. Source
 changes retain draft/caret, pending capture/append and surviving reader/selection;
 hidden detail closes without opening a neighbor. Modal/marked input keeps priority.
@@ -498,3 +501,7 @@ without cloud retry actions. Owned rendered checks cover row targeting,
 Light/Dark width reservation, busy/duplicate guards and navigation/close/reopen.
 Native pixel attempts use only a new scratch app/root/port0, and do not launch
 the normal signed deliverable or control an existing app.
+
+For #157, verification uses owned runtime/rendered seams only. Native/CUA launches
+and capture attempts are explicitly prohibited; no new launcher infrastructure is
+added. Native pixels, OS IME and normal launch remain unverified.

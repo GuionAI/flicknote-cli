@@ -44,14 +44,14 @@ impl Today {
         if self.search.active() {
             (
                 Destination::Home,
-                self.source.human_only,
+                self.effective_human_only(),
                 None,
                 Some(self.search.query.clone()),
             )
         } else {
             (
                 self.destination.clone(),
-                self.source.human_only,
+                self.effective_human_only(),
                 self.range,
                 None,
             )

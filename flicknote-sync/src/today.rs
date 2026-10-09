@@ -135,6 +135,13 @@ pub enum Destination {
     Charts,
 }
 
+impl Destination {
+    /// Utility collections include every creation channel, including during global search.
+    pub fn effective_human_only(&self, saved: bool) -> bool {
+        saved && matches!(self, Self::Home | Self::Project(_) | Self::Charts)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectContext {
     pub id: String,
@@ -242,7 +249,7 @@ impl TodayWatch {
                     range.map_or_else(String::new, |r| r.0.to_rfc3339()),
                     range.map_or_else(String::new, |r| r.1.to_rfc3339()),
                     project_id,
-                    if human_only { "1" } else { "0" }.to_string(),
+                    u8::from(destination.effective_human_only(human_only)).to_string(),
                     if destination == Destination::Archive {
                         "1"
                     } else {

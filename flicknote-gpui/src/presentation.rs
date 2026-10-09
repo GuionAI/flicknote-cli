@@ -1134,7 +1134,9 @@ impl Today {
                                 }
                             }),
                     )
-                    .child(self.render_source(cx))
+                    .when(self.destination.effective_human_only(true), |d| {
+                        d.child(self.render_source(cx))
+                    })
                     .test_support(),
             )
             .when(!self.search.active(), |d| {
