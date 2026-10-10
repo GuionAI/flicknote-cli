@@ -248,7 +248,7 @@ impl From<NoteArchiveResult> for McpNoteArchiveResult {
 pub(super) struct McpProjectDto {
     pub name: String,
     pub color: Option<String>,
-    pub summary: Option<String>,
+    pub description: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -264,7 +264,7 @@ impl From<ProjectDto> for McpProjectDto {
         Self {
             name: project.name,
             color: project.color,
-            summary: project.summary,
+            description: project.description,
             archived: project.archived,
             created_at: project.created_at,
         }

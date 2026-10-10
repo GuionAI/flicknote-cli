@@ -26,8 +26,8 @@ recall already selects human-created candidates. Read stored metadata with
 Use the numeric short note ID returned by MCP. Do not substitute a UUID. Project
 operations identify projects by their names.
 
-Project reads expose a typed summary rather than raw project metadata.
-`project_modify` patches only color and summary; omitted fields stay unchanged,
+Project reads expose a typed nullable description rather than raw project metadata.
+`project_modify` patches only color and description; omitted fields stay unchanged,
 `null` clears a field, and a string sets it. Project assignment never archives
 or deletes the previous project.
 

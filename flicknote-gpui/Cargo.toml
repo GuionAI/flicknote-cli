@@ -20,7 +20,6 @@ futures-lite = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 anyhow = "1"
 log = "0.4"
-security-framework = "=3.7.0"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 chrono = "0.4.44"

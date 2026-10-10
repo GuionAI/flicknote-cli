@@ -34,7 +34,6 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
         temporal: Mutex::default(),
         capture: Arc::default(),
         draft: Mutex::default(),
-        organization: Mutex::default(),
         source: crate::source::Control::default(),
         capture_changed: tokio::sync::watch::channel(()).0,
     });

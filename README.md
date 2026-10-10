@@ -523,27 +523,24 @@ clears search and enters that destination directly. Composer drafts/caret and
 accepted operations survive search and window close. Archived keyword search,
 Command lookup, pagination and search history remain deferred.
 
-Add projects with the Plus icon beside Projects in the rail and edit their summaries above the project All list.
-The application menu's **Automatic organization…** control stores an account-scoped
-OpenRouter key in a new GUI Keychain service. The background GUI host routes
-post-first-start, unassigned ready notes from compact project/note summaries,
-with bounded content fallback, manual precedence and finite retries. Closing the
-window retains routing; Quit cancels it. Configuration, privacy/provider cost,
-cutoff and recovery are documented in [automatic organization](docs/automatic-organization.md).
-**Catch up** there offers the recent three or seven local 04:00 workdays,
-including today, with a free local eligible-count preview and an explicit Start.
-It freezes the end at Start, preserves the cutoff and drains without a total cap.
-Regular work shares one coordinator and takes priority; shared provider batch
-starts are at least ten seconds apart during Catch up. Stop and finite failure
-recovery preserve successful decisions; window close continues, Quit stops without
-automatic resume. Progress stays in the control. Reader drag selection freezes
-on pointer release while exact plain, canonical and code-block Copy remain distinct.
+Add projects with the Plus icon beside Projects in the rail and edit their
+**description** above All/Week. The description states the project's membership
+boundary; a note's summary still describes its own content. CLI `project modify
+ID --description TEXT` and local/private MCP `project_modify` use the same field.
+Old project summary inputs are rejected. No field migration runs at startup.
+Automatic organization, Catch up and client Jev routing are retired (#3634).
+The backend owns automatic project selection; manual classification remains.
+Existing obsolete preferences and Keychain items are left untouched.
+See [the one-time dev migration runbook](docs/project-description-migration.md).
+Reader drag selection freezes on pointer release while exact plain, canonical
+and code-block Copy remain distinct.
 **Only mine** in the right workspace header defaults off and applies to Home/Today
 and project-All/Week. It excludes only `metadata.created_by_ai` JSON boolean `true`
 before the watched 10,000-note limit; missing, false and other JSON values remain.
 The account-scoped choice persists across destination/window changes and restart.
 It describes creation channel, not authorship. Explicit-ID CLI/MCP/IPC access and
-background Jev eligibility remain independent. Charts and headless organization remain deferred.
+direct note access remain independent. Charts also supports Only mine; Failed,
+Shared and Archive bypass it.
 
 See [the normal GUI operator guide](docs/normal-gui-host.md) for login,
 config/endpoints and recovery, and [the shortcuts audit](docs/shortcuts-audit.md)

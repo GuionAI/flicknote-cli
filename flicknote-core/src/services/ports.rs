@@ -66,7 +66,6 @@ pub trait BrowserOpener: Send + Sync {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectAssignmentSource {
-    Jev,
     Manual,
 }
 
@@ -78,7 +77,6 @@ pub struct ProjectAssignmentEvent {
     pub from_project_id: Option<String>,
     pub to_project_id: Option<String>,
     pub source: ProjectAssignmentSource,
-    pub probability: Option<f64>,
     pub created_at: String,
 }
 

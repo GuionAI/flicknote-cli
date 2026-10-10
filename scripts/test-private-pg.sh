@@ -96,6 +96,9 @@ ALTER ROLE flicknote_mcp LOGIN;
 INSERT INTO auth.users(id) VALUES ('11111111-1111-4111-8111-111111111111'), ('22222222-2222-4222-8222-222222222222');
 SQL
 [[ "$mode" != --provision-only ]] || exit 0
+if [[ "${FLICKNOTE_TEST_PG_IN_CONTAINER:-}" != 1 ]]; then
+  python3 "$repo_root/scripts/test-project-description-pg.py" "$engine" "$container_name"
+fi
 cd "$repo_root"
-cargo test -p flicknote-sync --lib pg::tests::cancelled_identity_setup_discards_backend_before_pool_reuse -- --ignored --nocapture
-cargo test -p flicknote-sync --test private_pg -- --ignored --nocapture --test-threads=1
+cargo test --locked --all-features -p flicknote-sync --lib pg::tests::cancelled_identity_setup_discards_backend_before_pool_reuse -- --ignored --nocapture
+cargo test --locked --all-features -p flicknote-sync --test private_pg -- --ignored --nocapture --test-threads=1

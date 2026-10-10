@@ -34,6 +34,16 @@ _Avoid_: Project, shared workspace
 
 ## Language
 
+**Project description**:
+The stated membership boundary of a project: what work belongs there and how it
+differs from nearby projects. It supplies context for choosing a note's project.
+_Avoid_: Project summary
+
+**Note summary**:
+A concise account of an individual note's content. It describes that note rather
+than defining which notes belong to a project.
+_Avoid_: Project description
+
 **Entity**:
 A named person, company, location, or product identified in a note.
 _Avoid_: Keyword, topic

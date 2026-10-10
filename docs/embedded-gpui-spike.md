@@ -131,12 +131,11 @@ the old list/detail/selection and watch; capture stays global/unassigned with
 pending/recovery/unknown identity retained. Unmatched captures stay out of project
 lists. See [the shortcuts audit](shortcuts-audit.md) for deferred mappings.
 
-Project Add and summary editors use the same Kit controls in owned rendered
+Project Add and description editors use the same Kit controls in owned rendered
 tests. Their Return, Cmd-Return, Escape and composition contract is documented in
-[the shortcuts audit](shortcuts-audit.md). Automatic organization and its credential
-control run only in the normal GUI host; synthetic `--root` never accesses
-Keychain or starts the provider actor. Tests inject fake stores and port0 HTTP
-separately; see [automatic organization](automatic-organization.md).
+[the shortcuts audit](shortcuts-audit.md). Client automatic organization and its
+credential reader are retired (#3634); tests never exercise real Keychain.
+
 
 The composer creates an unassigned note with detail closed and appends to the
 confirmed open detail with it open (#3378). The `Append to #ID` placeholder reflects
@@ -246,7 +245,7 @@ applicable bound. Failed, Shared and Archive bypass it and hide the entire contr
 group, including Not saved/retry, even during search from those origins (#157).
 Their watches include every creation channel before the 10,000-note limit. The
 choice defaults off, persists per account in separate `gui-source.json`, and
-leaves rail/context, direct-ID operations and Jev eligibility unchanged. Source
+leaves rail/context, direct-ID operations unchanged. Source
 changes retain draft/caret, pending capture/append and surviving reader/selection;
 hidden detail closes without opening a neighbor. Modal/marked input keeps priority.
 Only JSON boolean `created_by_ai:true` is excluded; all other JSON values remain.

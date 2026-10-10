@@ -68,9 +68,9 @@ struct ModifyProjectArgs {
     /// Color hex code (use "none" to clear)
     #[arg(long)]
     color: Option<String>,
-    /// Project summary (use "none" to clear)
+    /// Project description (use "none" to clear)
     #[arg(long)]
-    summary: Option<String>,
+    description: Option<String>,
 }
 
 #[derive(Args)]
@@ -154,8 +154,8 @@ async fn detail(daemon: &DaemonClient, args: &DetailArgs) -> Result<(), CliError
     if let Some(ref color) = project.color {
         println!("Color:   {color}");
     }
-    if let Some(ref summary) = project.summary {
-        println!("Summary: {summary}");
+    if let Some(ref description) = project.description {
+        println!("Description: {description}");
     }
     let status = if project.archived {
         "archived"
@@ -185,7 +185,7 @@ async fn modify(daemon: &DaemonClient, args: &ModifyProjectArgs) -> Result<(), C
         .call(AppRequest::ProjectModify(ProjectModifyInput {
             id: args.id.clone(),
             color: patch(&args.color),
-            summary: patch(&args.summary),
+            description: patch(&args.description),
         }))
         .await?;
     println!("Updated project {}.", project.id);

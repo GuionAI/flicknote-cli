@@ -9,7 +9,6 @@ use deadpool_postgres::{Object, Pool};
 use flicknote_client::dto::RecallCandidate;
 use flicknote_core::backend::{
     InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteSearch as StructuredSearch,
-    RouteProjectUpdate,
 };
 use flicknote_core::error::CliError;
 use flicknote_core::services::error::ServiceError;
@@ -384,14 +383,7 @@ impl NoteDb for PgRequestDb {
     async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
         self.update_note_field(id, "content=$2", &[&content]).await
     }
-    async fn route_notes_to_projects(
-        &self,
-        _updates: &[RouteProjectUpdate],
-    ) -> Result<(), CliError> {
-        Err(CliError::Other(
-            "automatic project routing is local-only".into(),
-        ))
-    }
+
     async fn submit_draft(&self, id: &str) -> Result<bool, CliError> {
         let id = uuid(id)?;
         Ok(self.execute("UPDATE notes SET status='ai_queued', updated_at=now() WHERE id=$1 AND user_id=auth.uid() AND deleted_at IS NULL AND status='draft'", &[&id]).await? > 0)
@@ -506,7 +498,7 @@ impl NoteDb for PgRequestDb {
         &self,
         id: &str,
         color: Option<Option<&str>>,
-        summary: Option<Option<&str>>,
+        description: Option<Option<&str>>,
     ) -> Result<(), CliError> {
         let id = Uuid::parse_str(id).map_err(|_| project_missing(id))?;
         let row = self
@@ -521,13 +513,13 @@ impl NoteDb for PgRequestDb {
             .as_object_mut()
             .ok_or_else(|| pg_error("project metadata must be object"))?;
         object.remove("pinned");
-        if let Some(summary) = summary {
-            match summary {
+        if let Some(description) = description {
+            match description {
                 Some(value) => {
-                    object.insert("summary".into(), value.into());
+                    object.insert("description".into(), value.into());
                 }
                 None => {
-                    object.remove("summary");
+                    object.remove("description");
                 }
             }
         }

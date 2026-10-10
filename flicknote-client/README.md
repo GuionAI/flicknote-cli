@@ -47,7 +47,11 @@ business rules, and service lifecycle. Storage/Markdown projections and internal
 error conversions remain in core/sync. The CLI and daemon use these canonical
 client types directly, with no legacy type paths or compatibility re-exports.
 
-The wire protocol and existing CLI/MCP JSON and schema contracts are unchanged.
+Project DTO/IPC/MCP contracts expose nullable `description` only, stored in
+`projects.metadata.description`. `ProjectModifyInput.description` uses `Patch`: omitted
+preserves, null clears, and a string sets. Obsolete project `summary` input is
+rejected; there is no fallback or startup migration. Note summaries remain unchanged.
+The old probability-routing request/result are removed.
 Connection and health waits remain bounded; ordinary reads retain their existing
 transport backstop. Human recall has a five-second whole-call deadline, and
 command-hook/MCP recall has three seconds, enforced at those entrypoints.

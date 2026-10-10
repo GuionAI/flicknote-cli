@@ -69,7 +69,6 @@ mod tests {
             from_project_id: None,
             to_project_id: Some("project-1".to_string()),
             source: ProjectAssignmentSource::Manual,
-            probability: None,
             created_at: "2026-09-25T00:00:00Z".to_string(),
         }];
 
@@ -83,6 +82,5 @@ mod tests {
         assert_eq!(value["v"], 1);
         assert_eq!(value["event"], "project_assignment");
         assert_eq!(value["source"], "manual");
-        assert_eq!(value["probability"], serde_json::Value::Null);
     }
 }

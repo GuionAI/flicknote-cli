@@ -55,7 +55,7 @@ impl<'a> ProjectService<'a> {
     }
 
     pub async fn modify(&self, input: ProjectModifyInput) -> Result<ProjectDto, ServiceError> {
-        if input.color.is_missing() && input.summary.is_missing() {
+        if input.color.is_missing() && input.description.is_missing() {
             return Err(ServiceError::NothingToModify);
         }
         let id = self.resolve_project_id(&input.id).await?;
@@ -64,16 +64,16 @@ impl<'a> ProjectService<'a> {
             Patch::Null => Some(None),
             Patch::Value(color) => Some(Some(color)),
         };
-        let summary = match input.summary {
+        let description = match input.description {
             Patch::Missing => None,
             Patch::Null => Some(None),
-            Patch::Value(summary) => Some(Some(summary)),
+            Patch::Value(description) => Some(Some(description)),
         };
         self.db
             .update_project(
                 &id,
                 color.as_ref().map(|value| value.as_deref()),
-                summary.as_ref().map(|value| value.as_deref()),
+                description.as_ref().map(|value| value.as_deref()),
             )
             .await?;
         Ok(self.db.find_project(&id).await?.into())
@@ -122,7 +122,7 @@ impl From<Project> for ProjectDto {
             id: project.id,
             name: project.name,
             color: project.color,
-            summary: project
+            description: project
                 .metadata
                 .as_deref()
                 .map(serde_json::from_str)
@@ -131,7 +131,7 @@ impl From<Project> for ProjectDto {
                 .flatten()
                 .and_then(|metadata: serde_json::Value| {
                     metadata
-                        .get("summary")
+                        .get("description")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_string)
                 }),
@@ -178,7 +178,7 @@ mod tests {
             .modify(ProjectModifyInput {
                 id: created.id.clone(),
                 color: Patch::Value("#abcdef".to_string()),
-                summary: Patch::Missing,
+                description: Patch::Missing,
             })
             .await
             .unwrap();
@@ -188,20 +188,20 @@ mod tests {
             .modify(ProjectModifyInput {
                 id: created.id.clone(),
                 color: Patch::Missing,
-                summary: Patch::Value("Current work".to_string()),
+                description: Patch::Value("Current work".to_string()),
             })
             .await
             .unwrap();
-        assert_eq!(summarized.summary.as_deref(), Some("Current work"));
+        assert_eq!(summarized.description.as_deref(), Some("Current work"));
         let cleared = service
             .modify(ProjectModifyInput {
                 id: created.id.clone(),
                 color: Patch::Missing,
-                summary: Patch::Null,
+                description: Patch::Null,
             })
             .await
             .unwrap();
-        assert!(cleared.summary.is_none());
+        assert!(cleared.description.is_none());
 
         let archived = service.archive(&created.id).await.unwrap();
         assert!(archived.archived);

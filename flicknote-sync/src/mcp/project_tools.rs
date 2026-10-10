@@ -20,6 +20,7 @@ pub(super) struct ProjectAddParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ProjectModifyParams {
     pub project: String,
     #[serde(default)]
@@ -27,5 +28,5 @@ pub(super) struct ProjectModifyParams {
     pub color: Patch<String>,
     #[serde(default)]
     #[schemars(with = "Option<String>")]
-    pub summary: Patch<String>,
+    pub description: Patch<String>,
 }

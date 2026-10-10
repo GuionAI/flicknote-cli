@@ -817,10 +817,20 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         &resource,
         "full",
         "project_modify",
-        json!({"project":"HTTP project","summary":"For HTTP"}),
+        json!({"project":"HTTP project","description":"For HTTP"}),
     )
     .await;
-    assert_eq!(changed["summary"], "For HTTP");
+    assert_eq!(changed["description"], "For HTTP");
+    let rejected: serde_json::Value = client.post(&resource).bearer_auth("full")
+        .header("Accept", "application/json, text/event-stream")
+        .header("MCP-Protocol-Version", "2025-03-26")
+        .json(&json!({"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"project_modify","arguments":{"project":"HTTP project","summary":"obsolete","color":"red"}}}))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(
+        rejected.get("error").is_some() || rejected["result"]["isError"] == true,
+        "{rejected}"
+    );
+
     tool_call(
         &client,
         &resource,
@@ -1121,5 +1131,107 @@ async fn concurrent_appends_and_cancelled_transactions_preserve_ownership() {
     let a = db(&isolated_pool, alice).await;
     assert!(a.resolve_note_id(&cancelled_id).await.is_err());
     assert!(a.resolve_note_id(&created.uuid).await.is_ok());
+    a.finish(true).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
+async fn private_project_description_preserves_metadata_and_note_evidence() {
+    use flicknote_client::dto::{Patch, ProjectModifyInput};
+    let pool = pool();
+    let alice = "11111111-1111-4111-8111-111111111111";
+    let a = db(&pool, alice).await;
+    let project = ProjectService::new(a.as_ref())
+        .add(ProjectAddInput {
+            name: "Description contract".into(),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let creator = PgNoteCreator(a.clone());
+    let note = NoteService::new(a.as_ref())
+        .add(&creator, add_input("note body", true))
+        .await
+        .unwrap();
+    a.update_note_summary(&note.uuid, Some("note evidence"))
+        .await
+        .unwrap();
+    a.finish(true).await.unwrap();
+    // Seed obsolete metadata through the migrated, authenticated/RLS contract.
+    let connection = pool.get().await.unwrap();
+    connection.batch_execute("BEGIN; SET LOCAL ROLE authenticated; SET LOCAL request.jwt.claim.sub='11111111-1111-4111-8111-111111111111';").await.unwrap();
+    connection
+        .execute(
+            "UPDATE projects SET metadata=$2 WHERE id=$1",
+            &[
+                &Uuid::parse_str(&project.id).unwrap(),
+                &serde_json::json!({"summary":"old boundary","sibling":{"keep":true}}),
+            ],
+        )
+        .await
+        .unwrap();
+    connection.batch_execute("COMMIT").await.unwrap();
+    drop(connection);
+    let a = db(&pool, alice).await;
+    let service = ProjectService::new(a.as_ref());
+    assert!(
+        service
+            .get(&project.id)
+            .await
+            .unwrap()
+            .description
+            .is_none()
+    );
+    let modified = service
+        .modify(ProjectModifyInput {
+            id: project.id.clone(),
+            color: Patch::Missing,
+            description: Patch::Value("  exact\n".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(modified.description.as_deref(), Some("  exact\n"));
+    let unchanged = service
+        .modify(ProjectModifyInput {
+            id: project.id.clone(),
+            color: Patch::Value("blue".into()),
+            description: Patch::Missing,
+        })
+        .await
+        .unwrap();
+    assert_eq!(unchanged.description, modified.description);
+    assert!(
+        service
+            .list(false)
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.id == project.id && p.description == modified.description)
+    );
+    let cleared = service
+        .modify(ProjectModifyInput {
+            id: project.id.clone(),
+            color: Patch::Missing,
+            description: Patch::Null,
+        })
+        .await
+        .unwrap();
+    assert!(cleared.description.is_none());
+    let metadata: serde_json::Value = serde_json::from_str(
+        a.find_project(&project.id)
+            .await
+            .unwrap()
+            .metadata
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        metadata,
+        serde_json::json!({"summary":"old boundary","sibling":{"keep":true}})
+    );
+    let stored = a.find_note(&note.uuid).await.unwrap();
+    assert_eq!(stored.summary.as_deref(), Some("note evidence"));
+    assert_eq!(stored.status, "draft");
     a.finish(true).await.unwrap();
 }

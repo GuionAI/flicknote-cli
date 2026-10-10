@@ -35,12 +35,13 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectModifyInput {
     pub id: String,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
     pub color: Patch<String>,
     #[serde(default, skip_serializing_if = "Patch::is_missing")]
-    pub summary: Patch<String>,
+    pub description: Patch<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -54,7 +55,7 @@ pub struct ProjectDto {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
-    pub summary: Option<String>,
+    pub description: Option<String>,
     pub archived: bool,
     pub created_at: Option<String>,
 }
@@ -254,18 +255,6 @@ pub struct NoteListInput {
     pub limit: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct NoteRouteProjectInput {
-    pub note_id: i64,
-    pub project_id: Option<String>,
-    pub probability: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct NoteRouteProjectResult {
-    pub routed: usize,
 }
 
 fn arbitrary_json_schema(_generator: &mut SchemaGenerator) -> Schema {

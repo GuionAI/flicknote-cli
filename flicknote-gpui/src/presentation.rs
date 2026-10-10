@@ -1140,7 +1140,7 @@ impl Today {
                     .test_support(),
             )
             .when(!self.search.active(), |d| {
-                d.children(self.render_summary(cx))
+                d.children(self.render_description(cx))
                     .children(self.render_period_controls(cx))
             })
             .child(
@@ -1269,7 +1269,7 @@ impl Render for Today {
                         && this
                             .editor
                             .as_ref()
-                            .is_some_and(|e| matches!(e.kind, project_editor::Kind::Summary(_)))
+                            .is_some_and(|e| matches!(e.kind, project_editor::Kind::Description(_)))
                     {
                         this.save_editor(window, cx);
                         return;

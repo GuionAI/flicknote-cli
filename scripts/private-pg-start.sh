@@ -4,7 +4,7 @@ set -euo pipefail
 export PATH=/usr/lib/postgresql/18/bin:$PATH
 cluster="$1"
 bootstrap="$2"
-initdb -D "$cluster" -A trust --no-instructions
+initdb -D "$cluster" -A trust --encoding=UTF8 --locale=C --no-instructions
 cat >> "$cluster/postgresql.conf" <<'CONF'
 shared_preload_libraries = 'pgroonga_wal_resource_manager,pgroonga_crash_safer'
 pgroonga.enable_wal_resource_manager = on

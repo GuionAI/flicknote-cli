@@ -2330,7 +2330,6 @@ dependencies = [
  "futures-lite",
  "gpui-kit",
  "log",
- "security-framework",
  "serde",
  "serde_json",
  "tempfile",

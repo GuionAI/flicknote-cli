@@ -24,7 +24,6 @@ Common workflows:
   flicknote unshare <id>
   flicknote project share <project-id>
   flicknote project unshare <project-id>
-  flicknote note route-project < routes.json
 
 The Gateway command is for internal development and maintenance requests.
 Use numeric note IDs from `flicknote list`.

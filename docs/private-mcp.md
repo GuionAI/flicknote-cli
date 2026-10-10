@@ -124,7 +124,7 @@ triggers, or policies. The infrastructure-only
 [`private_pg_bootstrap.sql`](../flicknote-sync/tests/fixtures/private_pg_bootstrap.sql)
 creates minimal Auth prerequisites and referenced roles. `auth.uid()` reads
 transaction-local request claims, so Alice/Bob isolation exercises real RLS.
-The database is named `supabase` and enables `wal_level=logical` for CDC
+The database is named `supabase`, uses an explicit UTF-8/C-locale fixture cluster, and enables `wal_level=logical` for CDC
 migrations. Test users are seeded after migrations and MCP preparation; only
 the disposable fixture activates the `flicknote_mcp` login without credentials.
 
@@ -163,7 +163,8 @@ No mutating test accepts a shared/live database URL.
 
 The real PostgreSQL/HTTP suite verifies ordinary text/URL creation, rejection of
 draft input, seeded draft get/list, metadata and content edits preserving drafts, short IDs, owner isolation, extraction
-replacement, PGroonga search, cancellation, and a failed canonical read whose
+replacement, PGroonga search, cancellation, project description reads/patches with note-summary preservation and obsolete input
+rejection, the one-time owner-scoped SQL artifact suite (container mode), and a failed canonical read whose
 insert rolls back without durable rows or false success. Validate harness
 failure propagation and container cleanup separately:
 
@@ -219,7 +220,11 @@ The remote server advertises `entity_list`, `topic_list`; `note_add`,
 `note_rename_section`, `note_replace_section`, `note_restore`, `note_submit`,
 `note_write`; and `project_add`, `project_archive`, `project_get`, `project_list`,
 `project_modify`. It reuses the local MCP tool arguments, results, and strict
-output schemas. The local server retains its complete tool set; remote sharing,
+output schemas. Project list/get expose nullable `description` from
+`projects.metadata.description` only. Project modify patches color/description;
+omitted preserves, null clears, strings set, and old project summary inputs are
+rejected. Note summary and `notes.summary` are unchanged. The server runs no
+field conversion; see [the owner-scoped dev migration](project-description-migration.md). The local server retains its complete tool set; remote sharing,
 source/open tools, and host-triggered recall are not advertised.
 
 Local and remote MCP `note_add` accept content and optional project only.

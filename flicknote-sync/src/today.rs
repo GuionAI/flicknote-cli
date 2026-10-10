@@ -147,7 +147,7 @@ pub struct ProjectContext {
     pub id: String,
     pub name: String,
     pub color: Option<String>,
-    pub summary: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -238,7 +238,7 @@ impl TodayWatch {
                     Destination::Archive => "n.deleted_at IS NOT NULL",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, coalesce(n.status, '') AS status, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.summary') AS summary FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS summary, archived, draft, shared, status FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, summary, NULL, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, coalesce(n.status, '') AS status, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.description') AS description FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS description, archived, draft, shared, status FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, description, NULL, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
                     Destination::Project(id) => id.clone(),
@@ -286,7 +286,7 @@ impl TodayWatch {
                                 id: r.get(1)?,
                                 name: r.get(5)?,
                                 color: r.get(4)?,
-                                summary: r.get(9)?,
+                                description: r.get(9)?,
                             });
                         }
                     }

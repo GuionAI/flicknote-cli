@@ -477,7 +477,7 @@ fn known_color_geometry_and_plus_accessory_alignment(cx: &mut TestAppContext) {
             }
         }
     }
-    // A watch-driven Jev-like assignment/color change is visible immediately; colorless stays absent.
+    // A watch-driven backend assignment/color change is visible immediately; colorless stays absent.
     runtime.block_on(async {
         host.db
             .writer()

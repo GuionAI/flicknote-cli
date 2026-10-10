@@ -454,13 +454,6 @@ mod tests {
             Ok(())
         }
 
-        async fn route_notes_to_projects(
-            &self,
-            _updates: &[crate::backend::RouteProjectUpdate],
-        ) -> Result<(), CliError> {
-            unimplemented!()
-        }
-
         async fn submit_draft(&self, _id: &str) -> Result<bool, CliError> {
             unimplemented!()
         }
@@ -517,7 +510,7 @@ mod tests {
             &self,
             _id: &str,
             _color: Option<Option<&str>>,
-            _summary: Option<Option<&str>>,
+            _description: Option<Option<&str>>,
         ) -> Result<(), CliError> {
             unimplemented!()
         }

@@ -72,6 +72,7 @@ struct McpHarness {
     alpha_id: String,
     server: tokio::task::JoinHandle<()>,
     app: Arc<Application>,
+    database: PowerSyncDatabase,
 }
 
 impl McpHarness {
@@ -87,7 +88,7 @@ impl McpHarness {
         search.prepare().await.unwrap();
         let creator: Arc<dyn NoteCreator> = Arc::new(PersistingCreator {
             db: backend.clone(),
-            database,
+            database: database.clone(),
         });
         let app = Arc::new(
             Application::new(backend, creator, Arc::new(UnusedShareGateway))
@@ -117,6 +118,7 @@ impl McpHarness {
             alpha_id,
             server,
             app,
+            database,
         }
     }
 
@@ -707,14 +709,18 @@ async fn mcp_tool_output_schemas_are_strict_client_compatible() {
         .and_then(|reference| reference.strip_prefix("#/$defs/"))
         .map(|name| &projects["outputSchema"]["$defs"][name]["properties"])
         .unwrap_or(&item["properties"]);
-    assert!(properties.get("summary").is_some());
+    assert!(properties.get("description").is_some());
     assert!(properties.get("metadata").is_none());
 
     let modify = tools
         .iter()
         .find(|tool| tool["name"] == "project_modify")
         .unwrap();
-    assert!(modify["inputSchema"]["properties"].get("summary").is_some());
+    assert!(
+        modify["inputSchema"]["properties"]
+            .get("description")
+            .is_some()
+    );
     assert!(modify["inputSchema"]["properties"].get("pinned").is_none());
 }
 
@@ -1554,7 +1560,7 @@ async fn mcp_project_and_source_contracts_are_preserved() {
             .is_none()
     );
     assert_eq!(
-        projects["result"]["structuredContent"]["projects"][0]["summary"],
+        projects["result"]["structuredContent"]["projects"][0]["description"],
         "Project boundary"
     );
     assert!(
@@ -1568,13 +1574,13 @@ async fn mcp_project_and_source_contracts_are_preserved() {
             serde_json::json!({
                 "project": "MCP Project",
                 "color": "#abcdef",
-                "summary": "Updated boundary"
+                "description": "Updated boundary"
             }),
         )
         .await;
     assert_eq!(project["result"]["structuredContent"]["color"], "#abcdef");
     assert_eq!(
-        project["result"]["structuredContent"]["summary"],
+        project["result"]["structuredContent"]["description"],
         "Updated boundary"
     );
 
@@ -1612,5 +1618,95 @@ async fn mcp_project_and_source_contracts_are_preserved() {
     assert_eq!(
         no_source["result"]["structuredContent"]["code"],
         "no_source"
+    );
+}
+
+#[tokio::test]
+async fn mcp_project_description_has_no_summary_fallback_and_preserves_note_summary() {
+    let mut harness = McpHarness::start().await;
+    {
+        let writer = harness.database.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE projects SET metadata=? WHERE name='MCP Project'",
+                [r#"{"summary":"obsolete boundary","other":{"keep":true}}"#],
+            )
+            .unwrap();
+        writer.execute("UPDATE notes SET summary='note evidence',metadata=? WHERE short_id=42",
+            [r#"{"project_routing":{"project_id":null,"reason":"backend none","routed":true}}"#]).unwrap();
+    }
+    let get = harness
+        .call("project_get", serde_json::json!({"project":"MCP Project"}))
+        .await;
+    assert!(get["result"]["structuredContent"]["description"].is_null());
+    assert!(get["result"]["structuredContent"].get("summary").is_none());
+    let old = harness
+        .call(
+            "project_modify",
+            serde_json::json!({"project":"MCP Project","summary":"ignored?","color":"red"}),
+        )
+        .await;
+    assert!(
+        old.get("error").is_some() || old["result"]["isError"] == true,
+        "{old}"
+    );
+    let set = harness
+        .call(
+            "project_modify",
+            serde_json::json!({"project":"MCP Project","description":"  Exact boundary\n"}),
+        )
+        .await;
+    assert_eq!(
+        set["result"]["structuredContent"]["description"],
+        "  Exact boundary\n"
+    );
+    let omitted = harness
+        .call(
+            "project_modify",
+            serde_json::json!({"project":"MCP Project","color":"blue"}),
+        )
+        .await;
+    assert_eq!(
+        omitted["result"]["structuredContent"]["description"],
+        "  Exact boundary\n"
+    );
+    let listed = harness.call("project_list", serde_json::json!({})).await;
+    assert_eq!(
+        listed["result"]["structuredContent"]["projects"][0]["description"],
+        "  Exact boundary\n"
+    );
+    let clear = harness
+        .call(
+            "project_modify",
+            serde_json::json!({"project":"MCP Project","description":null}),
+        )
+        .await;
+    assert!(clear["result"]["structuredContent"]["description"].is_null());
+    let note = harness.call("note_get", serde_json::json!({"id":42})).await;
+    assert_eq!(
+        note["result"]["structuredContent"]["summary"],
+        "note evidence"
+    );
+    assert_eq!(
+        note["result"]["structuredContent"]["metadata"]["project_routing"]["reason"],
+        "backend none"
+    );
+    let writer = harness.database.writer().await.unwrap();
+    let metadata: String = writer
+        .query_row(
+            "SELECT metadata FROM projects WHERE name='MCP Project'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&metadata).unwrap(),
+        serde_json::json!({"summary":"obsolete boundary","other":{"keep":true}})
+    );
+    assert!(
+        serde_json::from_value::<flicknote_client::dto::ProjectModifyInput>(
+            serde_json::json!({"id":"project","color":"blue","summary":null})
+        )
+        .is_err()
     );
 }

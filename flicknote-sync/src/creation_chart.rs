@@ -176,8 +176,8 @@ impl ChartWatch {
                                 Ok((days,groups)) => {
                                     // Rail context is independent of the chart source/range, as on other destinations.
                                     match db.reader().await {
-                                        Ok(reader) => reader.prepare("SELECT id,name,color,json_extract(metadata,'$.summary') FROM projects WHERE user_id=? AND coalesce(is_archived,0)=0 ORDER BY name,id LIMIT 10000").and_then(|mut stmt| {
-                                            let projects = stmt.query_map([&user],|r| Ok(ProjectContext { id:r.get(0)?,name:r.get(1)?,color:r.get(2)?,summary:r.get(3)? }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+                                        Ok(reader) => reader.prepare("SELECT id,name,color,json_extract(metadata,'$.description') FROM projects WHERE user_id=? AND coalesce(is_archived,0)=0 ORDER BY name,id LIMIT 10000").and_then(|mut stmt| {
+                                            let projects = stmt.query_map([&user],|r| Ok(ProjectContext { id:r.get(0)?,name:r.get(1)?,color:r.get(2)?,description:r.get(3)? }))?.collect::<rusqlite::Result<Vec<_>>>()?;
                                             Ok(Snapshot { days,groups,projects:Arc::new(projects) })
                                         }).map_err(|e| e.to_string()),
                                         Err(error) => Err(error.to_string()),

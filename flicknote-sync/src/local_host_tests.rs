@@ -851,7 +851,7 @@ async fn seed_source_matrix(host: &LocalHost, project: &str) {
         let mut writer = host.db.writer().await.unwrap();
         let tx = writer.transaction().unwrap();
         tx.execute(
-            "UPDATE projects SET metadata='{\"summary\":\"Keep context\"}' WHERE id=?",
+            "UPDATE projects SET metadata='{\"description\":\"Keep context\"}' WHERE id=?",
             [project],
         )
         .unwrap();
@@ -916,7 +916,7 @@ async fn human_scope_marker_matrix_before_limit_and_direct_access() {
     assert_eq!(history.rows[0].uuid, "old-source");
     assert_eq!(day.projects.len(), 1);
     assert_eq!(day.projects[0].id, project);
-    assert_eq!(day.projects[0].summary.as_deref(), Some("Keep context"));
+    assert_eq!(day.projects[0].description.as_deref(), Some("Keep context"));
     let mut unfiltered = TodayWatch::start_destination(
         host.db.clone(),
         host.user_id.clone(),
@@ -973,7 +973,7 @@ async fn human_scope_marker_matrix_before_limit_and_direct_access() {
         .unwrap();
     let empty = snapshot(&mut all, |s| s.rows.is_empty()).await;
     assert_eq!(empty.projects[0].id, project);
-    assert_eq!(empty.projects[0].summary, day.projects[0].summary);
+    assert_eq!(empty.projects[0].description, day.projects[0].description);
     drop((home, all, unfiltered));
     host.shutdown().await;
     server.abort();
@@ -1043,11 +1043,7 @@ async fn shared_archive_watch_use_canonical_expiry_owner_all_sources_before_limi
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events.len(), 2, "same-project drop emits no event");
-    assert!(
-        events
-            .iter()
-            .all(|e| e["source"] == "manual" && e["probability"].is_null())
-    );
+    assert!(events.iter().all(|e| e["source"] == "manual"));
     {
         let writer = host.db.writer().await.unwrap();
         writer.execute("INSERT INTO note_shares(id,user_id,token,created_at) SELECT id,user_id,'owned-token','2026-01-01T00:00:00Z' FROM notes", []).unwrap();

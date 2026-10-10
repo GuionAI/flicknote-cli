@@ -65,7 +65,7 @@ fn project_unshare_command_parses() {
 }
 
 #[test]
-fn project_modify_supports_summary_but_not_pinned() {
+fn project_modify_supports_description_but_not_summary_or_pinned() {
     let id = "550e8400-e29b-41d4-a716-446655440000";
     assert!(
         Cli::try_parse_from([
@@ -73,10 +73,13 @@ fn project_modify_supports_summary_but_not_pinned() {
             "project",
             "modify",
             id,
-            "--summary",
+            "--description",
             "Boundary"
         ])
         .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from(["flicknote", "project", "modify", id, "--summary", "Old"]).is_err()
     );
     assert!(
         Cli::try_parse_from(["flicknote", "project", "modify", id, "--pinned", "true"]).is_err()
@@ -99,7 +102,7 @@ fn list_project_and_no_project_are_mutually_exclusive() {
 }
 
 #[test]
-fn list_time_filters_and_route_project_parse() {
+fn list_time_filters_parse() {
     assert!(
         Cli::try_parse_from([
             "flicknote",
@@ -112,7 +115,6 @@ fn list_time_filters_and_route_project_parse() {
         ])
         .is_ok()
     );
-    assert!(Cli::try_parse_from(["flicknote", "note", "route-project"]).is_ok());
 }
 
 #[test]

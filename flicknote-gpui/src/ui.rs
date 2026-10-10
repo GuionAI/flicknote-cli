@@ -35,7 +35,6 @@ pub(super) struct Services {
     pub(super) temporal: Mutex<temporal::Memory>,
     pub(super) capture: Arc<Mutex<Capture>>,
     pub(super) draft: Mutex<(String, std::ops::Range<usize>)>,
-    pub(super) organization: Mutex<Option<crate::organization::Control>>,
     pub(super) source: crate::source::Control,
     pub(super) capture_changed: tokio::sync::watch::Sender<()>,
 }
@@ -80,7 +79,6 @@ actions!(
         NextDestination,
         PreviousDestination,
         SaveEditor,
-        AutomaticOrganization,
         FocusSearch,
         SearchNext,
         SearchPrevious
@@ -166,7 +164,6 @@ struct Reading {
 struct Today {
     editor: Option<project_editor::Editor>,
     pending_project: Option<String>,
-    organization_task: Option<Task<()>>,
     services: Arc<Services>,
     destination: Destination,
     period: Period,
@@ -243,7 +240,6 @@ impl Today {
         let mut this = Self {
             editor: None,
             pending_project: None,
-            organization_task: None,
             destination,
             range: period.range(&chrono::Local::now()).ok().flatten(),
             period,
@@ -300,7 +296,6 @@ impl Today {
         this.observe_source(window, cx);
         this.observe_main_loop(window, cx);
         this.subscribe_status(window, cx);
-        this.observe_organization(window, cx);
         this
     }
 
@@ -365,33 +360,6 @@ impl Today {
                 {
                     break;
                 }
-            }
-        }));
-    }
-
-    fn observe_organization(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(control) = self
-            .services
-            .organization
-            .lock()
-            .expect("organization control")
-            .clone()
-        else {
-            return;
-        };
-        self.organization_task = Some(cx.spawn_in(window, async move |entity, cx| {
-            let mut state = control.state;
-            let mut error = control.routing_error;
-            let mut catch_up = control.catch_up;
-            let mut opened=control.opened.subscribe();
-            loop {
-                let requested=*opened.borrow_and_update();
-                if entity.update_in(cx,|this,window,cx| {
-                    if requested {this.edit(project_editor::Kind::Organization,window,cx);}
-                    cx.notify();
-                }).is_err(){break;}
-                if requested {control.opened.send_replace(false);}
-                tokio::select! {r=state.changed()=>if r.is_err(){break;}, r=error.changed()=>if r.is_err(){break;},r=opened.changed()=>if r.is_err(){break;},r=catch_up.changed()=>if r.is_err(){break;}}
             }
         }));
     }
@@ -1300,26 +1268,11 @@ fn install_workspace_menu(
         }
         open(reopen.clone(), reopen_system.clone(), cx);
     });
-    let organization_state = state.clone();
-    let organization_system = system.clone();
-    cx.on_action(move |_: &AutomaticOrganization, cx| {
-        if let Some(Ok(WorkspaceState::Ready(services))) = organization_state.borrow().as_ref()
-            && let Some(control) = services
-                .organization
-                .lock()
-                .expect("organization control")
-                .as_ref()
-        {
-            control.opened.send_replace(true);
-            open(organization_state.clone(), organization_system.clone(), cx);
-        }
-    });
     cx.set_menus(vec![Menu {
         name: "FlickNote".into(),
         disabled: false,
         items: vec![
             MenuItem::action("Open Today", Reopen),
-            MenuItem::action("Automatic organization…", AutomaticOrganization),
             MenuItem::action("Next note", NextNote),
             MenuItem::action("Previous note", PreviousNote),
             MenuItem::action("Archive selected note", ArchiveNote),

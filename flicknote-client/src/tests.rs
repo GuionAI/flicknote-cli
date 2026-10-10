@@ -64,22 +64,22 @@ fn protocol_v15_uses_typed_project_contracts() {
         id: "project-id".to_string(),
         name: "Work".to_string(),
         color: Some("#123456".to_string()),
-        summary: Some("Project boundary".to_string()),
+        description: Some("Project boundary".to_string()),
         archived: false,
         created_at: Some("2026-09-25T00:00:00Z".to_string()),
     };
     let value = serde_json::to_value(AppResponse::Projects(vec![project])).unwrap();
-    assert_eq!(value["payload"][0]["summary"], "Project boundary");
+    assert_eq!(value["payload"][0]["description"], "Project boundary");
     assert!(value["payload"][0].get("metadata").is_none());
     assert!(value["payload"][0].get("user_id").is_none());
 
     let modify = serde_json::to_value(AppRequest::ProjectModify(ProjectModifyInput {
         id: "project-id".to_string(),
         color: Patch::Missing,
-        summary: Patch::Value("Updated boundary".to_string()),
+        description: Patch::Value("Updated boundary".to_string()),
     }))
     .unwrap();
-    assert_eq!(modify["payload"]["summary"], "Updated boundary");
+    assert_eq!(modify["payload"]["description"], "Updated boundary");
     assert!(modify["payload"].get("pinned").is_none());
 
     assert!(

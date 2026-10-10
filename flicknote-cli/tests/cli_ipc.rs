@@ -843,13 +843,50 @@ async fn cli_json_commands_expose_lightweight_discovery_items() {
             .keys()
             .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>(),
-        ["archived", "color", "created_at", "id", "name", "summary"]
-            .into_iter()
-            .collect()
+        [
+            "archived",
+            "color",
+            "created_at",
+            "description",
+            "id",
+            "name"
+        ]
+        .into_iter()
+        .collect()
     );
-    assert!(project.contains_key("summary"));
+    assert!(project.contains_key("description"));
     assert!(!project.contains_key("metadata"));
     assert!(!project.contains_key("user_id"));
+    let modified = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &[
+            "project",
+            "modify",
+            &project_id,
+            "--description",
+            "Exact project boundary",
+        ],
+        "",
+    );
+    assert!(
+        modified.status.success(),
+        "{}",
+        String::from_utf8_lossy(&modified.stderr)
+    );
+    let detail = run_cli_with_input(
+        &config_root,
+        &data_root,
+        &["project", "detail", &project_id],
+        "",
+    );
+    assert!(detail.status.success());
+    assert!(
+        String::from_utf8(detail.stdout)
+            .unwrap()
+            .contains("Description: Exact project boundary")
+    );
+
     assert!(!project.contains_key("is_archived"));
 }
 
@@ -1307,50 +1344,6 @@ fn cli_discovery_json_uses_the_daemon_list_items_without_note_record_lookups() {
     assert!(matches!(
         daemon.requests().as_slice(),
         [AppRequest::NoteList(_), AppRequest::NoteFind(_)]
-    ));
-}
-
-#[test]
-fn cli_route_project_reads_one_json_batch_from_stdin() {
-    let directory = tempfile::tempdir().unwrap();
-    let config_root = directory.path().join("config");
-    let data_root = directory.path().join("data");
-    let project_id = uuid::Uuid::new_v4().to_string();
-    let daemon = spawn_scripted_daemon(
-        &config_root,
-        &data_root,
-        flicknote_sync::ipc::server_info(),
-        |request| match request {
-            AppRequest::NoteRouteProject(routes) => DaemonResponse::App(Box::new(
-                AppResponse::NoteRouteProject(flicknote_client::dto::NoteRouteProjectResult {
-                    routed: routes.len(),
-                }),
-            )),
-            _ => panic!("unexpected request: {request:?}"),
-        },
-    );
-    let input = serde_json::json!([
-        {"note_id":3127,"project_id":project_id,"probability":0.91},
-        {"note_id":3128,"project_id":null,"probability":0.78}
-    ])
-    .to_string();
-
-    let output = run_cli_with_input(&config_root, &data_root, &["note", "route-project"], &input);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-        serde_json::json!({"routed":2})
-    );
-    assert!(matches!(
-        daemon.requests().as_slice(),
-        [AppRequest::NoteRouteProject(routes)]
-            if routes.len() == 2
-                && routes[0].note_id == 3127
-                && routes[1].project_id.is_none()
     ));
 }
 

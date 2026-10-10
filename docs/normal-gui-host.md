@@ -212,10 +212,10 @@ Option-H/Left and Option-L/Right dispatch the same previous/next actions only wi
 empty, unmarked composer and no modal editor. Draft arrows retain Kit word motion;
 marked text and modal editors retain priority. Pointer controls preserve ordinary
 draft/caret/undo but block marked input and editors. Compact Kit controls sit
-below the project summary and above the note list;
+below the project description and above the note list;
 project All/Week keeps the same control-region height, with Week's range on its
 own readable line at narrow widths. Home controls sit immediately below its
-header, without a summary spacer.
+header, without a description spacer.
 Scope/date changes close detail, reset row selection, discard old rows and replace
 the watch. Native pixels and OS IME remain separate, unverified user handoff.
 
@@ -255,17 +255,16 @@ Late preference load/save notifications leave their effective watch/search/actio
 scopes unchanged, retaining rows, reader and accepted operation identities.
 
 The owner/destination/source predicate precedes ordering and the 10,000-note SQL
-limit. The active project rail and summaries stay available even with no matching
+limit. The active project rail and descriptions stay available even with no matching
 notes. Today retains its 04:00 bounds and fixed 32-point preview rows. Switching
 source preserves ordinary composer text/caret, pending capture/append and a still
 visible selection/reader. If detail disappears, it closes with existing focus
 recovery and neighbor selection; another detail never opens automatically. Project
-and organization editors and marked composition block activation.
+editors and marked composition block activation.
 
 The process owns the choice. `gui-source.json` beside `daemon.sock` stores only
-account identifiers and booleans with private permissions, separately from
-organization cutoff/enabled state and Keychain. Loading and saving run off the UI
-thread after directory ownership; IPC/MCP/auth/sync readiness does not wait.
+account identifiers and booleans with private permissions,
+independently of other preferences. Loading and saving run off the UI thread after directory ownership; IPC/MCP/auth/sync readiness does not wait.
 The loaded scope precedes the first eligible note projection; utility views can
 project immediately while the preference loads. A storage error retains the
 session choice, shows **Not saved** beside the control, and offers retry after fixing
@@ -273,8 +272,7 @@ storage access. Rapid choices and late watch/save completions cannot restore an
 older projection or overwrite a newer choice. No Swift preferences are imported.
 
 This is a list projection, not access control. Explicit-ID Application, CLI IPC
-and MCP operations remain unfiltered without warning. Background Jev continues
-across all eligible creation channels, including hidden MCP notes. Search exact-ID access follows this same unfiltered read contract.
+and MCP operations remain unfiltered without warning. Search exact-ID access follows this same unfiltered read contract.
 
 ## Same-list workspace search (#3430)
 
@@ -412,7 +410,7 @@ the saved origin under current Only mine. Explicit rail clicks cancel that origi
 Search input, same-Today rows and native CtrlF/B behavior retain #3443/#3446.
 Ordinary close/reopen retains Charts and composer state in process memory and
 starts a fresh watch; closing, leaving or searching cancels the chart work.
-Existing IPC/MCP/sync/organization hosting continues independently. Local 04:00
+Existing IPC/MCP/sync hosting continues independently. Local 04:00
 rolls the range without a database write; source/epoch/range guards reject older
 completions. No analytics daemon, periodic polling or saved chart cache is added.
 
@@ -425,16 +423,16 @@ rail traversal, retained draft/caret, no hidden note actions, search-origin rest
 These are isolated host and rendered-component evidence; native pixels, OS input,
 cloud completeness and installed-app/Keychain acceptance remain unverified.
 
-## Projects and automatic organization (#3384)
+## Projects and descriptions (#3384, #3634)
 
 The Plus icon beside the rail's Projects heading creates by name through Application. A project's
-summary appears above All/Week/date controls in a fixed total 80-point region,
+description appears above All/Week/date controls in a fixed total 80-point region,
 including inset and Edit. The region never shrinks or grows with its text;
-wrapped long text scrolls internally, and an empty summary retains the same
-region with **Add a project summary**. Edit offers multiline Save/Cancel and
+wrapped long text scrolls internally, and an empty description retains the same
+region with **Add a project description**. Edit offers multiline Save/Cancel and
 Cmd-Return. Editors retain failure text, own native input and block workspace
 navigation/capture. Project creation selects the canonical watched UUID while
-preserving the note draft/caret. Add project, summary and Automatic organization
+preserving the note draft/caret. Add project and description editors
 share Kit 0.7.0's public unstyled `base::Dialog` host, with the existing skin and
 no added animation/shadow. Its stable focus trap keeps Tab inside the editor;
 guarded confirmation/cancellation retains busy and marked input, and only the
@@ -448,16 +446,15 @@ persistent workspace panes rather than dialogs.
 Owned LocalHost/rendered tests establish wheel offsets and 980/760 Light/Dark
 geometry; native OS wheel, pixels and IME remain separate user handoff evidence.
 
-The application menu's Automatic organization control offers masked Save/Replace,
-Remove and enable/disable, with its own error feedback. Normal GUI startup starts
-an independent host-owned organization coordinator after publishing cached readiness.
-It records a per-account first-start cutoff even without a key, uses a new
-account-scoped Keychain service and compact OpenRouter Decisions Choice requests,
-and survives window close. No old Swift credentials/preferences are imported.
-Eligibility, privacy/cost, bounded retries, cancellation/manual precedence,
-non-secret preference location and configuration steps are authoritative in
-[automatic organization](automatic-organization.md). Headless routing is deferred;
-private PostgreSQL remains unchanged. Synthetic mode starts no live adapter.
+Project descriptions use only `projects.metadata.description`. Blank GUI Save
+clears that key; other input preserves entered text. Cancel and failed Save
+preserve editable recovery. Note summaries remain unchanged. Manual assignment
+uses the existing guarded Application path and clears prior routing metadata.
+Automatic organization/Catch up and its provider/credential readers are retired.
+Startup does not read, reset or remove their old preferences or secrets.
+The backend owns automatic project selection and general `project_routing`
+markers remain readable. See [the migration runbook](project-description-migration.md)
+for separately executed, owner-scoped dev conversion after old writers stop.
 
 ## Failed processing notes (#153)
 
@@ -535,7 +532,7 @@ No failure copies a stale/fabricated link or automatically retries publishing.
 Accepted operations retain their original UUID/short ID and project UUID with the
 host across navigation and window close. Quit cancels them through the existing
 operation registry. Classification preserves content/lifecycle/provenance and
-uses the manual assignment path, without calling Jev.
+uses the manual assignment path, through manual classification.
 
 Active detail offers Share or Copy share link, and Unshare when watched shared.
 Copy share link reuses the canonical get-or-create gateway semantics. Unshare
@@ -553,17 +550,7 @@ geometry in both themes at 980/760 points. They use only temporary state and por
 Native pixels/input/IME, real cloud/share links and real Keychain acceptance remain
 separate, unperformed evidence for the user's trial after reviewed installation.
 
-## Recent organization and reader release (#3398)
-
-Automatic organization also offers Catch up for three or seven local 04:00
-workdays, including today. Preview is local and free of inference; enabled
-credentials are required for Start. Start freezes the range end without changing
-the persisted cutoff. The shared coordinator prioritizes regular notes and drains
-without a total cap, at least ten seconds between shared provider batch starts.
-Progress, Stop and retained completed/unfinished results stay in the organization
-control. Closing it or the workspace retains the run; Quit does not resume it.
-See [the organization contract](automatic-organization.md#catch-up-recent-notes-3398)
-for eligibility, canonical accounting and bounded failure recovery.
+## Reader pointer release (#3398)
 
 Markdown drag selection freezes after primary-pointer release, including release
 outside the reader. The reading pane lets MouseUp reach Kit's existing root
@@ -614,8 +601,9 @@ bash scripts/check-routine.sh
 Tests own their temporary paths/listeners and fake GoTrue/PostgREST/PowerSync
 transport; rendered tests cover production creation, email login, cancellation,
 close/reopen and retained input/IME/layout behavior. No live state or service is
-a test fixture. Existing PostgreSQL integration tests remain ignored without
-provisioning; its unchanged boundary requires no new PG harness.
+a test fixture. PostgreSQL integration tests remain ignored without provisioning. Project adapter
+and migration artifacts require the isolated, migration-backed harness; see
+[the private MCP contract](private-mcp.md#Migration-backed-cli-verification).
 
 Kit/base/component/assets 0.7.0, GPUI-pre 0.3.7 and the exact maintenance/license
 exceptions in the synthetic guide were rechecked for this experimental trial.

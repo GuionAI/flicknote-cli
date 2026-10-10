@@ -105,18 +105,14 @@ def package(output, binaries, identity, signer=codesign):
         'Packaging performs no launch/install/service/login/cloud operations. Preserve old apps/profiles.\n'
         'Normal native launch, input/pixels, live cutover and cloud verification remain unperformed.\n'
         'Only mine in the right header defaults off and persists per account across Home/Today and project-All.\n'
-        'It excludes only JSON boolean created_by_ai:true before the bounded watch limit; direct-ID access and Jev stay unfiltered.\n'
+        'It excludes only JSON boolean created_by_ai:true before the bounded watch limit; direct-ID access stays unfiltered; Failed/Shared/Archive bypass Only mine.\n'
         'Storage failure retains session scope and offers Not saved / retry; no Swift preferences are imported.\n'
-        'Configure through FlickNote > Automatic organization: save a masked OpenRouter key in the new account-scoped GUI Keychain service.\n'
-        'The first-start cutoff persists even without a key; enabling can catch up post-cutoff ready notes.\n'
-        'Provider descriptions are private data sent to a paid provider; Disable/Remove cancels routing.\n'
-        'No old key/preferences import or automatic historical sweep occurs.\n'
-        'Catch up offers 3/7 local 04:00 workdays including today; Start freezes the end and preserves the cutoff.\n'
-        'It drains without a total cap using the shared coordinator, regular priority and at least10s between batch starts.\n'
-        'Stop/configuration changes cancel; window close continues; Quit never resumes a manual run.\n'
+        'Project editors use description; note summaries remain independent.\n'
+        'Automatic organization/Catch up and client Jev credential/provider readers are retired (#3634).\n'
+        'Existing obsolete preferences/Keychain items are untouched; automatic project selection belongs to the backend.\n'
         'Orc installs accepted merged updates to /Applications/FlickNote.app with verified hashes and rollback retained.\n'
         'Installation never automatically quits/restarts a running app or clears drafts.\n'
-        'See docs/automatic-organization.md in the matching source for privacy, input, eligibility and retry contracts.\n'
+        'See docs/project-description-migration.md for separately operated owner-scoped dev conversion after old writers stop.\n'
         'See docs/normal-gui-host.md in the matching source for cutover and rollback instructions.\n')
     return manifest
 

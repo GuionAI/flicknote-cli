@@ -131,7 +131,6 @@ impl Host {
             temporal: std::sync::Mutex::default(),
             capture: std::sync::Arc::default(),
             draft: std::sync::Mutex::default(),
-            organization: std::sync::Mutex::default(),
             source: crate::source::Control::default(),
             capture_changed: tokio::sync::watch::channel(()).0,
         };
@@ -140,13 +139,6 @@ impl Host {
             Self::Synthetic(host) => host.socket.parent().expect("synthetic data directory"),
         };
         services.source = crate::source::Control::start(&services, root.join("gui-source.json"));
-        if let Self::Real(host) = self {
-            let control = crate::organization::start(
-                &services,
-                host.socket.parent().expect("host data directory"),
-            );
-            *services.organization.lock().expect("organization control") = Some(control);
-        }
         services
     }
     pub(crate) async fn burst(&self, count: u32) -> Result<(), String> {

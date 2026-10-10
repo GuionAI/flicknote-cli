@@ -191,10 +191,15 @@ project Week uses Monday 00:00. Keep historical ranges fixed, current ranges
 clock-following, per-UUID choices process-local and creation current/unassigned.
 Include period identity in stale-watch and accepted-operation reconciliation.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts.
-Read `docs/automatic-organization.md` before changing GUI project editors,
-organization eligibility/retries, cutoff preferences or credential handling.
-Organization starts only in the normal GUI host; tests inject fake secrets/provider
-HTTP and own preference roots. Never exercise the real Keychain adapter in tests.
+Project descriptions use only `projects.metadata.description` across client,
+IPC/MCP, CLI and GUI; note summaries remain independent. Reject obsolete project
+summary inputs. No alias, fallback, dual write or startup migration. Client Jev,
+Automatic organization/Catch up and their credential/preference readers are retired;
+do not restore them or delete real secrets/preferences. Preserve manual assignment,
+lifecycle/Failed Retry, host ownership/scopes and general backend routing markers.
+Read `docs/project-description-migration.md` for #3634's separately operated dev
+conversion, exact old marker predicate, reviewed preimages and constrained rollback.
+Only owned isolated fixtures may run migration tests; never use live/shared databases.
 
 ## Git Hooks (lefthook)
 

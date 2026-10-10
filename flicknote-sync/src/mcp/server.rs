@@ -749,7 +749,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "project_modify",
-        description = "Patch a project's color and/or summary by name. Missing leaves a field unchanged, null clears it, and a string sets it."
+        description = "Patch a project's color and/or description by name. Missing leaves a field unchanged, null clears it, and a string sets it."
     )]
     async fn project_modify(
         &self,
@@ -763,7 +763,7 @@ impl FlickNoteMcp {
             self.call::<ProjectDto>(AppRequest::ProjectModify(ProjectModifyInput {
                 id: project_id,
                 color: params.color,
-                summary: params.summary,
+                description: params.description,
             }))
             .await
             .map(Into::into),

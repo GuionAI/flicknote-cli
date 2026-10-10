@@ -36,8 +36,8 @@ surface or native acceptance.
 | CtrlB | Native backward caret motion in the owning editor | Native editor-local behavior retained; neither CtrlF nor CtrlB is remapped |
 | CmdA/C/V/X | Native select-all/copy/paste/cut in the owning text editor | Retained Kit native editing; these are not missing workspace actions |
 | CmdZ / CmdShiftZ | Native undo/redo | Retained Kit native editing; navigation retains the same composer/undo state |
-| Return (editors) | Save project name or inline note title; summary newline | Project name save and summary newline match; inline title editing is a missing/deferred GPUI surface |
-| CmdReturn | Composer submits; project summary editor saves | Summary save implemented #3384. Composer secondary Return is not submitted by GPUI; parity deferred; marked input retains Kit priority |
+| Return (editors) | Save project name or inline note title; description newline | Project name save and description newline match; inline title editing is a missing/deferred GPUI surface |
+| CmdReturn | Composer submits; project description editor saves | Description save implemented #3384. Composer secondary Return is not submitted by GPUI; parity deferred; marked input retains Kit priority |
 | CmdQ | Quit application | Implemented: explicit host shutdown; window close keeps host alive |
 | CmdComma | Settings | Deferred: no GPUI settings surface |
 | Global Fn / configured trigger | Desktop global workspace trigger | Deferred: no GPUI global hook/trigger |
@@ -76,18 +76,17 @@ Follow [the normal GUI operator guide](normal-gui-host.md) for existing-config,
 source/hash-bound packaging and opt-in launch. This audit authorizes no account,
 service, installed-app, release or deployment change.
 
-## Project and organization editors (#3384)
+## Project editors (#3384)
 
-Add project and summary Edit use focused Kit inputs. Workspace number/Option,
+Add project and description Edit use focused Kit inputs. Workspace number/Option,
 note capture and detail actions stay inactive under the modal editor. Return
-saves a project name; in the summary it inserts a newline, while Cmd-Return saves
+saves a project name; in the description it inserts a newline, while Cmd-Return saves
 without inserting one. Marked input keeps composition priority. Escape cancels
 only after input transient/composition handling; Cancel leaves stored data intact.
 Saving disables duplicate submissions and dismissal until completion; errors
-retain editable text. Summary completion is bound to its editor/UUID, while
-watch is authoritative. The masked organization key field uses Kit's single-line
-input and no composer native adapter. See [organization](automatic-organization.md)
-for configuration and retained host behavior. No general Settings shortcut is added.
+retain editable text. Description completion is bound to its editor/UUID, while
+watch is authoritative. Automatic organization/Catch up and its masked key field
+are retired (#3634); existing secrets and preferences are untouched.
 
 ## Only mine header control (#3389)
 
@@ -97,7 +96,7 @@ draft/caret and accepted capture/append work; modal editors and marked compositi
 block it. Its account-scoped default-off choice persists across Home/project-All,
 window close/reopen and restart. It excludes only JSON boolean `created_by_ai:true`
 before the bounded watch LIMIT. Rail/context and explicit-ID operations stay
-unfiltered; Jev includes hidden eligible notes. Failed/Shared/Archive/Charts use the same filter. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
+unfiltered. Charts shares the filter; Failed/Shared/Archive bypass it. See [source choice and storage recovery](normal-gui-host.md#workspace-source-choice-3389).
 
 ## Chinese input-source Option routing (#3296)
 
@@ -173,12 +172,9 @@ and 760×560 detail open/closed, final-row/full-width/action reachability and
 composer growth without reading-pane overlap. Native pixels/IME/cloud and personal
 aesthetic acceptance are separate evidence, unperformed by this implementation.
 
-## Catch up and pointer release (#3398)
+## Pointer release (#3398)
 
-Catch up lives in Automatic organization, with three/seven-day choice and
-Start/Stop; no workspace shortcut or date-navigation surface is added. Closing
-its editor retains host-owned work. Number/Option/capture guards under editors
-remain unchanged. Pointer selection uses Kit's root layer: release ends the
+Pointer selection uses Kit's root layer: release ends the
 interval before unpressed motion, and exact plain Cmd-C preserves whitespace.
 The pane-wide click interceptor blocked MouseUp bubbling; bare Kit passed while
 the actual reader and a minimal intercepted TextView failed. Disabling Copy
@@ -236,7 +232,7 @@ the top-50 bound. Positive numeric/`#ID` access puts an exact canonical note fir
 and ignores discovery source filtering. Arrows/Return in the search input select
 and open canonical results; Return can flush debounce. Native CmdA/C/V, caret,
 composition and candidate handling stay with Kit. Marked Return/Escape commits or
-cancels composition first, and modal project/organization editors block search.
+cancels composition first, and modal project editors block search.
 Search results use the same Today row renderer at 32 points (#3446), with identical
 preview, type glyph, project-color marker, accessories, hover and selection; only
 the collection and ranked order change. No GUI excerpt/highlight or successful
@@ -261,7 +257,7 @@ command or a promise to implement missing desktop surfaces. Rechecked read-only
 at the desktop pin above, including these source seams:
 
 - `FlickNotePanelController.swift`: `FlickNotePanelKeyRouting` at 191–290;
-  key-window/editor/marked guards and intent effects at 561–666; summary
+  key-window/editor/marked guards and intent effects at 561–666; description
   CmdReturn at 1477–1482; native plain search TextField at 1112–1124; project-name Return at 1182–1185
   and inline title Return at 1626–1630.
 - `FlickNoteComposerEditor.swift`: Return/CommandReturn submit, ShiftReturn
