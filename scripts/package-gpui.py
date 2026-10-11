@@ -69,6 +69,9 @@ def package(output, binaries, identity, signer=codesign):
         raise ValueError('output must be a NEW versioned directory inside .scratch')
     if subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip():
         raise ValueError('commit the source before packaging')
+    icon = ROOT / 'flicknote-gpui/assets/app-icon/FlickNote.icns'
+    if not icon.is_file():
+        raise ValueError(f'required application icon is missing: {icon}')
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=ROOT, text=True).strip()
     app = output / 'FlickNote.app'
@@ -76,10 +79,14 @@ def package(output, binaries, identity, signer=codesign):
     macos.mkdir(parents=True)
     unsigned_sha256 = digest(binaries / 'flicknote-gpui')
     shutil.copy2(binaries / 'flicknote-gpui', macos / 'flicknote-gpui')
+    resources = app / 'Contents/Resources'
+    resources.mkdir()
+    shutil.copy2(icon, resources / icon.name)
     bundle_id = 'app.flicknote.gpui'
     with (app / 'Contents/Info.plist').open('wb') as file:
         plistlib.dump({'CFBundleExecutable': 'flicknote-gpui', 'CFBundleIdentifier': bundle_id,
                       'CFBundleName': 'FlickNote', 'CFBundlePackageType': 'APPL',
+                      'CFBundleIconFile': icon.name,
                       'CFBundleVersion': commit[:12], 'NSHighResolutionCapable': True}, file)
     signing = sign_bundle(app, identity, signer)
     manifest = {'mode': 'normal', 'source_commit': commit, 'source_tree': tree,

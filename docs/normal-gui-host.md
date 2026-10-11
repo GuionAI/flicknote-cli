@@ -21,6 +21,14 @@ endpoint environment or CLI runtime dependency. Packaging creates no runtime
 state, launches nothing and installs no service. `SOURCE.json` records source
 commit/tree, unsigned input digest, certificate metadata and final signed app hashes; run `shasum -a 256 -c SHA256SUMS` in that output.
 Preserve historical apps/profiles/sessions and scratch evidence unchanged.
+The packager requires the repository-owned static
+`flicknote-gpui/assets/app-icon/FlickNote.icns`, copies it to `Contents/Resources`
+and declares `CFBundleIconFile` before signing. Missing assets fail packaging;
+the final manifest/hash list covers the icon and strict signature verifies its seal.
+See [icon provenance and regeneration](../flicknote-gpui/assets/app-icon/README.md).
+Validate exported PNGs with `iconutil` without launching the app. Finder/Dock
+refresh and a running app's icon remain user checks after reviewed installation;
+packaging does not clear caches or restart applications.
 The explicit local identity is **Apple Development: Sifang Feng (Z283R4SYUZ)**,
 SHA1 `3C696934260FDAFA30B7A1959AD9CC0D964C5BB7`, team `RL5WAW5828`.
 The stable bundle identifier remains `app.flicknote.gpui`. Packaging requires a

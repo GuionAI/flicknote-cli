@@ -21,6 +21,14 @@ CERTIFICATE = b'owned fake certificate; never a real Keychain identity'
 IDENTITY = hashlib.sha1(CERTIFICATE).hexdigest().upper()
 REQUIREMENT = ('identifier "app.flicknote.gpui" and anchor apple generic and '
                'certificate leaf[subject.OU] = "FIXTURE123"')
+ICON = b'owned fake icon bytes'
+
+
+def fixture_icon(owned):
+    icon = owned / 'flicknote-gpui/assets/app-icon/FlickNote.icns'
+    icon.parent.mkdir(parents=True)
+    icon.write_bytes(ICON)
+    return icon
 
 
 class FakeSigner:
@@ -54,6 +62,8 @@ class FakeSigner:
     @staticmethod
     def assert_complete_bundle(app):
         assert (app / 'Contents/Info.plist').is_file()
+        metadata = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+        assert (app / 'Contents/Resources' / metadata['CFBundleIconFile']).read_bytes() == ICON
         assert not (app.parent / 'SOURCE.json').exists()
         assert not (app.parent / 'SHA256SUMS').exists()
 
@@ -74,7 +84,8 @@ class NormalPackage(unittest.TestCase):
             subprocess.run(['git', '-C', str(owned), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
                             'commit', '-q', '--allow-empty', '-m', 'chore(ci): fixture'], check=True)
             (owned / '.gitignore').write_text('bin/\n.scratch/\n')
-            subprocess.run(['git', '-C', str(owned), 'add', '.gitignore'], check=True)
+            icon = fixture_icon(owned)
+            subprocess.run(['git', '-C', str(owned), 'add', '.gitignore', str(icon)], check=True)
             subprocess.run(['git', '-C', str(owned), '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.test',
                             'commit', '-q', '-m', 'chore(ci): ignore artifacts'], check=True)
             output = owned / '.scratch' / 'normal-v1'
@@ -85,6 +96,10 @@ class NormalPackage(unittest.TestCase):
             app = output / 'FlickNote.app'
             metadata = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
             self.assertEqual(metadata['CFBundleIdentifier'], manifest['bundle_id'])
+            bundled_icon = app / 'Contents/Resources' / metadata['CFBundleIconFile']
+            self.assertEqual(bundled_icon.read_bytes(), icon.read_bytes())
+            self.assertEqual(manifest['sha256'][str(bundled_icon.relative_to(output))],
+                             package.digest(icon))
             self.assertEqual(manifest['mode'], 'normal')
             self.assertEqual(manifest['unsigned_input_sha256'], package.digest(fake))
             signed_path = 'FlickNote.app/Contents/MacOS/flicknote-gpui'
@@ -113,6 +128,17 @@ class NormalPackage(unittest.TestCase):
                 package.package(output, binaries, IDENTITY, signer)
             with self.assertRaises(ValueError):
                 package.package(owned / 'outside-scratch', binaries, IDENTITY, signer)
+            subprocess.run(['git', '-C', str(owned), 'rm', str(icon)], check=True,
+                           capture_output=True)
+            subprocess.run(['git', '-C', str(owned), '-c', 'user.name=Fixture',
+                            '-c', 'user.email=fixture@example.test', 'commit', '-q',
+                            '-m', 'chore(ci): missing icon fixture'], check=True)
+            missing = owned / '.scratch' / 'missing-icon'
+            missing_signer = FakeSigner()
+            with self.assertRaisesRegex(ValueError, 'required application icon is missing'):
+                package.package(missing, binaries, IDENTITY, missing_signer)
+            self.assertFalse(missing.exists())
+            self.assertEqual(missing_signer.calls, [])
             (owned / 'dirty').write_text('uncommitted')
             with self.assertRaises(ValueError):
                 package.package(owned / '.scratch' / 'normal-v2', binaries, IDENTITY, signer)
@@ -137,7 +163,8 @@ class NormalPackage(unittest.TestCase):
             (binaries / 'flicknote-gpui').write_bytes(b'owned unsigned fixture')
             subprocess.run(['git', 'init', '-q', str(owned)], check=True)
             (owned / '.gitignore').write_text('bin/\n.scratch/\n')
-            subprocess.run(['git', '-C', str(owned), 'add', '.gitignore'], check=True)
+            icon = fixture_icon(owned)
+            subprocess.run(['git', '-C', str(owned), 'add', '.gitignore', str(icon)], check=True)
             subprocess.run(['git', '-C', str(owned), '-c', 'user.name=Fixture',
                             '-c', 'user.email=fixture@example.test', 'commit', '-q',
                             '-m', 'chore(ci): fixture'], check=True)
