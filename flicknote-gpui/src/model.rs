@@ -165,6 +165,7 @@ mod tests {
                     project_id: None,
                     project_name: None,
                     note_type: "normal".into(),
+                    source_url: None,
                     project_color: None,
                     archived: false,
                     draft: false,

@@ -17,11 +17,41 @@ pub struct TodayRow {
     pub project_id: Option<String>,
     pub project_name: Option<String>,
     pub note_type: String,
+    pub source_url: Option<String>,
     pub project_color: Option<String>,
     pub archived: bool,
     pub draft: bool,
     pub shared: bool,
     pub failed_stage: Option<FailedStage>,
+}
+
+fn decode_row(r: &rusqlite::Row<'_>, id: i64) -> rusqlite::Result<TodayRow> {
+    let content: String = r.get(2)?;
+    let title: Option<String> = r.get(6)?;
+    let note_type: String = r.get(3)?;
+    let source_url = source_url(&note_type, r.get::<_, Option<String>>(14)?.as_deref());
+    let preview = persisted_preview(
+        &content,
+        title.as_deref(),
+        source_url.as_deref(),
+        &note_type,
+    );
+    Ok(TodayRow {
+        id,
+        uuid: r.get(1)?,
+        preview,
+        content,
+        title,
+        project_id: r.get(7)?,
+        project_name: r.get(8)?,
+        note_type,
+        source_url,
+        project_color: r.get(4)?,
+        archived: r.get(10)?,
+        draft: r.get(11)?,
+        shared: r.get(12)?,
+        failed_stage: FailedStage::from_status(&r.get::<_, String>(13)?),
+    })
 }
 
 /// Match desktop line folding while preserving spaces/tabs inside each line.
@@ -35,7 +65,31 @@ pub fn fold_preview(text: &str) -> String {
     .join(" ")
 }
 
-fn persisted_preview(content: &str, title: Option<&str>) -> String {
+pub(crate) fn source_url(note_type: &str, metadata: Option<&str>) -> Option<String> {
+    if note_type != "link" {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(metadata?).ok()?;
+    value["link"]["url"]
+        .as_str()
+        .filter(|url| !url.trim().is_empty())
+        .map(str::to_owned)
+}
+
+pub(crate) fn persisted_preview(
+    content: &str,
+    title: Option<&str>,
+    source: Option<&str>,
+    note_type: &str,
+) -> String {
+    if content.is_empty() && note_type == "link" {
+        return fold_preview(
+            title
+                .filter(|t| !t.trim().is_empty())
+                .or(source)
+                .unwrap_or("Untitled note"),
+        );
+    }
     fold_preview(if content.len() <= 512 {
         content
     } else {
@@ -238,7 +292,7 @@ impl TodayWatch {
                     Destination::Archive => "n.deleted_at IS NOT NULL",
                 };
                 let sql = format!(
-                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, coalesce(n.status, '') AS status, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.description') AS description FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS description, archived, draft, shared, status FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, description, NULL, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
+                    "WITH today AS (SELECT n.short_id, n.id, coalesce(n.content, '') AS content, coalesce(n.type, 'normal') AS type, n.metadata, p.color, n.title, p.id AS project_id, p.name AS project_name, n.deleted_at IS NOT NULL AS archived, coalesce(n.status, '') = 'draft' AS draft, coalesce(n.status, '') AS status, EXISTS (SELECT 1 FROM note_shares share WHERE share.id = n.id AND share.user_id = n.user_id AND (share.expires_at IS NULL OR julianday(share.expires_at) > julianday('now'))) AS shared FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND (n.deleted_at IS NOT NULL) = CAST(?6 AS INTEGER) AND n.short_id IS NOT NULL AND {membership} AND (?2 = '' OR (julianday(n.created_at) >= julianday(?2) AND julianday(n.created_at) < julianday(?3))) AND (?5 = '0' OR json_type(n.metadata, '$.created_by_ai') IS NOT 'true') ORDER BY n.short_id DESC LIMIT {LIMIT}), context AS (SELECT id, name, color, json_extract(metadata, '$.description') AS description FROM projects WHERE user_id = ?1 AND coalesce(is_archived, 0) = 0 ORDER BY name, id LIMIT {LIMIT}) SELECT short_id, id, content, type, color, NULL AS name, title, project_id, project_name, NULL AS description, archived, draft, shared, status, metadata FROM today UNION ALL SELECT NULL, id, NULL, NULL, color, name, NULL, NULL, NULL, description, NULL, NULL, NULL, NULL, NULL FROM context ORDER BY short_id DESC, name, id"
                 );
                 let project_id = match &destination {
                     Destination::Project(id) => id.clone(),
@@ -263,24 +317,7 @@ impl TodayWatch {
                     let mut results = stmt.query(rusqlite::params_from_iter(params))?;
                     while let Some(r) = results.next()? {
                         if let Some(id) = r.get::<_, Option<i64>>(0)? {
-                            let content: String = r.get(2)?;
-                            let title: Option<String> = r.get(6)?;
-                            let preview = persisted_preview(&content, title.as_deref());
-                            rows.push(TodayRow {
-                                id,
-                                uuid: r.get(1)?,
-                                preview,
-                                content,
-                                title,
-                                project_id: r.get(7)?,
-                                project_name: r.get(8)?,
-                                note_type: r.get(3)?,
-                                project_color: r.get(4)?,
-                                archived: r.get(10)?,
-                                draft: r.get(11)?,
-                                shared: r.get(12)?,
-                                failed_stage: FailedStage::from_status(&r.get::<_, String>(13)?),
-                            });
+                            rows.push(decode_row(r, id)?);
                         } else {
                             projects.push(ProjectContext {
                                 id: r.get(1)?,

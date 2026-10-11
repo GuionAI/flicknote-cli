@@ -1,7 +1,7 @@
 //! GUI-local search projection. Public search contracts and ranking stay with Application.
 use crate::{
     app::Application,
-    today::{TodayRow, fold_preview},
+    today::{TodayRow, fold_preview, persisted_preview, source_url},
 };
 use flicknote_client::{
     AppRequest, AppResponse, WireError,
@@ -116,6 +116,14 @@ pub async fn read(
             Ok(AppResponse::NoteDetail(note))
                 if note.note.uuid == row.uuid && note.note.short_id == Some(row.id) =>
             {
+                row.source_url = source_url(
+                    &note.note.note_type,
+                    note.metadata
+                        .as_ref()
+                        .map(serde_json::Value::to_string)
+                        .as_deref(),
+                );
+                row.note_type = note.note.note_type;
                 row.content = note.content;
                 row.title = note.note.title;
                 row.project_id = note.note.project_id;
@@ -147,7 +155,7 @@ async fn project(
 ) -> Result<Vec<TodayRow>, String> {
     let reader = db.reader().await.map_err(|e| e.to_string())?;
     let mut stmt = reader.prepare_cached(
-        "SELECT n.id, CASE WHEN length(CAST(coalesce(n.content, '') AS BLOB)) <= 512 THEN coalesce(n.content, '') ELSE coalesce(n.title, 'Untitled note') END, n.title, n.project_id, p.name, p.color, coalesce(n.type, 'normal'), n.deleted_at IS NOT NULL, coalesce(n.status, '') = 'draft', EXISTS (SELECT 1 FROM note_shares s WHERE s.id = n.id AND s.user_id = n.user_id AND (s.expires_at IS NULL OR julianday(s.expires_at) > julianday('now'))) FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.short_id = ?2"
+        "SELECT n.id, CASE WHEN length(CAST(coalesce(n.content, '') AS BLOB)) <= 512 THEN coalesce(n.content, '') ELSE coalesce(n.title, 'Untitled note') END, n.title, n.project_id, p.name, p.color, coalesce(n.type, 'normal'), n.deleted_at IS NOT NULL, coalesce(n.status, '') = 'draft', EXISTS (SELECT 1 FROM note_shares s WHERE s.id = n.id AND s.user_id = n.user_id AND (s.expires_at IS NULL OR julianday(s.expires_at) > julianday('now'))) , n.metadata, coalesce(n.content, '') = '' FROM notes n LEFT JOIN projects p ON p.id = n.project_id AND p.user_id = n.user_id WHERE n.user_id = ?1 AND n.short_id = ?2"
     ).map_err(|e| e.to_string())?;
     let mut rows = Vec::with_capacity(hits.len());
     for hit in hits {
@@ -161,15 +169,24 @@ async fn project(
             continue;
         };
         let row = (|| -> rusqlite::Result<TodayRow> {
+            let note_type: String = r.get(6)?;
+            let source_url = source_url(&note_type, r.get::<_, Option<String>>(10)?.as_deref());
+            let title: Option<String> = r.get(2)?;
+            let preview = if r.get::<_, bool>(11)? {
+                persisted_preview("", title.as_deref(), source_url.as_deref(), &note_type)
+            } else {
+                fold_preview(&r.get::<_, String>(1)?)
+            };
             Ok(TodayRow {
                 id,
                 uuid: r.get(0)?,
-                preview: fold_preview(&r.get::<_, String>(1)?),
-                title: r.get(2)?,
+                preview,
+                title,
                 project_id: r.get(3)?,
                 project_name: r.get(4)?,
                 project_color: r.get(5)?,
-                note_type: r.get(6)?,
+                note_type,
+                source_url,
                 archived: r.get(7)?,
                 draft: r.get(8)?,
                 shared: r.get(9)?,

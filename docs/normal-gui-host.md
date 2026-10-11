@@ -198,6 +198,36 @@ structured identity, known canonical detail and **do not submit again** guidance
 check the identified note after sync/recovery before considering another create.
 Pending/watch acknowledgement reconciles by persisted ID in either order.
 
+## Link capture, original source and copy feedback (#3705)
+
+With detail closed, Enter on a single lowercase `http://` or `https://` URL
+creates a human link note queued for source processing. Surrounding whitespace
+is trimmed; internal whitespace, URL plus prose, multiple URLs and scheme-less
+addresses remain ordinary text. Open active detail keeps Enter as append and
+never reclassifies the note. Creation remains current and unassigned.
+
+Link detail shows a compact original-source bar below title/project and above
+the reader during waiting, failure and completion, including Failed, Shared,
+Archive and search detail. Domain/path truncate while Open and Copy stay reachable;
+hover and accessible action labels expose the full URL. Only acceptable HTTP(S)
+source addresses can open; missing/malformed source data is safely omitted.
+Source stays separate from stored body, canonical Copy and the append baseline.
+Empty-body link rows show nonblank title, else original URL, else Untitled note;
+nonempty-body previews keep the existing 512-byte policy. Pending URL capture
+uses the link glyph until canonical watch reconciliation.
+
+Every workspace-owned native copy shows **Copied** for about one second after
+the clipboard write: body, reader selection, code block, generated/reused share
+URL, captured uncertain text, submitted/recovery append text and original source.
+Repeating copy refreshes the full one-second interval without stacking. No-selection
+and failed/empty share results do not report success. Feedback preserves focus,
+selection, draft and errors, and is discarded with the window. Editable-input
+copy keeps native input behavior. There is no manual-copy browser fallback.
+
+Owned LocalHost/fake-backend and rendered-component checks cover these contracts.
+Native pixels, OS IME, real pasteboard and cloud processing remain unverified;
+Worker packaging never launches or installs the app.
+
 ## Historical days and project weeks (#3422)
 
 Home starts Today and offers previous/next semantic days, selected date and Today

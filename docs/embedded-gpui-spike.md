@@ -82,12 +82,15 @@ Its next calendar boundary replaces the query. Closing Today cancels that watch.
 Spec #3341 matches the Swift desktop preview policy in Home and project-All.
 Persisted content of **512 raw UTF-8 bytes or fewer** shows content; longer
 content shows the authoritative nullable title, with **Untitled note** only
-when the title is null. Empty content and explicitly empty titles stay empty.
-All note types follow the same threshold, measured before folding. Newline
+when the title is null. Empty ordinary content and explicitly empty long-body
+titles stay empty.
+Empty-body links instead show nonblank title, original source URL, or Untitled note
+(#3705). Nonempty content follows the same threshold, measured before folding. Newline
 characters split lines; each line's edges are trimmed, empty lines omitted,
 and the rest joined with one space. Internal spaces and tabs remain intact.
-Titles use the same folding to keep rows single-line. Pending capture always
-shows folded content until its persisted watch row reconciles. Content/title
+Titles use the same folding to keep rows single-line. Pending capture shows folded
+input until its persisted watch row reconciles;
+single-URL creation uses the link glyph (#3705). Content/title
 updates refresh previews through the existing bounded account-scoped watch on
 the host runtime; stable IDs, ordering, membership and selection remain intact.
 Rows remain full-width, 32 points high and truncated. Detail overlays accepted append
@@ -275,6 +278,9 @@ always-visible Copy button at top-right. It copies that block's entire code payl
 including whitespace and newlines, without Markdown fences or the language label.
 These block actions remain separate from selection copy and whole-note toolbar Copy.
 The pane is readonly and never writes rendering output back to a note.
+Link notes retain the original-source bar independently of body/processing status.
+All workspace-owned copies show a one-second Copied toast, refreshed by each copy;
+see [the source/copy contract](normal-gui-host.md#link-capture-original-source-and-copy-feedback-3705).
 Primary-pointer release freezes the dragged interval; subsequent unpressed moves
 leave both selection and plain copy unchanged (#3398). Kit's root selection layer
 receives release normally; the reading pane no longer intercepts click bubbling.

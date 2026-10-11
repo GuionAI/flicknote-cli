@@ -138,6 +138,7 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
             window.render_frame(cx);
             window.press("cmd-a", cx);
             window.press("cmd-c", cx);
+            assert!(view.read(cx).copy_toast.is_some());
             let text = cx.read_from_clipboard().unwrap().text().unwrap();
             for rendered in [
                 "中文 Heading",
@@ -413,12 +414,14 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
         state.update(cx, gpui_kit::base::TextViewState::clear_selection);
         gpui_kit::base::TextSelection::clear(window, cx);
         window.focus(&state.read(cx).focus_handle().clone(), cx);
+        view.update(cx, |this, _| this.copy_toast = None);
         cx.write_to_clipboard(ClipboardItem::new_string("no selection".into()));
         window.press("cmd-c", cx);
         assert_eq!(
             cx.read_from_clipboard().unwrap().text().unwrap(),
             "no selection"
         );
+        assert!(view.read(cx).copy_toast.is_none());
     })
     .unwrap();
     // Real host changes, two block-scoped actions, note switch and body update.
@@ -496,6 +499,8 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
                     assert!(bounds.right() <= pane.right());
                     assert!(bounds.bottom() <= px(560.));
                     window.click(gpui_kit::SharedString::from(selector), cx);
+                    window.render_frame(cx);
+                    assert!(window.try_find("copy-toast").is_some());
                     assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), expected);
                 }
                 window.click("copy-detail", cx);

@@ -1958,3 +1958,89 @@ async fn retry_processing_exact_stage_active_account_and_preservation() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn link_source_projection_is_safe_consistent_and_independent_of_body() {
+    use crate::today::Destination;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let url = "https://example.invalid/original";
+    let cases = [
+        ("link", None, json!({"link":{"url":url}}), url, Some(url)),
+        (
+            "link",
+            Some(" Saved title "),
+            json!({"link":{"url":url}}),
+            "Saved title",
+            Some(url),
+        ),
+        (
+            "link",
+            Some(" \t"),
+            json!({"link":{"url":42}}),
+            "Untitled note",
+            None,
+        ),
+        (
+            "link",
+            None,
+            json!({"link":{"url":""}}),
+            "Untitled note",
+            None,
+        ),
+        ("link", None, json!({"link":false}), "Untitled note", None),
+        ("normal", None, json!({"link":{"url":url}}), "", None),
+    ];
+    {
+        let writer = host.db.writer().await.unwrap();
+        for (i, (kind, title, metadata, _, _)) in cases.iter().enumerate() {
+            writer.execute("INSERT INTO notes(id,user_id,short_id,content,type,status,title,metadata,created_at) VALUES(?,'account-a',?,'',?,'source_failed',?,?,?)",rusqlite::params![format!("00000000-0000-4000-8000-{i:012}"),100+i as i64,kind,title,metadata.to_string(),chrono::Utc::now().to_rfc3339()]).unwrap();
+        }
+    }
+    let mut watch = TodayWatch::start_destination(
+        host.db.clone(),
+        host.user_id.clone(),
+        Destination::Failed,
+        false,
+    );
+    let rows = snapshot(&mut watch, |s| s.rows.len() == cases.len()).await;
+    for (i, (_, _, _, preview, source)) in cases.iter().enumerate() {
+        let row = rows.rows.iter().find(|r| r.id == 100 + i as i64).unwrap();
+        assert_eq!(&row.preview, preview);
+        assert_eq!(row.source_url.as_deref(), *source);
+        assert!(row.content.is_empty());
+        let found = crate::workspace_search::read(
+            &host.app,
+            &host.db,
+            &host.user_id,
+            &format!("#{}", row.id),
+            false,
+            Some(row.id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(found.rows[0].source_url, row.source_url);
+        assert_eq!(found.rows[0].preview, row.preview);
+        assert!(found.rows[0].content.is_empty());
+    }
+    // Source metadata update propagates without rewriting the canonical body or list policy.
+    host.db.writer().await.unwrap().execute("UPDATE notes SET content='Processed body',title='Processed title',metadata=? WHERE short_id=100",[json!({"link":{"url":"https://changed.invalid/path"}}).to_string()]).unwrap();
+    let changed = snapshot(&mut watch, |s| {
+        s.rows
+            .iter()
+            .any(|r| r.id == 100 && r.source_url.as_deref() == Some("https://changed.invalid/path"))
+    })
+    .await;
+    let row = changed.rows.iter().find(|r| r.id == 100).unwrap();
+    assert_eq!(row.content, "Processed body");
+    assert_eq!(row.preview, "Processed body");
+    let result =
+        crate::workspace_search::read(&host.app, &host.db, &host.user_id, "#100", false, Some(100))
+            .await
+            .unwrap();
+    assert_eq!(result.rows[0].source_url, row.source_url);
+    assert_eq!(result.rows[0].content, row.content);
+    drop(watch);
+    host.shutdown().await;
+    server.abort();
+}

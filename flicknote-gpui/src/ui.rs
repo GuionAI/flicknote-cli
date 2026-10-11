@@ -156,6 +156,7 @@ struct Reading {
     title: Option<String>,
     project_name: Option<String>,
     source: String,
+    source_url: Option<String>,
     state: Entity<gpui_kit::base::TextViewState>,
     scroll: gpui_kit::ScrollHandle,
     append_scroll: Option<Subscription>,
@@ -179,6 +180,7 @@ struct Today {
     canonical_search_rows: Arc<Vec<flicknote_sync::today::TodayRow>>,
     detail: Option<Reading>,
     detail_open: bool,
+    copy_toast: Option<Task<()>>,
     list_scroll: gpui_kit::UniformListScrollHandle,
     escape_composing: bool,
     enter_composing: bool,
@@ -258,6 +260,7 @@ impl Today {
             canonical_search_rows: Arc::default(),
             detail: None,
             detail_open: false,
+            copy_toast: None,
             list_scroll: gpui_kit::UniformListScrollHandle::new(),
             escape_composing: false,
             enter_composing: false,
@@ -792,8 +795,8 @@ impl Today {
             }
         }
         let links = std::mem::take(&mut self.model.capture().note_actions.links);
-        for link in links {
-            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(link));
+        for link in links.into_iter().filter(|link| !link.trim().is_empty()) {
+            self.copy_text(link, cx);
         }
         self.project_notes(window, cx);
         let restore = std::mem::take(&mut self.model.capture().restore);
@@ -823,6 +826,19 @@ impl Today {
         self.composer.update(cx, |input, cx| {
             input.marked_text_range(window, cx).is_some()
         }) || self.search_composing(window, cx)
+    }
+
+    fn copy_text(&mut self, text: String, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+        // Replacing the owned task cancels the previous deadline; feedback never stacks.
+        self.copy_toast = Some(cx.spawn(async move |entity, cx| {
+            cx.background_executor().timer(Duration::from_secs(1)).await;
+            let _updated = entity.update(cx, |this, cx| {
+                this.copy_toast = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
     }
 
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -857,7 +873,7 @@ impl Today {
                 .handle(AppRequest::NoteAdd(NoteAddInput {
                     content: text,
                     project: None,
-                    interpret_as_url: false,
+                    interpret_as_url: true,
                     draft: false,
                     topics: vec![],
                     created_by_ai: false,
@@ -1003,12 +1019,16 @@ impl Today {
                     .state
                     .update(cx, |state, cx| state.set_text(&source, cx));
                 reading.source.clone_from(&source);
-            } else if reading.title != row.title || reading.project_name != row.project_name {
+            } else if reading.title != row.title
+                || reading.project_name != row.project_name
+                || reading.source_url != row.source_url
+            {
                 // Header reflow changes body geometry, not document revision.
                 reading
                     .state
                     .update(cx, gpui_kit::base::TextViewState::invalidate_inline_layout);
             }
+            reading.source_url.clone_from(&row.source_url);
             reading.title.clone_from(&row.title);
             reading.project_name.clone_from(&row.project_name);
             return;
@@ -1027,6 +1047,7 @@ impl Today {
             title: row.title.clone(),
             project_name: row.project_name.clone(),
             source,
+            source_url: row.source_url.clone(),
             state,
             scroll: gpui_kit::ScrollHandle::new(),
             append_scroll: None,
@@ -1409,3 +1430,7 @@ mod temporal_tests;
 #[cfg(test)]
 #[path = "search_tests.rs"]
 mod search_tests;
+
+#[cfg(test)]
+#[path = "link_tests.rs"]
+mod link_tests;

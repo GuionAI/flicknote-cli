@@ -34,6 +34,12 @@ _Avoid_: Project, shared workspace
 
 ## Language
 
+**Link note**:
+A note captured from a single web address whose source is retained separately
+from the content obtained from that address. A web address mentioned inside an
+ordinary text note does not make that note a link note.
+_Avoid_: Text containing a link, hyperlink
+
 **Project description**:
 The stated membership boundary of a project: what work belongs there and how it
 differs from nearby projects. It supplies context for choosing a note's project.

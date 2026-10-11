@@ -8,7 +8,7 @@ use gpui_kit::{
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Default)]
-struct Gateway {
+pub(super) struct Gateway {
     db: Arc<Mutex<Option<flicknote_sync::PowerSyncDatabase>>>,
     calls: Arc<Mutex<Vec<(String, String)>>>,
     mode: Arc<AtomicU8>,
@@ -76,7 +76,7 @@ async fn create_http(
     note["deleted_at"] = serde_json::Value::Null;
     axum::Json(serde_json::json!([note]))
 }
-fn fixture(
+pub(super) fn fixture(
     runtime: &tokio::runtime::Runtime,
     root: &std::path::Path,
 ) -> (flicknote_sync::LocalHost, Gateway) {
@@ -300,6 +300,7 @@ fn native_drag_classifies_archives_publishes_and_browses_collections(cx: &mut Te
                     .is_some_and(|s| s == format!("https://owned.invalid/share/{}", uuid(3)))
         })
     });
+    assert!(cx.update(|cx| view.read(cx).copy_toast.is_some()));
     assert_eq!(
         fake.calls.lock().unwrap().as_slice(),
         [("GET".into(), uuid(3)), ("POST".into(), uuid(3))]
@@ -314,6 +315,7 @@ fn native_drag_classifies_archives_publishes_and_browses_collections(cx: &mut Te
         3,
         "already shared GET reuses link"
     );
+    assert!(cx.update(|cx| view.read(cx).copy_toast.is_some()));
     cx.update_window(window.into(), |_, w, cx| {
         w.click("shared", cx);
     })
@@ -641,6 +643,7 @@ fn sharing_pending_guards_navigation_close_reopen_and_uncertain_failure(cx: &mut
     });
     fake.mode.store(2, Ordering::SeqCst);
     cx.update_window(window.into(), |_, w, cx| {
+        view.update(cx, |this, _| this.copy_toast = None);
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("sentinel".into()));
         drag(w, cx, 1, "shared");
     })
@@ -658,6 +661,7 @@ fn sharing_pending_guards_navigation_close_reopen_and_uncertain_failure(cx: &mut
             cx.read_from_clipboard().unwrap().text().unwrap(),
             "sentinel"
         );
+        assert!(view.read(cx).copy_toast.is_none());
     });
     let requests = fake.calls.lock().unwrap().len();
     cx.run_until_parked();

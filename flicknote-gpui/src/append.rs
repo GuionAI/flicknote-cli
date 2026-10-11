@@ -128,6 +128,7 @@ mod tests {
             shared: false,
             failed_stage: None,
             note_type: "normal".into(),
+            source_url: None,
         }
     }
     fn success() -> AppResponse {

@@ -460,6 +460,7 @@ fn rows_fill_viewport_for_short_long_and_pending_previews(cx: &mut TestAppContex
                             project_id: None,
                             project_name: None,
                             note_type: "normal".into(),
+                            source_url: None,
                             project_color: Some("05C7F7".into()),
                             archived: false,
                             draft: false,

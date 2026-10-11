@@ -8,7 +8,7 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     progress::Progress,
 };
-use gpui_kit::{ClipboardItem, FontWeight, Hsla, rgb, uniform_list};
+use gpui_kit::{FontWeight, Hsla, rgb, uniform_list};
 
 fn icon(name: IconName, color: Hsla, width: f32) -> impl IntoElement {
     Icon::new(name).size(px(width)).text_color(color)
@@ -100,6 +100,25 @@ impl Today {
         gpui_kit::base::TextSelection::clear(window, cx);
         cx.notify();
     }
+    fn render_copy_toast(&self, p: ColorTokens) -> Option<impl IntoElement + use<>> {
+        self.copy_toast.as_ref().map(|_| {
+            gpui_kit::base::Toast::new("copy-toast")
+                .transition_status(gpui_kit::base::ToastTransitionStatus::Present)
+                .absolute()
+                .bottom(px(16.))
+                .right(px(16.))
+                .px(px(12.))
+                .py(px(8.))
+                .rounded(px(6.))
+                .border_1()
+                .border_color(p.border)
+                .bg(p.surface)
+                .text_color(p.foreground)
+                .text_size(px(12.))
+                .child("Copied")
+        })
+    }
+
     fn render_search_input(&self, p: ColorTokens) -> impl IntoElement + use<> {
         div()
             .id("workspace-search")
@@ -561,7 +580,14 @@ impl Today {
                             .flex_shrink_0()
                             .child(preview(
                                 &flicknote_sync::today::fold_preview(&pending.text),
-                                "normal",
+                                if (pending.text.trim().starts_with("http://")
+                                    || pending.text.trim().starts_with("https://"))
+                                    && !pending.text.trim().chars().any(char::is_whitespace)
+                                {
+                                    "link"
+                                } else {
+                                    "normal"
+                                },
                                 None,
                                 p,
                             ))
@@ -829,9 +855,9 @@ impl Today {
                             .small()
                             .accessibility_label("Copy note")
                             .tooltip("Copy note")
-                            .on_click(move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(content.clone()));
-                            }),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.copy_text(content.clone(), cx);
+                            })),
                     )
                     .children(self.share_actions(row, disabled, cx))
                     .child(
@@ -943,7 +969,11 @@ impl Today {
                             .child(error)
                     }))
                     .children(self.retry_checks(&capture.note_actions, cx))
-                    .children(append_recovery(&capture.appends, p))
+                    .children(append_recovery(
+                        &capture.appends,
+                        p,
+                        &cx.entity().downgrade(),
+                    ))
                     .children(capture.uncertain.last().map(|(text, error)| {
                         let id = error
                             .details
@@ -960,11 +990,9 @@ impl Today {
                                 Button::new("copy-uncertain")
                                     .label("Copy captured text")
                                     .ghost()
-                                    .on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            text.clone(),
-                                        ))
-                                    }),
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy_text(text.clone(), cx);
+                                    })),
                             )
                     }))
                     .children((!capture.recovery.is_empty()).then(|| {
@@ -1246,8 +1274,7 @@ impl Render for Today {
             selection: theme.list_active,
             ..theme.color_tokens()
         };
-        let viewport = window.viewport_size();
-        let detail_width = reading_width(f32::from(viewport.width));
+        let detail_width = reading_width(f32::from(window.viewport_size().width));
         self.workspace_actions(navigation_context, cx)
             .relative()
             .size_full()
@@ -1328,6 +1355,7 @@ impl Render for Today {
             .when(self.editor.is_none(), |d| {
                 d.child(crate::native_input::install(self.composer.clone()))
             })
+            .children(self.render_copy_toast(p))
             .children(self.render_editor(cx))
     }
 }
@@ -1336,7 +1364,7 @@ fn render_reading(
     reading: &Reading,
     row: &flicknote_sync::today::TodayRow,
     p: ColorTokens,
-    cx: &App,
+    cx: &Context<Today>,
 ) -> impl IntoElement + use<> {
     div()
         .id(("detail-reading", reading.state.entity_id()))
@@ -1379,13 +1407,21 @@ fn render_reading(
                 .child(div().flex_1().min_w_0().child(name.clone()))
                 .test_support()
         }))
-        .child(reader(&reading.state, cx))
+        .children(source_bar(row, p, cx))
+        .child(reader(&reading.state, cx, {
+            let view = cx.entity().downgrade();
+            move |text, cx| copy_feedback(&view, text, cx)
+        }))
         .test_support()
 }
 
 /// Base uses the component-installed theme defaults and Root's existing selection layer.
 /// The facade omits the image resolver; use its public Base implementation directly.
-fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoElement {
+fn reader(
+    state: &Entity<gpui_kit::base::TextViewState>,
+    cx: &App,
+    copy: impl Fn(String, &mut App) + Clone + Send + Sync + 'static,
+) -> impl IntoElement {
     let theme = Theme::global(cx);
     let mut table = gpui_kit::StyleRefinement::default();
     table.overflow.x = Some(gpui_kit::Overflow::Scroll);
@@ -1402,6 +1438,7 @@ fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoE
         .with_code_block(code)
         .with_dark(theme.is_dark());
     let selection = state.clone();
+    let copy_selection = copy.clone();
     div()
         .w_full()
         .min_w_0()
@@ -1411,7 +1448,7 @@ fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoE
                 cx.propagate();
                 return;
             }
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
+            copy_selection(text, cx);
             cx.stop_propagation();
         })
         .child(
@@ -1420,7 +1457,8 @@ fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoE
                 .selectable(true)
                 .selection_format(gpui_kit::base::SelectionFormat::Plain)
                 .image_source(suppressed_image)
-                .code_block_actions(|block, _, _| {
+                .code_block_actions(move |block, _, _| {
+                    let copy = copy.clone();
                     let code = block.code();
                     let start = block.span.map_or(0, |span| span.start);
                     // Kit scopes this action's element ID to its containing code block.
@@ -1431,7 +1469,7 @@ fn reader(state: &Entity<gpui_kit::base::TextViewState>, cx: &App) -> impl IntoE
                         .accessibility_label("Copy code block")
                         .tooltip("Copy code block")
                         .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
+                            copy(code.to_string(), cx);
                         })
                 })
                 .on_link_click(|url, _, _, cx| activate_link(url, |url| cx.open_url(url)))
@@ -1450,7 +1488,7 @@ fn suppressed_image(_: &gpui_kit::SharedUri) -> gpui_kit::ImageSource {
     }))
 }
 
-fn activate_link(url: &str, open: impl FnOnce(&str)) {
+fn acceptable_link(url: &str) -> bool {
     if let Some((scheme, address)) = url.split_once(':')
         && (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
         && address
@@ -1458,15 +1496,107 @@ fn activate_link(url: &str, open: impl FnOnce(&str)) {
             .is_some_and(|rest| !rest.is_empty() && !rest.starts_with(['/', '?', '#']))
         && !url.chars().any(|c| c.is_control() || c.is_whitespace())
     {
+        return true;
+    }
+    false
+}
+
+fn activate_link(url: &str, open: impl FnOnce(&str)) {
+    if acceptable_link(url) {
         open(url);
     }
 }
 
-fn append_recovery(appends: &crate::append::Appends, p: ColorTokens) -> Vec<gpui_kit::AnyElement> {
+fn copy_feedback(view: &gpui_kit::WeakEntity<Today>, text: String, cx: &mut App) {
+    let _updated = view.update(cx, |this, cx| this.copy_text(text, cx));
+}
+
+fn source_bar(
+    row: &flicknote_sync::today::TodayRow,
+    p: ColorTokens,
+    cx: &Context<Today>,
+) -> Option<impl IntoElement + use<>> {
+    let url = row
+        .source_url
+        .as_ref()
+        .filter(|url| row.note_type == "link" && acceptable_link(url))?;
+    let address = url.split_once("://")?.1;
+    let end = address.find(['/', '?', '#']).unwrap_or(address.len());
+    let (domain, path) = address.split_at(end);
+    let open = url.clone();
+    let copy = url.clone();
+    Some(
+        div()
+            .id("source-bar")
+            .aria_label(format!("Original source: {url}"))
+            .w_full()
+            .h(px(52.))
+            .mb(px(16.))
+            .px(px(8.))
+            .border_1()
+            .border_color(p.border)
+            .rounded(px(6.))
+            .bg(p.background)
+            .flex()
+            .items_center()
+            .gap(px(8.))
+            .test_support()
+            .child(icon(IconName::Link, p.muted_foreground, 14.))
+            .child(
+                div()
+                    .id("source-address")
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .tooltip({
+                        let url = url.clone();
+                        move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(url.clone())
+                                .build(window, cx)
+                        }
+                    })
+                    .text_size(px(12.))
+                    .child(div().truncate().child(domain.to_owned()))
+                    .child(
+                        div()
+                            .truncate()
+                            .text_color(p.muted_foreground)
+                            .child(path.to_owned()),
+                    ),
+            )
+            .child(
+                Button::new("open-source")
+                    .label("Open")
+                    .ghost()
+                    .small()
+                    .flex_shrink_0()
+                    .accessibility_label(format!("Open original source: {url}"))
+                    .tooltip(url.clone())
+                    .on_click(move |_, _, cx| activate_link(&open, |url| cx.open_url(url))),
+            )
+            .child(
+                Button::new("copy-source")
+                    .label("Copy")
+                    .ghost()
+                    .small()
+                    .flex_shrink_0()
+                    .accessibility_label(format!("Copy original source: {url}"))
+                    .tooltip(url.clone())
+                    .on_click(cx.listener(move |this, _, _, cx| this.copy_text(copy.clone(), cx))),
+            ),
+    )
+}
+
+fn append_recovery(
+    appends: &crate::append::Appends,
+    p: ColorTokens,
+    view: &gpui_kit::WeakEntity<Today>,
+) -> Vec<gpui_kit::AnyElement> {
     appends
         .recovery
         .iter()
         .map(|recovery| {
+            let view = view.clone();
             let text = recovery.text.clone();
             let guidance = if recovery.uncertain {
                 "Check the note before resubmitting."
@@ -1489,7 +1619,7 @@ fn append_recovery(appends: &crate::append::Appends, p: ColorTokens) -> Vec<gpui
                     .label("Copy submitted text")
                     .ghost()
                     .on_click(move |_, _, cx| {
-                        cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        copy_feedback(&view, text.clone(), cx);
                     }),
                 )
                 .into_any_element()
@@ -1602,7 +1732,7 @@ mod resource_tests {
         }
         impl Render for Resources {
             fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(300.)).child(reader(&self.state, cx))
+                div().w(px(300.)).child(reader(&self.state, cx, |_, _| {}))
             }
         }
         let (window, view) = cx.update(|cx| gpui_kit::open_window(Default::default(), cx, |_, cx| {

@@ -274,7 +274,7 @@ fn append_possible_after_write_retains_truthful_recovery(cx: &mut TestAppContext
     settle(cx, |cx| {
         cx.update(|cx| !view.read(cx).model.capture().appends.recovery.is_empty())
     });
-    cx.update_window(window.into(), |_, _window, cx| {
+    cx.update_window(window.into(), |_, window, cx| {
         view.update(cx, |this, cx| {
             assert_eq!(this.composer.read(cx).value(), "new typing");
             assert_eq!(this.detail.as_ref().unwrap().source, "");
@@ -284,6 +284,15 @@ fn append_possible_after_write_retains_truthful_recovery(cx: &mut TestAppContext
             assert_eq!(recovery.uuid, "00000000-0000-4000-8000-000000000002");
             assert_eq!(recovery.text, "possible write");
         });
+        window.render_frame(cx);
+        window.click("copy-append-1", cx);
+        window.render_frame(cx);
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().unwrap(),
+            "possible write"
+        );
+        assert!(window.try_find("copy-toast").is_some());
+        assert_eq!(view.read(cx).composer.read(cx).value(), "new typing");
     })
     .unwrap();
     runtime.block_on(async {
