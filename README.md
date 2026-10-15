@@ -133,12 +133,15 @@ python3 scripts/generate-release-workflow.py --check
 Use this procedure when editing dist configuration or upgrading cargo-dist;
 plain `dist init`/`dist generate` does not recreate the gate. The check generates
 in temporary state and fails on template drift or a different checked-in result.
+It also checks the computed artifact plan for the ARM macOS runner and Linux
+musl target.
 See [cargo-dist customization](https://axodotdev.github.io/cargo-dist/book/ci/customizing.html).
 
 The release uses cargo-dist 0.31.0 for `x86_64-unknown-linux-musl` and
-`aarch64-apple-darwin`. Verify the published Linux archive and its `.sha256`
-asset before handing the version to fse, which packages public GitHub Release
-binaries only. A failed public release tag stays immutable; publish a new
+`aarch64-apple-darwin`, with the ARM runner explicitly set to `macos-15` because
+0.31.0 defaults to the retiring `macos-14`. Verify the published Linux archive
+and its `.sha256` asset before handing the version to fse, which packages public
+GitHub Release binaries only. A failed public release tag stays immutable; publish a new
 patch after the correction is reviewed and merged.
 
 ## Usage

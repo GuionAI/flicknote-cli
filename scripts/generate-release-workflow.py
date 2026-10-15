@@ -2,6 +2,7 @@
 """Generate cargo-dist 0.31.0 CI with a strict, pre-plan publication gate."""
 
 import argparse
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -44,6 +45,17 @@ def gate(text):
     return text
 
 
+def validate_plan(plan):
+    tasks = plan['ci']['github']['artifacts_matrix']['include']
+    arm = [task for task in tasks if 'aarch64-apple-darwin' in task['targets']]
+    if not arm:
+        raise ValueError('release plan is missing aarch64-apple-darwin')
+    if any(task.get('runner') != 'macos-15' for task in arm):
+        raise ValueError('release plan must use macos-15 for aarch64-apple-darwin')
+    if not any('x86_64-unknown-linux-musl' in task['targets'] for task in tasks):
+        raise ValueError('release plan is missing x86_64-unknown-linux-musl')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check', action='store_true')
@@ -65,6 +77,9 @@ def main():
         config.write_text(replace_once(config.read_text(), 'allow-dirty = ["ci"]',
                                        'allow-dirty = []'))
         subprocess.run(['dist', 'generate', '--mode', 'ci'], cwd=checkout, check=True)
+        plan = subprocess.check_output(['dist', 'plan', '--output-format=json'],
+                                       cwd=checkout, text=True)
+        validate_plan(json.loads(plan))
         expected = gate((checkout / WORKFLOW).read_text())
     if args.check:
         if (ROOT / WORKFLOW).read_text() != expected:

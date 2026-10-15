@@ -27,6 +27,10 @@ plan-jobs = ["./checks"]
 # Regenerate with python3 scripts/generate-release-workflow.py, not plain dist init.
 allow-dirty = ["ci"]
 
+[dist.github-custom-runners]
+# Keep ARM releases off the retiring cargo-dist 0.31.0 default (macos-14).
+aarch64-apple-darwin = "macos-15"
+
 [dist.dependencies.apt]
 libclang-dev = "*"
 musl-tools = "*"

@@ -3,12 +3,14 @@
 
 from pathlib import Path
 import re
+import runpy
 import unittest
 import tomllib
 
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+validate_plan = runpy.run_path(ROOT / 'scripts/generate-release-workflow.py')['validate_plan']
 
 
 def load(name):
@@ -26,6 +28,24 @@ def condition(expression, results):
 
 
 class ReleaseContract(unittest.TestCase):
+    def test_computed_plan_targets_and_runner(self):
+        arm = {'targets': ['aarch64-apple-darwin'], 'runner': 'macos-15'}
+        linux = {'targets': ['x86_64-unknown-linux-musl'], 'runner': 'ubuntu-22.04'}
+
+        def plan(tasks):
+            return {'ci': {'github': {'artifacts_matrix': {'include': tasks}}}}
+
+        validate_plan(plan([arm, linux]))
+        for tasks, error in (
+            ([linux], 'missing aarch64-apple-darwin'),
+            ([dict(arm, runner='macos-14'), linux], 'must use macos-15'),
+            ([{'targets': arm['targets']}, linux], 'must use macos-15'),
+            ([arm, dict(arm, runner='macos-14'), linux], 'must use macos-15'),
+            ([arm], 'missing x86_64-unknown-linux-musl'),
+        ):
+            with self.subTest(tasks=tasks), self.assertRaisesRegex(ValueError, error):
+                validate_plan(plan(tasks))
+
     def test_exact_source_and_triggers(self):
         checks, release = load('checks.yml'), load('release.yml')
         self.assertEqual(set(checks['on']), {'schedule', 'workflow_dispatch', 'workflow_call'})
