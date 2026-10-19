@@ -18,6 +18,8 @@ mod source;
 #[cfg(target_os = "macos")]
 mod sync_progress;
 #[cfg(target_os = "macos")]
+mod tray;
+#[cfg(target_os = "macos")]
 mod ui;
 #[cfg(target_os = "macos")]
 mod workspace;

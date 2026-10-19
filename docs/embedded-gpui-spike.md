@@ -412,12 +412,15 @@ prior native observations and the subsequent layout correction.
 ## Approved dependency boundary
 
 Spec #3240 records a user-approved bounded decision for this synthetic spike.
-The pinned stack has these informational maintenance notices. No patched
+The pinned stack has the informational maintenance notices below. No patched
 compatible releases remove them without changing the upstream stack; the
-experiment retains the verified matching component/runtime versions. Each
-notice is named individually in `deny.toml`; global maintenance checking remains
-active. Vulnerabilities and unsoundness receive no waiver. `anyhow` is locked to
-patched 1.0.103 for RUSTSEC-2026-0190.
+experiment retains the verified matching component/runtime versions. #4315
+explicitly adds three user-approved informational exceptions (0370–0372) to the
+original five. Each notice is named individually in `deny.toml`; global
+maintenance checking and all-target graph coverage remain active. Vulnerabilities
+and unsoundness receive no waiver. `anyhow` is locked to patched 1.0.103 for
+RUSTSEC-2026-0190; #4315 updates only rustls to patched 0.23.46 for
+RUSTSEC-2026-0346–0349.
 
 | Advisory | Pinned crate | Shortest path from gpui-kit 0.7.0 | Reason for bounded acceptance |
 |---|---|---|---|
@@ -426,6 +429,19 @@ patched 1.0.103 for RUSTSEC-2026-0190.
 | RUSTSEC-2025-0134 | rustls-pemfile 2.2.0 | gpui-kit-assets 0.7.0 → gpui-pre-reqwest 0.12.15 → rustls-pemfile | Assets' non-macOS path; absent from resolved macOS graph |
 | RUSTSEC-2026-0206 | rustybuzz 0.20.1 | gpui-pre 0.3.7 → usvg 0.46.0 → rustybuzz | SVG text shaping; upstream parser/shaper migration deferred |
 | RUSTSEC-2026-0192 | ttf-parser 0.25.1 | gpui-pre 0.3.7 → ttf-parser | Native font parsing; upstream migration deferred |
+| RUSTSEC-2026-0370 | zvariant 5.15.0 | gpui-pre-linux 0.3.7 → oo7 / zbus → zvariant | User-approved #4315 informational exception; Linux GUI only |
+| RUSTSEC-2026-0371 | zbus_names 4.3.4 | gpui-pre-linux 0.3.7 → zbus → zbus_names | User-approved #4315 informational exception; Linux GUI only |
+| RUSTSEC-2026-0372 | zvariant_derive 5.15.0 | gpui-pre-linux 0.3.7 → zvariant → zvariant_derive | User-approved #4315 informational exception; Linux GUI only |
+
+The three #4315 notices describe unmaintained standalone crates merged into
+zbus 6, not known vulnerabilities. The resolved Mac GUI and Mac/Linux headless
+CLI, client and sync graphs (including private MCP) do not reach them. The
+all-target audit still includes GPUI's Linux accessibility, portal and credential
+parents. Their current compatible constraints require zbus 5; no compatible
+parent update removes these notices. Remove the three exceptions when upstream
+parents permit a compatible zbus 6 migration, and re-review exact versions on
+dependency changes. No target filtering, GPUI fork or license/source expansion
+is authorized by this exception.
 
 The original #3240 `cargo metadata --locked --format-version 1` normal/build
 dependency evidence showed none of these five reachable from production
@@ -433,7 +449,7 @@ dependency evidence showed none of these five reachable from production
 `flicknote-spike`. After #3313, recheck the retained CLI and client graphs.
 Metadata with `--filter-platform aarch64-apple-darwin` excludes rustls-pemfile. This is graph
 evidence, not a Linux build/runtime claim. Recheck versions and reachability on
-upgrades. All five exceptions must be re-reviewed before any live-data takeover;
+upgrades. All approved informational exceptions must be re-reviewed before any live-data takeover;
 they are not automatically approved for production. Future cloud/auth/sync
 compatibility and production switching require separately approved work.
 
@@ -459,10 +475,13 @@ not distribute an installed desktop app.
 
 ## Real-account experimental scope recheck (#3279)
 
-The exact pinned Kit/GPUI maintenance notices and license exceptions above were
-rechecked for independent-profile email login and real production local-host use.
-No version, exception, fork or vulnerability/soundness policy changed. Native Mac
-GUI reaches the existing exact exceptions except non-Mac rustls-pemfile; CLI,
+At #3279, the then-approved Kit/GPUI maintenance notices and license exceptions
+were rechecked for independent-profile email login and real production local-host
+use without version, exception, fork or vulnerability/soundness policy changes.
+The later #4315 rustls patch and three explicit informational exceptions above
+supersede that historical unchanged-list statement. Native Mac
+GUI reaches the original five exceptions except non-Mac rustls-pemfile; the
+three #4315 additions are Linux GUI only. CLI,
 pure client and headless normal graphs remain free of them. The source-bound
 report records the graph and matching license hashes; the full routine deny check
 passes. This is experimental trial approval, not installed production takeover.

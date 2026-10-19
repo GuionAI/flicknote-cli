@@ -61,4 +61,12 @@ ignore = [
     "RUSTSEC-2025-0134", # rustls-pemfile 2.2.0: assets -> gpui-pre-reqwest; non-Mac.
     "RUSTSEC-2026-0206", # rustybuzz 0.20.1: gpui-pre -> usvg text shaping.
     "RUSTSEC-2026-0192", # ttf-parser 0.25.1: gpui-pre font parsing.
+    # #4315: explicitly user-approved informational unmaintained exceptions.
+    # Existing GPUI Linux graph only; verified absent from Mac GUI and headless
+    # normal/build graphs (including private MCP). Remove with a compatible
+    # upstream zbus6 migration; re-review if these exact versions change.
+    # Full paths/evidence: docs/embedded-gpui-spike.md.
+    "RUSTSEC-2026-0370", # zvariant 5.15.0: gpui-pre-linux -> oo7/zbus -> zvariant.
+    "RUSTSEC-2026-0371", # zbus_names 4.3.4: gpui-pre-linux -> zbus -> zbus_names.
+    "RUSTSEC-2026-0372", # zvariant_derive 5.15.0: same Linux graph -> zvariant -> derive.
 ]

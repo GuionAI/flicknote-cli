@@ -1972,3 +1972,140 @@ fn assert_project_note_navigation(window: &mut Window, cx: &mut App, view: &Enti
         input.set_selected_range(caret, cx);
     });
 }
+
+#[gpui_kit::test]
+fn tray_open_retains_window_destination_draft_and_closed_host(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let host = runtime
+        .block_on(flicknote_sync::spike::SpikeHost::start(
+            root.path(),
+            0,
+            2,
+            Duration::ZERO,
+        ))
+        .unwrap();
+    let services = synthetic_services(&host, &runtime);
+    *services.destination.lock().unwrap() = Destination::Archive;
+    *services.draft.lock().unwrap() = ("retained draft".into(), 4..4);
+    let (_sender, state) =
+        tokio::sync::watch::channel(Some(Ok(WorkspaceState::Ready(services.clone()))));
+    let system = std::rc::Rc::new(std::cell::Cell::new(true));
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        tray_action(crate::tray::Action::Open, &state, &system, cx);
+    });
+    settle(cx, |cx| {
+        cx.update(|cx| {
+            let window = cx.windows()[0];
+            cx.update_window(window, |root, _, cx| {
+                root.downcast::<gpui_kit::base::Root>()
+                    .unwrap()
+                    .read(cx)
+                    .view()
+                    .clone()
+                    .downcast::<Shell>()
+                    .unwrap()
+                    .read(cx)
+                    .content
+                    .is_some()
+            })
+            .unwrap()
+        })
+    });
+    let original = cx.update(|cx| cx.windows()[0]);
+    cx.update(|cx| tray_action(crate::tray::Action::Open, &state, &system, cx));
+    cx.update(|cx| assert_eq!(cx.windows(), vec![original]));
+    cx.update_window(original, |root, _, cx| {
+        let shell = root
+            .downcast::<gpui_kit::base::Root>()
+            .unwrap()
+            .read(cx)
+            .view()
+            .clone()
+            .downcast::<Shell>()
+            .unwrap();
+        assert_eq!(
+            shell
+                .read(cx)
+                .content
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .destination,
+            Destination::Archive
+        );
+    })
+    .unwrap();
+    cx.update_window(original, |_, w, _| w.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        runtime
+            .block_on(flicknote_client::DaemonClient::new(&host.socket).health())
+            .is_ok()
+    );
+    cx.update(|cx| {
+        tray_action(crate::tray::Action::Open, &state, &system, cx);
+        assert_eq!(cx.windows().len(), 1);
+        assert_eq!(*services.destination.lock().unwrap(), Destination::Archive);
+        assert_eq!(
+            *services.draft.lock().unwrap(),
+            ("retained draft".into(), 4..4)
+        );
+    });
+    runtime.block_on(host.run_until(async { Ok(()) })).unwrap();
+}
+
+#[test]
+fn normal_host_activity_releases_after_owned_endpoints_and_operations_stop() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let root = tempfile::tempdir().unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let real = append_tests::fixture(&runtime, root.path());
+    let socket = real.socket.clone();
+    let port = real.mcp_port;
+    let released = Arc::new(AtomicBool::new(false));
+    let count = released.clone();
+    let gone = socket.clone();
+    let activity = gpui_kit::ActivityGuard::new(move || {
+        assert!(!gone.exists());
+        count.store(true, Ordering::SeqCst);
+    });
+    let host = crate::launch::Host::Real(real);
+    let services = host.services(runtime.handle().clone());
+    let pending = runtime.spawn(std::future::pending::<()>());
+    services.track(&pending);
+    runtime
+        .block_on(host.run_with_activity(
+            activity,
+            async {
+                assert!(!released.load(Ordering::SeqCst));
+                assert!(
+                    flicknote_client::DaemonClient::new(&socket)
+                        .health()
+                        .await
+                        .is_ok()
+                );
+                Err("owned stop".into())
+            },
+            || services.cancel_operations(),
+        ))
+        .unwrap_err();
+    assert!(released.load(Ordering::SeqCst));
+    assert!(runtime.block_on(pending).unwrap_err().is_cancelled());
+    assert!(!socket.exists());
+    assert!(
+        runtime
+            .block_on(tokio::net::TcpStream::connect((
+                std::net::Ipv4Addr::LOCALHOST,
+                port
+            )))
+            .is_err()
+    );
+    // Same normal-host fixture root is immediately available to the next owner.
+    let ownership =
+        flicknote_sync::ownership::DataDirectoryLock::acquire(socket.parent().unwrap()).unwrap();
+    drop(ownership);
+}

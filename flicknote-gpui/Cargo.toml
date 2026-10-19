@@ -23,6 +23,9 @@ log = "0.4"
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 chrono = "0.4.44"
+objc2 = "=0.6.4"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSString", "NSObject", "NSGeometry"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSResponder", "NSMenu", "NSMenuItem", "NSImage", "NSEvent", "NSAccessibilityCustomAction", "NSAccessibilityProtocols"] }
 
 [lints]
 workspace = true

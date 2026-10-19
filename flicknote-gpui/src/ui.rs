@@ -1246,6 +1246,7 @@ fn install_appearance_menu(system: &std::rc::Rc<std::cell::Cell<bool>>, cx: &mut
 
 fn open(state: HostState, system: std::rc::Rc<std::cell::Cell<bool>>, cx: &mut App) {
     if let Some(window) = cx.windows().first().copied() {
+        cx.activate(true);
         let _result = cx.update_window(window, |_, window, _| window.activate_window());
         return;
     }
@@ -1307,8 +1308,42 @@ fn install_workspace_menu(
     }]);
 }
 
+fn tray_action(
+    action: crate::tray::Action,
+    state: &HostState,
+    system: &std::rc::Rc<std::cell::Cell<bool>>,
+    cx: &mut App,
+) {
+    match action {
+        crate::tray::Action::Open => open(state.clone(), system.clone(), cx),
+        crate::tray::Action::Quit => cx.quit(),
+    }
+}
+
+fn install_tray(
+    state: &HostState,
+    system: &std::rc::Rc<std::cell::Cell<bool>>,
+    cx: &mut App,
+) -> anyhow::Result<crate::tray::Tray> {
+    let (actions, mut events) = tokio::sync::mpsc::unbounded_channel();
+    let tray = crate::tray::Tray::new(actions)?;
+    let tray_state = state.clone();
+    let tray_system = system.clone();
+    cx.spawn(async move |cx| {
+        while let Some(action) = events.recv().await {
+            cx.update(|cx| tray_action(action, &tray_state, &tray_system, cx));
+        }
+    })
+    .detach();
+    Ok(tray)
+}
+
 pub(crate) fn run() -> anyhow::Result<()> {
     let options = crate::launch::Options::parse();
+    let application = gpui_kit::application()
+        .with_assets(crate::assets::TodayAssets)
+        .with_quit_mode(QuitMode::Explicit);
+    let executor = application.background_executor();
     let runtime = tokio::runtime::Runtime::new()?;
     let handle = runtime.handle().clone();
     let (ready, state) = tokio::sync::watch::channel(None);
@@ -1328,13 +1363,19 @@ pub(crate) fn run() -> anyhow::Result<()> {
                 return Err(error.to_string());
             }
         };
+        // Service ownership, not window visibility, owns this Send activity.
+        // GPUI uses UserInitiatedAllowingIdleSystemSleep; Drop ends it, including
+        // failure/cancellation, only after the bounded host shutdown returns.
+        let activity = executor.prevent_app_nap("FlickNote local IPC and MCP host");
         ready.send_replace(Some(Ok(WorkspaceState::Ready(Arc::new(
             host.services(handle),
         )))));
-        host.burst(options.burst_batches).await?;
+        let burst = host.burst(options.burst_batches).await;
         let app_state = ready.borrow().clone();
-        host.run_until(
+        host.run_with_activity(
+            activity,
             async {
+                burst?;
                 if !*receiver.borrow() {
                     let _changed = receiver.changed().await;
                 }
@@ -1355,9 +1396,6 @@ pub(crate) fn run() -> anyhow::Result<()> {
             error
         })
     });
-    let application = gpui_kit::application()
-        .with_assets(crate::assets::TodayAssets)
-        .with_quit_mode(QuitMode::Explicit);
     let reopen = state.clone();
     let system = std::rc::Rc::new(std::cell::Cell::new(true));
     let reopen_system = system.clone();
@@ -1371,8 +1409,18 @@ pub(crate) fn run() -> anyhow::Result<()> {
             KeyBinding::new("cmd-1", Reopen, None),
         ]);
         install_workspace_menu(&state, &system, cx);
+        let mut tray = match install_tray(&state, &system, cx) {
+            Ok(tray) => Some(tray),
+            Err(error) => {
+                log::error!("Could not create menu bar entry: {error}");
+                quit.send_replace(true);
+                cx.quit();
+                return;
+            }
+        };
         let mut quit = Some(quit);
         cx.on_app_quit(move |_| {
+            drop(tray.take());
             if let Some(quit) = quit.take() {
                 quit.send_replace(true);
             }

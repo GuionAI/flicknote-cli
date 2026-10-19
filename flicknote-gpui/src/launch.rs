@@ -147,6 +147,18 @@ impl Host {
         }
         Ok(())
     }
+    /// Own the GUI service activity through the existing bounded shutdown.
+    pub(crate) async fn run_with_activity(
+        self,
+        activity: gpui_kit::ActivityGuard,
+        stop: impl std::future::Future<Output = Result<(), String>>,
+        cancel_operations: impl FnOnce(),
+    ) -> Result<(), String> {
+        let result = self.run_until(stop, cancel_operations).await;
+        drop(activity);
+        result
+    }
+
     pub(crate) async fn run_until(
         self,
         stop: impl std::future::Future<Output = Result<(), String>>,
@@ -292,3 +304,75 @@ mod tests {
 #[cfg(test)]
 #[path = "normal_host_tests.rs"]
 mod normal_host_tests;
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn service_activity_spans_closed_windows_and_releases_after_shutdown_on_stop_or_error() {
+        for fail in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let synthetic = SpikeHost::start(root.path(), 0, 1, Duration::ZERO)
+                .await
+                .unwrap();
+            let socket = synthetic.socket.clone();
+            let port = synthetic.mcp_port;
+            let released = Arc::new(AtomicUsize::new(0));
+            let count = released.clone();
+            let gone = socket.clone();
+            let activity = gpui_kit::ActivityGuard::new(move || {
+                assert!(!gone.exists(), "activity must outlive socket ownership");
+                count.fetch_add(1, Ordering::SeqCst);
+            });
+            let cancelled = Arc::new(AtomicUsize::new(0));
+            let cancel = cancelled.clone();
+            let result = Host::Synthetic(synthetic)
+                .run_with_activity(
+                    activity,
+                    async {
+                        // No window exists, and both service listeners remain ready.
+                        assert_eq!(released.load(Ordering::SeqCst), 0);
+                        assert!(
+                            flicknote_client::DaemonClient::new(&socket)
+                                .health()
+                                .await
+                                .is_ok()
+                        );
+                        assert!(
+                            tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                                .await
+                                .is_ok()
+                        );
+                        if fail {
+                            Err("owned host stop failure".into())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    move || {
+                        cancel.fetch_add(1, Ordering::SeqCst);
+                    },
+                )
+                .await;
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(cancelled.load(Ordering::SeqCst), 1);
+            assert_eq!(released.load(Ordering::SeqCst), 1);
+            assert!(!socket.exists());
+            assert!(
+                tokio::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port))
+                    .await
+                    .is_err()
+            );
+            // Ownership was released too, so a fresh fixture can reuse this root.
+            let next = SpikeHost::start(root.path(), 0, 1, Duration::ZERO)
+                .await
+                .unwrap();
+            next.run_until(async { Ok(()) }).await.unwrap();
+        }
+    }
+}

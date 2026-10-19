@@ -605,6 +605,35 @@ Verify the sealed signature and final hashes again without modifying the bundle.
 Installation does not quit/restart a running app or clear its drafts. Worker
 packaging and tests perform no installation, native launch or service changes.
 
+## Menu bar and background service activity (#4315)
+
+The normal macOS app keeps its Dock icon and adds a native FlickNote menu bar
+button. A single left click opens or focuses the workspace; it never hides it
+or resets Home. A right click opens the native menu with **Quit FlickNote**.
+Keyboard activation opens the workspace; the button is named **FlickNote** for
+accessibility, with **Open FlickNote** and **Quit FlickNote** custom accessibility actions. The normal
+application menu and Command-Q remain available. The brand-derived monochrome
+image uses AppKit template rendering in Light/Dark. No login item or Dock
+preference change is made.
+
+The entry exists during login, startup and recovery as well as while ready.
+Open reuses the existing window, or restores its last process-local destination,
+draft/caret and accepted work after close. Quit follows the same cancellation and
+bounded host shutdown as Command-Q, removes the entry and releases socket/lock.
+No extra host, hidden-window toggle or automatic headless takeover is introduced.
+
+After successful host startup, GPUI's `BackgroundExecutor.prevent_app_nap` guard
+is held by the service task through bounded shutdown, independently of windows
+and destinations. Login or startup failure does not acquire a service activity.
+Quit, cancellation or host failure releases it. GPUI 0.3.7 uses
+`UserInitiatedAllowingIdleSystemSleep`; the Send activity's Drop calls
+`NSProcessInfo.endActivity`, including when shutdown finishes on a worker thread.
+This targets continued IPC/MCP/sync work while the computer is awake and permits
+normal system idle sleep. It does not guarantee recovery from crashes, database
+blocking or sleep, and does not establish App Nap as the cause of the intermittent
+stall. Live foreground/background effectiveness and native mouse/VoiceOver/pixel
+acceptance are separate from owned host/rendered test and build evidence.
+
 ## Close, reopen and Quit
 
 Closing Today cancels only its watch/input work; IPC, local MCP and sync continue.
@@ -636,6 +665,16 @@ cargo test --locked -p flicknote-cli
 bash scripts/check-routine.sh
 ```
 
+For an explicit macOS main-thread AppKit callback/resource probe, use a NEW
+ignored output: `python3 scripts/test-native-tray.py --output
+.scratch/macos-tray-host-lifecycle/native-v1`. It compiles the same bridge and
+locked dependencies, owns a short temporary synthetic root and port0 host, and
+checks actual Open/Quit/AX callbacks, template properties and target cleanup.
+It also acquires/releases the real GPUI activity. It launches no normal bundle
+and establishes neither physical mouse/menu tracking nor native pixels,
+VoiceOver navigation or live App Nap effectiveness. Ordinary libtest workers
+cannot own AppKit's main thread, so this probe is separate from routine tests.
+
 Tests own their temporary paths/listeners and fake GoTrue/PostgREST/PowerSync
 transport; rendered tests cover production creation, email login, cancellation,
 close/reopen and retained input/IME/layout behavior. No live state or service is
@@ -645,9 +684,15 @@ and migration artifacts require the isolated, migration-backed harness; see
 
 Kit/base/component/assets 0.7.0, GPUI-pre 0.3.7 and the exact maintenance/license
 exceptions in the synthetic guide were rechecked for this experimental trial.
-Versions and exception lists are unchanged; CLI/client/headless normal graphs
-exclude them, and the pure client remains backend/GPUI-free. `cargo deny check`
-passes without a new vulnerability/soundness waiver, broad ignore or fork. The
+The Kit/GPUI versions remain pinned. #4315 patches rustls to 0.23.46 and adds
+only the explicitly user-approved informational unmaintained IDs
+RUSTSEC-2026-0370/0371/0372 for existing zvariant 5.15.0, zbus_names 4.3.4 and
+zvariant_derive 5.15.0 in the GPUI Linux graph. Locked Mac GUI (including tests)
+and headless CLI/sync/client graphs exclude these three packages. See the
+[dependency contract](embedded-gpui-spike.md#approved-dependency-boundary) for
+paths, approval and removal with compatible upstream zbus6 migration.
+Vulnerabilities/soundness receive no waiver; all-target coverage, license/source
+policy and the pure client's backend/GPUI-free boundary remain unchanged. The
 source-bound implementation report records graph paths, license hashes, tests,
 builds and unperformed native/cloud evidence. For #3296, the owned diagnostic established English-source Option-J/K navigation
 and Chinese-source symbol insertion on the prior routing. Automated regression
