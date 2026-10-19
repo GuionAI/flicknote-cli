@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::TOPIC_EXTRACTION_KEY;
 use crate::error::CliError;
-use crate::types::{Note, Project};
+use crate::types::{Note, NoteDiscovery, Project};
 use flicknote_client::dto::RecallCandidate;
 
 use super::{
@@ -201,8 +201,10 @@ const SQ_UPDATE_SUMMARY: &str =
     "UPDATE notes SET summary = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_UPDATE_FLAGGED: &str =
     "UPDATE notes SET is_flagged = ?, updated_at = ? WHERE user_id = ? AND id = ?";
-const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, key, value FROM note_extractions \
-     WHERE user_id = ? AND key IN (SELECT value FROM json_each(?)) \
+// Disqualify the global key index: page note IDs must drive this lookup.
+// Unary + preserves TEXT/NULL values while avoiding an unrelated-key scan.
+pub(super) const SQ_LIST_EXTRACTIONS: &str = "SELECT note_id, key, value FROM note_extractions \
+     WHERE user_id = ? AND +key IN (SELECT value FROM json_each(?)) \
      AND note_id IN (SELECT value FROM json_each(?)) \
      ORDER BY key, value";
 const SQ_LIST_EXTRACTION_VALUES: &str = "SELECT DISTINCT e.value FROM note_extractions e \
@@ -411,6 +413,24 @@ fn decode_note(row: &Row<'_>) -> rusqlite::Result<Note> {
     })
 }
 
+fn decode_discovery(row: &Row<'_>) -> rusqlite::Result<NoteDiscovery> {
+    Ok(NoteDiscovery {
+        id: row.get("id")?,
+        short_id: row.get("short_id")?,
+        r#type: row.get("type")?,
+        status: row.get("status")?,
+        title: row.get("title")?,
+        summary: row.get("summary")?,
+        is_flagged: row.get("is_flagged")?,
+        project_id: row.get("project_id")?,
+        metadata: row.get("metadata")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        deleted_at: row.get("deleted_at")?,
+        content_bytes: row.get::<_, i64>("content_bytes")? as u64,
+    })
+}
+
 fn decode_project(row: &Row<'_>) -> rusqlite::Result<Project> {
     Ok(Project {
         id: row.get("id")?,
@@ -423,14 +443,14 @@ fn decode_project(row: &Row<'_>) -> rusqlite::Result<Project> {
     })
 }
 
-fn query_notes(
+fn query_discovery(
     connection: &Connection,
     sql: &str,
     parameters: impl Params,
-) -> Result<Vec<Note>, CliError> {
+) -> Result<Vec<NoteDiscovery>, CliError> {
     let mut statement = connection.prepare(sql)?;
     Ok(statement
-        .query_map(parameters, decode_note)?
+        .query_map(parameters, decode_discovery)?
         .collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -496,25 +516,23 @@ impl NoteDb for LocalPowerSyncBackend {
             .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
     }
 
-    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
+    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError> {
         let limit = i64::from(filter.limit);
         let reader = self.db.reader().await?;
-        query_notes(
+        query_discovery(
             &reader,
             r#"
             SELECT
                 id,
                 short_id,
-                user_id,
                 type,
                 status,
                 title,
-                content,
+                coalesce(length(CAST(content AS BLOB)), 0) AS content_bytes,
                 summary,
                 is_flagged,
                 project_id,
                 metadata,
-                source,
                 created_at,
                 updated_at,
                 deleted_at
@@ -572,7 +590,7 @@ impl NoteDb for LocalPowerSyncBackend {
         &self,
         search: &NoteSearch,
         filter: &NoteFilter<'_>,
-    ) -> Result<Vec<Note>, CliError> {
+    ) -> Result<Vec<NoteDiscovery>, CliError> {
         if search.extractions.is_empty() {
             return Err(CliError::Other(
                 "search_notes_structured requires an extraction filter".into(),
@@ -592,22 +610,20 @@ impl NoteDb for LocalPowerSyncBackend {
                 .collect::<Vec<_>>(),
         )?;
         let reader = self.db.reader().await?;
-        query_notes(
+        query_discovery(
             &reader,
             r#"
             SELECT
                 id,
                 short_id,
-                user_id,
                 type,
                 status,
                 title,
-                content,
+                coalesce(length(CAST(content AS BLOB)), 0) AS content_bytes,
                 summary,
                 is_flagged,
                 project_id,
                 metadata,
-                source,
                 created_at,
                 updated_at,
                 deleted_at
@@ -802,6 +818,20 @@ impl NoteDb for LocalPowerSyncBackend {
                 |row| row.get(0),
             )
             .optional()?)
+    }
+
+    async fn list_project_names(
+        &self,
+        project_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, String>, CliError> {
+        if project_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let ids = serde_json::to_string(project_ids)?;
+        let reader = self.db.reader().await?;
+        Ok(reader.prepare("SELECT id, name FROM projects WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))")?
+            .query_map(params![self.user_id, ids], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<_, _>>()?)
     }
 
     async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {

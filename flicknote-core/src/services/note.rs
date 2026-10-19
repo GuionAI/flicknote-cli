@@ -1,7 +1,7 @@
 //! Note application service.
 
 use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
-use crate::types::NoteStatus;
+use crate::types::{NoteDiscovery, NoteStatus};
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
 use flicknote_client::dto::{
@@ -159,11 +159,7 @@ impl<'a> NoteService<'a> {
                 cursor: input.cursor,
             })
             .await?;
-        let mut items = Vec::with_capacity(notes.len());
-        for note in notes {
-            items.push(self.list_item(note).await?);
-        }
-        Ok(items)
+        self.list_items(notes).await
     }
 
     pub async fn find(&self, input: NoteFindInput) -> Result<Vec<NoteListItem>, ServiceError> {
@@ -208,11 +204,7 @@ impl<'a> NoteService<'a> {
                 },
             )
             .await?;
-        let mut items = Vec::with_capacity(notes.len());
-        for note in notes {
-            items.push(self.list_item(note).await?);
-        }
-        Ok(items)
+        self.list_items(notes).await
     }
 
     pub async fn recall(
@@ -371,16 +363,16 @@ impl<'a> NoteService<'a> {
         } else {
             self.db.resolve_note_id(note_id).await?
         };
-        let note = if archived {
+        let mut note = if archived {
             self.db.find_archived_note(&full_id).await?
         } else {
             self.db.find_note(&full_id).await?
         };
-        let content = note.content.clone().unwrap_or_default();
+        let content = note.content.take().unwrap_or_default();
         let mut extraction_keys = Vec::with_capacity(ENTITY_EXTRACTION_KEYS.len() + 1);
         extraction_keys.push(TOPIC_EXTRACTION_KEY);
         extraction_keys.extend_from_slice(ENTITY_EXTRACTION_KEYS);
-        let extractions = self
+        let extractions: Vec<ExtractionDto> = self
             .db
             .list_note_extractions(&[&full_id], &extraction_keys)
             .await?
@@ -395,13 +387,20 @@ impl<'a> NoteService<'a> {
             .map(serde_json::from_str)
             .transpose()
             .map_err(|error| ServiceError::Internal(error.to_string()))?;
-        let sections = markdown::parse_markdown(note.content.as_deref().unwrap_or(""))
+        let sections = markdown::parse_markdown(&content)
             .build_tree()
             .into_iter()
             .map(SectionDto::from)
             .collect();
+        let topics = extractions
+            .iter()
+            .filter(|extraction| extraction.key == TOPIC_EXTRACTION_KEY)
+            .map(|extraction| extraction.value.clone())
+            .collect();
+        let mut row = NoteDiscovery::from(note);
+        row.content_bytes = content.len() as u64;
         Ok(NoteDetail {
-            note: self.summary(note).await?,
+            note: self.summary_with_topics(row, topics).await?,
             content,
             metadata,
             extractions,
@@ -867,48 +866,86 @@ impl<'a> NoteService<'a> {
     }
 
     async fn summary(&self, note: crate::types::Note) -> Result<NoteSummary, ServiceError> {
-        let content_bytes = note
-            .content
-            .as_ref()
-            .map_or(0, |content| content.len() as u64);
-        let project = match note.project_id.as_deref() {
-            Some(project_id) => self.db.find_project_name_by_id(project_id).await?,
-            None => None,
-        };
         let topics = self
             .db
             .list_note_topics(&[&note.id])
             .await?
             .remove(&note.id)
             .unwrap_or_default();
-        Ok(NoteSummary {
-            short_id: note.short_id,
-            uuid: note.id,
-            note_type: note.r#type,
-            title: note.title,
-            project_id: note.project_id,
-            project,
-            topics,
-            summary: note.summary,
-            content_bytes,
-            flagged: note.is_flagged == Some(1),
-            draft: note.status == "draft",
-            created_at: note.created_at,
-            updated_at: note.updated_at,
-            deleted_at: note.deleted_at,
-        })
+        self.summary_with_topics(note.into(), topics).await
     }
 
-    async fn list_item(&self, note: crate::types::Note) -> Result<NoteListItem, ServiceError> {
-        let metadata = note
-            .metadata
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()
-            .map_err(crate::error::CliError::Json)?;
-        let mut item: NoteListItem = self.summary(note).await?.into();
-        item.metadata = metadata;
-        Ok(item)
+    async fn summary_with_topics(
+        &self,
+        note: NoteDiscovery,
+        topics: Vec<String>,
+    ) -> Result<NoteSummary, ServiceError> {
+        let project = match note.project_id.as_deref() {
+            Some(id) => self.db.find_project_name_by_id(id).await?,
+            None => None,
+        };
+        Ok(discovery_summary(note, project, topics))
+    }
+
+    async fn list_items(
+        &self,
+        notes: Vec<NoteDiscovery>,
+    ) -> Result<Vec<NoteListItem>, ServiceError> {
+        let ids = notes
+            .iter()
+            .map(|note| note.id.as_str())
+            .collect::<Vec<_>>();
+        let mut topics = self.db.list_note_topics(&ids).await?;
+        let project_ids = notes
+            .iter()
+            .filter_map(|note| note.project_id.as_deref())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let projects = self.db.list_project_names(&project_ids).await?;
+        notes
+            .into_iter()
+            .map(|note| {
+                let metadata = note
+                    .metadata
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(crate::error::CliError::Json)?;
+                let project = note
+                    .project_id
+                    .as_ref()
+                    .and_then(|id| projects.get(id))
+                    .cloned();
+                let note_topics = topics.remove(&note.id).unwrap_or_default();
+                let mut item: NoteListItem = discovery_summary(note, project, note_topics).into();
+                item.metadata = metadata;
+                Ok(item)
+            })
+            .collect()
+    }
+}
+
+fn discovery_summary(
+    note: NoteDiscovery,
+    project: Option<String>,
+    topics: Vec<String>,
+) -> NoteSummary {
+    NoteSummary {
+        short_id: note.short_id,
+        uuid: note.id,
+        note_type: note.r#type,
+        title: note.title,
+        project_id: note.project_id,
+        project,
+        topics,
+        summary: note.summary,
+        content_bytes: note.content_bytes,
+        flagged: note.is_flagged == Some(1),
+        draft: note.status == "draft",
+        created_at: note.created_at,
+        updated_at: note.updated_at,
+        deleted_at: note.deleted_at,
     }
 }
 

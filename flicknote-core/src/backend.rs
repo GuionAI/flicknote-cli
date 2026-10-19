@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::error::CliError;
-use crate::types::{Note, Project};
+use crate::types::{Note, NoteDiscovery, Project};
 use flicknote_client::dto::RecallCandidate;
 
 // ─── Filter / request types ──────────────────────────────────────────────────
@@ -93,12 +93,12 @@ pub trait NoteDb: Send + Sync {
     async fn find_note(&self, id: &str) -> Result<Note, CliError>;
     async fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
     async fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
-    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError>;
+    async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError>;
     async fn search_notes_structured(
         &self,
         search: &NoteSearch,
         filter: &NoteFilter<'_>,
-    ) -> Result<Vec<Note>, CliError>;
+    ) -> Result<Vec<NoteDiscovery>, CliError>;
     async fn recall_notes(
         &self,
         prompt: &str,
@@ -131,6 +131,11 @@ pub trait NoteDb: Send + Sync {
     // Project reads
     async fn find_project_by_name(&self, name: &str) -> Result<Option<String>, CliError>;
     async fn find_project_name_by_id(&self, project_id: &str) -> Result<Option<String>, CliError>;
+    /// Names for only the selected page's project IDs, including archived projects.
+    async fn list_project_names(
+        &self,
+        project_ids: &[&str],
+    ) -> Result<std::collections::HashMap<String, String>, CliError>;
     async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError>;
     async fn find_project(&self, id: &str) -> Result<Project, CliError>;
     async fn resolve_project_id(&self, prefix: &str) -> Result<String, CliError>;
@@ -199,3 +204,6 @@ pub use local::{FailedStage, LocalPowerSyncBackend};
 #[cfg(test)]
 #[cfg(feature = "powersync")]
 mod tests;
+
+#[cfg(all(test, feature = "powersync"))]
+mod read_efficiency;

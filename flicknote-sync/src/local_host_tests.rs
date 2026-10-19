@@ -2044,3 +2044,62 @@ async fn link_source_projection_is_safe_consistent_and_independent_of_body() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn discovery_batches_keep_ipc_and_mcp_read_contracts() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let body = "# Heading\n\n中文🙂\0tail";
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET content=?,source=?,metadata='{\"nested\":[1,true]}' WHERE id='a'",
+                rusqlite::params![body, "unreturned".repeat(32768)],
+            )
+            .unwrap();
+        for (key, value) in [
+            ("::topic", "zeta"),
+            ("::topic", "alpha"),
+            ("::product", "entity"),
+        ] {
+            writer.execute("INSERT INTO note_extractions(id,note_id,user_id,key,value) VALUES (?,'a','account-a',?,?)",rusqlite::params![value,key,value]).unwrap();
+        }
+        writer.execute("DELETE FROM ps_crud", []).unwrap();
+    }
+    let client = DaemonClient::new(&host.socket);
+    let input = serde_json::from_value(json!({"limit":20})).unwrap();
+    let AppResponse::NoteListItems(rows) = client.app(AppRequest::NoteList(input)).await.unwrap()
+    else {
+        panic!("list result")
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].content_bytes, body.len() as u64);
+    assert_eq!(rows[0].topics, ["alpha", "zeta"]);
+    assert_eq!(rows[0].project.as_deref(), Some("Current"));
+    let listed = mcp(host.mcp_port, "note_list", json!({"limit":20})).await;
+    assert_eq!(
+        listed["result"]["structuredContent"]["notes"],
+        serde_json::to_value(&rows).unwrap()
+    );
+    let detail = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    let detail = &detail["result"]["structuredContent"];
+    assert_eq!(detail["content"], body);
+    assert_eq!(detail["topics"], json!(["alpha", "zeta"]));
+    assert_eq!(detail["extractions"].as_array().unwrap().len(), 3);
+    assert_eq!(detail["sections"].as_array().unwrap().len(), 1);
+    let found = mcp(host.mcp_port,"note_find",json!({"extractions":[{"key":"::topic","value":"alpha"},{"key":"::product","value":"entity"}]})).await;
+    let input = serde_json::from_value(json!({"extractions":[{"key":"::topic","value":"alpha"},{"key":"::product","value":"entity"}]})).unwrap();
+    let AppResponse::SearchHits(hits) = client.app(AppRequest::NoteFind(input)).await.unwrap()
+    else {
+        panic!("find result")
+    };
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].content_bytes, body.len() as u64);
+    assert_eq!(
+        found["result"]["structuredContent"]["hits"],
+        serde_json::to_value(hits).unwrap()
+    );
+    host.shutdown().await;
+    server.abort();
+}

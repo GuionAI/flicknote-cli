@@ -421,7 +421,10 @@ mod tests {
             Ok(self.find_note(id).await?.content)
         }
 
-        async fn list_notes(&self, _filter: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
+        async fn list_notes(
+            &self,
+            _filter: &NoteFilter<'_>,
+        ) -> Result<Vec<crate::types::NoteDiscovery>, CliError> {
             unimplemented!()
         }
 
@@ -429,7 +432,7 @@ mod tests {
             &self,
             _search: &NoteSearch,
             _filter: &NoteFilter<'_>,
-        ) -> Result<Vec<Note>, CliError> {
+        ) -> Result<Vec<crate::types::NoteDiscovery>, CliError> {
             unimplemented!()
         }
 
@@ -479,6 +482,13 @@ mod tests {
             &self,
             _project_id: &str,
         ) -> Result<Option<String>, CliError> {
+            unimplemented!()
+        }
+
+        async fn list_project_names(
+            &self,
+            _ids: &[&str],
+        ) -> Result<std::collections::HashMap<String, String>, CliError> {
             unimplemented!()
         }
 

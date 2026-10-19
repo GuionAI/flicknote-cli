@@ -17,7 +17,7 @@ impl Deref for BackendFixture {
     }
 }
 
-async fn make_powersync_backend() -> (
+pub(super) async fn make_powersync_backend() -> (
     tempfile::TempDir,
     powersync::PowerSyncDatabase,
     LocalPowerSyncBackend,
@@ -1669,7 +1669,7 @@ async fn list_notes_filters_created_range_no_project_and_cursor_in_sql() {
             cursor,
         }
     }
-    let ids = |notes: Vec<Note>| {
+    let ids = |notes: Vec<NoteDiscovery>| {
         notes
             .into_iter()
             .map(|note| note.short_id.unwrap())
@@ -1751,7 +1751,7 @@ async fn human_list_excludes_mcp_created_notes_before_pagination() {
         limit: 1,
         cursor,
     };
-    let id = |notes: Vec<Note>| notes[0].short_id;
+    let id = |notes: Vec<NoteDiscovery>| notes[0].short_id;
 
     assert_eq!(
         id(backend.list_notes(&filter(false, None)).await.unwrap()),
@@ -1903,7 +1903,7 @@ async fn shared_list_filters_expiry_and_archive_before_pagination() {
         limit,
         cursor,
     };
-    let short_ids = |notes: Vec<Note>| {
+    let short_ids = |notes: Vec<NoteDiscovery>| {
         notes
             .into_iter()
             .map(|note| note.short_id.unwrap())
@@ -1958,7 +1958,7 @@ async fn list_notes_status_composes_with_range_no_project_and_cursor() {
         limit,
         cursor,
     };
-    let ids = |notes: Vec<Note>| {
+    let ids = |notes: Vec<NoteDiscovery>| {
         notes
             .into_iter()
             .map(|note| note.short_id.unwrap())
@@ -2007,7 +2007,7 @@ async fn list_notes_preserves_microseconds_across_rfc3339_formats() {
         limit: 20,
         cursor: None,
     };
-    let ids = |notes: Vec<Note>| {
+    let ids = |notes: Vec<NoteDiscovery>| {
         notes
             .into_iter()
             .map(|note| note.short_id.unwrap())
@@ -2072,7 +2072,7 @@ async fn bundled_sqlite_preserves_microseconds_at_second_rollover() {
         limit: 20,
         cursor: None,
     };
-    let ids = |notes: Vec<Note>| {
+    let ids = |notes: Vec<NoteDiscovery>| {
         notes
             .into_iter()
             .map(|note| note.short_id.unwrap())

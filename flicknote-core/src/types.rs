@@ -60,6 +60,47 @@ pub struct Note {
     pub deleted_at: Option<String>,
 }
 
+/// Internal discovery projection: never materializes stored body or source.
+#[derive(Debug, Clone)]
+pub struct NoteDiscovery {
+    pub id: String,
+    pub short_id: Option<i64>,
+    pub r#type: String,
+    pub status: String,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub is_flagged: Option<i64>,
+    pub project_id: Option<String>,
+    pub metadata: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub deleted_at: Option<String>,
+    pub content_bytes: u64,
+}
+
+impl From<Note> for NoteDiscovery {
+    fn from(note: Note) -> Self {
+        Self {
+            content_bytes: note
+                .content
+                .as_ref()
+                .map_or(0, |content| content.len() as u64),
+            id: note.id,
+            short_id: note.short_id,
+            r#type: note.r#type,
+            status: note.status,
+            title: note.title,
+            summary: note.summary,
+            is_flagged: note.is_flagged,
+            project_id: note.project_id,
+            metadata: note.metadata,
+            created_at: note.created_at,
+            updated_at: note.updated_at,
+            deleted_at: note.deleted_at,
+        }
+    }
+}
+
 impl Note {
     pub fn link_url(&self) -> Option<String> {
         let meta = self.metadata.as_ref()?;

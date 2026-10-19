@@ -13,12 +13,13 @@ use flicknote_core::backend::{
 use flicknote_core::error::CliError;
 use flicknote_core::services::error::ServiceError;
 use flicknote_core::services::ports::{CreateNote, CreatedNote, NoteCreator};
-use flicknote_core::types::{Note, Project};
+use flicknote_core::types::{Note, NoteDiscovery, Project};
 use tokio::sync::Mutex;
 use tokio_postgres::{Row, types::ToSql};
 use uuid::Uuid;
 
 const NOTE_COLUMNS: &str = "id, short_id, user_id, type, status, title, content, summary, is_flagged, project_id, metadata, source, created_at, updated_at, deleted_at";
+const DISCOVERY_COLUMNS: &str = "id, short_id, type, status, title, coalesce(octet_length(content), 0)::bigint AS content_bytes, summary, is_flagged, project_id, metadata, created_at, updated_at, deleted_at";
 const PROJECT_COLUMNS: &str = "id, user_id, name, color, metadata, is_archived, created_at";
 const SAFE_ROLE_SQL: &str = "SELECT NOT (r.rolsuper OR r.rolbypassrls) AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname IN ('notes','projects','note_extractions') AND pg_has_role(r.oid,c.relowner,'member')) FROM pg_roles r WHERE r.rolname=current_user";
 
@@ -59,6 +60,35 @@ fn note(row: &Row) -> Note {
         created_at: Some(created.to_rfc3339()),
         updated_at: Some(updated.to_rfc3339()),
         deleted_at: deleted.map(|v| v.to_rfc3339()),
+    }
+}
+fn discovery(row: &Row) -> NoteDiscovery {
+    NoteDiscovery {
+        id: row.get::<_, Uuid>("id").to_string(),
+        short_id: row.get::<_, Option<i32>>("short_id").map(i64::from),
+        r#type: row.get("type"),
+        status: row.get("status"),
+        title: row.get("title"),
+        summary: row.get("summary"),
+        is_flagged: Some(i64::from(row.get::<_, bool>("is_flagged"))),
+        project_id: row
+            .get::<_, Option<Uuid>>("project_id")
+            .map(|id| id.to_string()),
+        metadata: row
+            .get::<_, Option<serde_json::Value>>("metadata")
+            .map(|v| v.to_string()),
+        content_bytes: row.get::<_, i64>("content_bytes") as u64,
+        created_at: Some(
+            row.get::<_, chrono::DateTime<chrono::Utc>>("created_at")
+                .to_rfc3339(),
+        ),
+        updated_at: Some(
+            row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at")
+                .to_rfc3339(),
+        ),
+        deleted_at: row
+            .get::<_, Option<chrono::DateTime<chrono::Utc>>>("deleted_at")
+            .map(|v| v.to_rfc3339()),
     }
 }
 fn project(row: &Row) -> Project {
@@ -280,14 +310,14 @@ impl NoteDb for PgRequestDb {
         let id = uuid(id)?;
         self.query_opt("SELECT content FROM notes WHERE id=$1 AND user_id=auth.uid() AND deleted_at IS NULL FOR UPDATE", &[&id]).await?.map(|row| row.get(0)).ok_or_else(|| note_missing(&id.to_string()))
     }
-    async fn list_notes(&self, f: &NoteFilter<'_>) -> Result<Vec<Note>, CliError> {
+    async fn list_notes(&self, f: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError> {
         let project = f
             .project_id
             .map(Uuid::parse_str)
             .transpose()
             .map_err(pg_error)?;
         let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::text IS NULL OR status=$3) AND ($4::uuid IS NULL OR project_id=$4) AND (NOT $5 OR project_id IS NULL) AND (NOT $6 OR metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) AND ($7::bigint IS NULL OR created_at >= TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND ($8::bigint IS NULL OR created_at < TIMESTAMPTZ 'epoch' + $8 * INTERVAL '1 microsecond') AND ($9::bigint IS NULL OR short_id < $9) ORDER BY short_id DESC LIMIT $10"
+            "SELECT {DISCOVERY_COLUMNS} FROM notes WHERE user_id=auth.uid() AND (deleted_at IS NOT NULL)=$1 AND ($2::text IS NULL OR type=$2) AND ($3::text IS NULL OR status=$3) AND ($4::uuid IS NULL OR project_id=$4) AND (NOT $5 OR project_id IS NULL) AND (NOT $6 OR metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) AND ($7::bigint IS NULL OR created_at >= TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND ($8::bigint IS NULL OR created_at < TIMESTAMPTZ 'epoch' + $8 * INTERVAL '1 microsecond') AND ($9::bigint IS NULL OR short_id < $9) ORDER BY short_id DESC LIMIT $10"
         );
         let limit = i64::from(f.limit);
         Ok(self
@@ -308,14 +338,14 @@ impl NoteDb for PgRequestDb {
             )
             .await?
             .iter()
-            .map(note)
+            .map(discovery)
             .collect())
     }
     async fn search_notes_structured(
         &self,
         search: &StructuredSearch,
         f: &NoteFilter<'_>,
-    ) -> Result<Vec<Note>, CliError> {
+    ) -> Result<Vec<NoteDiscovery>, CliError> {
         if search.extractions.is_empty() {
             return Err(CliError::Other(
                 "search_notes_structured requires an extraction filter".into(),
@@ -335,7 +365,7 @@ impl NoteDb for PgRequestDb {
         )?;
         let limit = i64::from(f.limit);
         let sql = format!(
-            "SELECT {NOTE_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.key=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) ORDER BY n.updated_at DESC LIMIT $5"
+            "SELECT {DISCOVERY_COLUMNS} FROM notes n WHERE n.user_id=auth.uid() AND (n.deleted_at IS NOT NULL)=$1 AND ($1 OR n.status<>'draft') AND ($2::text IS NULL OR n.type=$2) AND ($3::uuid IS NULL OR n.project_id=$3) AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset($4::jsonb) AS f(key text, value text) WHERE NOT EXISTS (SELECT 1 FROM note_extractions e WHERE e.note_id=n.id AND e.user_id=auth.uid() AND e.key=f.key AND e.value=f.value)) AND ($6::bigint IS NULL OR n.created_at >= TIMESTAMPTZ 'epoch' + $6 * INTERVAL '1 microsecond') AND ($7::bigint IS NULL OR n.created_at < TIMESTAMPTZ 'epoch' + $7 * INTERVAL '1 microsecond') AND (NOT $8 OR n.metadata->'created_by_ai' IS DISTINCT FROM 'true'::jsonb) ORDER BY n.updated_at DESC LIMIT $5"
         );
         Ok(self
             .query(
@@ -353,7 +383,7 @@ impl NoteDb for PgRequestDb {
             )
             .await?
             .iter()
-            .map(note)
+            .map(discovery)
             .collect())
     }
     async fn recall_notes(
@@ -434,6 +464,28 @@ impl NoteDb for PgRequestDb {
             )
             .await?
             .map(|row| row.get(0)))
+    }
+    async fn list_project_names(
+        &self,
+        project_ids: &[&str],
+    ) -> Result<HashMap<String, String>, CliError> {
+        if project_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let ids = project_ids
+            .iter()
+            .map(|id| Uuid::parse_str(id))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(pg_error)?;
+        Ok(self
+            .query(
+                "SELECT id,name FROM projects WHERE user_id=auth.uid() AND id=ANY($1)",
+                &[&ids],
+            )
+            .await?
+            .iter()
+            .map(|row| (row.get::<_, Uuid>(0).to_string(), row.get(1)))
+            .collect())
     }
     async fn list_projects(&self, archived: bool) -> Result<Vec<Project>, CliError> {
         let sql = format!(

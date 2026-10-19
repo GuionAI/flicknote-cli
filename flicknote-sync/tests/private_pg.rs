@@ -1235,3 +1235,108 @@ async fn private_project_description_preserves_metadata_and_note_evidence() {
     assert_eq!(stored.status, "draft");
     a.finish(true).await.unwrap();
 }
+
+#[tokio::test]
+#[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
+async fn discovery_projection_and_batches_preserve_detail_and_rls() {
+    use flicknote_client::dto::{ExtractionFilterDto, NoteListInput, NoteListItem};
+    let pool = pool();
+    let a = db(&pool, "11111111-1111-4111-8111-111111111111").await;
+    let project = ProjectService::new(a.as_ref())
+        .add(ProjectAddInput {
+            name: format!("Read projection {}", Uuid::new_v4()),
+            color: None,
+        })
+        .await
+        .unwrap();
+    let topic = Uuid::new_v4().to_string();
+    let service = NoteService::new(a.as_ref());
+    let bodies = [
+        "中文🙂".to_string(),
+        "long body ".repeat(32768),
+        "https://example.invalid/owned".to_string(),
+    ];
+    let mut ids = Vec::new();
+    for body in &bodies {
+        let mut input = add_input(body, false);
+        input.project = Some(project.name.clone());
+        let created = service.add(&PgNoteCreator(a.clone()), input).await.unwrap();
+        a.set_note_extractions(
+            &created.uuid,
+            "::topic",
+            &["zeta".into(), topic.clone(), "alpha".into()],
+        )
+        .await
+        .unwrap();
+        a.set_note_extractions(&created.uuid, "::product", &["entity".into()])
+            .await
+            .unwrap();
+        ids.push(created);
+    }
+    a.delete_project(&project.id).await.unwrap();
+    let mut input: NoteListInput = serde_json::from_value(serde_json::json!({"limit":2})).unwrap();
+    let first = service.list(input.clone()).await.unwrap();
+    input.cursor = first.last().unwrap().id;
+    let second = service.list(input).await.unwrap();
+    let page = first.into_iter().chain(second).take(3).collect::<Vec<_>>();
+    assert_eq!(
+        page.iter().map(|n| n.id).collect::<Vec<_>>(),
+        ids.iter().rev().map(|n| n.short_id).collect::<Vec<_>>()
+    );
+    for row in &page {
+        let detail = service
+            .get(&row.id.unwrap().to_string(), false)
+            .await
+            .unwrap();
+        assert_eq!(row.content_bytes, detail.content.len() as u64);
+        assert_eq!(detail.extractions.len(), 4);
+        let mut expected: NoteListItem = detail.note.into();
+        expected.metadata = detail.metadata;
+        assert_eq!(row, &expected);
+        assert_eq!(row.project.as_deref(), Some(project.name.as_str()));
+    }
+    assert_eq!(page[0].content_bytes, 0); // URL notes have NULL stored content.
+    let found = service
+        .find(NoteFindInput {
+            keywords: vec![],
+            extractions: vec![ExtractionFilterDto {
+                key: "::topic".into(),
+                value: topic,
+            }],
+            project: None,
+            created_after: None,
+            created_before: None,
+            human: false,
+            archived: false,
+            limit: 10,
+        })
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 3);
+    for row in found {
+        assert!(page.contains(&row));
+    }
+    a.finish(true).await.unwrap();
+    let b = db(&pool, "22222222-2222-4222-8222-222222222222").await;
+    assert!(
+        b.list_project_names(&[&project.id])
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        b.list_note_topics(&ids.iter().map(|n| n.uuid.as_str()).collect::<Vec<_>>())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    for id in ids {
+        assert!(
+            NoteService::new(b.as_ref())
+                .get(&id.short_id.unwrap().to_string(), false)
+                .await
+                .is_err()
+        );
+    }
+    b.finish(false).await.unwrap();
+}
