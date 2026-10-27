@@ -32,7 +32,7 @@ use super::note_tools::*;
 use super::project_tools::*;
 use crate::recall::{McpRecallResult, RECALL_HOOK_TIMEOUT, current_time, recall_call_with_timeout};
 
-pub const EXPECTED_TOOLS: [&str; 31] = [
+pub const EXPECTED_TOOLS: [&str; 32] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -55,6 +55,7 @@ pub const EXPECTED_TOOLS: [&str; 31] = [
     "note_source",
     "note_submit",
     "note_unshare",
+    "note_update_metadata",
     "note_write",
     "project_add",
     "project_archive",
@@ -66,7 +67,7 @@ pub const EXPECTED_TOOLS: [&str; 31] = [
     "topic_list",
 ];
 
-pub(super) const REMOTE_TOOLS: [&str; 24] = [
+pub(super) const REMOTE_TOOLS: [&str; 25] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -84,6 +85,7 @@ pub(super) const REMOTE_TOOLS: [&str; 24] = [
     "note_replace_section",
     "note_restore",
     "note_submit",
+    "note_update_metadata",
     "note_write",
     "project_add",
     "project_archive",
@@ -483,7 +485,7 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_modify",
-        description = "Apply one exact stored-content before/after edit and/or patch title, summary, project, or flagged metadata. Omitted metadata is unchanged; null clears it."
+        description = "Apply one exact stored-content before/after edit, optionally within a section."
     )]
     async fn note_modify(
         &self,
@@ -492,9 +494,33 @@ impl FlickNoteMcp {
         structured(
             self.call::<NoteMutationResult>(AppRequest::NoteModify(NoteModifyInput {
                 id: params.id.to_string(),
-                before: params.before,
-                after: params.after,
+                before: Some(params.before),
+                after: Some(params.after),
                 section: params.section,
+                title: Default::default(),
+                summary: Default::default(),
+                project: Default::default(),
+                flagged: Default::default(),
+            }))
+            .await
+            .map(Into::into),
+        )
+    }
+
+    #[tool(
+        name = "note_update_metadata",
+        description = "Patch title, summary, project, or flagged metadata. Omitted fields are unchanged; null clears them."
+    )]
+    async fn note_update_metadata(
+        &self,
+        Parameters(params): Parameters<NoteUpdateMetadataParams>,
+    ) -> Result<Json<McpNoteMutationResult>, CallToolResult> {
+        structured(
+            self.call::<NoteMutationResult>(AppRequest::NoteModify(NoteModifyInput {
+                id: params.id.to_string(),
+                before: None,
+                after: None,
+                section: None,
                 title: params.title,
                 summary: params.summary,
                 project: params.project,

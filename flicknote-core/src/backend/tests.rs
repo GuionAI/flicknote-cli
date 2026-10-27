@@ -348,7 +348,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_uuid = backend.resolve_note_id(&id).await.unwrap();
     backend
-        .update_note_content(&from_uuid, "hi from uuid")
+        .update_note_content(&from_uuid, "hi from uuid", None)
         .await
         .unwrap();
     assert_eq!(
@@ -358,7 +358,7 @@ async fn test_resolved_note_id_can_update_content_and_extractions() {
 
     let from_short_id = backend.resolve_note_id("1172").await.unwrap();
     backend
-        .update_note_content(&from_short_id, "hi from short id")
+        .update_note_content(&from_short_id, "hi from short id", None)
         .await
         .unwrap();
     assert_eq!(

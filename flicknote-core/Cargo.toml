@@ -20,6 +20,8 @@ thiserror = { workspace = true }
 flicknote-auth = { path = "../flicknote-auth" }
 dirs = { workspace = true }
 chrono = "0.4"
+base64 = "0.22"
+zstd = "0.14"
 uuid = { workspace = true }
 pulldown-cmark = { version = "0.13.1", default-features = false }
 sha2 = "0.10"

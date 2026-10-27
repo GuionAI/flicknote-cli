@@ -1,6 +1,6 @@
 //! Note application service.
 
-use crate::backend::{MetadataFilter, NoteDb, NoteFilter, NoteSearch};
+use crate::backend::{MetadataFilter, NoteDb, NoteEdit, NoteFilter, NoteSearch};
 use crate::types::{NoteDiscovery, NoteStatus};
 use crate::{ENTITY_EXTRACTION_KEYS, TOPIC_EXTRACTION_KEY};
 
@@ -503,7 +503,9 @@ impl<'a> NoteService<'a> {
             Some(existing) if !existing.is_empty() => format!("{existing}\n\n{content}"),
             _ => content.to_string(),
         };
-        self.db.update_note_content(&full_id, &combined).await?;
+        self.db
+            .update_note_content(&full_id, &combined, Some(existing.as_deref()))
+            .await?;
         self.mutation_result(&full_id, &combined).await
     }
 
@@ -518,7 +520,7 @@ impl<'a> NoteService<'a> {
             ));
         }
         let full_id = self.db.resolve_note_id(note_id).await?;
-        self.db.update_note_content(&full_id, content).await?;
+        self.db.update_note_content(&full_id, content, None).await?;
         self.mutation_result(&full_id, content).await
     }
 
@@ -541,7 +543,9 @@ impl<'a> NoteService<'a> {
         let updated =
             markdown::replace_entire_section(&content, bounds.start, bounds.end, &shifted);
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated).await?;
+        self.db
+            .update_note_content(&full_id, updated, Some(Some(&content)))
+            .await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -572,7 +576,9 @@ impl<'a> NoteService<'a> {
             &content[heading_line_end..]
         );
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated).await?;
+        self.db
+            .update_note_content(&full_id, updated, Some(Some(&content)))
+            .await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -607,7 +613,9 @@ impl<'a> NoteService<'a> {
             format!("{before}\n\n{insertion}\n\n{after}")
         };
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated).await?;
+        self.db
+            .update_note_content(&full_id, updated, Some(Some(&content)))
+            .await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -632,7 +640,9 @@ impl<'a> NoteService<'a> {
             }
         );
         let updated = updated.trim();
-        self.db.update_note_content(&full_id, updated).await?;
+        self.db
+            .update_note_content(&full_id, updated, Some(Some(&content)))
+            .await?;
         self.mutation_result(&full_id, updated).await
     }
 
@@ -648,6 +658,16 @@ impl<'a> NoteService<'a> {
                 "section requires before and after".to_string(),
             ));
         }
+        if has_edit
+            && !(input.title.is_missing()
+                && input.summary.is_missing()
+                && input.project.is_missing()
+                && input.flagged.is_missing())
+        {
+            return Err(ServiceError::InvalidArgument(
+                "content and metadata must be edited separately".into(),
+            ));
+        }
         if !has_edit
             && input.title.is_missing()
             && input.summary.is_missing()
@@ -659,35 +679,94 @@ impl<'a> NoteService<'a> {
 
         let full_id = self.db.resolve_note_id(&input.id).await?;
         let note = self.db.find_note(&full_id).await?;
-        let mut resulting_content = note.content.clone().unwrap_or_default();
-        if let (Some(before), Some(after)) = (input.before.as_deref(), input.after.as_deref()) {
-            if let Some(section) = input.section.as_deref() {
-                let content = self.required_content(&full_id).await?;
-                let document = markdown::parse_markdown(&content);
-                let bounds = find_section(&document, section, &full_id)?;
-                let scoped = &content[bounds.start..bounds.end];
-                let matched = edit_match::find_unique(scoped, before)?;
-                let absolute = edit_match::MatchInfo {
-                    start: bounds.start + matched.start,
-                    end: bounds.start + matched.end,
-                };
-                resulting_content = edit_match::splice(&content, &absolute, after);
-                self.db
-                    .update_note_content(&full_id, resulting_content.trim())
-                    .await?;
-            } else {
-                let content = self.required_content(&full_id).await?;
-                let matched = edit_match::find_unique(&content, before)?;
-                resulting_content = edit_match::splice(&content, &matched, after);
-                self.db
-                    .update_note_content(&full_id, &resulting_content)
-                    .await?;
+        if has_edit {
+            return self.modify_content(&full_id, &note, &input).await;
+        }
+        let project = match &input.project {
+            Patch::Missing => None,
+            Patch::Null if note.project_id.is_some() => Some(None),
+            Patch::Null => None,
+            Patch::Value(name) => {
+                let id = self
+                    .db
+                    .find_project_by_name(name)
+                    .await?
+                    .ok_or_else(|| ServiceError::ProjectNotFound(name.clone()))?;
+                (note.project_id.as_deref() != Some(id.as_str())).then_some(Some(id))
             }
+        };
+        let title = match &input.title {
+            Patch::Missing => None,
+            Patch::Null => Some(None),
+            Patch::Value(value) => Some(Some(value.as_str())),
+        };
+        let summary = match &input.summary {
+            Patch::Missing => None,
+            Patch::Null => Some(None),
+            Patch::Value(value) => Some(Some(value.as_str())),
+        };
+        let flagged = match &input.flagged {
+            Patch::Missing => None,
+            Patch::Null => Some(None),
+            Patch::Value(value) => Some(Some(*value)),
+        };
+        self.db
+            .apply_note_edit(
+                &full_id,
+                &NoteEdit {
+                    title,
+                    summary,
+                    project: project.as_ref().map(|p| p.as_deref()),
+                    flagged,
+                    ..NoteEdit::default()
+                },
+            )
+            .await?;
+        if let Some(to_project_id) = project {
+            self.try_append_assignment_events(&[ProjectAssignmentEvent {
+                v: ProjectAssignmentEvent::VERSION,
+                event: ProjectAssignmentEvent::KIND,
+                note_id: full_id.clone(),
+                from_project_id: note.project_id.clone(),
+                to_project_id,
+                source: ProjectAssignmentSource::Manual,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            }])
+            .await;
         }
 
-        self.apply_metadata_patch(&full_id, &note, &input).await?;
+        self.mutation_result(&full_id, note.content.as_deref().unwrap_or_default())
+            .await
+    }
 
-        self.mutation_result(&full_id, &resulting_content).await
+    async fn modify_content(
+        &self,
+        id: &str,
+        note: &crate::types::Note,
+        input: &NoteModifyInput,
+    ) -> Result<NoteMutationResult, ServiceError> {
+        let content = note.content.as_deref().ok_or(ServiceError::NoTextContent)?;
+        let before = input.before.as_deref().expect("validated content edit");
+        let after = input.after.as_deref().expect("validated content edit");
+        let resulting = if let Some(section) = input.section.as_deref() {
+            let document = markdown::parse_markdown(content);
+            let bounds = find_section(&document, section, id)?;
+            let matched = edit_match::find_unique(&content[bounds.start..bounds.end], before)?;
+            let absolute = edit_match::MatchInfo {
+                start: bounds.start + matched.start,
+                end: bounds.start + matched.end,
+            };
+            edit_match::splice(content, &absolute, after)
+                .trim()
+                .to_owned()
+        } else {
+            let matched = edit_match::find_unique(content, before)?;
+            edit_match::splice(content, &matched, after)
+        };
+        self.db
+            .update_note_content(id, &resulting, Some(Some(content)))
+            .await?;
+        self.mutation_result(id, &resulting).await
     }
 
     pub async fn submit(&self, note_id: &str) -> Result<NoteMutationResult, ServiceError> {
@@ -748,77 +827,6 @@ impl<'a> NoteService<'a> {
             }
             None => Ok(None),
         }
-    }
-
-    async fn apply_metadata_patch(
-        &self,
-        note_id: &str,
-        note: &crate::types::Note,
-        input: &NoteModifyInput,
-    ) -> Result<(), ServiceError> {
-        match &input.title {
-            Patch::Missing => {}
-            Patch::Null => self.db.update_note_title(note_id, None).await?,
-            Patch::Value(title) => self.db.update_note_title(note_id, Some(title)).await?,
-        }
-        match &input.summary {
-            Patch::Missing => {}
-            Patch::Null => self.db.update_note_summary(note_id, None).await?,
-            Patch::Value(summary) => self.db.update_note_summary(note_id, Some(summary)).await?,
-        }
-        self.apply_project_patch(note_id, note, &input.project)
-            .await?;
-        match &input.flagged {
-            Patch::Missing => {}
-            Patch::Null => self.db.update_note_flagged(note_id, None).await?,
-            Patch::Value(flagged) => self.db.update_note_flagged(note_id, Some(*flagged)).await?,
-        }
-        Ok(())
-    }
-
-    async fn apply_project_patch(
-        &self,
-        note_id: &str,
-        note: &crate::types::Note,
-        project: &Patch<String>,
-    ) -> Result<(), ServiceError> {
-        let Patch::Value(name) = project else {
-            if matches!(project, Patch::Null) && note.project_id.is_some() {
-                self.db.update_note_project(note_id, None).await?;
-                self.try_append_assignment_events(&[ProjectAssignmentEvent {
-                    v: ProjectAssignmentEvent::VERSION,
-                    event: ProjectAssignmentEvent::KIND,
-                    note_id: note_id.to_string(),
-                    from_project_id: note.project_id.clone(),
-                    to_project_id: None,
-                    source: ProjectAssignmentSource::Manual,
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                }])
-                .await;
-            }
-            return Ok(());
-        };
-        let project_id = self
-            .db
-            .find_project_by_name(name)
-            .await?
-            .ok_or_else(|| ServiceError::ProjectNotFound(name.to_string()))?;
-        if note.project_id.as_deref() != Some(project_id.as_str()) {
-            self.db
-                .update_note_project(note_id, Some(&project_id))
-                .await?;
-            self.try_append_assignment_events(&[ProjectAssignmentEvent {
-                v: ProjectAssignmentEvent::VERSION,
-                event: ProjectAssignmentEvent::KIND,
-                note_id: note_id.to_string(),
-                from_project_id: note.project_id.clone(),
-                to_project_id: Some(project_id),
-                source: ProjectAssignmentSource::Manual,
-                created_at: chrono::Utc::now().to_rfc3339(),
-            }])
-            .await;
-        }
-        Ok(())
     }
 
     async fn try_append_assignment_events(&self, events: &[ProjectAssignmentEvent]) {

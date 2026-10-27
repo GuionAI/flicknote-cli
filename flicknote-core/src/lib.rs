@@ -14,3 +14,5 @@ pub const ENTITY_EXTRACTION_KEYS: &[&str] = &["::person", "::company", "::locati
 pub const REMOTE_COMMITTED_INSERT_METADATA: &str = r#"{"flicknote":"remote_committed_insert_v1"}"#;
 
 pub mod profile;
+
+pub mod history;

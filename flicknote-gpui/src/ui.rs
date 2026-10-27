@@ -81,12 +81,16 @@ actions!(
         SaveEditor,
         FocusSearch,
         SearchNext,
-        SearchPrevious
+        SearchPrevious,
+        HistoryNext,
+        HistoryPrevious
     ]
 );
 
 fn install_today_keys(cx: &mut App) {
     cx.bind_keys([
+        KeyBinding::new("down", HistoryNext, Some("HistoryList")),
+        KeyBinding::new("up", HistoryPrevious, Some("HistoryList")),
         KeyBinding::new("cmd-f", FocusSearch, Some("Today")),
         KeyBinding::new("cmd-f", FocusSearch, Some("Today > Input")),
         KeyBinding::new("down", SearchNext, Some("SearchInput > Input")),
@@ -164,6 +168,7 @@ struct Reading {
 
 struct Today {
     editor: Option<project_editor::Editor>,
+    history: Option<history::HistoryDialog>,
     pending_project: Option<String>,
     services: Arc<Services>,
     destination: Destination,
@@ -241,6 +246,7 @@ impl Today {
             .map(search::Origin::reopen);
         let mut this = Self {
             editor: None,
+            history: None,
             pending_project: None,
             destination,
             range: period.range(&chrono::Local::now()).ok().flatten(),
@@ -585,7 +591,7 @@ impl Today {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.editor.is_some() || self.composing(window, cx) {
+        if self.history.is_some() || self.editor.is_some() || self.composing(window, cx) {
             return;
         }
         self.set_destination(destination, window, cx);
@@ -978,6 +984,7 @@ impl Today {
     }
 
     fn refresh_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reconcile_history(window, cx);
         if self.detail_open && self.model.selected.is_none() {
             self.close_detail(window, cx);
         }
@@ -1070,7 +1077,8 @@ impl Today {
     }
 
     fn shortcuts_blocked(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        self.editor.is_some()
+        self.history.is_some()
+            || self.editor.is_some()
             || !self.composer.read(cx).value().is_empty()
             || self.composing(window, cx)
     }
@@ -1141,6 +1149,8 @@ mod chart;
 #[path = "search.rs"]
 mod search;
 
+#[path = "history.rs"]
+mod history;
 #[path = "presentation.rs"]
 mod presentation;
 
@@ -1482,3 +1492,7 @@ mod search_tests;
 #[cfg(test)]
 #[path = "link_tests.rs"]
 mod link_tests;
+
+#[cfg(test)]
+#[path = "history_tests.rs"]
+mod history_tests;

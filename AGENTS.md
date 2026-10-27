@@ -191,6 +191,8 @@ project Week uses Monday 00:00. Keep historical ranges fixed, current ranges
 clock-following, per-UUID choices process-local and creation current/unassigned.
 Include period identity in stale-watch and accepted-operation reconciliation.
 See `docs/shortcuts-audit.md` before extending desktop shortcuts.
+Before changing desktop saved-history reading, follow the snapshot and dialog
+contract in `docs/normal-gui-host.md`'s #4696 section.
 Project descriptions use only `projects.metadata.description` across client,
 IPC/MCP, CLI and GUI; note summaries remain independent. Reject obsolete project
 summary inputs. No alias, fallback, dual write or startup migration. Client Jev,

@@ -9,7 +9,7 @@ use crate::types::{Note, NoteDiscovery, Project};
 use flicknote_client::dto::RecallCandidate;
 
 use super::{
-    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteLookup, NoteSearch, NoteShare,
+    InsertNoteReq, InsertedNote, NoteDb, NoteEdit, NoteFilter, NoteLookup, NoteSearch, NoteShare,
     parse_note_lookup,
 };
 
@@ -41,9 +41,40 @@ pub struct LocalPowerSyncBackend {
     db: PowerSyncDatabase,
     user_id: String,
 }
+
+/// Fields read together for the desktop history dialog.
+pub struct DesktopHistorySnapshot {
+    pub content: Option<String>,
+    pub updated_at: Option<String>,
+    pub history: Option<String>,
+}
+
 impl LocalPowerSyncBackend {
     pub fn new(db: PowerSyncDatabase, user_id: String) -> Self {
         Self { db, user_id }
+    }
+
+    /// Current body, its timestamp and history from the same owner-scoped row.
+    pub async fn desktop_history_snapshot(
+        &self,
+        uuid: &str,
+        short_id: i64,
+        archived: bool,
+    ) -> Result<DesktopHistorySnapshot, CliError> {
+        let reader = self.db.reader().await?;
+        let (content, updated_at, history, oversized) = reader.query_row(
+            "SELECT content, updated_at, CASE WHEN length(CAST(history AS BLOB)) <= 360710144 THEN history END, coalesce(length(CAST(history AS BLOB)) > 360710144, 0) FROM notes WHERE user_id = ? AND id = ? AND short_id = ? AND (deleted_at IS NOT NULL) = ?",
+            params![self.user_id, uuid, short_id, archived],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get::<_, bool>(3)?)),
+        ).optional()?.ok_or_else(|| CliError::NoteNotFound { id: uuid.to_owned() })?;
+        if oversized {
+            return Err(CliError::Other("History exceeds the size limit".into()));
+        }
+        Ok(DesktopHistorySnapshot {
+            content,
+            updated_at,
+            history,
+        })
     }
 
     /// Single conditional PowerSync write: never restores archives or touches timestamps.
@@ -169,8 +200,6 @@ const SQ_FIND_CONTENT: &str =
 const SQ_INSERT: &str = "INSERT INTO notes \
      (id, user_id, type, status, title, content, metadata, project_id, created_at, updated_at) \
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-const SQ_UPDATE_CONTENT: &str =
-    "UPDATE notes SET content = ?, updated_at = ? WHERE user_id = ? AND id = ?";
 const SQ_SUBMIT_DRAFT: &str = "UPDATE notes SET status = 'ai_queued', updated_at = ? \
      WHERE user_id = ? AND id = ? AND deleted_at IS NULL AND status = 'draft'";
 const SQ_SET_DELETED_AT: &str =
@@ -768,10 +797,90 @@ impl NoteDb for LocalPowerSyncBackend {
         })
     }
 
-    async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
+    async fn update_note_content(
+        &self,
+        id: &str,
+        content: &str,
+        expected: Option<Option<&str>>,
+    ) -> Result<(), CliError> {
+        self.apply_note_edit(
+            id,
+            &NoteEdit {
+                content: Some((content, expected)),
+                ..NoteEdit::default()
+            },
+        )
+        .await
+    }
+
+    async fn apply_note_edit(&self, id: &str, edit: &NoteEdit<'_>) -> Result<(), CliError> {
+        let mut writer = self.db.writer().await?;
+        let tx = writer.transaction()?;
+        let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>, bool)> = tx.query_row(
+            "SELECT content, updated_at, created_at, CASE WHEN length(CAST(history AS BLOB)) <= 360710144 THEN history END, coalesce(length(CAST(history AS BLOB)) > 360710144, 0) FROM notes WHERE user_id = ? AND id = ? AND deleted_at IS NULL",
+            params![self.user_id, id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        ).optional()?;
+        let (old, updated, created, history, oversized) =
+            row.ok_or_else(|| CliError::NoteNotFound { id: id.to_owned() })?;
+        if let Some(Some(project)) = edit.project {
+            let exists = tx.query_row("SELECT 1 FROM projects WHERE user_id = ? AND id = ? AND coalesce(is_archived, 0) = 0", params![self.user_id, project], |_| Ok(())).optional()?.is_some();
+            if !exists {
+                return Err(CliError::ProjectNotFound {
+                    name: project.to_owned(),
+                });
+            }
+        }
         let now = chrono::Utc::now().to_rfc3339();
-        let writer = self.db.writer().await?;
-        writer.execute(SQ_UPDATE_CONTENT, params![content, now, self.user_id, id])?;
+        if let Some((content, expected)) = edit.content {
+            if expected.is_some_and(|value| old.as_deref() != value) {
+                return Err(CliError::ContentConflict);
+            }
+            if old.as_deref() != Some(content) {
+                if oversized {
+                    return Err(CliError::InvalidHistory);
+                }
+                let history = crate::history::save(
+                    history,
+                    old.as_deref(),
+                    updated.as_deref().or(created.as_deref()),
+                )?;
+                tx.execute("UPDATE notes SET content = ?, history = ?, updated_at = ? WHERE user_id = ? AND id = ? AND deleted_at IS NULL", params![content, history, now, self.user_id, id])?;
+            }
+        }
+        if let Some(title) = edit.title {
+            tx.execute(SQ_UPDATE_TITLE, params![title, now, self.user_id, id])?;
+        }
+        if let Some(summary) = edit.summary {
+            tx.execute(SQ_UPDATE_SUMMARY, params![summary, now, self.user_id, id])?;
+        }
+        if let Some(project) = edit.project {
+            tx.execute(SQ_UPDATE_PROJECT, params![project, now, self.user_id, id])?;
+        }
+        if let Some(flagged) = edit.flagged {
+            tx.execute(
+                SQ_UPDATE_FLAGGED,
+                params![flagged.map(i64::from), now, self.user_id, id],
+            )?;
+        }
+        if let Some(topics) = edit.topics {
+            tx.execute(
+                SQ_CLEAR_EXTRACTIONS,
+                params![self.user_id, id, crate::TOPIC_EXTRACTION_KEY],
+            )?;
+            for topic in topics {
+                tx.execute(
+                    SQ_INSERT_EXTRACTION,
+                    params![
+                        uuid::Uuid::new_v4().to_string(),
+                        id,
+                        self.user_id,
+                        crate::TOPIC_EXTRACTION_KEY,
+                        topic
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

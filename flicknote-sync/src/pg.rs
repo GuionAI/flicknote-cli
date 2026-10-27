@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use deadpool_postgres::{Object, Pool};
 use flicknote_client::dto::RecallCandidate;
 use flicknote_core::backend::{
-    InsertNoteReq, InsertedNote, NoteDb, NoteFilter, NoteSearch as StructuredSearch,
+    InsertNoteReq, InsertedNote, NoteDb, NoteEdit, NoteFilter, NoteSearch as StructuredSearch,
 };
 use flicknote_core::error::CliError;
 use flicknote_core::services::error::ServiceError;
@@ -215,7 +215,11 @@ impl PgRequestDb {
         if let Some(connection) = guard.take() {
             let connection = DisconnectOnDrop(Some(connection));
             connection
-                .batch_execute(if success { "COMMIT" } else { "ROLLBACK" })
+                .batch_execute(if success && !self.failed() {
+                    "COMMIT"
+                } else {
+                    "ROLLBACK"
+                })
                 .await
                 .map_err(pg_error)?;
             drop(connection.release());
@@ -422,8 +426,62 @@ impl NoteDb for PgRequestDb {
             short_id: row.get::<_, Option<i32>>(0).map(i64::from),
         })
     }
-    async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
-        self.update_note_field(id, "content=$2", &[&content]).await
+    async fn update_note_content(
+        &self,
+        input: &str,
+        content: &str,
+        expected: Option<Option<&str>>,
+    ) -> Result<(), CliError> {
+        let id = uuid(input)?;
+        let row = self.query_opt("SELECT content, updated_at, CASE WHEN octet_length(history) <= 360710144 THEN history END, coalesce(octet_length(history) > 360710144, false) FROM notes WHERE id=$1 AND user_id=auth.uid() AND deleted_at IS NULL FOR UPDATE", &[&id]).await?.ok_or_else(|| note_missing(input))?;
+        let old: Option<String> = row.get(0);
+        let updated: chrono::DateTime<chrono::Utc> = row.get(1);
+        let history: Option<String> = row.get(2);
+        let oversized: bool = row.get(3);
+        if expected.is_some_and(|value| value != old.as_deref()) {
+            return Err(CliError::ContentConflict);
+        }
+        if old.as_deref() == Some(content) {
+            return Ok(());
+        }
+        if oversized {
+            return Err(CliError::InvalidHistory);
+        }
+        let history =
+            flicknote_core::history::save(history, old.as_deref(), Some(&updated.to_rfc3339()))?;
+        self.execute("UPDATE notes SET content=$2, history=$3, updated_at=now() WHERE id=$1 AND user_id=auth.uid() AND deleted_at IS NULL", &[&id, &content, &history]).await?;
+        Ok(())
+    }
+
+    async fn apply_note_edit(&self, id: &str, edit: &NoteEdit<'_>) -> Result<(), CliError> {
+        // All private MCP operations already share one request transaction.
+        let result = async {
+            if let Some((content, expected)) = edit.content {
+                self.update_note_content(id, content, expected).await?;
+            }
+            if let Some(title) = edit.title {
+                self.update_note_title(id, title).await?;
+            }
+            if let Some(summary) = edit.summary {
+                self.update_note_summary(id, summary).await?;
+            }
+            if let Some(project) = edit.project {
+                self.update_note_project(id, project).await?;
+            }
+            if let Some(flagged) = edit.flagged {
+                self.update_note_flagged(id, flagged).await?;
+            }
+            if let Some(topics) = edit.topics {
+                self.set_note_extractions(id, flicknote_core::TOPIC_EXTRACTION_KEY, topics)
+                    .await?;
+            }
+            Ok(())
+        }
+        .await;
+        if result.is_err() {
+            self.mark_failed();
+        }
+        result
     }
 
     async fn submit_draft(&self, id: &str) -> Result<bool, CliError> {

@@ -428,6 +428,35 @@ fn assert_note_list_item_contract(note: &serde_json::Value) {
 }
 
 #[tokio::test]
+async fn mcp_content_and_metadata_input_schemas_are_separate() {
+    let mut harness = McpHarness::start().await;
+    let tools = harness.tools().await;
+    let modify = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_modify")
+        .unwrap();
+    let metadata = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_update_metadata")
+        .unwrap();
+    for tool in [modify, metadata] {
+        assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    }
+    for field in ["title", "summary", "project", "flagged"] {
+        assert!(modify["inputSchema"]["properties"].get(field).is_none());
+        assert!(metadata["inputSchema"]["properties"].get(field).is_some());
+    }
+    for field in ["before", "after", "section"] {
+        assert!(modify["inputSchema"]["properties"].get(field).is_some());
+        assert!(metadata["inputSchema"]["properties"].get(field).is_none());
+    }
+    let required = modify["inputSchema"]["required"].as_array().unwrap();
+    for field in ["id", "before", "after"] {
+        assert!(required.contains(&serde_json::json!(field)));
+    }
+}
+
+#[tokio::test]
 async fn mcp_server_exposes_stable_tool_contract() {
     let mut harness = McpHarness::start().await;
     let tools = harness.tools().await;
@@ -1265,7 +1294,7 @@ async fn mcp_note_add_marks_ai_creation_and_human_list_excludes_it() {
                 serde_json::json!({"id":id,"content":"Updated content"}),
             ),
             (
-                "note_modify",
+                "note_update_metadata",
                 serde_json::json!({"id":id,"title":"Updated title"}),
             ),
             ("note_archive", serde_json::json!({"id":id})),
@@ -1371,13 +1400,19 @@ async fn mcp_note_mutations_and_lifecycle_route_through_daemon() {
             serde_json::json!({
                 "id": 42,
                 "before": "Old text.",
-                "after": "New text.",
-                "flagged": true
+                "after": "New text."
             }),
         )
         .await;
+    assert_eq!(modified["result"]["isError"], false);
+    let metadata = harness
+        .call(
+            "note_update_metadata",
+            serde_json::json!({"id":42,"flagged":true}),
+        )
+        .await;
     assert_eq!(
-        modified["result"]["structuredContent"]["note"]["flagged"],
+        metadata["result"]["structuredContent"]["note"]["flagged"],
         true
     );
     assert_json_does_not_contain_key(&modified["result"]["structuredContent"], "status");
@@ -1489,7 +1524,7 @@ async fn mcp_draft_write_metadata_and_submit_contracts_are_orthogonal() {
 
     let patched = harness
         .call(
-            "note_modify",
+            "note_update_metadata",
             serde_json::json!({
                 "id": id,
                 "title": "Replacement title",
@@ -1506,7 +1541,7 @@ async fn mcp_draft_write_metadata_and_submit_contracts_are_orthogonal() {
     );
     let cleared = harness
         .call(
-            "note_modify",
+            "note_update_metadata",
             serde_json::json!({
                 "id": id,
                 "title": null,

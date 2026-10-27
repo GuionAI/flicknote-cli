@@ -277,6 +277,22 @@ not guaranteed exact edit times; collisions may be incremented. History is not
 an audit trail and does not cover every write path. Missing notes, missing
 versions and malformed or oversized history return errors. NULL history returns
 an empty list. Both MCP servers use the same owner and archive selection rules.
+On a content change, local and private remote MCP preserve the previous non-null
+body under its old update timestamp before saving the new body. If a local
+note has no old update time, its creation time is used as an approximate history
+marker, not as the old body's edit time. If the selected marker is absent or
+invalid, the content change fails without altering the note. Creation,
+metadata-only edits and unchanged content do not add versions. User-initiated content, title, summary, flag, project and
+lifecycle changes update the note's modification time; reads do not. Older
+unsaved versions are not recovered; separate offline edits do not promise
+automatic merging of whole-history fields.
+
+Use `note_modify` for an exact `before`/`after` content edit and
+`note_update_metadata` for title, summary, project or flagged patches. The
+tools reject each other's fields; omitted metadata stays unchanged and null
+clears it. A multi-field metadata patch commits atomically. Separate tool calls
+are separate operations. The human editable-note save commits title, topics,
+content and history together, using the note's timestamp from before the save.
 
 MCP creation sets `metadata.created_by_ai` to JSON boolean `true` regardless of
 client or session. Human CLI/GUI creation omits it. Human-only list, count and
@@ -497,6 +513,9 @@ rendered text, retaining code indentation and trailing whitespace. Each code blo
 has a top-right Copy button for its whole payload, excluding fences and language.
 Explicit http/https links can open the browser; images never load
 network, local files or data URLs. See [the reader contract](docs/embedded-gpui-spike.md#markdown-detail-reader-3348).
+Use **History** in the detail toolbar to read Current and browse saved versions,
+newest first; select an entry or use the arrow keys to read its Markdown. Times
+are local markers. The current body is not numbered, and the view is read-only.
 
 Home/day and project-All/Week use the production local host's watched local
 cache with Unix IPC and loopback MCP ready before the first download. Project

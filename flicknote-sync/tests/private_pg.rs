@@ -562,7 +562,8 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 24);
+    assert_eq!(names.len(), 25);
+    assert!(names.contains(&"note_update_metadata"));
     fn strict_schema(value: &Value) {
         match value {
             Value::Object(fields) => {
@@ -615,6 +616,22 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     }
     assert!(!names.contains(&"note_source"));
     assert!(!names.contains(&"note_share"));
+    let modify = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_modify")
+        .unwrap();
+    let metadata = tools
+        .iter()
+        .find(|tool| tool["name"] == "note_update_metadata")
+        .unwrap();
+    assert_eq!(modify["inputSchema"]["additionalProperties"], false);
+    assert_eq!(metadata["inputSchema"]["additionalProperties"], false);
+    assert!(modify["inputSchema"]["properties"].get("title").is_none());
+    assert!(
+        metadata["inputSchema"]["properties"]
+            .get("before")
+            .is_none()
+    );
     let add_tool = tools
         .iter()
         .find(|tool| tool["name"] == "note_add")
@@ -672,6 +689,300 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     .await
     .unwrap();
     let history_task = tokio::spawn(history_connection);
+    // Separate synthetic row exercises timestamp behavior at the real HTTP boundary.
+    let timestamp_note = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_add",
+        json!({"content":"# Timestamp fixture\n\noriginal"}),
+    )
+    .await;
+    let timestamp_id = timestamp_note["id"].as_i64().unwrap();
+    let timestamp_owner = db(&pg_pool, "11111111-1111-4111-8111-111111111111").await;
+    let timestamp_uuid = Uuid::parse_str(
+        &timestamp_owner
+            .resolve_note_id(&timestamp_id.to_string())
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    timestamp_owner.finish(true).await.unwrap();
+    let created_row = history_admin
+        .query_one(
+            "SELECT created_at,updated_at FROM notes WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    let created: chrono::DateTime<chrono::Utc> = created_row.get(0);
+    let updated: chrono::DateTime<chrono::Utc> = created_row.get(1);
+    assert_eq!(created, updated);
+    assert!((chrono::Utc::now() - created).num_seconds().abs() < 60);
+    history_admin
+        .execute(
+            "UPDATE notes SET content='original',history=NULL,updated_at='2020-01-01Z' WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    let before = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":timestamp_id}),
+    )
+    .await;
+    let rejected = send(json!({"jsonrpc":"2.0","id":94,"method":"tools/call","params":{"name":"note_modify","arguments":{"id":timestamp_id,"before":"original","after":"changed","title":"New title","project":"Missing project"}}}), "full").await.unwrap();
+    let rejected: Value = rejected.json().await.unwrap();
+    assert!(rejected["result"]["isError"] == true || rejected.get("error").is_some());
+    assert_eq!(
+        tool_call(
+            &client,
+            &resource,
+            "full",
+            "note_get",
+            json!({"id":timestamp_id})
+        )
+        .await,
+        before
+    );
+    assert_eq!(
+        tool_call(
+            &client,
+            &resource,
+            "full",
+            "note_list_versions",
+            json!({"id":timestamp_id})
+        )
+        .await["versions"],
+        json!([])
+    );
+    for (token, args) in [
+        (
+            "full",
+            json!({"id":timestamp_id,"before":"original","after":"changed","title":"Forbidden"}),
+        ),
+        (
+            "full",
+            json!({"id":timestamp_id,"title":"Forbidden","summary":"Forbidden","project":"Missing project"}),
+        ),
+        ("bob", json!({"id":timestamp_id,"title":"Forbidden"})),
+    ] {
+        let rejected = send(json!({"jsonrpc":"2.0","id":96,"method":"tools/call","params":{"name":"note_update_metadata","arguments":args}}), token).await.unwrap();
+        let rejected: Value = rejected.json().await.unwrap();
+        assert!(
+            rejected["result"]["isError"] == true || rejected.get("error").is_some(),
+            "{rejected}"
+        );
+        assert_eq!(
+            tool_call(
+                &client,
+                &resource,
+                "full",
+                "note_get",
+                json!({"id":timestamp_id})
+            )
+            .await,
+            before
+        );
+    }
+    history_admin
+        .execute(
+            "UPDATE notes SET history='bad!' WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    let rejected = send(json!({"jsonrpc":"2.0","id":95,"method":"tools/call","params":{"name":"note_modify","arguments":{"id":timestamp_id,"before":"original","after":"changed"}}}), "full").await.unwrap();
+    let rejected: Value = rejected.json().await.unwrap();
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(
+        tool_call(
+            &client,
+            &resource,
+            "full",
+            "note_get",
+            json!({"id":timestamp_id})
+        )
+        .await,
+        before
+    );
+    history_admin
+        .execute(
+            "UPDATE notes SET history=NULL WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_modify",
+        json!({"id":timestamp_id,"before":"original","after":"changed"}),
+    )
+    .await;
+    let historical = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":timestamp_id,"version":1}),
+    )
+    .await;
+    assert_eq!(historical["content"], "original");
+    assert_eq!(historical["time"], "2020-01-01T00:00:00.000Z");
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_update_metadata",
+        json!({"id":timestamp_id,"title":"New title","summary":"Keep summary","flagged":true}),
+    )
+    .await;
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_update_metadata",
+        json!({"id":timestamp_id,"title":null}),
+    )
+    .await;
+    let current = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":timestamp_id}),
+    )
+    .await;
+    assert_eq!(current["title"], Value::Null);
+    assert_eq!(current["summary"], "Keep summary");
+    assert_eq!(current["flagged"], true);
+    assert_eq!(current["content"], "changed");
+    history_admin
+        .execute(
+            "UPDATE notes SET content='original',history=NULL,updated_at='2020-01-01Z' WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    let before_reads: chrono::DateTime<chrono::Utc> = history_admin
+        .query_one(
+            "SELECT updated_at FROM notes WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":timestamp_id}),
+    )
+    .await;
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_list_versions",
+        json!({"id":timestamp_id}),
+    )
+    .await;
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_write",
+        json!({"id":timestamp_id,"content":"original"}),
+    )
+    .await;
+    let row = history_admin
+        .query_one(
+            "SELECT updated_at,history FROM notes WHERE id=$1",
+            &[&timestamp_uuid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, chrono::DateTime<chrono::Utc>>(0), before_reads);
+    assert!(row.get::<_, Option<String>>(1).is_none());
+    for (name, args, status, archived, expect_history) in [
+        (
+            "note_write",
+            json!({"id":timestamp_id,"content":"new"}),
+            "ready",
+            false,
+            true,
+        ),
+        (
+            "note_update_metadata",
+            json!({"id":timestamp_id,"title":"changed","summary":"new summary","flagged":true}),
+            "ready",
+            false,
+            false,
+        ),
+        (
+            "note_submit",
+            json!({"id":timestamp_id}),
+            "draft",
+            false,
+            false,
+        ),
+        (
+            "note_archive",
+            json!({"id":timestamp_id}),
+            "ready",
+            false,
+            false,
+        ),
+        (
+            "note_restore",
+            json!({"id":timestamp_id}),
+            "ready",
+            true,
+            false,
+        ),
+    ] {
+        history_admin.execute("UPDATE notes SET content='original',history=NULL,status=$2,updated_at='2020-01-01Z',deleted_at=CASE WHEN $3 THEN '2020-01-01Z'::timestamptz ELSE NULL END,metadata='{\"created_by_ai\":true}'::jsonb WHERE id=$1", &[&timestamp_uuid,&status,&archived]).await.unwrap();
+        let before = chrono::Utc::now();
+        tool_call(&client, &resource, "full", name, args).await;
+        let after = chrono::Utc::now();
+        let row = history_admin
+            .query_one(
+                "SELECT updated_at,history,metadata FROM notes WHERE id=$1",
+                &[&timestamp_uuid],
+            )
+            .await
+            .unwrap();
+        let updated: chrono::DateTime<chrono::Utc> = row.get(0);
+        let history: Option<String> = row.get(1);
+        let metadata: Option<Value> = row.get(2);
+        assert!(updated >= before && updated <= after, "{name}");
+        assert_eq!(history.is_some(), expect_history, "{name}");
+        assert_eq!(metadata.unwrap()["created_by_ai"], true);
+    }
+    assert!(
+        history_admin
+            .execute(
+                "UPDATE notes SET updated_at=NULL WHERE id=$1",
+                &[&timestamp_uuid]
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        history_admin
+            .execute(
+                "UPDATE notes SET created_at=NULL WHERE id=$1",
+                &[&timestamp_uuid]
+            )
+            .await
+            .is_err()
+    );
     history_admin
         .execute(
             "UPDATE notes SET history=$1 WHERE id=$2",
@@ -717,6 +1028,11 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     assert_eq!(detail["metadata"]["created_by_ai"], true);
     assert_eq!(detail["draft"], false);
     assert_eq!(detail["extractions"].as_array().unwrap().len(), 2);
+    let mut previous_bodies = Vec::new();
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -736,6 +1052,10 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     )
     .await;
     assert!(section_body["content"].as_str().unwrap().contains("Intro"));
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -744,6 +1064,10 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         json!({"id":id,"section":section,"position":"after","content":"# Tail\ntail text"}),
     )
     .await;
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -754,6 +1078,10 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     .await;
     let after_rename = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     let renamed = after_rename["sections"][0]["id"].as_str().unwrap();
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -764,6 +1092,10 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
     .await;
     let after_replace = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     let tail = after_replace["sections"][1]["id"].as_str().unwrap();
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -772,9 +1104,32 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         json!({"id":id,"section":tail}),
     )
     .await;
-    tool_call(&client, &resource, "full", "note_modify", json!({"id":id,"before":"replacement","after":"edited","summary":"Private summary","flagged":true})).await;
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_modify",
+        json!({"id":id,"before":"replacement","after":"edited"}),
+    )
+    .await;
+    tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_update_metadata",
+        json!({"id":id,"summary":"Private summary","flagged":true}),
+    )
+    .await;
     let flagged = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     assert_eq!(flagged["flagged"], true);
+    previous_bodies.push(
+        tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await["content"]
+            .clone(),
+    );
     tool_call(
         &client,
         &resource,
@@ -783,6 +1138,29 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         json!({"id":id,"content":"\nmore"}),
     )
     .await;
+    let versions = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_list_versions",
+        json!({"id":id}),
+    )
+    .await;
+    assert_eq!(
+        versions["versions"].as_array().unwrap().len(),
+        previous_bodies.len() + 1
+    );
+    for (index, body) in previous_bodies.into_iter().enumerate() {
+        let saved = tool_call(
+            &client,
+            &resource,
+            "full",
+            "note_get",
+            json!({"id":id,"version":index + 2}),
+        )
+        .await;
+        assert_eq!(saved["content"], body);
+    }
     tool_call(
         &client,
         &resource,
@@ -963,7 +1341,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         &client,
         &resource,
         "full",
-        "note_modify",
+        "note_update_metadata",
         json!({"id":draft_id,"flagged":true}),
     )
     .await;
@@ -990,7 +1368,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         &client,
         &resource,
         "full",
-        "note_modify",
+        "note_update_metadata",
         json!({"id":draft_id,"flagged":false}),
     )
     .await;
@@ -1387,4 +1765,189 @@ async fn discovery_projection_and_batches_preserve_detail_and_rls() {
         );
     }
     b.finish(false).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the test-owned PGroonga container started by scripts/test-private-pg.sh"]
+#[allow(clippy::too_many_lines)] // Exercise successive states on one isolated RLS-backed row.
+async fn history_writes_are_serialized_owner_scoped_and_atomic() {
+    let pool = pool();
+    let alice = "11111111-1111-4111-8111-111111111111";
+    let bob = "22222222-2222-4222-8222-222222222222";
+    let id = Uuid::new_v4().to_string();
+    let seed = db(&pool, alice).await;
+    seed.insert_note(&flicknote_core::backend::InsertNoteReq {
+        id: &id,
+        note_type: "normal",
+        status: "draft",
+        title: Some("owned"),
+        content: Some("initial"),
+        metadata: Some(r#"{"created_by_ai":true}"#),
+        project_id: None,
+        now: "2020-01-01T00:00:00Z",
+    })
+    .await
+    .unwrap();
+    seed.finish(true).await.unwrap();
+    let rejected = db(&pool, alice).await;
+    let missing_project = Uuid::new_v4().to_string();
+    let edit = flicknote_core::backend::NoteEdit {
+        title: Some(Some("must roll back")),
+        project: Some(Some(&missing_project)),
+        ..Default::default()
+    };
+    assert!(rejected.apply_note_edit(&id, &edit).await.is_err());
+    rejected.finish(true).await.unwrap();
+    let check = db(&pool, alice).await;
+    assert_eq!(
+        check.find_note(&id).await.unwrap().title.as_deref(),
+        Some("owned")
+    );
+    check.finish(true).await.unwrap();
+    let other = db(&pool, bob).await;
+    assert!(
+        other
+            .update_note_content(&id, "forbidden", None)
+            .await
+            .is_err()
+    );
+    other.finish(false).await.unwrap();
+
+    let first = db(&pool, alice).await;
+    let second = db(&pool, alice).await;
+    let run = |db: Arc<PgRequestDb>, value: &'static str, id: String| async move {
+        db.update_note_content(&id, value, None).await.unwrap();
+        db.finish(true).await.unwrap();
+    };
+    tokio::join!(
+        run(first, "one", id.clone()),
+        run(second, "two", id.clone())
+    );
+    let check = db(&pool, alice).await;
+    let row = check.find_note(&id).await.unwrap();
+    assert_eq!(row.status, "draft");
+    assert!(row.metadata.as_deref().unwrap().contains("created_by_ai"));
+    let history =
+        flicknote_core::history::decode(check.find_note_history(&id, false).await.unwrap())
+            .unwrap()
+            .0;
+    assert_eq!(history.len(), 2);
+    assert_eq!(history.values().next().unwrap(), "initial");
+    assert!(history.values().any(|body| body == "one" || body == "two"));
+    let current = row.content.unwrap();
+    assert_ne!(history.values().last().unwrap(), &current);
+    check.finish(true).await.unwrap();
+
+    let port = std::env::var("FLICKNOTE_TEST_PG_PORT").unwrap();
+    let (admin, connection) = tokio_postgres::connect(
+        &format!("postgresql://postgres@127.0.0.1:{port}/supabase?sslmode=disable"),
+        NoTls,
+    )
+    .await
+    .unwrap();
+    let task = tokio::spawn(connection);
+    let uuid = Uuid::parse_str(&id).unwrap();
+    admin
+        .execute(
+            "UPDATE notes SET content=NULL, history=NULL WHERE id=$1",
+            &[&uuid],
+        )
+        .await
+        .unwrap();
+    let null = db(&pool, alice).await;
+    null.update_note_content(&id, "first", None).await.unwrap();
+    assert!(null.find_note_history(&id, false).await.unwrap().is_none());
+    null.finish(true).await.unwrap();
+    admin
+        .execute(
+            "UPDATE notes SET content='', updated_at='2020-01-01Z' WHERE id=$1",
+            &[&uuid],
+        )
+        .await
+        .unwrap();
+    let empty = db(&pool, alice).await;
+    empty
+        .update_note_content(&id, "filled", None)
+        .await
+        .unwrap();
+    let prior = empty.find_note_history(&id, false).await.unwrap();
+    assert_eq!(
+        flicknote_core::history::decode(prior.clone())
+            .unwrap()
+            .0
+            .values()
+            .next()
+            .unwrap(),
+        ""
+    );
+    empty
+        .update_note_content(&id, "filled", None)
+        .await
+        .unwrap();
+    assert_eq!(empty.find_note_history(&id, false).await.unwrap(), prior);
+    empty.finish(true).await.unwrap();
+    admin
+        .execute(
+            "UPDATE notes SET updated_at='2020-01-01Z' WHERE id=$1",
+            &[&uuid],
+        )
+        .await
+        .unwrap();
+    let collision = db(&pool, alice).await;
+    collision
+        .update_note_content(&id, "again", None)
+        .await
+        .unwrap();
+    let history =
+        flicknote_core::history::decode(collision.find_note_history(&id, false).await.unwrap())
+            .unwrap()
+            .0;
+    assert_eq!(history.get(&1_577_836_800_000).unwrap(), "");
+    assert_eq!(history.get(&1_577_836_800_001).unwrap(), "filled");
+    collision.finish(true).await.unwrap();
+    let current = "again";
+    admin
+        .execute("UPDATE notes SET history='bad!' WHERE id=$1", &[&uuid])
+        .await
+        .unwrap();
+    let failed = db(&pool, alice).await;
+    assert!(matches!(
+        failed.update_note_content(&id, "changed", None).await,
+        Err(flicknote_core::error::CliError::InvalidHistory)
+    ));
+    failed.finish(false).await.unwrap();
+    let row = admin
+        .query_one(
+            "SELECT content, history, status FROM notes WHERE id=$1",
+            &[&uuid],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), current);
+    assert_eq!(row.get::<_, String>(1), "bad!");
+    assert_eq!(row.get::<_, String>(2), "draft");
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let oversized = STANDARD.encode([
+        0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0x01, 0x00, 0x00, 0x10, 0x01, 0x00, 0x00,
+    ]);
+    admin
+        .execute(
+            "UPDATE notes SET history=$2 WHERE id=$1",
+            &[&uuid, &oversized],
+        )
+        .await
+        .unwrap();
+    let failed = db(&pool, alice).await;
+    assert!(matches!(
+        failed.update_note_content(&id, "changed", None).await,
+        Err(flicknote_core::error::CliError::InvalidHistory)
+    ));
+    failed.finish(false).await.unwrap();
+    let row = admin
+        .query_one("SELECT content, history FROM notes WHERE id=$1", &[&uuid])
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, String>(0), current);
+    assert_eq!(row.get::<_, String>(1), oversized);
+    task.abort();
 }

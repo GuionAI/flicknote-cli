@@ -2,6 +2,12 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CliError {
+    #[error("Unable to decode note history or history exceeds the size limit")]
+    InvalidHistory,
+    #[error("Invalid note history timestamp")]
+    InvalidHistoryTimestamp,
+    #[error("Note content changed concurrently; retry the edit")]
+    ContentConflict,
     #[error("Not authenticated — run `flicknote login`")]
     NotAuthenticated,
 

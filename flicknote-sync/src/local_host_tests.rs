@@ -134,7 +134,7 @@ async fn fixture() -> (
         let writer = db.writer().await.unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         for (id, user, short_id) in [("a", "account-a", 3), ("b", "account-b", 99)] {
-            writer.execute("INSERT INTO notes(id,user_id,short_id,content,type,status,created_at) VALUES(?,?,?,'Cached body','link','ready',?)", rusqlite::params![id,user,short_id,now]).unwrap();
+            writer.execute("INSERT INTO notes(id,user_id,short_id,content,type,status,created_at,updated_at) VALUES(?,?,?,'Cached body','link','ready',?,?)", rusqlite::params![id,user,short_id,now,now]).unwrap();
         }
         for (id, user, name) in [
             (
@@ -2105,10 +2105,13 @@ async fn discovery_batches_keep_ipc_and_mcp_read_contracts() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise active, archived and invalid history on one owned host.
 async fn history_reads_are_scoped_and_return_saved_bodies() {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     let (_root, config, _fake, _streams, server) = fixture().await;
     let host = start(config).await;
+    #[cfg(feature = "experimental-spike")]
+    let local = LocalPowerSyncBackend::new(host.db.clone(), host.user_id.clone());
     let compressed =
         zstd::bulk::compress(br#"{"1791800000001":"newer","1791800000000":"older"}"#, 3).unwrap();
     let history = STANDARD.encode(compressed);
@@ -2122,6 +2125,53 @@ async fn history_reads_are_scoped_and_return_saved_bodies() {
             .unwrap();
     }
     let list = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    #[cfg(feature = "experimental-spike")]
+    {
+        let snapshot = host
+            .app
+            .desktop_history(&local, "a", 3, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|v| (v.version, v.content.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (None, "Cached body"),
+                (Some(2), "newer"),
+                (Some(1), "older")
+            ]
+        );
+        assert_eq!(
+            snapshot[1].time.as_deref(),
+            Some("2026-10-12T10:13:20.001Z")
+        );
+        assert!(
+            host.app
+                .desktop_history(&local, "b", 3, false)
+                .await
+                .is_err()
+        );
+        assert!(
+            host.app
+                .desktop_history(&local, "b", 99, false)
+                .await
+                .is_err()
+        );
+        assert!(
+            host.app
+                .desktop_history(&local, "b", 99, true)
+                .await
+                .is_err()
+        );
+        assert!(
+            host.app
+                .desktop_history(&local, "a", 3, true)
+                .await
+                .is_err()
+        );
+    }
     assert_eq!(
         list["result"]["structuredContent"]["versions"],
         json!([
@@ -2157,6 +2207,15 @@ async fn history_reads_are_scoped_and_return_saved_bodies() {
     }
     let empty = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
     assert_eq!(empty["result"]["structuredContent"]["versions"], json!([]));
+    #[cfg(feature = "experimental-spike")]
+    assert!(
+        host.app
+            .desktop_history(&local, "a", 3, false)
+            .await
+            .unwrap()
+            .len()
+            == 1
+    );
     {
         let writer = host.db.writer().await.unwrap();
         writer
@@ -2176,6 +2235,13 @@ async fn history_reads_are_scoped_and_return_saved_bodies() {
         bad["result"]["structuredContent"]["code"],
         "invalid_history"
     );
+    #[cfg(feature = "experimental-spike")]
+    assert!(
+        host.app
+            .desktop_history(&local, "a", 3, true)
+            .await
+            .is_err()
+    );
     {
         let writer = host.db.writer().await.unwrap();
         writer
@@ -2189,6 +2255,707 @@ async fn history_reads_are_scoped_and_return_saved_bodies() {
     )
     .await;
     assert_eq!(archived["result"]["structuredContent"]["content"], "newer");
+    #[cfg(feature = "experimental-spike")]
+    assert_eq!(
+        host.app
+            .desktop_history(&local, "a", 3, true)
+            .await
+            .unwrap()[1]
+            .content,
+        "newer"
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[cfg(feature = "experimental-spike")]
+#[tokio::test]
+async fn desktop_current_and_history_remain_in_the_same_snapshot_during_writes() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let local = LocalPowerSyncBackend::new(host.db.clone(), host.user_id.clone());
+    let other = LocalPowerSyncBackend::new(host.db.clone(), "other".into());
+    assert!(
+        host.app
+            .desktop_history(&other, "a", 3, false)
+            .await
+            .is_err()
+    );
+    let first = STANDARD.encode(zstd::bulk::compress(br#"{"1":"old-a"}"#, 3).unwrap());
+    let second = STANDARD.encode(zstd::bulk::compress(br#"{"2":"old-b"}"#, 3).unwrap());
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET content='current-a', updated_at='2020-01-01T00:00:00Z', history=? WHERE id='a'", [&first]).unwrap();
+    }
+    let db = host.db.clone();
+    let writer = tokio::spawn(async move {
+        for i in 0..100 {
+            let (content, time, history) = if i % 2 == 0 {
+                ("current-b", "2021-01-01T00:00:00Z", &second)
+            } else {
+                ("current-a", "2020-01-01T00:00:00Z", &first)
+            };
+            db.writer()
+                .await
+                .unwrap()
+                .execute(
+                    "UPDATE notes SET content=?, updated_at=?, history=? WHERE id='a'",
+                    [content, time, history],
+                )
+                .unwrap();
+            tokio::task::yield_now().await;
+        }
+    });
+    for _ in 0..100 {
+        let snapshot = host
+            .app
+            .desktop_history(&local, "a", 3, false)
+            .await
+            .unwrap();
+        let pair = (
+            snapshot[0].content.as_str(),
+            snapshot[0].time.as_deref(),
+            snapshot[1].content.as_str(),
+        );
+        assert!(matches!(
+            pair,
+            ("current-a", Some("2020-01-01T00:00:00Z"), "old-a")
+                | ("current-b", Some("2021-01-01T00:00:00Z"), "old-b")
+        ));
+        tokio::task::yield_now().await;
+    }
+    writer.await.unwrap();
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET content=NULL, updated_at=NULL, history=NULL WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    let snapshot = host
+        .app
+        .desktop_history(&local, "a", 3, false)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.len(), 1);
+    assert_eq!(snapshot[0].content, "");
+    assert_eq!(snapshot[0].time, None);
+    host.shutdown().await;
+    server.abort();
+}
+
+async fn history_edit(host: &LocalHost, name: &str, args: Value, count: usize) -> Value {
+    let old = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    let old_body = old["result"]["structuredContent"]["content"].clone();
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET updated_at='2020-01-01T00:00:00Z' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    let result = mcp(host.mcp_port, name, args).await;
+    assert_ne!(result["result"]["isError"], true, "{name}: {result}");
+    let versions = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        versions["result"]["structuredContent"]["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        count
+    );
+    let saved = mcp(host.mcp_port, "note_get", json!({"id":3,"version":count})).await;
+    assert_eq!(saved["result"]["structuredContent"]["content"], old_body);
+    assert_eq!(
+        saved["result"]["structuredContent"]["time"],
+        format!("2020-01-01T00:00:00.{:03}Z", count - 1)
+    );
+    mcp(host.mcp_port, "note_get", json!({"id":3})).await["result"]["structuredContent"].clone()
+}
+
+#[tokio::test]
+async fn mcp_content_edits_save_previous_body_and_collision_order() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let detail = history_edit(
+        &host,
+        "note_write",
+        json!({"id":3,"content":"# Intro\nfirst"}),
+        1,
+    )
+    .await;
+    let section = detail["sections"][0]["id"].as_str().unwrap().to_owned();
+    history_edit(
+        &host,
+        "note_modify",
+        json!({"id":3,"before":"first","after":"second"}),
+        2,
+    )
+    .await;
+    history_edit(&host, "note_append", json!({"id":3,"content":"extra"}), 3).await;
+    history_edit(
+        &host,
+        "note_insert",
+        json!({"id":3,"section":section,"position":"after","content":"# Tail\ntail"}),
+        4,
+    )
+    .await;
+    let detail = history_edit(
+        &host,
+        "note_rename_section",
+        json!({"id":3,"section":section,"name":"Renamed"}),
+        5,
+    )
+    .await;
+    let renamed = detail["sections"][0]["id"].as_str().unwrap().to_owned();
+    let detail = history_edit(
+        &host,
+        "note_replace_section",
+        json!({"id":3,"section":renamed,"content":"# Renamed\nreplacement"}),
+        6,
+    )
+    .await;
+    let tail = detail["sections"][1]["id"].as_str().unwrap().to_owned();
+    let detail = history_edit(
+        &host,
+        "note_delete_section",
+        json!({"id":3,"section":tail}),
+        7,
+    )
+    .await;
+    assert_eq!(detail["metadata"], Value::Null);
+    let versions = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        versions["result"]["structuredContent"]["versions"][0]["version"],
+        7
+    );
+    let same = detail["content"].as_str().unwrap();
+    mcp(host.mcp_port, "note_write", json!({"id":3,"content":same})).await;
+    mcp(
+        host.mcp_port,
+        "note_update_metadata",
+        json!({"id":3,"summary":"metadata only"}),
+    )
+    .await;
+    let versions = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        versions["result"]["structuredContent"]["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        7
+    );
+    assert_eq!(
+        mcp(
+            host.mcp_port,
+            "note_write",
+            json!({"id":99,"content":"denied"})
+        )
+        .await["result"]["isError"],
+        true
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn mcp_content_and_metadata_tools_are_strict_and_atomic() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let before = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    for (tool, args) in [
+        (
+            "note_modify",
+            json!({"id":3,"before":"Cached","after":"Changed","title":"Forbidden"}),
+        ),
+        (
+            "note_update_metadata",
+            json!({"id":3,"title":"Forbidden","before":"Cached","after":"Changed"}),
+        ),
+        (
+            "note_update_metadata",
+            json!({"id":3,"title":"Forbidden","project":"Missing project"}),
+        ),
+        ("note_update_metadata", json!({"id":3})),
+    ] {
+        let rejected = mcp(host.mcp_port, tool, args).await;
+        assert!(
+            rejected["result"]["isError"] == true || rejected.get("error").is_some(),
+            "{tool}: {rejected}"
+        );
+        assert_eq!(
+            mcp(host.mcp_port, "note_get", json!({"id":3})).await["result"]["structuredContent"],
+            before["result"]["structuredContent"]
+        );
+        assert_eq!(
+            mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await["result"]["structuredContent"]
+                ["versions"],
+            json!([])
+        );
+    }
+    let metadata = mcp(
+        host.mcp_port,
+        "note_update_metadata",
+        json!({"id":3,"title":"New title","summary":"New summary","flagged":true}),
+    )
+    .await;
+    assert_ne!(metadata["result"]["isError"], true);
+    assert!(metadata.get("error").is_none(), "{metadata}");
+    let current = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    assert_eq!(current["result"]["structuredContent"]["title"], "New title");
+    assert_eq!(
+        current["result"]["structuredContent"]["summary"],
+        "New summary"
+    );
+    assert_eq!(current["result"]["structuredContent"]["flagged"], true);
+    assert_eq!(
+        current["result"]["structuredContent"]["content"],
+        "Cached body"
+    );
+    let clear = mcp(
+        host.mcp_port,
+        "note_update_metadata",
+        json!({"id":3,"title":null}),
+    )
+    .await;
+    assert_ne!(clear["result"]["isError"], true);
+    let cleared = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    assert_eq!(cleared["result"]["structuredContent"]["title"], Value::Null);
+    assert_eq!(
+        cleared["result"]["structuredContent"]["summary"],
+        "New summary"
+    );
+    assert_eq!(cleared["result"]["structuredContent"]["flagged"], true);
+    let foreign = mcp(
+        host.mcp_port,
+        "note_update_metadata",
+        json!({"id":99,"title":"Denied"}),
+    )
+    .await;
+    assert_eq!(foreign["result"]["isError"], true);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET deleted_at='2026-01-01T00:00:00Z' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    let archived = mcp(host.mcp_port, "note_get", json!({"id":3,"archived":true})).await;
+    let rejected = mcp(
+        host.mcp_port,
+        "note_update_metadata",
+        json!({"id":3,"title":"Denied"}),
+    )
+    .await;
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(
+        mcp(host.mcp_port, "note_get", json!({"id":3,"archived":true})).await["result"]["structuredContent"],
+        archived["result"]["structuredContent"]
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn editable_save_combined_title_body_uses_previous_update_time() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    host.db.writer().await.unwrap().execute(
+        "UPDATE notes SET title='Old title',updated_at='2020-01-01T00:00:00Z',history=NULL WHERE id='a'", [],
+    ).unwrap();
+    let response = host
+        .app
+        .handle(AppRequest::NoteSaveEditable {
+            id: "3".into(),
+            document: "---\ntitle: New title\ntopics: [new-topic]\n---\nChanged body".into(),
+        })
+        .await;
+    assert!(response.is_ok(), "{response:?}");
+    let saved = mcp(host.mcp_port, "note_get", json!({"id":3,"version":1})).await;
+    assert_eq!(
+        saved["result"]["structuredContent"]["content"],
+        "Cached body"
+    );
+    assert_eq!(
+        saved["result"]["structuredContent"]["time"],
+        "2020-01-01T00:00:00.000Z"
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn editable_save_corrupt_history_keeps_title_topics_body_and_timestamp() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET title='Old title',updated_at='2020-01-01T00:00:00Z',history='bad!' WHERE id='a'", []).unwrap();
+        writer.execute("INSERT INTO note_extractions(id,note_id,user_id,key,value) VALUES('old-topic','a','account-a','::topic','old-topic')", []).unwrap();
+    }
+    let before = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    let result = host
+        .app
+        .handle(AppRequest::NoteSaveEditable {
+            id: "3".into(),
+            document: "---\ntitle: New title\ntopics: [new-topic]\n---\nChanged body".into(),
+        })
+        .await;
+    assert!(result.is_err());
+    let after = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    assert_eq!(
+        after["result"]["structuredContent"],
+        before["result"]["structuredContent"]
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Verify failure and unchanged rows on the same owned host.
+async fn history_write_null_empty_corrupt_and_conflict_are_atomic() {
+    use flicknote_core::backend::NoteDb;
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer.execute("UPDATE notes SET content=NULL,history=NULL,updated_at='2020-01-01T00:00:00Z' WHERE id='a'", []).unwrap();
+    }
+    let initial = mcp(
+        host.mcp_port,
+        "note_write",
+        json!({"id":3,"content":"first"}),
+    )
+    .await;
+    assert_ne!(initial["result"]["isError"], true);
+    assert_eq!(
+        mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await["result"]["structuredContent"]
+            ["versions"],
+        json!([])
+    );
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET content='',updated_at='2020-01-01T00:00:00Z' WHERE id='a'",
+                [],
+            )
+            .unwrap();
+    }
+    history_edit(
+        &host,
+        "note_write",
+        json!({"id":3,"content":"after empty"}),
+        1,
+    )
+    .await;
+    let backend =
+        flicknote_core::backend::LocalPowerSyncBackend::new(host.db.clone(), "account-a".into());
+    let conflict = backend
+        .update_note_content("a", "should not write", Some(Some("stale")))
+        .await;
+    assert!(matches!(
+        conflict,
+        Err(flicknote_core::error::CliError::ContentConflict)
+    ));
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("UPDATE notes SET history='bad!' WHERE id='a'", [])
+            .unwrap();
+    }
+    let failed = mcp(
+        host.mcp_port,
+        "note_write",
+        json!({"id":3,"content":"should not write"}),
+    )
+    .await;
+    assert_eq!(failed["result"]["isError"], true);
+    let writer = host.db.writer().await.unwrap();
+    let row: (String, String) = writer
+        .query_row("SELECT content,history FROM notes WHERE id='a'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(row, ("after empty".into(), "bad!".into()));
+    drop(writer);
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let oversized = STANDARD.encode([
+        0x28, 0xb5, 0x2f, 0xfd, 0xa0, 0x01, 0x00, 0x00, 0x10, 0x01, 0x00, 0x00,
+    ]);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute("UPDATE notes SET history=? WHERE id='a'", [&oversized])
+        .unwrap();
+    let failed = mcp(
+        host.mcp_port,
+        "note_write",
+        json!({"id":3,"content":"should not write"}),
+    )
+    .await;
+    assert_eq!(failed["result"]["isError"], true);
+    let writer = host.db.writer().await.unwrap();
+    let row: (String, String) = writer
+        .query_row("SELECT content,history FROM notes WHERE id='a'", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(row, ("after empty".into(), oversized));
+    drop(writer);
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET history=NULL,updated_at='invalid' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    let failed = mcp(
+        host.mcp_port,
+        "note_write",
+        json!({"id":3,"content":"should not write"}),
+    )
+    .await;
+    assert_eq!(
+        failed["result"]["structuredContent"]["code"],
+        "invalid_history_timestamp"
+    );
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET deleted_at='2020-01-01T00:00:00Z' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        mcp(
+            host.mcp_port,
+            "note_write",
+            json!({"id":3,"content":"should not write"})
+        )
+        .await["result"]["isError"],
+        true
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn concurrent_local_edits_reject_stale_snapshot_without_losing_history() {
+    use flicknote_core::backend::{LocalPowerSyncBackend, NoteDb};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let backend = LocalPowerSyncBackend::new(host.db.clone(), "account-a".into());
+    let first = backend.update_note_content("a", "first", Some(Some("Cached body")));
+    let second = backend.update_note_content("a", "second", Some(Some("Cached body")));
+    let (first, second) = tokio::join!(first, second);
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    assert!(
+        matches!(first, Err(flicknote_core::error::CliError::ContentConflict))
+            || matches!(
+                second,
+                Err(flicknote_core::error::CliError::ContentConflict)
+            )
+    );
+    let versions = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        versions["result"]["structuredContent"]["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let saved = mcp(host.mcp_port, "note_get", json!({"id":3,"version":1})).await;
+    assert_eq!(
+        saved["result"]["structuredContent"]["content"],
+        "Cached body"
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn mcp_missing_update_time_uses_creation_marker_with_collision() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let existing = flicknote_core::history::save(None, Some("older"), Some("2020-01-01T00:00:00Z"))
+        .unwrap()
+        .unwrap();
+    host.db.writer().await.unwrap().execute("UPDATE notes SET updated_at=NULL,created_at='2020-01-01T00:00:00Z',history=? WHERE id='a'", [&existing]).unwrap();
+    let before = chrono::Utc::now().timestamp_millis();
+    let edited = mcp(
+        host.mcp_port,
+        "note_append",
+        json!({"id":3,"content":"new"}),
+    )
+    .await;
+    let after = chrono::Utc::now().timestamp_millis();
+    assert_ne!(edited["result"]["isError"], true);
+    let saved = mcp(host.mcp_port, "note_get", json!({"id":3,"version":2})).await;
+    assert_eq!(
+        saved["result"]["structuredContent"]["content"],
+        "Cached body"
+    );
+    assert_eq!(
+        saved["result"]["structuredContent"]["time"],
+        "2020-01-01T00:00:00.001Z"
+    );
+    let current = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    let detail = &current["result"]["structuredContent"];
+    assert_eq!(detail["content"], "Cached body\n\nnew");
+    let updated = chrono::DateTime::parse_from_rfc3339(detail["updated_at"].as_str().unwrap())
+        .unwrap()
+        .timestamp_millis();
+    assert!((before - 1..=after + 1).contains(&updated));
+    assert_eq!(detail["draft"], false);
+    assert_eq!(detail["metadata"], Value::Null);
+    let versions = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        versions["result"]["structuredContent"]["versions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn mcp_missing_or_invalid_history_time_fails_without_partial_update() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    for (updated, created) in [
+        (None, None),
+        (None, Some("bad")),
+        (Some("bad"), Some("2020-01-01T00:00:00Z")),
+    ] {
+        host.db.writer().await.unwrap().execute("UPDATE notes SET updated_at=?, created_at=?, status='draft', metadata='{\"keep\":true}' WHERE id='a'", rusqlite::params![updated, created]).unwrap();
+        let before: String = host.db.reader().await.unwrap().query_row("SELECT json_object('content',content,'history',history,'status',status,'metadata',metadata,'summary',summary,'project_id',project_id,'updated_at',updated_at,'created_at',created_at) FROM notes WHERE id='a'", [], |r| r.get(0)).unwrap();
+        let result = mcp(
+            host.mcp_port,
+            "note_modify",
+            json!({"id":3,"before":"Cached","after":"changed"}),
+        )
+        .await;
+        assert_eq!(
+            result["result"]["structuredContent"]["code"],
+            "invalid_history_timestamp"
+        );
+        let after: String = host.db.reader().await.unwrap().query_row("SELECT json_object('content',content,'history',history,'status',status,'metadata',metadata,'summary',summary,'project_id',project_id,'updated_at',updated_at,'created_at',created_at) FROM notes WHERE id='a'", [], |r| r.get(0)).unwrap();
+        assert_eq!(before, after);
+    }
+    host.shutdown().await;
+    server.abort();
+}
+
+#[tokio::test]
+async fn mcp_user_mutations_advance_note_time_without_extra_history() {
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    host.db
+        .writer()
+        .await
+        .unwrap()
+        .execute(
+            "UPDATE notes SET updated_at='2020-01-01T00:00:00Z' WHERE id='a'",
+            [],
+        )
+        .unwrap();
+    mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    mcp(
+        host.mcp_port,
+        "note_write",
+        json!({"id":3,"content":"Cached body"}),
+    )
+    .await;
+    let (time, history): (String, Option<String>) = host
+        .db
+        .reader()
+        .await
+        .unwrap()
+        .query_row(
+            "SELECT updated_at, history FROM notes WHERE id='a'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(time, "2020-01-01T00:00:00Z");
+    assert!(history.is_none());
+    for (name, args, status, archived, has_history) in [
+        (
+            "note_write",
+            json!({"id":3,"content":"replaced"}),
+            "ready",
+            false,
+            true,
+        ),
+        (
+            "note_update_metadata",
+            json!({"id":3,"title":"new title","summary":"new summary","flagged":true,"project":"Current"}),
+            "ready",
+            false,
+            false,
+        ),
+        ("note_submit", json!({"id":3}), "draft", false, false),
+        ("note_archive", json!({"id":3}), "ready", false, false),
+        ("note_restore", json!({"id":3}), "ready", true, false),
+    ] {
+        host.db.writer().await.unwrap().execute("UPDATE notes SET content='Cached body',history=NULL,status=?,updated_at='2020-01-01T00:00:00Z',deleted_at=?,title=NULL,summary=NULL,is_flagged=0,project_id=NULL,metadata='{\"keep\":true}' WHERE id='a'", rusqlite::params![status, if archived { Some("2020-01-01T00:00:00Z") } else { None }]).unwrap();
+        let before = chrono::Utc::now().timestamp_millis();
+        let result = mcp(host.mcp_port, name, args).await;
+        let after = chrono::Utc::now().timestamp_millis();
+        assert_ne!(result["result"]["isError"], true, "{name}: {result}");
+        let reader = host.db.reader().await.unwrap();
+        let (updated, history, metadata): (String, Option<String>, String) = reader
+            .query_row(
+                "SELECT updated_at,history,metadata FROM notes WHERE id='a'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let millis = chrono::DateTime::parse_from_rfc3339(&updated)
+            .unwrap()
+            .timestamp_millis();
+        assert!((before - 1..=after + 1).contains(&millis), "{name}");
+        assert_eq!(history.is_some(), has_history, "{name}");
+        assert_eq!(
+            serde_json::from_str::<Value>(&metadata).unwrap()["keep"],
+            true
+        );
+    }
+    let before = chrono::Utc::now().timestamp_millis();
+    let added = mcp(
+        host.mcp_port,
+        "note_add",
+        json!({"content":"synthetic creation"}),
+    )
+    .await;
+    let after = chrono::Utc::now().timestamp_millis();
+    assert_ne!(added["result"]["isError"], true);
+    let id = added["result"]["structuredContent"]["id"].as_i64().unwrap();
+    let reader = host.db.reader().await.unwrap();
+    let (created, updated, history): (String, String, Option<String>) = reader.query_row("SELECT created_at,updated_at,history FROM notes WHERE short_id=? AND user_id='account-a'", [id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(created, updated);
+    let millis = chrono::DateTime::parse_from_rfc3339(&created)
+        .unwrap()
+        .timestamp_millis();
+    assert!((before - 1..=after + 1).contains(&millis));
+    assert!(history.is_none());
+    drop(reader);
     host.shutdown().await;
     server.abort();
 }

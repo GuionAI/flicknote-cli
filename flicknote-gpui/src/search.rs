@@ -113,7 +113,10 @@ impl Today {
         })
     }
     pub(super) fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.editor.is_some() || self.composing(window, cx) || self.search_composing(window, cx)
+        if self.history.is_some()
+            || self.editor.is_some()
+            || self.composing(window, cx)
+            || self.search_composing(window, cx)
         {
             return;
         }

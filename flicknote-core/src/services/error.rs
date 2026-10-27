@@ -83,6 +83,24 @@ impl ServiceError {
 impl From<CliError> for ServiceError {
     fn from(error: CliError) -> Self {
         match error {
+            CliError::InvalidHistory => Self::Remote {
+                code: "invalid_history".into(),
+                message: "Unable to decode note history or history exceeds the size limit".into(),
+                retryable: false,
+                details: None,
+            },
+            CliError::InvalidHistoryTimestamp => Self::Remote {
+                code: "invalid_history_timestamp".into(),
+                message: "Invalid note history timestamp".into(),
+                retryable: false,
+                details: None,
+            },
+            CliError::ContentConflict => Self::Remote {
+                code: "content_conflict".into(),
+                message: "Note content changed concurrently; retry the edit".into(),
+                retryable: true,
+                details: None,
+            },
             CliError::NoteNotFound { id } => Self::NoteNotFound(id),
             CliError::ProjectNotFound { name } => Self::ProjectNotFound(name),
             CliError::Io(error) => Self::Io(error),

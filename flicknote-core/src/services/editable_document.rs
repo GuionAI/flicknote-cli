@@ -1,7 +1,7 @@
 //! Service boundary for the editable full-note Markdown contract.
 
 use crate::TOPIC_EXTRACTION_KEY;
-use crate::backend::NoteDb;
+use crate::backend::{NoteDb, NoteEdit};
 use crate::error::CliError;
 use crate::types::Note;
 use flicknote_client::editable_document::EditableSaveResult;
@@ -52,19 +52,21 @@ pub async fn save_editable_note(
     }
 
     let title_changed = note.title.as_deref() != Some(parsed.title.as_str());
-    if title_changed {
-        db.update_note_title(note_id, Some(&parsed.title)).await?;
-    }
-
-    db.set_note_extractions(note_id, TOPIC_EXTRACTION_KEY, &parsed.topics)
-        .await?;
-
     let old_content = note.content.as_deref().unwrap_or("");
     let content_changed = old_content != parsed.stored_content;
-    if content_changed {
-        db.update_note_content(note_id, &parsed.stored_content)
-            .await?;
-    }
+    db.apply_note_edit(
+        note_id,
+        &NoteEdit {
+            title: title_changed.then_some(Some(parsed.title.as_str())),
+            content: content_changed.then_some((
+                parsed.stored_content.as_str(),
+                Some(note.content.as_deref()),
+            )),
+            topics: Some(&parsed.topics),
+            ..NoteEdit::default()
+        },
+    )
+    .await?;
 
     Ok(EditableSaveResult {
         title_changed,
@@ -456,12 +458,31 @@ mod tests {
             unimplemented!()
         }
 
-        async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError> {
+        async fn update_note_content(
+            &self,
+            id: &str,
+            content: &str,
+            _expected: Option<Option<&str>>,
+        ) -> Result<(), CliError> {
             let mut note = self.note.lock().unwrap();
             if note.id != id {
                 return Err(CliError::NoteNotFound { id: id.to_string() });
             }
             note.content = Some(content.to_string());
+            Ok(())
+        }
+
+        async fn apply_note_edit(&self, id: &str, edit: &NoteEdit<'_>) -> Result<(), CliError> {
+            if let Some((content, expected)) = edit.content {
+                self.update_note_content(id, content, expected).await?;
+            }
+            if let Some(title) = edit.title {
+                self.update_note_title(id, title).await?;
+            }
+            if let Some(topics) = edit.topics {
+                self.set_note_extractions(id, TOPIC_EXTRACTION_KEY, topics)
+                    .await?;
+            }
             Ok(())
         }
 

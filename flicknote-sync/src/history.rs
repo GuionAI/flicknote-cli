@@ -1,16 +1,24 @@
 //! Read the existing iOS-compatible content history format.
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::{DateTime, Datelike, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
+use flicknote_core::history;
 use flicknote_core::services::error::ServiceError;
 use rmcp::schemars::JsonSchema;
-use serde::{
-    Deserialize, Serialize,
-    de::{self, MapAccess, Visitor},
-};
-use std::{collections::BTreeMap, fmt};
-
-const MAX_BYTES: usize = 256 * 1024 * 1024;
-const MAX_ENCODED: usize = 360_710_144;
+use serde::Serialize;
+use std::collections::BTreeMap;
+struct History(BTreeMap<i64, String>);
+fn decode(encoded: Option<String>) -> Result<History, ServiceError> {
+    history::decode(encoded)
+        .map(|h| History(h.0))
+        .map_err(|_| invalid_history())
+}
+fn invalid_history() -> ServiceError {
+    ServiceError::Remote {
+        code: "invalid_history".into(),
+        message: "Unable to decode note history or history exceeds the size limit".into(),
+        retryable: false,
+        details: None,
+    }
+}
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub(crate) struct VersionInfo {
@@ -31,90 +39,6 @@ pub(crate) struct HistoricalNote {
     pub version: usize,
     pub time: String,
     pub content: String,
-}
-
-struct History(BTreeMap<i64, String>);
-impl<'de> Deserialize<'de> for History {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct HistoryVisitor;
-        impl<'de> Visitor<'de> for HistoryVisitor {
-            type Value = History;
-            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("an object of millisecond timestamps and text bodies")
-            }
-            fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<History, M::Error> {
-                let mut entries = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry::<String, String>()? {
-                    let digits = key.strip_prefix('-').unwrap_or(&key);
-                    if digits.is_empty() || !digits.bytes().all(|c| c.is_ascii_digit()) {
-                        return Err(de::Error::custom("invalid history timestamp"));
-                    }
-                    let timestamp: i64 = key.parse().map_err(de::Error::custom)?;
-                    if !DateTime::from_timestamp_millis(timestamp)
-                        .is_some_and(|date| (0..=9999).contains(&date.year()))
-                        || entries.insert(timestamp, value).is_some()
-                    {
-                        return Err(de::Error::custom("invalid or duplicate history timestamp"));
-                    }
-                }
-                Ok(History(entries))
-            }
-        }
-        deserializer.deserialize_map(HistoryVisitor)
-    }
-}
-
-fn invalid_history() -> ServiceError {
-    ServiceError::Remote {
-        code: "invalid_history".into(),
-        message: "Unable to decode note history or history exceeds the size limit".into(),
-        retryable: false,
-        details: None,
-    }
-}
-
-fn decode(encoded: Option<String>) -> Result<History, ServiceError> {
-    let Some(encoded) = encoded else {
-        return Ok(History(BTreeMap::new()));
-    };
-    if encoded.len() > MAX_ENCODED {
-        return Err(invalid_history());
-    }
-    let bytes = STANDARD.decode(encoded).map_err(|_| invalid_history())?;
-    // Require one ordinary known-size frame, never concatenated or skippable.
-    if !bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd])
-        || zstd::zstd_safe::find_frame_compressed_size(&bytes).ok() != Some(bytes.len())
-    {
-        return Err(invalid_history());
-    }
-    let descriptor = *bytes.get(4).ok_or_else(invalid_history)?;
-    if descriptor & 0x18 != 0 {
-        return Err(invalid_history());
-    }
-    if descriptor & 0x20 == 0 {
-        let window = *bytes.get(5).ok_or_else(invalid_history)?;
-        let base = 1u64 << (10 + (window >> 3));
-        if base + (base / 8) * u64::from(window & 7) > MAX_BYTES as u64 {
-            return Err(invalid_history());
-        }
-    }
-    let size = zstd::zstd_safe::get_frame_content_size(&bytes)
-        .ok()
-        .flatten()
-        .and_then(|n| usize::try_from(n).ok())
-        .filter(|n| *n > 0 && *n <= MAX_BYTES)
-        .ok_or_else(invalid_history)?;
-    let mut decompressor = zstd::bulk::Decompressor::new().map_err(|_| invalid_history())?;
-    decompressor
-        .window_log_max(28)
-        .map_err(|_| invalid_history())?;
-    let json = decompressor
-        .decompress(&bytes, size)
-        .map_err(|_| invalid_history())?;
-    if json.len() != size {
-        return Err(invalid_history());
-    }
-    serde_json::from_slice(&json).map_err(|_| invalid_history())
 }
 
 fn time(millis: i64) -> String {
@@ -138,6 +62,7 @@ impl History {
                 .collect(),
         }
     }
+    #[allow(clippy::result_large_err)] // Preserve the shared service error contract on macOS.
     fn get(self, id: i64, version: usize) -> Result<HistoricalNote, ServiceError> {
         if version == 0 {
             return Err(ServiceError::InvalidArgument(
@@ -172,9 +97,12 @@ impl crate::app::Application {
             self.db.resolve_note_id(&input).await
         }
         .map_err(ServiceError::from)?;
+        self.history_by_uuid(&uuid, archived).await
+    }
+    async fn history_by_uuid(&self, uuid: &str, archived: bool) -> Result<History, ServiceError> {
         let encoded =
             self.db
-                .find_note_history(&uuid, archived)
+                .find_note_history(uuid, archived)
                 .await
                 .map_err(|error| match error {
                     flicknote_core::error::CliError::Other(ref message)
@@ -206,11 +134,60 @@ impl crate::app::Application {
         }
         self.history(id, archived).await?.get(id, version)
     }
+
+    /// Read the current body and every saved body from one local snapshot.
+    #[cfg(feature = "experimental-spike")]
+    pub async fn desktop_history(
+        &self,
+        local: &flicknote_core::backend::LocalPowerSyncBackend,
+        uuid: &str,
+        id: i64,
+        archived: bool,
+    ) -> Result<Vec<DesktopVersion>, ServiceError> {
+        use flicknote_core::backend::NoteDb as _;
+        if local.user_id() != self.db.user_id() {
+            return Err(ServiceError::InvalidArgument("Note owner changed".into()));
+        }
+        let snapshot = local
+            .desktop_history_snapshot(uuid, id, archived)
+            .await
+            .map_err(|error| match error {
+                flicknote_core::error::CliError::Other(ref message)
+                    if message == "History exceeds the size limit" =>
+                {
+                    invalid_history()
+                }
+                other => ServiceError::from(other),
+            })?;
+        let history = decode(snapshot.history)?;
+        let mut versions = vec![DesktopVersion {
+            version: None,
+            time: snapshot.updated_at,
+            content: snapshot.content.unwrap_or_default(),
+        }];
+        versions.extend(history.0.into_iter().enumerate().rev().map(
+            |(i, (timestamp, content))| DesktopVersion {
+                version: Some(i + 1),
+                time: Some(time(timestamp)),
+                content,
+            },
+        ));
+        Ok(versions)
+    }
+}
+
+/// A current or saved body from the same note snapshot.
+#[cfg(feature = "experimental-spike")]
+pub struct DesktopVersion {
+    pub version: Option<usize>,
+    pub time: Option<String>,
+    pub content: String,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     fn encoded(json: &[u8]) -> String {
         STANDARD.encode(zstd::bulk::compress(json, 3).unwrap())
     }

@@ -57,6 +57,17 @@ pub struct InsertedNote {
     pub short_id: Option<i64>,
 }
 
+/// One user edit, committed together with its previous-body history.
+#[derive(Default)]
+pub struct NoteEdit<'a> {
+    pub content: Option<(&'a str, Option<Option<&'a str>>)>,
+    pub title: Option<Option<&'a str>>,
+    pub summary: Option<Option<&'a str>>,
+    pub project: Option<Option<&'a str>>,
+    pub flagged: Option<Option<bool>>,
+    pub topics: Option<&'a [String]>,
+}
+
 pub(crate) enum NoteLookup<'a> {
     ShortId(i64),
     Uuid(&'a str),
@@ -110,8 +121,19 @@ pub trait NoteDb: Send + Sync {
 
     // Note writes
     async fn insert_note(&self, req: &InsertNoteReq<'_>) -> Result<InsertedNote, CliError>;
-    /// Update stored content while preserving the note lifecycle status.
-    async fn update_note_content(&self, id: &str, content: &str) -> Result<(), CliError>;
+    /// Atomically preserve the old body and update content without changing lifecycle.
+    /// When supplied, `expected` is the content snapshot used to calculate the new
+    /// body (including an explicit NULL); stale snapshots fail with a conflict.
+    async fn update_note_content(
+        &self,
+        id: &str,
+        content: &str,
+        expected: Option<Option<&str>>,
+    ) -> Result<(), CliError>;
+
+    /// Apply all supplied fields and managed topics atomically; content is
+    /// compared with the snapshot used to calculate it before saving history.
+    async fn apply_note_edit(&self, id: &str, edit: &NoteEdit<'_>) -> Result<(), CliError>;
 
     /// Transition an active draft to the queued lifecycle state.
     /// Returns false when the note is no longer an active draft.

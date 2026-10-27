@@ -216,7 +216,7 @@ establish an observed scheduled run or an active branch-protection policy.
 
 The remote server advertises `entity_list`, `topic_list`; `note_add`,
 `note_append`, `note_archive`, `note_count`, `note_delete_section`, `note_find`,
-`note_get`, `note_get_section`, `note_insert`, `note_list`, `note_list_versions`, `note_modify`,
+`note_get`, `note_get_section`, `note_insert`, `note_list`, `note_list_versions`, `note_modify`, `note_update_metadata`,
 `note_rename_section`, `note_replace_section`, `note_restore`, `note_submit`,
 `note_write`; and `project_add`, `project_archive`, `project_get`, `project_list`,
 `project_modify`. It reuses the local MCP tool arguments, results, and strict
@@ -233,6 +233,9 @@ Text creation enters `ai_queued`; recognized URLs create link notes and enter
 Human CLI `flicknote add --draft` creates drafts; existing drafts remain readable
 and editable through MCP. Content and metadata edits keep
 the lifecycle state, and `note_submit` is the explicit draft transition.
+`note_modify` accepts only exact content edits; `note_update_metadata` accepts
+only metadata patches, applying all supplied fields atomically. The tools reject
+each other's fields, and separate calls do not form a single transaction.
 MCP creation persists `metadata.created_by_ai: true` independently of client
 or session, including link notes while preserving `link.url`. Human creation
 omits the marker. Local SQLite and PostgreSQL human filters exclude only JSON
@@ -255,5 +258,12 @@ newest first, numbered from 1 for the oldest; `note_get` with `version` returns
 only id, version, UTC time marker and body. Current content is unnumbered.
 These numbers can change as history changes; timestamps need not be exact edit
 times and not all writers save history. NULL means no history; malformed or
-oversized payloads fail instead of returning an empty list. No history is written
-or migrated by this server.
+oversized payloads fail instead of returning an empty list. On content changes,
+the request transaction locks the owner-scoped row and records the preceding
+non-null body at its old update timestamp, incrementing on collisions, together
+with the new content. Unchanged bodies, metadata-only changes and creation do
+not add versions. User content, title, summary, flag, project and lifecycle
+changes advance the note's update time; reads do not. Corrupt or oversized
+history causes the content change to fail. Previously unsaved versions are not
+backfilled; separately edited offline history fields have no automatic merge
+guarantee.

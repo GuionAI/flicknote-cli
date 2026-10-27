@@ -122,7 +122,7 @@ fn markdown_watch_reading_selection_identity_and_layout(cx: &mut gpui_kit::TestA
             let pane = window.find("detail-surface").bounds();
             assert_eq!(pane.size.width, px(272.));
             assert!(window.find("detail-id").bounds().bottom() <= px(44.));
-            for action in ["copy-detail", "archive", "close-detail"] {
+            for action in ["history-detail", "copy-detail", "archive", "close-detail"] {
                 assert!(window.find(action).bounds().right() <= pane.right());
             }
             let state = view.read(cx).detail.as_ref().unwrap().state.clone();

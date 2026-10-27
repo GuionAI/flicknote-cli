@@ -588,6 +588,23 @@ geometry in both themes at 980/760 points. They use only temporary state and por
 Native pixels/input/IME, real cloud/share links and real Keychain acceptance remain
 separate, unperformed evidence for the user's trial after reviewed installation.
 
+## Saved note history (#4696)
+
+The detail toolbar's History button opens saved bodies in a read-only dialog.
+Current is selected first; saved entries follow newest first, with v1 the
+oldest saved entry. Available timestamps are displayed in local time. The
+current body is not numbered.
+Use the version list or its arrow keys to read another entry; close the dialog
+to return to the note. Click the backdrop, press Escape, or use Close to dismiss.
+Current remains available when no saved versions exist.
+An error can be retried by closing and reopening the dialog. History markers
+are not precise edit times, and this view does not restore or compare versions.
+
+The desktop host reads and decodes one owner- and archive-scoped history
+snapshot including current content and updated_at through Application, without
+calling its MCP endpoint. Version labels,
+times and bodies are held together for the lifetime of the dialog.
+
 ## Reader pointer release (#3398)
 
 Markdown drag selection freezes after primary-pointer release, including release

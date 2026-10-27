@@ -88,6 +88,7 @@ fn rail_label(title: &str) -> impl IntoElement {
 
 impl Today {
     pub(super) fn close_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history = None;
         if self.detail_open && self.editor.is_none() {
             self.composer
                 .update(cx, |input, cx| input.focus(window, cx));
@@ -790,6 +791,7 @@ impl Today {
         }
         buttons
     }
+    #[allow(clippy::too_many_lines)] // Keep the fixed detail toolbar and reader together.
     fn render_detail(
         &self,
         p: ColorTokens,
@@ -806,6 +808,7 @@ impl Today {
         let disabled = self.note_busy(&row.uuid) || !self.drag_allowed;
         let content = row.content.clone();
         let target = row.clone();
+        let history_target = row.clone();
         let lifecycle = if row.archived {
             NoteAction::Restore
         } else {
@@ -847,6 +850,17 @@ impl Today {
                             .text_color(p.muted_foreground)
                             .child(format!("#{}", row.id))
                             .test_support(),
+                    )
+                    .child(
+                        Button::new("history-detail")
+                            .label("History")
+                            .ghost()
+                            .small()
+                            .accessibility_label("Note history")
+                            .tooltip("Note history")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.open_history(history_target.clone(), window, cx);
+                            })),
                     )
                     .child(
                         Button::new("copy-detail")
@@ -1256,13 +1270,14 @@ impl Today {
     }
 }
 impl Render for Today {
+    #[allow(clippy::too_many_lines)] // The workspace owns shared input and modal routing.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if self.visible && window.is_visible() {
             self.frames += 1;
         }
         self.visible = window.is_visible();
         self.update_note_input_guards(window, cx);
-        let navigation_context = if self.editor.is_some() {
+        let navigation_context = if self.editor.is_some() || self.history.is_some() {
             "WorkspaceEditor"
         } else if self.shortcuts_blocked(window, cx) {
             "Today"
@@ -1323,7 +1338,9 @@ impl Render for Today {
             .on_action(
                 cx.listener(|this, _: &gpui_kit::base::input::Escape, window, cx| {
                     if !this.escape_composing {
-                        if this.editor.is_some() {
+                        if this.history.is_some() {
+                            this.close_history(window, cx);
+                        } else if this.editor.is_some() {
                             this.cancel_editor(window, cx);
                         } else if this.search_focused(window, cx) {
                             this.escape_search(window, cx);
@@ -1357,6 +1374,7 @@ impl Render for Today {
             })
             .children(self.render_copy_toast(p))
             .children(self.render_editor(cx))
+            .children(self.render_history(cx))
     }
 }
 
@@ -1417,7 +1435,7 @@ fn render_reading(
 
 /// Base uses the component-installed theme defaults and Root's existing selection layer.
 /// The facade omits the image resolver; use its public Base implementation directly.
-fn reader(
+pub(super) fn reader(
     state: &Entity<gpui_kit::base::TextViewState>,
     cx: &App,
     copy: impl Fn(String, &mut App) + Clone + Send + Sync + 'static,

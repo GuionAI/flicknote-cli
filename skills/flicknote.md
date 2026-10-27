@@ -34,11 +34,12 @@ or deletes the previous project.
 ## Exact edits
 
 `note_modify` performs one exact, whitespace-sensitive stored-content
-`before`/`after` replacement. The `before` text must occur exactly once. Include
-more surrounding context when a match is ambiguous. It also patches title, summary, project, and
-flagged metadata: omitted fields stay unchanged, `null` clears a field, and a
-value sets it. `note_write` replaces the whole stored content. These ordinary
-content and metadata mutations preserve lifecycle status.
+`before`/`after` replacement, optionally within a section. The `before` text
+must occur exactly once. Include more surrounding context when a match is
+ambiguous. `note_update_metadata` patches title, summary, project, and flagged:
+omitted fields stay unchanged, `null` clears a field, and a value sets it.
+Content and metadata require separate tool calls. `note_write` replaces the
+whole stored content. These mutations preserve lifecycle status.
 
 ## Section scope
 

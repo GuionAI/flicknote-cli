@@ -94,6 +94,7 @@ fn append_local_host_optimism_busy_watch_copy_and_close_reopen(cx: &mut TestAppC
     let host = fixture(&runtime, root.path());
     let services = services(&host, &runtime);
     cx.update(gpui_kit::init);
+    let append_started = chrono::Utc::now();
     let (window, view) = open(cx, services.clone());
     settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
     // The open append context retains the same native composition Return guard.
@@ -164,6 +165,31 @@ fn append_local_host_optimism_busy_watch_copy_and_close_reopen(cx: &mut TestAppC
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(5));
     }
+    let saved = runtime
+        .block_on(host.app.desktop_history(
+            &flicknote_core::backend::LocalPowerSyncBackend::new(
+                host.db.clone(),
+                host.user_id.clone(),
+            ),
+            "00000000-0000-4000-8000-000000000002",
+            2,
+            false,
+        ))
+        .unwrap();
+    assert_eq!(saved.len(), 2);
+    assert_eq!(saved[1].content, "# Original\n\nBody");
+    let (created, updated, current): (String, String, String) = runtime.block_on(async {
+        host.db.reader().await.unwrap().query_row(
+            "SELECT created_at,updated_at,content FROM notes WHERE short_id=2 AND user_id='append-owner'",
+            [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
+        ).unwrap()
+    });
+    let created = chrono::DateTime::parse_from_rfc3339(&created).unwrap();
+    let updated = chrono::DateTime::parse_from_rfc3339(&updated).unwrap();
+    let marker = chrono::DateTime::parse_from_rfc3339(saved[1].time.as_deref().unwrap()).unwrap();
+    assert_eq!(marker.timestamp_millis(), created.timestamp_millis());
+    assert!(updated >= append_started && updated <= chrono::Utc::now());
+    assert_eq!(current, "# Original\n\nBody\n\n  **added**\n");
     let (window, view) = open(cx, services.clone());
     settle(cx, |cx| cx.update(|cx| view.read(cx).loaded));
     cx.update_window(window.into(), |_, window, cx| {

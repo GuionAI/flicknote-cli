@@ -3,6 +3,8 @@ pub mod browser;
 mod connector;
 pub mod fts_search;
 mod history;
+#[cfg(feature = "experimental-spike")]
+pub use history::DesktopVersion;
 pub mod ipc;
 pub mod mcp;
 pub mod ownership;

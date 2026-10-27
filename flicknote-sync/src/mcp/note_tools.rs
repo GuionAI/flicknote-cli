@@ -265,12 +265,20 @@ pub(super) struct NoteAddParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NoteModifyParams {
     #[serde(deserialize_with = "deserialize_note_id")]
     pub id: i64,
-    pub before: Option<String>,
-    pub after: Option<String>,
+    pub before: String,
+    pub after: String,
     pub section: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NoteUpdateMetadataParams {
+    #[serde(deserialize_with = "deserialize_note_id")]
+    pub id: i64,
     #[serde(default)]
     pub title: Patch<String>,
     #[serde(default)]
@@ -350,7 +358,15 @@ mod tests {
             42
         );
         assert_eq!(
-            serde_json::from_value::<NoteModifyParams>(json!({ "id": "42" }))
+            serde_json::from_value::<NoteModifyParams>(
+                json!({ "id": "42", "before": "old", "after": "new" })
+            )
+            .unwrap()
+            .id,
+            42
+        );
+        assert_eq!(
+            serde_json::from_value::<NoteUpdateMetadataParams>(json!({ "id": "42" }))
                 .unwrap()
                 .id,
             42
@@ -425,14 +441,15 @@ mod tests {
     }
 
     #[test]
-    fn note_modify_metadata_fields_preserve_missing_null_and_value() {
-        let missing: NoteModifyParams = serde_json::from_value(json!({ "id": 42 })).unwrap();
+    fn metadata_fields_preserve_missing_null_and_value() {
+        let missing: NoteUpdateMetadataParams =
+            serde_json::from_value(json!({ "id": 42 })).unwrap();
         assert_eq!(missing.title, Patch::Missing);
         assert_eq!(missing.summary, Patch::Missing);
         assert_eq!(missing.project, Patch::Missing);
         assert_eq!(missing.flagged, Patch::Missing);
 
-        let clear: NoteModifyParams = serde_json::from_value(json!({
+        let clear: NoteUpdateMetadataParams = serde_json::from_value(json!({
             "id": 42,
             "title": null,
             "summary": null,
@@ -445,7 +462,7 @@ mod tests {
         assert_eq!(clear.project, Patch::Null);
         assert_eq!(clear.flagged, Patch::Null);
 
-        let set: NoteModifyParams = serde_json::from_value(json!({
+        let set: NoteUpdateMetadataParams = serde_json::from_value(json!({
             "id": 42,
             "title": "Title",
             "summary": "Summary",
