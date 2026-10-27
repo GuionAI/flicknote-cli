@@ -108,6 +108,28 @@ class ReleaseContract(unittest.TestCase):
                 if 'sh.rustup.rs' in step.get('run', ''):
                     self.assertIn('--default-toolchain none', step['run'])
 
+    def test_manual_image_publication_contract(self):
+        workflow = load('private-mcp-image.yml')
+        self.assertEqual(set(workflow['on']), {'workflow_dispatch'})
+        self.assertEqual(workflow['on']['workflow_dispatch']['inputs']['release_tag']['required'], 'true')
+        self.assertEqual(workflow['permissions'], {'contents': 'read', 'packages': 'write'})
+        job = workflow['jobs']['publish']
+        self.assertIn("github.ref == 'refs/heads/main'", job['if'])
+        steps = job['steps']
+        self.assertEqual(steps[0]['with']['ref'], '${{ github.sha }}')
+        self.assertEqual(steps[0]['with']['persist-credentials'], 'false')
+        scripts = [step.get('run', '') for step in steps]
+        prepare = next(i for i, script in enumerate(scripts) if 'prepare.py' in script)
+        build = next(i for i, script in enumerate(scripts) if 'docker build' in script)
+        publish = next(i for i, script in enumerate(scripts) if 'docker push' in script)
+        self.assertLess(prepare, build)
+        self.assertLess(build, publish)
+        self.assertIn('smoke.sh', scripts[build])
+        self.assertLess(scripts[publish].index('registry.py "$RELEASE_TAG" before'), scripts[publish].index('docker push'))
+        self.assertGreater(scripts[publish].index('registry.py "$RELEASE_TAG" after'), scripts[publish].index('docker push'))
+        for step in steps:
+            self.assertNotIn('continue-on-error', step)
+
     def test_fail_closed_publication(self):
         jobs = load('release.yml')['jobs']
         checks, plan, host = (jobs[name] for name in ('custom-checks', 'plan', 'host'))

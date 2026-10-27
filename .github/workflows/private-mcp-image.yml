@@ -1,0 +1,61 @@
+name: Publish private MCP image
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Stable published CLI release tag (vX.Y.Z)
+        required: true
+        type: string
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: private-mcp-image-publication
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.repository == 'GuionAI/flicknote-cli' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify published release and prepare context
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          python3 scripts/private-mcp-image/prepare.py "$RELEASE_TAG" "$RUNNER_TEMP/image-context" > "$RUNNER_TEMP/release.json"
+          echo "sha256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' "$RUNNER_TEMP/release.json")" >> "$GITHUB_OUTPUT"
+          echo "url=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$RUNNER_TEMP/release.json")" >> "$GITHUB_OUTPUT"
+          cp scripts/private-mcp-image/Dockerfile "$RUNNER_TEMP/image-context/Dockerfile"
+      - name: Build and verify image
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ARTIFACT_SHA256: ${{ steps.release.outputs.sha256 }}
+          ARTIFACT_URL: ${{ steps.release.outputs.url }}
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --tag local/private-mcp:verified \
+            --build-arg "RELEASE_TAG=$RELEASE_TAG" --build-arg "ARTIFACT_SHA256=$ARTIFACT_SHA256" \
+            --build-arg "ARTIFACT_URL=$ARTIFACT_URL" "$RUNNER_TEMP/image-context"
+          test "$(docker image inspect local/private-mcp:verified --format '{{.Os}}/{{.Architecture}} {{.Config.User}}')" = 'linux/amd64 65532:65532'
+          docker run --rm --network none --entrypoint /bin/sh -v "$PWD/scripts/private-mcp-image/smoke.sh:/smoke.sh:ro" local/private-mcp:verified /smoke.sh "$RELEASE_TAG"
+      - name: Check for conflicts and publish
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          python3 scripts/private-mcp-image/registry.py "$RELEASE_TAG" before
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/guionai/flicknote-private-mcp:$RELEASE_TAG"
+          docker tag local/private-mcp:verified "$image"
+          docker push "$image" | tee "$RUNNER_TEMP/push.log"
+          pushed=$(sed -n "s/.*digest: \(sha256:[0-9a-f]\{64\}\).*/\1/p" "$RUNNER_TEMP/push.log" | tail -1)
+          remote=$(python3 scripts/private-mcp-image/registry.py "$RELEASE_TAG" after)
+          test -n "$pushed" && test "${remote##*@}" = "$pushed"
+          echo "$remote" | tee -a "$GITHUB_STEP_SUMMARY"

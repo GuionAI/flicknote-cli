@@ -7,4 +7,5 @@ cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo deny check
 bash scripts/test-release.sh
+python3 scripts/test-private-mcp-image.py
 python3 scripts/test-gpui-package.py

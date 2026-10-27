@@ -267,3 +267,38 @@ changes advance the note's update time; reads do not. Corrupt or oversized
 history causes the content change to fail. Previously unsaved versions are not
 backfilled; separately edited offline history fields have no automatic merge
 guarantee.
+
+## Manual GHCR image publication
+
+The `Publish private MCP image` GitHub Actions workflow packages an existing
+stable, published CLI release, such as `v1.16.0`, as
+`ghcr.io/guionai/flicknote-private-mcp:v1.16.0`. Run it on `main` with the
+explicit release tag after review and merge. It verifies the public release
+metadata, archive and checksum asset digests, checksum filename, archive
+contents and executable version; it builds the pinned linux/amd64 runtime and
+checks its non-root user, CA, license, help and isolated listener before the
+publication step. It uses the workflow `GITHUB_TOKEN` with `packages: write`;
+no additional personal token is needed. The separately generated cargo-dist
+release workflow and its exact-source gate remain unchanged. This action does
+not create or change a CLI release or tag.
+
+Before running, the operator must confirm that the GHCR package name is free or
+belongs to this repository, that the workflow has package publication access,
+and that no other publisher can write the same tag during the run. The workflow
+serializes its own runs and refuses an existing version, unknown registry status,
+or an existing package whose repository linkage cannot be established from the
+GitHub API. GitHub may conceal inaccessible packages or omit repository linkage;
+stop and inspect package ownership and permissions if the check fails. GHCR
+version tags are mutable: the lookup and push are not an atomic reservation
+against other publishers. Do not rerun after an uncertain or failed push until
+the remote tag, digest and provenance have been inspected. No automatic retry
+or overwrite is safe. The workflow records the registry manifest digest and
+checks it against Docker's push result.
+
+After the first publish, confirm package visibility is **public** in GitHub;
+creation does not guarantee public visibility. Independently check the Action's
+source SHA and input, version tag, digest, linux/amd64, OCI labels and complete
+anonymous image-layer download. Registry publication and anonymous pull do not
+establish a successful cluster pull or deployment. fse retains its existing
+image and deployment configuration until a separately authorized change; the
+current dev/prod rollout is paused.
