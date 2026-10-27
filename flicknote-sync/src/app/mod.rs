@@ -12,7 +12,7 @@ mod note;
 mod project;
 
 pub struct Application {
-    db: Arc<dyn NoteDb>,
+    pub(crate) db: Arc<dyn NoteDb>,
     creator: Arc<dyn NoteCreator>,
     share_gateway: Option<Arc<dyn ShareGateway>>,
     assignment_events: Option<Arc<dyn ProjectAssignmentEventSink>>,

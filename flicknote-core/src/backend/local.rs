@@ -516,6 +516,22 @@ impl NoteDb for LocalPowerSyncBackend {
             .ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })
     }
 
+    async fn find_note_history(
+        &self,
+        id: &str,
+        archived: bool,
+    ) -> Result<Option<String>, CliError> {
+        let reader = self.db.reader().await?;
+        let (history, oversized): (Option<String>, bool) = reader.query_row(
+            "SELECT CASE WHEN length(CAST(history AS BLOB)) <= 360710144 THEN history END, coalesce(length(CAST(history AS BLOB)) > 360710144, 0) FROM notes WHERE user_id = ? AND id = ? AND (deleted_at IS NOT NULL) = ?",
+            params![self.user_id, id, archived], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?.ok_or_else(|| CliError::NoteNotFound { id: id.to_string() })?;
+        if oversized {
+            return Err(CliError::Other("History exceeds the size limit".into()));
+        }
+        Ok(history)
+    }
+
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError> {
         let limit = i64::from(filter.limit);
         let reader = self.db.reader().await?;

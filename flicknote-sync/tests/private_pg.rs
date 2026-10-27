@@ -562,7 +562,7 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(names.len(), 23);
+    assert_eq!(names.len(), 24);
     fn strict_schema(value: &Value) {
         match value {
             Value::Object(fields) => {
@@ -664,6 +664,54 @@ async fn private_http_mcp_advertises_and_runs_only_supported_tools() {
         .await
         .unwrap();
     seed.finish(true).await.unwrap();
+    // Seed only this harness-owned row with the cross-client iOS libzstd fixture.
+    let (history_admin, history_connection) = tokio_postgres::connect(
+        &format!("postgresql://postgres@127.0.0.1:{port}/supabase?sslmode=disable"),
+        NoTls,
+    )
+    .await
+    .unwrap();
+    let history_task = tokio::spawn(history_connection);
+    history_admin
+        .execute(
+            "UPDATE notes SET history=$1 WHERE id=$2",
+            &[
+                &"KLUv/SAa0QAAeyIxNzkxODAwMDAwMDAwIjoi5q2j5paHIn0=",
+                &Uuid::parse_str(&full_id).unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+    let versions = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_list_versions",
+        json!({"id":id}),
+    )
+    .await;
+    assert_eq!(
+        versions["versions"],
+        json!([{"version":1,"time":"2026-10-12T10:13:20.000Z"}])
+    );
+    let historical = tool_call(
+        &client,
+        &resource,
+        "full",
+        "note_get",
+        json!({"id":id,"version":1}),
+    )
+    .await;
+    assert_eq!(
+        historical,
+        json!({"id":id,"version":1,"time":"2026-10-12T10:13:20.000Z","content":"正文"})
+    );
+    for name in ["note_get", "note_list_versions"] {
+        let denied = send(json!({"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":name,"arguments":{"id":id,"version":1}}}), "bob").await.unwrap();
+        let denied: Value = denied.json().await.unwrap();
+        assert_eq!(denied["result"]["isError"], true);
+    }
+    history_task.abort();
     let detail = tool_call(&client, &resource, "full", "note_get", json!({"id":id})).await;
     assert_eq!(detail["content"], "中文 苹果");
     assert_eq!(detail["metadata"]["created_by_ai"], true);

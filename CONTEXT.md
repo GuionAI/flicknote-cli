@@ -74,6 +74,14 @@ _Avoid_: Semantic search, answer retrieval
 An existing note offered for possible further reading, represented by its identifier, title, available summary, and modification time. It is historical material whose relevance and claims still need evaluation.
 _Avoid_: Verified fact, instruction
 
+**Content history**:
+Saved historical bodies of a note, each with a millisecond time marker. History
+is not a complete audit trail: not every client saves each write and the marker
+may come from a note timestamp, generation time, or an incremented collision.
+The current body is separate. A history version number is a temporary ordering
+position, not a permanent identity; older arriving or removed history can change it.
+_Avoid_: Complete edit log, permanent version ID, exact edit time
+
 **Note modification time**:
 The time a note was last changed. It does not establish when the described event happened or whether a claim is more accurate.
 _Avoid_: Event time, evidence of truth

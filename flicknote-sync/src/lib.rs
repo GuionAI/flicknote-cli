@@ -2,6 +2,7 @@ pub mod app;
 pub mod browser;
 mod connector;
 pub mod fts_search;
+mod history;
 pub mod ipc;
 pub mod mcp;
 pub mod ownership;

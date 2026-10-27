@@ -310,6 +310,18 @@ impl NoteDb for PgRequestDb {
         let id = uuid(id)?;
         self.query_opt("SELECT content FROM notes WHERE id=$1 AND user_id=auth.uid() AND deleted_at IS NULL FOR UPDATE", &[&id]).await?.map(|row| row.get(0)).ok_or_else(|| note_missing(&id.to_string()))
     }
+    async fn find_note_history(
+        &self,
+        input: &str,
+        archived: bool,
+    ) -> Result<Option<String>, CliError> {
+        let id = uuid(input)?;
+        let row = self.query_opt("SELECT CASE WHEN octet_length(history) <= 360710144 THEN history END, coalesce(octet_length(history) > 360710144, false) FROM notes WHERE id=$1 AND user_id=auth.uid() AND (deleted_at IS NOT NULL)=$2", &[&id, &archived]).await?.ok_or_else(|| note_missing(input))?;
+        if row.get::<_, bool>(1) {
+            return Err(CliError::Other("History exceeds the size limit".into()));
+        }
+        Ok(row.get(0))
+    }
     async fn list_notes(&self, f: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError> {
         let project = f
             .project_id

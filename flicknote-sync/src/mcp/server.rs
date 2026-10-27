@@ -22,16 +22,17 @@ use rmcp::{Json, ServerHandler, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use super::dto::{
-    McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteDetail,
+    McpEntity, McpEntityListResult, McpEntityType, McpNoteArchiveResult, McpNoteGetResult,
     McpNoteListResult, McpNoteMutationResult, McpProjectDto, McpProjectListResult, McpSearchResult,
-    McpSourceResult, McpTopicListResult, source_output_schema,
+    McpSourceResult, McpTopicListResult, note_get_output_schema, source_output_schema,
+    version_list_output_schema,
 };
 use super::error::tool_error;
 use super::note_tools::*;
 use super::project_tools::*;
 use crate::recall::{McpRecallResult, RECALL_HOOK_TIMEOUT, current_time, recall_call_with_timeout};
 
-pub const EXPECTED_TOOLS: [&str; 30] = [
+pub const EXPECTED_TOOLS: [&str; 31] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -43,6 +44,7 @@ pub const EXPECTED_TOOLS: [&str; 30] = [
     "note_get_section",
     "note_insert",
     "note_list",
+    "note_list_versions",
     "note_modify",
     "note_open",
     "note_rename_section",
@@ -64,7 +66,7 @@ pub const EXPECTED_TOOLS: [&str; 30] = [
     "topic_list",
 ];
 
-pub(super) const REMOTE_TOOLS: [&str; 23] = [
+pub(super) const REMOTE_TOOLS: [&str; 24] = [
     "entity_list",
     "note_add",
     "note_append",
@@ -76,6 +78,7 @@ pub(super) const REMOTE_TOOLS: [&str; 23] = [
     "note_get_section",
     "note_insert",
     "note_list",
+    "note_list_versions",
     "note_modify",
     "note_rename_section",
     "note_replace_section",
@@ -366,21 +369,53 @@ impl FlickNoteMcp {
 
     #[tool(
         name = "note_get",
-        description = "Get one note with stored content, metadata, extractions, and section tree.",
+        description = "Get the current note or a saved historical body by version (oldest is 1). Historical versions contain only id, version, time and content.",
+        output_schema = note_get_output_schema(),
         annotations(read_only_hint = true)
     )]
     async fn note_get(
         &self,
         Parameters(params): Parameters<NoteGetParams>,
-    ) -> Result<Json<McpNoteDetail>, CallToolResult> {
-        structured(
-            self.call::<NoteDetail>(AppRequest::NoteGet {
-                id: params.id.to_string(),
-                archived: params.archived,
-            })
-            .await
-            .map(Into::into),
-        )
+    ) -> Result<Json<McpNoteGetResult>, CallToolResult> {
+        let result = match params.version {
+            Some(version) => self
+                .app
+                .history_get(params.id, params.archived, version)
+                .await
+                .map(McpNoteGetResult::Historical),
+            None => self
+                .call::<NoteDetail>(AppRequest::NoteGet {
+                    id: params.id.to_string(),
+                    archived: params.archived,
+                })
+                .await
+                .map(|note| McpNoteGetResult::Current(Box::new(note.into()))),
+        };
+        if result.is_err()
+            && let Some(db) = &self.request_db
+        {
+            db.mark_failed();
+        }
+        structured(result)
+    }
+
+    #[tool(
+        name = "note_list_versions",
+        output_schema = version_list_output_schema(),
+        description = "List saved historical bodies newest first, numbered oldest first. The current body is not included; timestamps are history markers, not an audit trail.",
+        annotations(read_only_hint = true)
+    )]
+    async fn note_list_versions(
+        &self,
+        Parameters(params): Parameters<NoteVersionsParams>,
+    ) -> Result<Json<crate::history::VersionList>, CallToolResult> {
+        let result = self.app.history_list(params.id, params.archived).await;
+        if result.is_err()
+            && let Some(db) = &self.request_db
+        {
+            db.mark_failed();
+        }
+        structured(result)
     }
 
     #[tool(

@@ -2103,3 +2103,92 @@ async fn discovery_batches_keep_ipc_and_mcp_read_contracts() {
     host.shutdown().await;
     server.abort();
 }
+
+#[tokio::test]
+async fn history_reads_are_scoped_and_return_saved_bodies() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let compressed =
+        zstd::bulk::compress(br#"{"1791800000001":"newer","1791800000000":"older"}"#, 3).unwrap();
+    let history = STANDARD.encode(compressed);
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET history=? WHERE id IN ('a','b')",
+                [&history],
+            )
+            .unwrap();
+    }
+    let list = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(
+        list["result"]["structuredContent"]["versions"],
+        json!([
+            {"version":2,"time":"2026-10-12T10:13:20.001Z"},
+            {"version":1,"time":"2026-10-12T10:13:20.000Z"}
+        ])
+    );
+    let older = mcp(host.mcp_port, "note_get", json!({"id":3,"version":1})).await;
+    assert_eq!(
+        older["result"]["structuredContent"],
+        json!({"id":3,"version":1,"time":"2026-10-12T10:13:20.000Z","content":"older"})
+    );
+    let current = mcp(host.mcp_port, "note_get", json!({"id":3})).await;
+    assert_eq!(
+        current["result"]["structuredContent"]["content"],
+        "Cached body"
+    );
+    for args in [
+        json!({"id":3,"version":0}),
+        json!({"id":3,"version":3}),
+        json!({"id":3,"version":"1"}),
+        json!({"id":99,"version":1}),
+        json!({"id":3,"archived":true,"version":1}),
+    ] {
+        let result = mcp(host.mcp_port, "note_get", args).await;
+        assert_eq!(result["result"]["isError"], true, "{result}");
+    }
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("UPDATE notes SET history=NULL WHERE id='a'", [])
+            .unwrap();
+    }
+    let empty = mcp(host.mcp_port, "note_list_versions", json!({"id":3})).await;
+    assert_eq!(empty["result"]["structuredContent"]["versions"], json!([]));
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute(
+                "UPDATE notes SET history='bad!', deleted_at='2026-01-01T00:00:00Z' WHERE id='a'",
+                [],
+            )
+            .unwrap();
+    }
+    let bad = mcp(
+        host.mcp_port,
+        "note_list_versions",
+        json!({"id":3,"archived":true}),
+    )
+    .await;
+    assert_eq!(
+        bad["result"]["structuredContent"]["code"],
+        "invalid_history"
+    );
+    {
+        let writer = host.db.writer().await.unwrap();
+        writer
+            .execute("UPDATE notes SET history=? WHERE id='a'", [&history])
+            .unwrap();
+    }
+    let archived = mcp(
+        host.mcp_port,
+        "note_get",
+        json!({"id":3,"archived":true,"version":2}),
+    )
+    .await;
+    assert_eq!(archived["result"]["structuredContent"]["content"], "newer");
+    host.shutdown().await;
+    server.abort();
+}

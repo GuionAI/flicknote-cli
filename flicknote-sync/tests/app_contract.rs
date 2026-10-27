@@ -562,3 +562,52 @@ async fn app_owns_editable_document_parsing_and_persistence() {
         Some("Second")
     );
 }
+
+#[tokio::test]
+async fn powersync_schema_upgrade_preserves_existing_note_and_history() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("upgrade.db");
+    PowerSyncEnvironment::powersync_auto_extension().unwrap();
+    let open = |schema| {
+        let pool = ConnectionPool::open(&path).unwrap();
+        let environment = PowerSyncEnvironment::custom(
+            reqwest::Client::new(),
+            pool,
+            PowerSyncEnvironment::tokio_timer(),
+        );
+        PowerSyncDatabase::new(environment, schema)
+    };
+    let mut old_schema = app_schema();
+    old_schema
+        .tables
+        .iter_mut()
+        .find(|table| table.name == "notes")
+        .unwrap()
+        .columns
+        .retain(|column| column.name != "history");
+    let old = open(old_schema);
+    {
+        let writer = old.writer().await.unwrap();
+        writer.execute("INSERT INTO notes(id,user_id,short_id,type,status,content) VALUES('existing','user-1',12,'normal','ready','current')", []).unwrap();
+        writer.execute("INSERT OR REPLACE INTO ps_data__notes(id,data) SELECT id,json_set(data,'$.history','fixture-history') FROM ps_data__notes WHERE id='existing'", []).unwrap();
+    }
+    drop(old);
+    let upgraded = open(app_schema());
+    let backend = LocalPowerSyncBackend::new(upgraded, "user-1".into());
+    assert_eq!(
+        backend
+            .find_note_content("existing")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("current")
+    );
+    assert_eq!(
+        backend
+            .find_note_history("existing", false)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("fixture-history")
+    );
+}

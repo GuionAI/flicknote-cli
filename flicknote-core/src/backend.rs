@@ -93,6 +93,9 @@ pub trait NoteDb: Send + Sync {
     async fn find_note(&self, id: &str) -> Result<Note, CliError>;
     async fn find_archived_note(&self, id: &str) -> Result<Note, CliError>;
     async fn find_note_content(&self, id: &str) -> Result<Option<String>, CliError>;
+    /// Read only this owner's history in the requested archive state.
+    async fn find_note_history(&self, id: &str, archived: bool)
+    -> Result<Option<String>, CliError>;
     async fn list_notes(&self, filter: &NoteFilter<'_>) -> Result<Vec<NoteDiscovery>, CliError>;
     async fn search_notes_structured(
         &self,

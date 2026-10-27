@@ -266,6 +266,18 @@ accept numeric short IDs and do not expose internal UUIDs; project tools use
 project names. `note_source` reads stored source data. Every data tool uses the running daemon; the MCP process
 never opens SQLite. The server does not start the daemon automatically.
 
+`note_list_versions(id, archived?)` lists saved historical bodies as
+`{"versions":[{"version":2,"time":"..."},{"version":1,"time":"..."}]}`.
+Versions are numbered by ascending timestamp (1 is oldest) and listed newest
+first. `note_get(id, version: 1, archived?)` returns only `id`, `version`,
+`time`, and `content`; omit `version` to read the current note. The current body
+has no version number. Numbers are temporary and can change when older history
+arrives or history is overwritten or removed. Times are UTC history markers,
+not guaranteed exact edit times; collisions may be incremented. History is not
+an audit trail and does not cover every write path. Missing notes, missing
+versions and malformed or oversized history return errors. NULL history returns
+an empty list. Both MCP servers use the same owner and archive selection rules.
+
 MCP creation sets `metadata.created_by_ai` to JSON boolean `true` regardless of
 client or session. Human CLI/GUI creation omits it. Human-only list, count and
 find exclude only boolean `true`; missing and `false` are human creation.

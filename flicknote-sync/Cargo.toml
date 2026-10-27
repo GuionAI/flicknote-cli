@@ -28,6 +28,8 @@ futures-lite = { workspace = true }
 log = "0.4"
 uuid = { workspace = true }
 chrono = "0.4"
+base64 = "0.22"
+zstd = "0.14"
 fs4 = { workspace = true }
 dirs = { workspace = true }
 thiserror = { workspace = true }

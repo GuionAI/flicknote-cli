@@ -81,7 +81,7 @@ Failed/cancelled requests roll back or discard the connection. Project assignmen
 checks ownership and active state in the same transaction.
 
 The adapter expects the current fb columns and short-ID trigger contract:
-`notes` has `short_id`, `status`, `is_flagged`, `metadata`, `source`, `project_id`,
+`notes` has `short_id`, `status`, `is_flagged`, `metadata`, `source`, nullable text `history`, `project_id`,
 timestamps and user ownership; `projects` has `metadata`, `color`,
 `is_archived`, timestamps and user ownership; `note_extractions` has
 `note_id`, `user_id`, `key`, and `value`, with uniqueness on
@@ -216,7 +216,7 @@ establish an observed scheduled run or an active branch-protection policy.
 
 The remote server advertises `entity_list`, `topic_list`; `note_add`,
 `note_append`, `note_archive`, `note_count`, `note_delete_section`, `note_find`,
-`note_get`, `note_get_section`, `note_insert`, `note_list`, `note_modify`,
+`note_get`, `note_get_section`, `note_insert`, `note_list`, `note_list_versions`, `note_modify`,
 `note_rename_section`, `note_replace_section`, `note_restore`, `note_submit`,
 `note_write`; and `project_add`, `project_archive`, `project_get`, `project_list`,
 `project_modify`. It reuses the local MCP tool arguments, results, and strict
@@ -248,3 +248,12 @@ and creation-time and human filtering, coverage ranking, and segmented snippets.
 include archived notes; lexical terms cannot combine with archived or
 extraction filters. PGroonga and local SQLite FTS do not promise identical
 ranking or tokenization.
+
+Saved content history is read only for the authorized note owner, using the
+same archive selection and ordering as local MCP. `note_list_versions` returns
+newest first, numbered from 1 for the oldest; `note_get` with `version` returns
+only id, version, UTC time marker and body. Current content is unnumbered.
+These numbers can change as history changes; timestamps need not be exact edit
+times and not all writers save history. NULL means no history; malformed or
+oversized payloads fail instead of returning an empty list. No history is written
+or migrated by this server.

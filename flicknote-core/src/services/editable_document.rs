@@ -421,6 +421,14 @@ mod tests {
             Ok(self.find_note(id).await?.content)
         }
 
+        async fn find_note_history(
+            &self,
+            _id: &str,
+            _archived: bool,
+        ) -> Result<Option<String>, CliError> {
+            unimplemented!()
+        }
+
         async fn list_notes(
             &self,
             _filter: &NoteFilter<'_>,

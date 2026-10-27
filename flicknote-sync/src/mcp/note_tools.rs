@@ -226,6 +226,28 @@ pub(super) struct NoteGetParams {
     pub id: i64,
     #[serde(default)]
     pub archived: bool,
+    /// Historical version, numbered oldest first from 1. Omit for current content.
+    #[serde(default, deserialize_with = "deserialize_version")]
+    #[schemars(range(min = 1))]
+    pub version: Option<usize>,
+}
+
+fn deserialize_version<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<usize>, D::Error> {
+    let version = usize::deserialize(deserializer)?;
+    if version == 0 {
+        return Err(de::Error::custom("version must be a positive integer"));
+    }
+    Ok(Some(version))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct NoteVersionsParams {
+    #[serde(deserialize_with = "deserialize_note_id")]
+    pub id: i64,
+    #[serde(default)]
+    pub archived: bool,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -121,6 +121,41 @@ impl From<NoteDetail> for McpNoteDetail {
     }
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub(super) enum McpNoteGetResult {
+    Current(Box<McpNoteDetail>),
+    Historical(crate::history::HistoricalNote),
+}
+
+pub(super) fn note_get_output_schema() -> Arc<JsonObject> {
+    let mut schema = (*schema_for_output::<McpNoteGetResult>()).clone();
+    schema.insert("type".into(), serde_json::Value::String("object".into()));
+    for name in ["McpNoteDetail", "HistoricalNote"] {
+        schema["$defs"][name]["additionalProperties"] = serde_json::json!({"not": {}});
+    }
+    // All detail fields serialize, including nullable Option fields.
+    let detail = &mut schema["$defs"]["McpNoteDetail"];
+    let required = detail["properties"]
+        .as_object()
+        .expect("detail properties")
+        .keys()
+        .map(|name| serde_json::Value::String(name.clone()))
+        .collect();
+    detail["required"] = serde_json::Value::Array(required);
+    Arc::new(schema)
+}
+
+pub(super) fn version_list_output_schema() -> Arc<JsonObject> {
+    let mut schema = (*schema_for_output::<crate::history::VersionList>()).clone();
+    schema.insert(
+        "additionalProperties".into(),
+        serde_json::json!({"not": {}}),
+    );
+    schema["$defs"]["VersionInfo"]["additionalProperties"] = serde_json::json!({"not": {}});
+    Arc::new(schema)
+}
+
 /// Every JSON value type plus `null` (for `Option` fields). Used wherever
 /// `serde_json::Value` appears so the schema stays an object-form term.
 const ARBITRARY_JSON_TYPES: [&str; 7] = [

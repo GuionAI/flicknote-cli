@@ -40,6 +40,7 @@ fn notes_table() -> Table {
             Column::text("status"),
             Column::text("title"),
             Column::text("content"),
+            Column::text("history"),
             Column::text("summary"),
             Column::integer("is_flagged"),
             Column::text("project_id"),

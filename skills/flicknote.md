@@ -47,6 +47,16 @@ heading and child sections. Read the section tree before replacing, inserting,
 renaming, or deleting a section. A section replacement must supply the complete
 replacement heading and subtree; section deletion is destructive.
 
+## Saved content history
+
+`note_list_versions(id, archived?)` lists saved historical bodies newest first;
+`version: 1` is the oldest. `note_get(id, version: 1, archived?)` returns only
+`id`, `version`, `time`, and `content`; omit version for the current note.
+Numbers can change if older history arrives or saved history changes. UTC times
+are history markers, not guaranteed exact edit times. This is not a complete
+audit trail; not every write path saves history. NULL history gives an empty
+list; invalid data and missing versions return errors.
+
 ## Lifecycle
 
 Archiving is the normal soft-delete operation. Treat archive as destructive and

@@ -733,14 +733,37 @@ async fn mcp_note_get_output_schema_advertises_detail_structure() {
         .find(|tool| tool["name"] == "note_get")
         .unwrap();
     let output = &note_get["outputSchema"];
-    let properties = output["properties"].as_object().unwrap();
+    let variants = output["anyOf"].as_array().unwrap();
+    assert_eq!(variants.len(), 2);
+    let detail = &output["$defs"]["McpNoteDetail"];
+    let historical = &output["$defs"]["HistoricalNote"];
+    for field in ["id", "version", "time", "content"] {
+        assert!(
+            historical["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == field)
+        );
+        assert!(historical["properties"].get(field).is_some());
+    }
+    assert_eq!(historical["properties"].as_object().unwrap().len(), 4);
+    assert_eq!(
+        historical["additionalProperties"],
+        serde_json::json!({"not": {}})
+    );
+    assert_eq!(
+        detail["additionalProperties"],
+        serde_json::json!({"not": {}})
+    );
+    let properties = detail["properties"].as_object().unwrap();
     for required_property in ["content", "metadata", "extractions", "sections"] {
         assert!(
             properties.contains_key(required_property),
             "note_get outputSchema must advertise {required_property}"
         );
     }
-    let required = output["required"].as_array().unwrap();
+    let required = detail["required"].as_array().unwrap();
     for required_field in ["content", "extractions", "sections"] {
         assert!(
             required.iter().any(|field| field == required_field),
