@@ -1163,9 +1163,9 @@ async fn shared_archive_watch_use_canonical_expiry_owner_all_sources_before_limi
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // One owned host verifies the calendar and SQL boundary together.
+#[allow(clippy::too_many_lines)] // Exercise calendar arithmetic and owned host membership together.
 async fn historical_day_and_project_week_calendar_membership_before_limit() {
-    use crate::today::{Destination, Period};
+    use crate::today::Period;
     use chrono::{Days, TimeZone};
     use chrono_tz::America::New_York;
     for (month, day, hours) in [(3, 7, 23), (10, 31, 25)] {
@@ -1204,13 +1204,35 @@ async fn historical_day_and_project_week_calendar_membership_before_limit() {
         previous.range(&monday).unwrap()
     );
 
-    let (_root, config, _fake, _streams, server) = fixture().await;
-    let host = start(config).await;
-    let project = "11111111-1111-4111-8111-111111111111";
-    let day = chrono::Local::now()
+    let original_day = chrono::Local::now()
         .date_naive()
         .checked_sub_days(Days::new(30))
         .unwrap();
+    // Sunday overlaps the project week's end; Saturday does not.
+    for (day, expected_home) in [
+        (
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(),
+            Some(&[8, 6, 3, 2][..]),
+        ),
+        (
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap(),
+            Some(&[8, 3, 2][..]),
+        ),
+        (original_day, None),
+    ] {
+        let home_ids = assert_historical_calendar_membership(day).await;
+        if let Some(expected_home) = expected_home {
+            assert_eq!(home_ids, expected_home);
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+async fn assert_historical_calendar_membership(day: chrono::NaiveDate) -> Vec<i64> {
+    use crate::today::{Destination, Period};
+    let (_root, config, _fake, _streams, server) = fixture().await;
+    let host = start(config).await;
+    let project = "11111111-1111-4111-8111-111111111111";
     let day_period = Period::Day(Some(day));
     let (day_start, day_end) = day_period.range(&chrono::Local::now()).unwrap().unwrap();
     let monday = day
@@ -1248,7 +1270,7 @@ async fn historical_day_and_project_week_calendar_membership_before_limit() {
         // Excluded high IDs must not exhaust the bound before calendar/source/owner filtering.
         for index in 0..=crate::today::LIMIT {
             let (kind, date, owner, metadata) = match index % 3 {
-                0 => ("future", week_end, "account-a", "{}"),
+                0 => ("future", day_end.max(week_end), "account-a", "{}"),
                 1 => (
                     "machine",
                     day_start,
@@ -1273,11 +1295,12 @@ async fn historical_day_and_project_week_calendar_membership_before_limit() {
     if week_start >= day_start && week_start < day_end {
         expected.push(5);
     }
+    if week_end >= day_start && week_end < day_end {
+        expected.push(6);
+    }
     expected.sort_unstable_by(|a, b| b.cmp(a));
-    assert_eq!(
-        home_snapshot.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
-        expected
-    );
+    let home_ids = home_snapshot.rows.iter().map(|r| r.id).collect::<Vec<_>>();
+    assert_eq!(home_ids, expected);
     assert_eq!(home_snapshot.range, Some((day_start, day_end)));
     let mut week = TodayWatch::start_period(
         host.db.clone(),
@@ -1336,6 +1359,7 @@ async fn historical_day_and_project_week_calendar_membership_before_limit() {
     drop((home, week, all));
     host.shutdown().await;
     server.abort();
+    home_ids
 }
 
 #[tokio::test]
