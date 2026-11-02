@@ -219,7 +219,7 @@ fn builtin_defaults(env: &str) -> EndpointDefaults {
     let (supabase_url, supabase_anon_key, powersync_url, api_url, gateway_url) = match env {
         "prod" => (
             "https://auth.flicknote.app",
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFocGNqYW1maGJpb3BqZG5laW5uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA0NTc1NDIsImV4cCI6MjA2NjAzMzU0Mn0.g6B2UohS8Zw_mrsDljAB7n6feUTvpmMVvvsf7VMRXA4",
+            "sb_publishable_UCSPDM18SikS-mAvDCBd-8_0MFiCGvJ",
             "https://sync.flicknote.app",
             "https://api.flicknote.app/api/v1",
             "https://gw.flicknote.app",
@@ -326,7 +326,29 @@ mod tests {
         assert_eq!(defaults.powersync_url, "https://sync.flicknote.app");
         assert_eq!(defaults.api_url, "https://api.flicknote.app/api/v1");
         assert_eq!(defaults.gateway_url, "https://gw.flicknote.app");
-        assert!(!defaults.supabase_anon_key.is_empty());
+        assert_eq!(
+            defaults.supabase_anon_key,
+            "sb_publishable_UCSPDM18SikS-mAvDCBd-8_0MFiCGvJ"
+        );
+    }
+
+    #[test]
+    fn test_config_load_uses_prod_defaults() {
+        with_clean_env(Some("prod"), || {
+            let config_home = tempfile::tempdir().expect("config tempdir");
+            let data_home = tempfile::tempdir().expect("data tempdir");
+            unsafe {
+                std::env::set_var("XDG_CONFIG_HOME", config_home.path());
+                std::env::set_var("XDG_DATA_HOME", data_home.path());
+            }
+
+            let config = Config::load().expect("Config::load should use prod defaults");
+            assert_eq!(config.supabase_url, "https://auth.flicknote.app");
+            assert_eq!(
+                config.supabase_anon_key,
+                "sb_publishable_UCSPDM18SikS-mAvDCBd-8_0MFiCGvJ"
+            );
+        });
     }
 
     #[test]
